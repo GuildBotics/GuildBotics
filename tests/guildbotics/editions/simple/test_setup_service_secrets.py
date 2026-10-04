@@ -143,27 +143,41 @@ class TestPersonSecrets:
         assert snapshot.has_github_access_token is True
         assert snapshot.has_slack_bot_token is False
 
-    def test_update_person_rename_moves_keychain_tokens(self, fake_keyring, tmp_path):
+    @pytest.mark.parametrize(
+        "original, renamed", [("alice", "alice-2"), ("Alice", "alice")]
+    )
+    def test_update_person_rename_moves_keychain_tokens(
+        self, fake_keyring, tmp_path, original, renamed
+    ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(
             _person_input(config_dir, github_access_token="ghp-secret")
         )
+        members = config_dir / "team/members"
+        if original != "alice":
+            (members / "alice").rename(members / original)
+        project_file = config_dir / "team/project.yml"
+        project_file.write_text(dump_yaml({"default_person_id": original}))
 
         service.update_person(
             PersonUpdateInput(
                 **{
                     **_person_input(config_dir).model_dump(),
-                    "original_person_id": "alice",
-                    "person_id": "alice-2",
+                    "original_person_id": original,
+                    "person_id": renamed,
                     "person_name": "Alice 2",
                 }
             )
         )
 
         store = KeyringSecretStore(config_dir)
-        assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") == "ghp-secret"
-        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+        prefix = "ALICE_2" if renamed == "alice-2" else "ALICE"
+        assert store.get(f"{prefix}_GITHUB_ACCESS_TOKEN") == "ghp-secret"
+        if renamed == "alice-2":
+            assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+        assert [child.name for child in members.iterdir()] == [renamed]
+        assert load_yaml_file(project_file)["default_person_id"] == renamed
 
     def test_update_person_blank_token_keeps_existing_secret(
         self, fake_keyring, tmp_path

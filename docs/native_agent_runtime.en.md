@@ -176,7 +176,9 @@ so another spelling of the same directory does not bypass this check.
 
 Opening, creating, or joining a workspace registers its location on this device.
 Credential symlinks protect their original location, intermediate links, and actual destination; they
-do not prevent commands in unrelated directories. The trusted installed package
+do not prevent commands in unrelated directories. Loops stop after 40 link hops.
+Missing or non-directory components before `..` remain untraversable; their inspected
+prefix stays protected without blocking unrelated locations. The trusted installed package
 is canonicalized once before inspection, and code and templates share that root.
 The **Device and hub → Registered workspaces** list includes inactive workspaces;
 remove an entry only when its state no longer needs protection. Removing the entry
@@ -185,18 +187,23 @@ another entry requires confirmation. Invalid startup selections leave Desktop
 running with no workspace selected and show the refusal reason. Unavailable old
 locations can still be unregistered. Malformed grants allow workspace selection
 for editing or synchronization, but commands remain refused until repaired.
-Input-folder failures have their own alert, cleared by a successful input retry.
 Copy sources must remain outside protected state. Leaf links are refused. Ancestor
 links such as `~/Dropbox/report.pdf` are accepted only when the parent contains fixed
 credential state and cannot be shared with a turn; otherwise select the file in its
 real directory. The preview shows the refusal and offers no unsafe grant. Status
-polling retries an unavailable input store and clears its error after recovery.
-Invalid stored member IDs show their config filename and can be renamed or deleted
-in setup, while runtime loading remains refused until repair. Copying checks the 20MiB
+polling retries an unavailable input store and clears its dedicated alert after recovery.
+Member IDs accept lowercase letters, digits, `_` and `-`, excluding Windows reserved names.
+Invalid stored configurations show their filename and can be edited, renamed or deleted
+in setup, while runtime loading remains refused until repair. Existing directory names
+such as `Alice`, `alice.bak`, names with internal spaces, and Unicode names are addressable
+for repair. Names with separators, drive or stream suffixes, control characters, or trailing
+dots or spaces must be renamed or removed on disk using the reported filename.
+Directories without `person.yml` are not members. Copying checks the 20MiB
 limit throughout the read, including files that grow during the copy. Workspace
 locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
-opening it.
+opening it. Host-created hard links to protected files are not distinguished by copy
+admission; turns cannot create such links because protected files are not mounted.
 
 - **Working directory**: the command's working directory is bound
   read/write at the same path it has on the host (a read-only command gets an

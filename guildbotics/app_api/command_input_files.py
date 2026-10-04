@@ -17,8 +17,6 @@ from fastapi import UploadFile
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
-    LocalGrants,
-    SharedGrants,
     exchange_tmp_dir,
     grant_spelling,
     load_local_grants,
@@ -32,7 +30,7 @@ from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     unlock_file,
 )
-from guildbotics.utils.fileio import WorkspaceNotConfiguredError
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.safe_paths import (
     HostPathPermissionError,
     UnsafePathError,
@@ -41,7 +39,6 @@ from guildbotics.utils.safe_paths import (
     normalize_host_path,
     open_host_file,
     resolve_host_links,
-    t,
     visit_host_directory,
 )
 
@@ -96,11 +93,6 @@ class CommandInputFileStore:
     def _start(self) -> None:
         if self._directory is not None:
             return
-        from guildbotics.intelligences.agent_environment.contract import (
-            protected_paths,
-            validate_mount_source,
-        )
-
         self._root = validate_mount_source(
             self._root, protected_paths(), grant=True, create=True
         )
@@ -130,9 +122,9 @@ class CommandInputFileStore:
         """Save an image in the active App API session directory."""
         return save_command_input_file(self._session_directory(), upload_file)
 
-    def copy(self, source: Path, cwd: Path | None = None) -> Path:
+    def copy(self, source: Path) -> Path:
         """Copy a file of the user's into the active session directory."""
-        return copy_command_input_file(self._session_directory(), source, cwd)
+        return copy_command_input_file(self._session_directory(), source)
 
     def close(self) -> None:
         """Remove everything owned by this App API session."""
@@ -191,9 +183,7 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
     return _write_command_input_file(directory, f"{uuid4().hex}{suffix}", write)
 
 
-def copy_command_input_file(
-    directory: Path, source: Path, cwd: Path | None = None
-) -> Path:
+def copy_command_input_file(directory: Path, source: Path) -> Path:
     """Copy one of the user's files beside the pasted images and return the copy.
 
     The copy keeps the file's name behind a short random prefix: the name is
@@ -208,13 +198,13 @@ def copy_command_input_file(
         ValueError: If ``source`` is not a regular file or exceeds the limit.
     """
     name = source.name
-    source = _admit_input_path(source, cwd)
+    source = _admit_input_path(source)
     try:
         info = source.stat()
     except PermissionError as exc:
         raise HostPathPermissionError(source) from exc
     except FileNotFoundError as exc:
-        raise ValueError(f"'{source}' is not a file.") from exc
+        raise ValueError(t("safe_paths.file_missing", path=source)) from exc
     if not stat.S_ISREG(info.st_mode):
         raise ValueError(f"'{source}' is not a file.")
     _check_size(info.st_size)
@@ -228,29 +218,25 @@ def copy_command_input_file(
             _check_size(size)
             output.write(content)
 
-        consume_host_file(source, chunk)
+        try:
+            consume_host_file(source, chunk)
+        except FileNotFoundError as exc:
+            raise ValueError(t("safe_paths.file_missing", path=source)) from exc
         return size
 
     return _write_command_input_file(directory, f"{uuid4().hex[:8]}-{name}", write)
 
 
-def _input_grants() -> tuple[SharedGrants, LocalGrants]:
-    try:
-        return load_shared_grants(), load_local_grants()
-    except WorkspaceNotConfiguredError:
-        return SharedGrants(), LocalGrants()
-
-
-def _admit_input_path(source: Path, cwd: Path | None) -> Path:
+def _admit_input_path(source: Path) -> Path:
     """A copy must never borrow the host's authority through a turn's link."""
     denied = protected_paths()
 
     def admit_link(link: Path, leaf: bool) -> None:
         if leaf:
-            raise UnsafePathError(t("safe_paths.link", path=link))
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
         parent = inspect_host_path(link.parent)
         if any(facts.contains(parent) for closed in denied for facts in closed.facts()):
-            raise UnsafePathError(t("safe_paths.link", path=link))
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
         # A current cwd cannot prove that a previous turn never wrote here.
         # Trust only a parent that can never be granted: it contains a fixed
         # credential/device path. Registered workspace state is removable.
@@ -263,24 +249,11 @@ def _admit_input_path(source: Path, cwd: Path | None) -> Path:
             for closed in denied
             if closed.kind == "credentials"
         ):
-            raise UnsafePathError(t("safe_paths.link", path=link))
-        shared, local = _input_grants()
-        access = resolve_access(shared, local, create=False)
-        writable = [
-            grant.path
-            for grant in (*access.documents, *access.paths)
-            if grant.access == "read_write"
-        ]
-        if cwd is not None:
-            writable.append(normalize_host_path(cwd))
-        if any(
-            inspect_host_path(root, missing=True).contains(parent) for root in writable
-        ):
-            raise UnsafePathError(t("safe_paths.link", path=link))
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
 
     resolution = resolve_host_links(source, on_link=admit_link)
     if resolution.cyclic:
-        raise UnsafePathError(t("safe_paths.link", path=source))
+        raise UnsafePathError(t("safe_paths.copy_link", path=source))
     return validate_mount_source(resolution.path, denied, grant=True, missing=True)
 
 
@@ -403,7 +376,7 @@ def describe_command_input_paths(
         problem = ""
         if not reachable and kind != "missing":
             try:
-                real = _admit_input_path(path, cwd)
+                real = _admit_input_path(path)
             except AccessContractError as exc:
                 problem = str(exc)
             else:

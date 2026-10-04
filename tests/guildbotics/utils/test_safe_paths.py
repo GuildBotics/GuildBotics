@@ -51,10 +51,6 @@ def test_link_resolution_preserves_os_component_order(tmp_path, symlinks, shape)
             (public / "ordinary").write_text("file")
         link.symlink_to(Path("public/ordinary/../dir"), target_is_directory=True)
         assert ".." in Path(os.readlink(link)).parts
-        if shape == "file_parent":
-            with pytest.raises(UnsafePathError):
-                resolve_host_links(link)
-            return
         resolution = resolve_host_links(link)
         assert ".." in resolution.path.parts
         with pytest.raises(UnsafePathError):
@@ -205,10 +201,12 @@ def test_public_path_operations_preserve_absolute_permission_path(
 @pytest.mark.skipif(
     os.name == "nt", reason="POSIX directory-relative permission refusal"
 )
+@pytest.mark.parametrize("language", ["en", "ja"])
 def test_protected_link_permission_error_names_owner_and_denied_component(
-    tmp_path, monkeypatch, symlinks
+    tmp_path, monkeypatch, symlinks, language
 ):
     from guildbotics.intelligences.agent_environment.contract import DeniedPath
+    from guildbotics.utils import i18n_tool
 
     target = tmp_path / "blocked"
     target.mkdir()
@@ -223,8 +221,18 @@ def test_protected_link_permission_error_names_owner_and_denied_component(
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", deny)
-    with pytest.raises(HostPathPermissionError) as failure:
-        DeniedPath(protected, "credentials").facts()
+    previous = i18n_tool.get_language()
+    i18n_tool.set_language(language)
+    try:
+        with pytest.raises(HostPathPermissionError) as failure:
+            DeniedPath(protected, "credentials").facts()
+        assert str(failure.value) == i18n_tool.t(
+            "safe_paths.protected_unavailable",
+            protected=protected,
+            reason=safe_paths.filesystem_permission_problem(target),
+        )
+    finally:
+        i18n_tool.set_language(previous)
     assert failure.value.filename == str(target)
     assert str(protected) in str(failure.value)
     assert str(target) in str(failure.value)

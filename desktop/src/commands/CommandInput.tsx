@@ -134,14 +134,14 @@ export function CommandInput({
       setUploadError(null);
       setUploadsInFlight((count) => count + 1);
       try {
-        appendPaths([(await copyCommandInputFile(entry.path, cwd)).guest_path]);
+        appendPaths([(await copyCommandInputFile(entry.path)).guest_path]);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {
         setUploadsInFlight((count) => count - 1);
       }
     },
-    [appendPaths, cwd],
+    [appendPaths],
   );
 
   useEffect(() => {

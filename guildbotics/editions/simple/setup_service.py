@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import requests  # type: ignore
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from yaml import YAMLError
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.entities.team import Person
@@ -27,8 +28,8 @@ from guildbotics.utils.fileio import (
     save_yaml_file,
 )
 from guildbotics.utils.person_id import (
-    PERSON_ID_REQUIREMENT,
     is_valid_person_id,
+    iter_member_config_directories,
     person_config_directory,
     stored_person_config_directory,
     validate_member_directory_name,
@@ -382,14 +383,28 @@ def _person_config_dir(config_dir: Path, person_id: str) -> Path:
     return config_dir / person_config_directory(person_id)
 
 
-def _stored_person_config_dir(config_dir: Path, name: str) -> Path:
+def stored_person_config_dir(config_dir: Path, name: str) -> Path:
     path = config_dir / stored_person_config_directory(name)
     members = config_dir / "team/members"
-    if not members.exists() or not any(
-        child.name == name and child.is_dir() for child in members.iterdir()
-    ):
+    if not any(child.name == name for child in iter_member_config_directories(members)):
         raise SetupServiceError("person_not_found", "Member config was not found.")
     return path
+
+
+def _config_mapping(value: object) -> dict[str, Any]:
+    """Project invalid stored data into an editable form, never into a member."""
+    return (
+        {key: item for key, item in value.items() if isinstance(key, str)}
+        if isinstance(value, dict)
+        else {}
+    )
+
+
+def _read_member_form(path: Path) -> dict[str, Any]:
+    try:
+        return _config_mapping(load_yaml_file(path))
+    except YAMLError:
+        return {}
 
 
 def _person_config_file(config_dir: Path, person_id: str) -> Path:
@@ -529,8 +544,10 @@ class SimpleProjectSetupService:
                 names a member that cannot execute commands.
         """
         if person_id:
-            if not is_valid_person_id(person_id):
-                raise SetupServiceError("invalid_person_id", PERSON_ID_REQUIREMENT)
+            try:
+                validate_person_id(person_id)
+            except ValueError as exc:
+                raise SetupServiceError("invalid_person_id", str(exc)) from exc
             person_file = _person_config_file(config_dir, person_id)
             if not person_file.exists():
                 raise SetupServiceError(
@@ -824,6 +841,7 @@ class SimplePersonSetupService:
         snapshot, so a token the GUI reports as saved is the token returned
         here. Missing members simply have no secrets and yield empty strings.
         """
+        validate_member_directory_name(person_id)
         store = resolve_secret_store(config_dir)
         prefix = self._person_env_prefix(person_id)
         return (
@@ -834,30 +852,23 @@ class SimplePersonSetupService:
     def list_person_configs(self, *, config_dir: Path) -> list[PersonConfigSummary]:
         """Read the member list without requiring a project config or secrets."""
         members_dir = config_dir / "team/members"
-        if not members_dir.exists():
-            return []
-
         members = []
-        for person_dir in sorted(members_dir.iterdir()):
+        for person_dir in iter_member_config_directories(members_dir):
             person_file = person_dir / "person.yml"
-            if not person_dir.is_dir() or not person_file.exists():
+            try:
+                validate_member_directory_name(person_dir.name)
+            except ValueError:
                 continue
-            person_data = cast(dict, load_yaml_file(person_file))
-            profile = person_data.get("profile", {})
-            configured_roles = (
-                profile.get("roles", {}) if isinstance(profile, dict) else {}
-            )
+            person_data = _read_member_form(person_file)
+            profile = _config_mapping(person_data.get("profile"))
+            configured_roles = _config_mapping(profile.get("roles"))
             members.append(
                 PersonConfigSummary(
                     person_id=person_dir.name,
                     name=str(person_data.get("name", "")),
                     person_type=str(person_data.get("person_type", "")),
                     is_active=bool(person_data.get("is_active", False)),
-                    roles=(
-                        list(configured_roles.keys())
-                        if isinstance(configured_roles, dict)
-                        else []
-                    ),
+                    roles=list(configured_roles),
                 )
             )
         return members
@@ -865,12 +876,10 @@ class SimplePersonSetupService:
     def read_person_config(
         self, *, config_dir: Path, person_id: str
     ) -> PersonConfigSnapshot:
-        person_file = _stored_person_config_dir(config_dir, person_id) / "person.yml"
-        if not person_file.exists():
-            raise SetupServiceError("person_not_found", "Member config was not found.")
-        person_data = cast(dict, load_yaml_file(person_file))
-        account_info = person_data.get("account_info", {})
-        profile = person_data.get("profile", {})
+        person_file = stored_person_config_dir(config_dir, person_id) / "person.yml"
+        person_data = _read_member_form(person_file)
+        account_info = _config_mapping(person_data.get("account_info"))
+        profile = _config_mapping(person_data.get("profile"))
         person_type = str(person_data.get("person_type", ""))
         github_account_type = str(account_info.get("github_account_type", ""))
         if not github_account_type and person_type in {
@@ -879,12 +888,9 @@ class SimplePersonSetupService:
             "github_apps",
         }:
             github_account_type = person_type
-        configured_roles = profile.get("roles", {}) if isinstance(profile, dict) else {}
-        character = profile.get("character", {}) if isinstance(profile, dict) else {}
-        roles = (
-            list(configured_roles.keys()) if isinstance(configured_roles, dict) else []
-        )
-        character_data = character if isinstance(character, dict) else {}
+        roles = list(_config_mapping(profile.get("roles")))
+        character_data = _config_mapping(profile.get("character"))
+        routine_commands = person_data.get("routine_commands")
 
         channels: list[str] = []
         channel_participation: dict[str, str] = {}
@@ -963,7 +969,9 @@ class SimplePersonSetupService:
             slack_channel_participation=channel_participation,
             routine_commands=[
                 str(command).strip()
-                for command in person_data.get("routine_commands", [])
+                for command in (
+                    routine_commands if isinstance(routine_commands, list) else []
+                )
                 if str(command).strip()
             ],
             task_schedules=_read_task_schedules(person_data.get("task_schedules", [])),
@@ -1052,7 +1060,7 @@ class SimplePersonSetupService:
     def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         original_person_file = (
-            _stored_person_config_dir(config.config_dir, config.original_person_id)
+            stored_person_config_dir(config.config_dir, config.original_person_id)
             / "person.yml"
         )
         if not original_person_file.exists():
@@ -1060,7 +1068,7 @@ class SimplePersonSetupService:
 
         old_person_dir = original_person_file.parent
         new_person_dir = _person_config_dir(config.config_dir, config.person_id)
-        if old_person_dir != new_person_dir and new_person_dir.exists():
+        if new_person_dir.exists() and not old_person_dir.samefile(new_person_dir):
             raise SetupServiceError("person_id_conflict", "Member ID already exists.")
 
         # SecretStore first: shared key metadata moves independently of local
@@ -1084,9 +1092,8 @@ class SimplePersonSetupService:
         if renamed or pending_secrets or stored_pem:
             files.append(CreatedFile(path=store.location, action="update"))
 
-        if old_person_dir != new_person_dir:
-            new_person_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(old_person_dir), str(new_person_dir))
+        if config.original_person_id != config.person_id:
+            old_person_dir.rename(new_person_dir)
             files.extend(
                 _retarget_default_person_id(
                     config.config_dir, config.original_person_id, config.person_id
@@ -1103,10 +1110,8 @@ class SimplePersonSetupService:
     @shared_write_operation
     def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
         files: list[CreatedFile] = []
-        person_dir = _stored_person_config_dir(config_dir, person_id)
+        person_dir = stored_person_config_dir(config_dir, person_id)
         person_file = person_dir / "person.yml"
-        if not person_file.exists():
-            raise SetupServiceError("person_not_found", "Member config was not found.")
 
         # SecretStore first: indexed keys are removed whether or not this
         # device holds their current generation, and a store failure leaves

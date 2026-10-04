@@ -4,6 +4,8 @@ en:
   unavailable: "Cannot safely open %{path}: %{reason}."
   protected_unavailable: "Cannot inspect protected path %{protected} or its link target: %{reason}"
   link: "Links are not allowed in %{path}; use the real directory."
+  copy_link: "Cannot copy a file through link %{path}. Select the original file directly; links in locations an agent could write are refused."
+  file_missing: "File not found: %{path}. Select the original file again."
   registry: "Cannot read the workspace registry %{path}: %{reason}. Repair this file before selecting a workspace or running commands."
   missing: "Host directory does not exist: %{path}."
   protected_credentials: "Cannot share %{path}: it overlaps credentials or device state in %{protected}. Choose another working directory or narrow the directory access."

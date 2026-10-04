@@ -96,11 +96,6 @@ class HostPathResolution:
     cyclic: bool = False
 
 
-@dataclass(frozen=True)
-class _LinkEnd:
-    key: tuple[int, int, Path]
-
-
 def resolve_host_links(
     path: Path, *, on_link: Callable[[Path, bool], None] | None = None
 ) -> HostPathResolution:
@@ -111,20 +106,16 @@ def resolve_host_links(
     """
     path = normalize_host_path(path)
     names = [path]
-    active: set[tuple[int, int, Path]] = set()
     links = 0
-    pending: deque[str | _LinkEnd] = deque(path.parts[1:])
+    pending = deque(path.parts[1:])
     current = Path(path.anchor)
     while pending:
         component = pending.popleft()
-        if isinstance(component, _LinkEnd):
-            active.remove(component.key)
-            continue
         if component == "..":
             current = current.parent
             continue
         candidate = current / component
-        leaf = not any(isinstance(part, str) for part in pending)
+        leaf = not pending
         try:
             info = candidate.lstat()
             linked = stat.S_ISLNK(info.st_mode) or bool(
@@ -132,24 +123,20 @@ def resolve_host_links(
                 & stat.FILE_ATTRIBUTE_REPARSE_POINT
             )
             if not linked:
+                if not leaf and not stat.S_ISDIR(info.st_mode):
+                    raise NotADirectoryError(str(candidate))
                 inspect_host_path(candidate, directory=not leaf)
                 current = candidate
                 continue
             names.append(candidate)
-            key = (info.st_dev, info.st_ino, candidate)
             links += 1
-            if key in active or links > MAX_HOST_LINKS:
+            if links > MAX_HOST_LINKS:
                 return HostPathResolution(candidate, tuple(dict.fromkeys(names)), True)
-            active.add(key)
             if on_link is not None:
                 on_link(candidate, leaf)
             target = os.readlink(candidate)
             if os.name == "nt" and target.startswith("\\\\?\\"):
-                target = (
-                    "\\\\" + target[8:]
-                    if target.startswith("\\\\?\\UNC\\")
-                    else target[4:]
-                )
+                target = target[4:]
                 if not Path(target).drive.endswith(":"):
                     raise UnsafePathError(t("safe_paths.invalid", path=target))
             destination = Path(target)
@@ -157,13 +144,18 @@ def resolve_host_links(
                 destination = candidate.parent / destination
             destination = _host_alias(destination)
             current = Path(destination.anchor)
-            pending = deque((*destination.parts[1:], _LinkEnd(key), *pending))
-        except FileNotFoundError:
+            pending = deque((*destination.parts[1:], *pending))
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            # Keep the untraversed tail for admission to refuse. Only the
+            # inspected prefix belongs in the protected path's facts.
+            untraversable = isinstance(exc, NotADirectoryError) or ".." in pending
+            if untraversable:
+                names.append(candidate)
             current = candidate
             for component in pending:
-                if isinstance(component, _LinkEnd):
-                    continue
                 current = current / component
+            if untraversable:
+                return HostPathResolution(current, tuple(dict.fromkeys(names)))
             break
         except PermissionError as exc:
             raise HostPathPermissionError(candidate) from exc

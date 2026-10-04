@@ -1799,11 +1799,8 @@ export async function uploadCommandInputFile(file: File): Promise<CommandInputFi
   return uploadFile("/commands/input-files", file);
 }
 
-export async function copyCommandInputFile(
-  path: string,
-  cwd?: string,
-): Promise<CommandInputFileResponse> {
-  return request("/commands/input-files/copy", { method: "POST", body: { path, cwd } });
+export async function copyCommandInputFile(path: string): Promise<CommandInputFileResponse> {
+  return request("/commands/input-files/copy", { method: "POST", body: { path } });
 }
 
 export async function checkCommandInputPaths(body: {

@@ -41,7 +41,7 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
-from guildbotics.utils.person_id import OptionalPersonId, PersonId
+from guildbotics.utils.person_id import MemberDirectoryName, OptionalPersonId, PersonId
 
 
 class CliAgentLastTurn(BaseModel):
@@ -512,7 +512,6 @@ class CommandInputFileResponse(BaseModel):
 
 class CommandInputFileCopyRequest(BaseModel):
     path: Path
-    cwd: Path | None = None
 
 
 class CommandInputPathsRequest(BaseModel):
@@ -1549,6 +1548,6 @@ class SlackTokenVerifyRequest(BaseModel):
     app_token: str = ""
     # Member being edited, if any. An empty token field means "keep the stored
     # one" on save, so verification resolves that member's stored token.
-    person_id: OptionalPersonId = ""
+    person_id: MemberDirectoryName | Literal[""] = ""
     # Channels as currently edited in the form, checked for bot membership.
     channels: list[str] = Field(default_factory=list)

@@ -153,3 +153,55 @@ def test_valid_member_identifier_is_preserved(tmp_path):
         get_member_clone_path("aiko_1-2", tmp_path)
         == tmp_path / ".guildbotics/local/clones/aiko_1-2"
     )
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize("shape", ["id", "directory", "fields", "yaml", "mismatch"])
+def test_member_config_messages_use_localized_keys(tmp_path, language, shape):
+    import i18n
+
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+    from guildbotics.utils.i18n_tool import t
+    from guildbotics.utils.person_id import (
+        MemberConfigError,
+        validate_member_directory_name,
+        validate_person_id,
+    )
+
+    previous = i18n.get("locale")
+    i18n.set("locale", language)
+    try:
+        if shape in {"id", "directory"}:
+            validate = (
+                validate_person_id if shape == "id" else validate_member_directory_name
+            )
+            key = "id_requirement" if shape == "id" else "directory_name"
+            with pytest.raises(ValueError) as error:
+                validate("../keys")
+            assert str(error.value) == t(f"member_config.{key}")
+            return
+        team = tmp_path / "team"
+        member = team / "members/alice"
+        member.mkdir(parents=True)
+        (team / "project.yml").write_text("name: Test\nlanguage: en\n")
+        path = member / "person.yml"
+        path.write_text(
+            {
+                "fields": "person_id: Alice\nname: Test\n",
+                "yaml": "person_id: [",
+                "mismatch": "person_id: bob\nname: Test\n",
+            }[shape]
+        )
+        with pytest.raises(MemberConfigError) as error:
+            YamlTeamLoader(str(team)).load()
+        reason = (
+            t("member_config.invalid_fields", fields="person_id")
+            if shape == "fields"
+            else t(
+                f"member_config.{'invalid_yaml' if shape == 'yaml' else 'directory_mismatch'}"
+            )
+        )
+        assert error.value.filename == str(path)
+        assert str(error.value) == t("member_config.invalid", path=path, reason=reason)
+    finally:
+        i18n.set("locale", previous)

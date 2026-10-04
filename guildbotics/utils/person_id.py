@@ -1,12 +1,12 @@
 """Member identifiers are directory components on every supported OS."""
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import AfterValidator
+from pydantic import AfterValidator, ValidationError
 
-PERSON_ID_REQUIREMENT = "person_id must contain only lowercase letters, digits, _ or - and must not be a Windows reserved name"
 _RESERVED = {"con", "prn", "aux", "nul"} | {
     f"{kind}{number}" for kind in ("com", "lpt") for number in range(1, 10)
 }
@@ -18,7 +18,9 @@ def is_valid_person_id(value: str) -> bool:
 
 def validate_person_id(value: str) -> str:
     if not is_valid_person_id(value):
-        raise ValueError(PERSON_ID_REQUIREMENT)
+        from guildbotics.utils.i18n_tool import t
+
+        raise ValueError(t("member_config.id_requirement"))
     return value
 
 
@@ -34,8 +36,15 @@ OptionalPersonId = Annotated[str, AfterValidator(validate_optional_person_id)]
 
 def validate_member_directory_name(value: str) -> str:
     """Address stored configuration for repair, without authorizing a member."""
-    if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
-        raise ValueError("Member configuration directory must be one safe name")
+    if (
+        value in {"", ".", ".."}
+        or not value.isprintable()
+        or any(character in value for character in "/\\:")
+        or value.endswith((".", " "))
+    ):
+        from guildbotics.utils.i18n_tool import t
+
+        raise ValueError(t("member_config.directory_name"))
     return value
 
 
@@ -51,9 +60,30 @@ def person_config_directory(person_id: str) -> Path:
     return stored_person_config_directory(validate_person_id(person_id))
 
 
+def iter_member_config_directories(members: Path) -> Iterator[Path]:
+    """A member is a child directory containing a configuration file."""
+    if members.is_dir():
+        for child in sorted(members.iterdir()):
+            if child.is_dir() and (child / "person.yml").is_file():
+                yield child
+
+
 class MemberConfigError(ValueError):
     """An invalid member file, addressable in the configuration editor."""
 
     def __init__(self, path: Path, error: Exception) -> None:
+        from guildbotics.utils.i18n_tool import t
+
         self.filename = str(path)
-        super().__init__(f"Invalid member configuration {path}: {error}")
+        reason = (
+            t(
+                "member_config.invalid_fields",
+                fields=", ".join(
+                    ".".join(map(str, detail["loc"])) or "person.yml"
+                    for detail in error.errors()
+                ),
+            )
+            if isinstance(error, ValidationError)
+            else str(error)
+        )
+        super().__init__(t("member_config.invalid", path=path, reason=reason))

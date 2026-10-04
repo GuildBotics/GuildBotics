@@ -17,13 +17,13 @@ from guildbotics.app_api.command_input_files import (
 )
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
-    DocumentGrant,
-    LocalGrants,
-    SharedGrants,
     SENSITIVE_HOME_DIRECTORIES,
     DeniedPath,
+    DocumentGrant,
+    LocalGrants,
     ResolvedAccess,
     ResolvedGrant,
+    SharedGrants,
 )
 
 
@@ -70,7 +70,7 @@ def test_copy_and_preview_never_expose_any_protected_source(
     destination = tmp_path / "session"
     destination.mkdir()
     with pytest.raises(UnsafePathError):
-        copy_command_input_file(destination, source, cwd=writable)
+        copy_command_input_file(destination, source)
     preview = describe_command_input_paths([source], cwd=writable)[0]
     assert not preview.reachable
     assert preview.grant is None
@@ -81,7 +81,7 @@ def test_copy_and_preview_never_expose_any_protected_source(
 
 @pytest.mark.parametrize("cwd", [None, "new"])
 def test_old_turn_link_is_refused_after_switching_working_directory(
-    tmp_path, symlinks, cwd
+    tmp_path, symlinks, cwd, monkeypatch
 ):
     from guildbotics.utils.safe_paths import UnsafePathError
 
@@ -93,8 +93,12 @@ def test_old_turn_link_is_refused_after_switching_working_directory(
     (old / "link").symlink_to(private, target_is_directory=True)
     new = tmp_path / "new"
     new.mkdir()
+    monkeypatch.chdir(new)
     with pytest.raises(UnsafePathError):
-        copy_command_input_file(tmp_path, old / "link/report", cwd=new if cwd else None)
+        copy_command_input_file(tmp_path, old / "link/report")
+    assert describe_command_input_paths(
+        [old / "link/report"], cwd=new if cwd else None
+    )[0].problem
     assert not list(tmp_path.glob("*-report"))
 
 
@@ -122,6 +126,48 @@ def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
         filename="clipboard.png",
         headers=Headers({"content-type": content_type}),
     )
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_copy_source_disappearance_is_invalid_input_and_cleans_partial_copy(
+    tmp_path, monkeypatch, language
+):
+    from fastapi.testclient import TestClient
+
+    from guildbotics.app_api.api import create_app
+    from guildbotics.utils import i18n_tool
+
+    source = tmp_path / "report"
+    source.write_text("public")
+    original = command_input_files.consume_host_file
+
+    def disappear(path, consume):
+        path.unlink()
+        original(path, consume)
+
+    monkeypatch.setattr(command_input_files, "consume_host_file", disappear)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    client = TestClient(
+        create_app(session_token="secret", command_input_file_store=store)
+    )
+    previous = i18n_tool.get_language()
+    i18n_tool.set_language(language)
+    try:
+        response = client.post(
+            "/commands/input-files/copy",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+            json={"path": str(source)},
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "command_input_file_invalid"
+        assert (
+            i18n_tool.t("safe_paths.file_missing", path=source)
+            in response.json()["message"]
+        )
+        assert not list(store._directory.glob("*report*"))
+    finally:
+        i18n_tool.set_language(previous)
+        store.close()
 
 
 def test_user_copy_accepts_linked_sources_and_streams_a_growing_file(
@@ -419,8 +465,11 @@ def test_copy_command_input_file_refuses_directories_and_large_files(
 
     with pytest.raises(ValueError, match="is not a file"):
         copy_command_input_file(directory, folder)
-    with pytest.raises(ValueError, match="is not a file"):
+    with pytest.raises(ValueError) as error:
         copy_command_input_file(directory, tmp_path / "missing.txt")
+    assert str(error.value) == command_input_files.t(
+        "safe_paths.file_missing", path=tmp_path / "missing.txt"
+    )
     with pytest.raises(ValueError, match="too large"):
         copy_command_input_file(directory, big)
 
@@ -494,13 +543,12 @@ def test_store_preserves_another_active_session(tmp_path: Path) -> None:
 def test_session_creation_refuses_an_exchange_name_swapped_after_validation(
     tmp_path, monkeypatch, symlinks
 ):
-    from guildbotics.intelligences.agent_environment import contract
     from guildbotics.utils.safe_paths import UnsafePathError
 
     root = tmp_path / "inputs"
     outside = tmp_path / "outside"
     outside.mkdir(mode=0o755)
-    validate = contract.validate_mount_source
+    validate = command_input_files.validate_mount_source
 
     def swap(path, *args, **kwargs):
         checked = validate(path, *args, **kwargs)
@@ -508,7 +556,7 @@ def test_session_creation_refuses_an_exchange_name_swapped_after_validation(
         root.symlink_to(outside, target_is_directory=True)
         return checked
 
-    monkeypatch.setattr(contract, "validate_mount_source", swap)
+    monkeypatch.setattr(command_input_files, "validate_mount_source", swap)
     with pytest.raises((UnsafePathError, OSError)):
         CommandInputFileStore(root=root).start()
     assert not list(outside.iterdir())

@@ -366,10 +366,11 @@ def get_person_config_path(
     Returns:
         Path: The absolute path to the configuration file.
     """
-    from guildbotics.utils.person_id import validate_person_id
+
+    from guildbotics.utils.person_id import person_config_directory
 
     p = get_config_path(
-        f"team/members/{validate_person_id(person_id)}/{path_str}", language_code
+        (person_config_directory(person_id) / path_str).as_posix(), language_code
     )
     if p.exists():
         return p

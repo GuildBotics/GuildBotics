@@ -1,0 +1,7 @@
+en:
+  id_requirement: "Use lowercase letters, digits, _ or - for the member ID. Windows reserved names are not allowed."
+  directory_name: "The stored member directory must be one printable name without separators, a drive or stream suffix, or trailing dots or spaces."
+  directory_mismatch: "The member ID must match its directory name. Rename or delete the stored configuration in setup."
+  invalid_fields: "Invalid member fields: %{fields}. Correct the configuration in setup."
+  invalid_yaml: "The member file is not valid YAML. Correct the configuration in setup."
+  invalid: "Cannot load member configuration %{path}: %{reason}"

@@ -161,9 +161,7 @@ describe("CommandInput", () => {
 
     fireEvent.click(screen.getByRole("button", { name: t("commands.inputPathCopy") }));
 
-    await waitFor(() =>
-      expect(copyMock).toHaveBeenCalledWith("/Users/me/Desktop/shot.png", "/work/clone"),
-    );
+    await waitFor(() => expect(copyMock).toHaveBeenCalledWith("/Users/me/Desktop/shot.png"));
     await waitFor(() =>
       expect(input).toHaveValue(
         "describe\n/Users/me/gone.txt\n/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",

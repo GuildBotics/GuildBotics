@@ -161,6 +161,7 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
     github_app_key_dir,
     person_config_paths,
+    stored_person_config_dir,
     stored_person_config_paths,
 )
 from guildbotics.editions.simple.slack_app_setup import (
@@ -755,9 +756,7 @@ def create_app(
         request: CommandInputFileCopyRequest,
         _: None = Depends(require_token),
     ) -> CommandInputFileResponse:
-        return _store_command_input(
-            lambda: input_file_store.copy(request.path, command_cwd(request.cwd))
-        )
+        return _store_command_input(lambda: input_file_store.copy(request.path))
 
     def _store_command_input(
         store: Callable[[], Path],
@@ -1467,10 +1466,11 @@ def create_app(
         _: None = Depends(require_token),
     ) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
-        revisions = config_repository(config_dir).revisions(
-            stored_person_config_paths(person_id)
-        )
         try:
+            stored_person_config_dir(config_dir, person_id)
+            revisions = config_repository(config_dir).revisions(
+                stored_person_config_paths(person_id)
+            )
             snapshot: PersonConfigSnapshot = (
                 SimplePersonSetupService().read_person_config(
                     config_dir=config_dir,

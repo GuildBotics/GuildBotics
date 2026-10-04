@@ -2274,7 +2274,7 @@ const resources = {
           failed: "サービスオーナーを読み取れませんでした",
         },
         sshKey: {
-          title: "この device の SSH 鍵",
+          title: "この端末の SSH 鍵",
           body: "この公開鍵を Hub マシンの authorized_keys へ追加してください。GuildBotics が代行はしません。その操作自体が、そのマシンへのアクセス権を持っていることの証明になるためです。",
           create: "鍵を作成する",
           copy: "コピー",
