@@ -175,6 +175,42 @@ def test_selected_workspace_registration_cannot_be_removed(tmp_path):
     assert tmp_path in registered_workspaces()
 
 
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("fault", ["permission", "link"])
+def test_registration_removal_needs_no_access_to_obsolete_path(
+    tmp_path, monkeypatch, active, fault
+):
+    from guildbotics.utils import safe_paths
+    from guildbotics.utils.safe_paths import HostPathPermissionError, UnsafePathError
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    path = tmp_path / "obsolete"
+    register_workspace(path)
+    original = safe_paths.inspect_host_path
+
+    def inspect(path_arg, *args, **kwargs):
+        if path_arg == path:
+            raise (
+                HostPathPermissionError(path)
+                if fault == "permission"
+                else UnsafePathError("linked ancestor")
+            )
+        return original(path_arg, *args, **kwargs)
+
+    monkeypatch.setattr(safe_paths, "inspect_host_path", inspect)
+    response = _client(RuntimeStub(path if active else tmp_path)).request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(path)},
+    )
+    assert response.status_code == (HTTP_BAD_REQUEST if active else HTTP_OK)
+    assert (path in registered_workspaces()) is active
+
+
 @pytest.mark.parametrize("problem", ["registry", "permission"])
 def test_api_starts_unselected_when_input_store_cannot_be_initialized(
     tmp_path, monkeypatch, problem
@@ -184,7 +220,7 @@ def test_api_starts_unselected_when_input_store_cannot_be_initialized(
         GUILDBOTICS_CONFIG_DIR,
         GUILDBOTICS_WORKSPACE_ROOT,
     )
-    from guildbotics.utils.safe_paths import UnsafePathError
+    from guildbotics.utils.safe_paths import HostPathPermissionError, UnsafePathError
 
     for key in (GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT):
         monkeypatch.delenv(key, raising=False)
@@ -194,17 +230,18 @@ def test_api_starts_unselected_when_input_store_cannot_be_initialized(
         raise (
             UnsafePathError("registry is invalid")
             if problem == "registry"
-            else PermissionError("Documents denied")
+            else HostPathPermissionError(tmp_path / "inputs")
         )
 
-    monkeypatch.setattr(store, "start", fail)
+    monkeypatch.setattr(store, "_start", fail)
     with TestClient(
         api.create_app(session_token="secret", command_input_file_store=store)
     ) as client:
         response = client.get("/config/status", headers=AUTH_HEADERS)
         assert response.status_code == HTTP_OK
         assert response.json()["workspace"] is None
-        assert response.json()["workspace_problem"]
+        assert response.json()["workspace_problem"] == ""
+        assert response.json()["input_store_problem"]
 
 
 def _runtime_status(
@@ -246,6 +283,10 @@ class RuntimeStub:
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
+
+    @property
+    def selected_workspace(self) -> Path | None:
+        return self.config_status.workspace
 
     async def fetch_project_status_options(
         self, request: ProjectStatusOptionsRequest

@@ -361,15 +361,16 @@ class AppRuntime:
         """Expose the process-wide sync/relay service to the API composition root."""
         return self._workspace_sync
 
-    def get_config_status(self) -> ConfigStatus:
+    @property
+    def selected_workspace(self) -> Path | None:
+        """The selected name, without opening potentially obsolete files."""
         try:
-            workspace: Path | None = get_workspace_root()
+            return get_workspace_root()
         except WorkspaceNotConfiguredError:
-            # First launch: no workspace is selected yet. Never fall back to
-            # the process cwd — it may be a source checkout, and reporting it
-            # would let Setup create `.guildbotics/` there without an explicit
-            # choice.
-            workspace = None
+            return None
+
+    def get_config_status(self) -> ConfigStatus:
+        workspace = self.selected_workspace
         config_dir = get_primary_config_dir() or (
             workspace / ".guildbotics" / "config" if workspace is not None else None
         )

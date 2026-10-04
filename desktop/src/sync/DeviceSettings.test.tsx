@@ -126,6 +126,27 @@ describe("hosting the hub here", () => {
 });
 
 describe("registered workspaces", () => {
+  it("allows cancellation and displays mutation failures inside the confirmation", async () => {
+    vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one"]);
+    vi.mocked(unregisterWorkspace).mockRejectedValue(new Error("Registry is locked"));
+    const user = userEvent.setup();
+    renderSettings();
+    const open = await screen.findByRole("button", {
+      name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+    });
+    await user.click(open);
+    await user.click(screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }));
+    expect(unregisterWorkspace).not.toHaveBeenCalled();
+    await user.click(open);
+    await user.click(
+      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
+    );
+    const error = await screen.findByText("Registry is locked");
+    expect(error.closest('[role="dialog"]')).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }));
+    await user.click(open);
+    expect(screen.queryByText("Registry is locked")).not.toBeInTheDocument();
+  });
   it("marks the selected workspace and disables its removal", async () => {
     vi.mocked(getConfigStatus).mockResolvedValue({ workspace: "/work/one" } as Awaited<
       ReturnType<typeof getConfigStatus>

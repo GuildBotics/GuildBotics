@@ -37,9 +37,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     validate_mount_source,
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_environment.status import (
-    filesystem_permission_problem,
-)
 from guildbotics.intelligences.agent_runtime.environment import (
     command_environment,
     command_path,
@@ -144,12 +141,8 @@ def host_command_cwd() -> Path:
     cwd = exchange_dir()
     try:
         cwd = validate_mount_source(cwd, protected_paths(), grant=True, create=True)
-    except PermissionError as exc:
-        raise CommandError(filesystem_permission_problem(cwd)) from exc
     except AccessContractError as exc:
-        if not isinstance(exc.__cause__, PermissionError):
-            raise CommandError(str(exc)) from exc
-        raise CommandError(filesystem_permission_problem(cwd)) from exc
+        raise CommandError(str(exc)) from exc
     return cwd
 
 

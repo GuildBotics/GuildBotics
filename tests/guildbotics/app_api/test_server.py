@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
 import os
 import sys
-from types import SimpleNamespace
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -119,6 +119,7 @@ def test_explicit_restore_registers_selected_workspace(tmp_path, monkeypatch):
 def test_malformed_grants_do_not_prevent_desktop_startup(
     captured_launch, monkeypatch, tmp_path, file
 ):
+    monkeypatch.chdir(tmp_path)
     _isolate_runtime_environment(monkeypatch)
     selected = tmp_path / "selected"
     selected.mkdir()
@@ -129,9 +130,9 @@ def test_malformed_grants_do_not_prevent_desktop_startup(
     monkeypatch.setenv(TOKEN_ENV, "session-token")
     monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
     server.main()
-    assert captured_launch["create_app"]["workspace_problem"]
-    assert GUILDBOTICS_WORKSPACE_ROOT not in os.environ
-    assert GUILDBOTICS_CONFIG_DIR not in os.environ
+    assert captured_launch["create_app"]["workspace_problem"] == ""
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(selected)
+    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(selected / ".guildbotics/config")
 
 
 def test_restored_runtime_switches_workspace_root(tmp_path: Path, monkeypatch) -> None:

@@ -1,5 +1,5 @@
-from io import BytesIO
 import os
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -7,15 +7,15 @@ from fastapi import UploadFile
 from starlette.datastructures import Headers
 
 from guildbotics.app_api import command_input_files
-from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.command_input_files import (
-    command_cwd,
     CommandInputFileStore,
     GrantSuggestion,
+    command_cwd,
     copy_command_input_file,
     describe_command_input_paths,
     save_command_input_file,
 )
+from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
@@ -29,6 +29,110 @@ def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
         filename="clipboard.png",
         headers=Headers({"content-type": content_type}),
     )
+
+
+def test_user_copy_accepts_linked_sources_and_streams_a_growing_file(
+    tmp_path, monkeypatch, symlinks
+):
+    original = tmp_path / "original"
+    original.mkdir()
+    source = original / "report.txt"
+    source.write_bytes(b"public")
+    link = tmp_path / "Dropbox"
+    link.symlink_to(original, target_is_directory=True)
+    destination = tmp_path / "session"
+    destination.mkdir()
+    assert (
+        copy_command_input_file(destination, link / source.name).read_bytes()
+        == b"public"
+    )
+    before = set(destination.iterdir())
+    monkeypatch.setattr(command_input_files, "MAX_COMMAND_INPUT_FILE_BYTES", 8)
+    calls = []
+
+    def consume(path, chunk):
+        assert path == source
+        for content in (b"1234", b"5678", b"9", b"never"):
+            calls.append(content)
+            chunk(content)
+
+    monkeypatch.setattr(command_input_files, "consume_host_file", consume)
+    with pytest.raises(ValueError, match="too large"):
+        copy_command_input_file(destination, link / source.name)
+    assert calls == [b"1234", b"5678", b"9"]
+    assert set(destination.iterdir()) == before
+
+
+@pytest.mark.parametrize("stage", ["resolve", "stat"])
+def test_copy_permission_refusal_preserves_absolute_path(tmp_path, monkeypatch, stage):
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    source = tmp_path / "report"
+    source.write_text("public")
+    original = getattr(Path, stage)
+
+    def refuse(self, *args, **kwargs):
+        if self == source:
+            raise PermissionError(13, "denied", str(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, stage, refuse)
+    with pytest.raises(HostPathPermissionError) as failure:
+        copy_command_input_file(tmp_path, source)
+    assert failure.value.filename == str(source)
+
+
+def test_input_store_problem_clears_after_successful_retry(tmp_path, monkeypatch):
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    start = store._start
+    monkeypatch.setattr(
+        store,
+        "_start",
+        lambda: (_ for _ in ()).throw(HostPathPermissionError(store._root)),
+    )
+    with pytest.raises(HostPathPermissionError):
+        store.start()
+    assert store.problem
+    monkeypatch.setattr(store, "_start", start)
+    try:
+        assert store.save(_upload(b"image")).is_file()
+        assert store.problem == ""
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("fault", ["permission", "link"])
+def test_unavailable_old_session_lock_does_not_block_new_sessions(
+    tmp_path, monkeypatch, symlinks, fault
+):
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    root = tmp_path / "inputs"
+    old = root / "session-old"
+    old.mkdir(parents=True)
+    lock = old / ".session.lock"
+    original = command_input_files.open_host_file
+    if fault == "link":
+        target = tmp_path / "keep"
+        target.write_text("private")
+        lock.symlink_to(target)
+    else:
+
+        def open_file(path):
+            if path == lock:
+                raise HostPathPermissionError(lock)
+            return original(path)
+
+        monkeypatch.setattr(command_input_files, "open_host_file", open_file)
+    store = CommandInputFileStore(root=root)
+    try:
+        store.start()
+        assert store.save(_upload(b"image")).is_file()
+        assert old.is_dir()
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("action", ["save", "copy", "close"])

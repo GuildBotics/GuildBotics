@@ -51,7 +51,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     DeniedPath,
     NetworkPolicy,
     ResolvedAccess,
-    builtin_denied_paths,
+    builtin_denied,
     validate_mount_source,
 )
 from guildbotics.utils.os_language import os_ui_language
@@ -163,7 +163,7 @@ def build_environment_spec(
         dict.fromkeys(
             (
                 *contract.access.denied,
-                *(DeniedPath(p, True) for p in builtin_denied_paths(home)),
+                *builtin_denied(home),
             )
         )
     )

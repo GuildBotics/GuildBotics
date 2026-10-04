@@ -362,6 +362,15 @@ links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
 (`data/workspaces.json`); Desktop lists and unregisters entries through
 `/device/workspaces`. Workspace admission rejects locations under the target's grants
 or the exchange directory before registration or initialization.
+Admission permits unavailable grant configuration so editing and synchronization
+can repair it; command contract loading remains strict. Protected link names and
+resolvable destinations share one interpretation for mounts and input previews;
+link loops protect the lexical name. `HostPathPermissionError` keeps absolute
+paths and localized guidance within the common `UnsafePathError` contract.
+Input-store failures belong to the store, separate from workspace selection,
+and clear after successful startup retry. Member IDs are single validated path
+components, and the installed package always mounts at
+`/opt/guildbotics/code/guildbotics` regardless of its physical directory name.
 
 ### Model effort
 

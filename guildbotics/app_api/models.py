@@ -82,6 +82,7 @@ class ShutdownResponse(BaseModel):
 
 class ConfigStatus(BaseModel):
     workspace_problem: str = ""
+    input_store_problem: str = ""
     cwd: Path
     workspace: Path | None
     config_dir: Path | None

@@ -279,10 +279,9 @@ def create_app(
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
         added_app_handler = False
         added_uvicorn_handler = False
-        try:
+        # The input store owns this retryable refusal, not workspace selection.
+        with contextlib.suppress(UnsafePathError):
             input_file_store.start()
-        except (UnsafePathError, PermissionError) as exc:
-            app_runtime.workspace_problem = app_runtime.workspace_problem or str(exc)
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
@@ -344,21 +343,6 @@ def create_app(
         request: Request, exc: UnsafePathError
     ) -> JSONResponse:
         return _error_response(400, "unsafe_host_path", str(exc), {})
-
-    @app.exception_handler(PermissionError)
-    async def path_permission_handler(
-        request: Request, exc: PermissionError
-    ) -> JSONResponse:
-        from guildbotics.intelligences.agent_environment.status import (
-            filesystem_permission_problem,
-        )
-
-        return _error_response(
-            400,
-            "unsafe_host_path",
-            filesystem_permission_problem(Path(exc.filename or Path.home())),
-            {},
-        )
 
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
@@ -451,13 +435,21 @@ def create_app(
     def remove_device_workspace(
         request: WorkspaceChangeRequest, _: None = Depends(require_token)
     ) -> list[str]:
-        from guildbotics.utils.safe_paths import inspect_host_path
+        from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
 
-        selected = app_runtime.get_config_status().workspace
+        selected = app_runtime.selected_workspace
         if selected is not None:
-            current = inspect_host_path(selected, missing=True)
-            removing = inspect_host_path(request.workspace_dir, missing=True)
-            if current.contains(removing) and removing.contains(current):
+            same = normalize_host_path(selected) == normalize_host_path(
+                request.workspace_dir
+            )
+            if not same:
+                try:
+                    current = inspect_host_path(selected, missing=True)
+                    removing = inspect_host_path(request.workspace_dir, missing=True)
+                    same = current.contains(removing) and removing.contains(current)
+                except UnsafePathError:
+                    pass  # Obsolete registrations must remain removable.
+            if same:
                 raise UnsafePathError(t("safe_paths.active_workspace"))
         unregister_workspace(request.workspace_dir)
         return [str(path) for path in registered_workspaces()]
@@ -499,7 +491,9 @@ def create_app(
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:
-        return app_runtime.get_config_status()
+        return app_runtime.get_config_status().model_copy(
+            update={"input_store_problem": input_file_store.problem}
+        )
 
     @app.post("/workspace", response_model=ConfigStatus, responses=error_responses)
     def workspace_change(

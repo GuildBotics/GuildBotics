@@ -5,5 +5,7 @@ en:
   link: "Links are not allowed in %{path}; use the real directory."
   registry: "Cannot read the workspace registry %{path}: %{reason}. Repair this file before selecting a workspace or running commands."
   missing: "Host directory does not exist: %{path}."
-  protected: "Cannot share %{path}: it overlaps protected directory %{protected}. Keep the workspace outside the working repository, or choose another working directory. For a workspace no longer used on this device, remove its registration in Device and Hub → Registered workspaces."
+  protected_credentials: "Cannot share %{path}: it overlaps credentials or device state in %{protected}. Choose another working directory or narrow the directory access."
+  protected_workspace: "Cannot share %{path}: it overlaps workspace state in %{protected}. Keep the workspace outside the working repository, or choose another working directory. For a workspace no longer used on this device, remove its registration in Device and hub → Registered workspaces."
+  protected_local: "Cannot share %{path}: it overlaps %{protected}, which this device's directory access settings deny. Narrow the directory access or revise the denied directory setting."
   workspace_granted: "Cannot open or create workspace %{path}: it is inside granted directory %{granted}. Choose a location outside the grants and exchange directory."

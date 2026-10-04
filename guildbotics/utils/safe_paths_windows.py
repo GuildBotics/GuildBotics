@@ -221,8 +221,8 @@ def inspect_windows_path(
             kernel.CloseHandle(handle)
 
 
-def read_windows_file(path: Path) -> bytes:
-    """Read through the same no-follow leaf handle."""
+def consume_windows_file(path: Path, consume_chunk: Callable[[bytes], None]) -> None:
+    """Stream through the same no-follow leaf handle."""
     kernel = _WINDOWS.WinDLL("kernel32", use_last_error=True)
     kernel.ReadFile.argtypes = [
         wintypes.HANDLE,
@@ -231,7 +231,6 @@ def read_windows_file(path: Path) -> bytes:
         ctypes.POINTER(wintypes.DWORD),
         wintypes.LPVOID,
     ]
-    chunks: list[bytes] = []
 
     def consume(handle: int) -> None:
         buffer = ctypes.create_string_buffer(65536)
@@ -243,12 +242,11 @@ def read_windows_file(path: Path) -> bytes:
                 raise _WINDOWS.WinError(_WINDOWS.get_last_error())
             if not count.value:
                 return
-            chunks.append(buffer.raw[: count.value])
+            consume_chunk(buffer.raw[: count.value])
 
     _, missing = inspect_windows_path(path, False, False, consume)
     if missing:
         raise FileNotFoundError(str(path))
-    return b"".join(chunks)
 
 
 def open_windows_file(path: Path) -> IO[str]:

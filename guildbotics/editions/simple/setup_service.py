@@ -26,6 +26,11 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
     save_yaml_file,
 )
+from guildbotics.utils.person_id import (
+    PERSON_ID_REQUIREMENT,
+    is_valid_person_id,
+    validate_person_id,
+)
 from guildbotics.utils.secret_store import (
     SecretStore,
     resolve_secret_store,
@@ -43,20 +48,10 @@ HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
 SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
 CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
-# A person ID is also a directory name under ``team/members``, so it must not
-# carry separators or traversal segments.
-PERSON_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
-PERSON_ID_REQUIREMENT = "person_id must contain only lowercase letters, digits, _ or -"
-
 # Default GitHub Projects status names used when no custom lane mapping is set.
 DEFAULT_LANE_READY = "Todo"
 DEFAULT_LANE_WORKING = "In Progress"
 DEFAULT_LANE_DONE = "Done"
-
-
-def is_valid_person_id(value: str) -> bool:
-    """Return whether a person ID is usable as a member directory name."""
-    return bool(PERSON_ID_PATTERN.match(value))
 
 
 def github_app_key_dir() -> Path:
@@ -290,12 +285,7 @@ class PersonSetupInput(BaseModel):
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
-    @field_validator("person_id")
-    @classmethod
-    def validate_person_id(cls, value: str) -> str:
-        if not is_valid_person_id(value):
-            raise ValueError(PERSON_ID_REQUIREMENT)
-        return value
+    _person_id = field_validator("person_id")(validate_person_id)
 
     @field_validator("person_name")
     @classmethod
@@ -354,6 +344,7 @@ class PersonConfigSnapshot(BaseModel):
 
 class PersonUpdateInput(PersonSetupInput):
     original_person_id: str
+    _original_person_id = field_validator("original_person_id")(validate_person_id)
     # Revisions this form was composed against; empty for a member being added.
     expected_revisions: dict[str, str] = Field(default_factory=dict)
 
@@ -370,7 +361,7 @@ PROJECT_CONFIG_PATHS = (
 
 def person_config_paths(person_id: str) -> tuple[str, ...]:
     """Return the config files the member screen reads and writes."""
-    return (f"team/members/{person_id}/person.yml",)
+    return (f"team/members/{validate_person_id(person_id)}/person.yml",)
 
 
 def _project_config_file(config_dir: Path) -> Path:
@@ -378,7 +369,7 @@ def _project_config_file(config_dir: Path) -> Path:
 
 
 def _person_config_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / f"team/members/{person_id}"
+    return config_dir / f"team/members/{validate_person_id(person_id)}"
 
 
 def _person_config_file(config_dir: Path, person_id: str) -> Path:

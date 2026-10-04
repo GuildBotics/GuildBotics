@@ -9,12 +9,12 @@ import yaml
 from pydantic import ValidationError
 
 from guildbotics.intelligences.agent_environment.contract import (
-    AccessContract,
-    AccessContractError,
-    SENSITIVE_HOME_DIRECTORIES,
-    DocumentGrant,
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
+    SENSITIVE_HOME_DIRECTORIES,
+    AccessContract,
+    AccessContractError,
+    DocumentGrant,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
@@ -37,6 +37,90 @@ _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
 
 @pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("shape", ["self", "mutual", "broken"])
+def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
+    tmp_path, symlinks, name, shape
+):
+    from guildbotics.intelligences.agent_environment.contract import (
+        DeniedPath,
+        ResolvedAccess,
+        ResolvedGrant,
+    )
+
+    private = tmp_path / "private" / name
+    private.parent.mkdir(parents=True, exist_ok=True)
+    other = private.with_name(private.name + "-other")
+    private.symlink_to(private if shape == "self" else other, target_is_directory=True)
+    if shape == "mutual":
+        other.symlink_to(private, target_is_directory=True)
+    work = tmp_path / "work"
+    work.mkdir()
+    file = work / "report"
+    file.write_text("public")
+    denied = (DeniedPath(private, "credentials"),)
+    assert validate_mount_source(work, denied, grant=True) == work
+    access = ResolvedAccess(
+        paths=(ResolvedGrant(work, "read", str(work)),), denied=denied
+    )
+    assert access.reaches(file)
+    with pytest.raises(AccessContractError):
+        validate_mount_source(private.parent, denied, grant=True)
+
+
+def test_local_deny_link_uses_the_same_name_and_target_facts(tmp_path, symlinks):
+    home = tmp_path / "home"
+    home.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (home / "deny").symlink_to(private, target_is_directory=True)
+    access = resolve_access(
+        SharedGrants(), LocalGrants(deny=["deny"]), home, create=False
+    )
+    for source in (home, private):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(source, access.denied, grant=True)
+    (home / "deny").unlink()
+    (home / "deny").symlink_to(home, target_is_directory=True)
+    with pytest.raises(AccessContractError, match="home|HOME"):
+        resolve_access(SharedGrants(), LocalGrants(deny=["deny"]), home, create=False)
+
+
+@pytest.mark.parametrize("scope", ["shared", "local"])
+@pytest.mark.parametrize(
+    "content",
+    ["documents: [", "[]", "unknown: true", "paths: [{path: '..', access: read}]"],
+)
+def test_invalid_grants_allow_selection_but_still_refuse_execution(
+    tmp_path, monkeypatch, scope, content
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.commands.metadata import CommandAccess
+    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.utils.fileio import apply_workspace_root
+
+    root = tmp_path / "repair"
+    root.mkdir()
+    path = (
+        root
+        / ".guildbotics"
+        / (
+            f"config/{FILESYSTEM_GRANTS_PATH}"
+            if scope == "shared"
+            else f"local/{LOCAL_GRANTS_FILENAME}"
+        )
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(content)
+    assert validate_workspace_location(root) == root
+    monkeypatch.chdir(tmp_path)
+    apply_workspace_root(root)
+    with pytest.raises(CommandError):
+        environment._contract(CommandAccess())
+    path.write_text("{}")
+    assert environment._contract(CommandAccess()).access.documents
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
 def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
     tmp_path, monkeypatch, symlinks, name
 ):
@@ -51,7 +135,7 @@ def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unre
     link.symlink_to(target, target_is_directory=True)
     from guildbotics.intelligences.agent_environment.contract import DeniedPath
 
-    denied = (DeniedPath(link, True),)
+    denied = (DeniedPath(link, "credentials"),)
     unrelated = tmp_path / "work"
     unrelated.mkdir()
     assert validate_mount_source(unrelated, denied, grant=True) == unrelated

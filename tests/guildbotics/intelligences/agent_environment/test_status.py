@@ -1,9 +1,9 @@
 """One reading of the device answers the CLI, the Desktop, and a refused turn."""
 
 from __future__ import annotations
-import os
 
 import errno
+import os
 from pathlib import Path
 
 import pytest
@@ -35,6 +35,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 from guildbotics.intelligences.agent_runtime.environment import _ready
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
 from guildbotics.intelligences.cli_agents import CliAgentInfo
+from guildbotics.utils import processes, safe_paths
 from guildbotics.utils.i18n_tool import t
 
 
@@ -321,8 +322,8 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    fake_platform(module, "darwin")
-    monkeypatch.setattr(module, "launching_app_name", lambda: app)
+    fake_platform(safe_paths, "darwin")
+    monkeypatch.setattr(processes, "launching_app_name", lambda: app)
 
     status = device_status()
     assert status.setting == "filesystem"
@@ -351,7 +352,7 @@ def test_grant_preflight_checks_parents_without_creating_directories(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    fake_platform(module, "linux")
+    fake_platform(safe_paths, "linux")
     status = device_status()
     assert status.setting == "filesystem"
     assert status.refusal == t(
@@ -378,8 +379,8 @@ def test_nofollow_open_permission_error_keeps_macos_guidance(
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(safe_paths.os, "open", open_path)
-    fake_platform(module, "darwin")
-    monkeypatch.setattr(module, "launching_app_name", lambda: "")
+    fake_platform(safe_paths, "darwin")
+    monkeypatch.setattr(processes, "launching_app_name", lambda: "")
     assert device_status().refusal == t(
         "intelligences.agent_environment.filesystem.macos_documents", app=""
     )
@@ -467,10 +468,9 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
 ):
     import shlex
 
+    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.status import ToolStatus
     from guildbotics.utils.i18n_tool import set_language
-
-    from guildbotics.intelligences.agent_environment import provider_state
 
     home = tmp_path / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))

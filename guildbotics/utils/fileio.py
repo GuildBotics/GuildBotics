@@ -238,7 +238,11 @@ def get_workspace_local_path(
 
 def get_member_clone_path(person_id: str, workspace_root: Path | None = None) -> Path:
     """Return the member working clone directory (not synchronized)."""
-    return get_workspace_local_path("clones", person_id, workspace_root=workspace_root)
+    from guildbotics.utils.person_id import validate_person_id
+
+    return get_workspace_local_path(
+        "clones", validate_person_id(person_id), workspace_root=workspace_root
+    )
 
 
 def get_workspace_work_path(
@@ -362,7 +366,11 @@ def get_person_config_path(
     Returns:
         Path: The absolute path to the configuration file.
     """
-    p = get_config_path(f"team/members/{person_id}/{path_str}", language_code)
+    from guildbotics.utils.person_id import validate_person_id
+
+    p = get_config_path(
+        f"team/members/{validate_person_id(person_id)}/{path_str}", language_code
+    )
     if p.exists():
         return p
     return get_config_path(path_str, language_code)

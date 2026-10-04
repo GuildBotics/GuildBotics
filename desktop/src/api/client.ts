@@ -37,6 +37,7 @@ export function memberAvatarUrl(personId: string, cacheBust?: number | string): 
 
 export type ConfigStatus = {
   workspace_problem?: string;
+  input_store_problem?: string;
   cwd: string;
   workspace: string | null;
   config_dir: string | null;

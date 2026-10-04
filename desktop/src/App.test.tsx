@@ -172,6 +172,20 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("clears a recovered input-store alert without changing workspace", async () => {
+    const status = await getConfigStatus();
+    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+      ...status,
+      input_store_problem: "Input folder is unavailable",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findByText("Input folder is unavailable")).toBeInTheDocument();
+    await waitFor(
+      () => expect(screen.queryByText("Input folder is unavailable")).not.toBeInTheDocument(),
+      { timeout: 4000 },
+    );
+  });
   it("shows the refused workspace reason while leaving setup accessible", async () => {
     vi.mocked(getConfigStatus).mockResolvedValueOnce({
       cwd: "/exchange",

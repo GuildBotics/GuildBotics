@@ -83,7 +83,6 @@ from guildbotics.intelligences.agent_environment.spec import (
 from guildbotics.intelligences.agent_environment.status import (
     DeviceStatus,
     device_status,
-    filesystem_permission_problem,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainError,
@@ -153,7 +152,7 @@ _LOG_DRAIN_SECONDS = 2.0
 #: A line the entry logs: its level, then its message.
 _LOG_LINE = re.compile(r"(DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)", re.DOTALL)
 _PACKAGE = normalize_host_path(PACKAGE_ROOT)
-CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / _PACKAGE.name), _PACKAGE, readonly=True)
+CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / "guildbotics"), _PACKAGE, readonly=True)
 
 
 def code_path(path: Path) -> str:
@@ -310,10 +309,6 @@ def _contract(access: CommandAccess) -> AccessContract:
             access=resolve_access(load_shared_grants(), load_local_grants()),
             read_only=access.read_only,
         )
-    except PermissionError as exc:
-        raise CommandError(
-            filesystem_permission_problem(Path(exc.filename or Path.home()))
-        ) from exc
     except (AccessContractError, ToolchainError) as exc:
         raise CommandError(str(exc)) from exc
 

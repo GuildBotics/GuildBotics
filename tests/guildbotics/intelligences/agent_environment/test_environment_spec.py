@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfoNotFoundError
 import pytest
 import tzlocal
 
+from guildbotics.intelligences.agent_environment import spec as spec_module
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
     AccessContractError,
@@ -24,7 +25,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     SharedGrants,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment import spec as spec_module
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
     EnvironmentMount,
@@ -151,7 +151,7 @@ def test_a_grant_containing_a_deny_is_refused(tmp_path: Path, read_only: bool) -
     granted.mkdir()
     access = ResolvedAccess(
         documents=(ResolvedGrant(granted, "read", "granted"),),
-        denied=(DeniedPath(granted / "private", False),),
+        denied=(DeniedPath(granted / "private", "local"),),
     )
     with pytest.raises(AccessContractError):
         build_environment_spec(_contract(access, read_only=read_only), cwd)
@@ -160,7 +160,7 @@ def test_a_grant_containing_a_deny_is_refused(tmp_path: Path, read_only: bool) -
 def test_a_missing_denied_corner_also_refuses_its_parent(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     cwd.mkdir()
-    access = ResolvedAccess(denied=(DeniedPath(cwd / "not-created", False),))
+    access = ResolvedAccess(denied=(DeniedPath(cwd / "not-created", "local"),))
     with pytest.raises(AccessContractError):
         build_environment_spec(_contract(access), cwd)
 

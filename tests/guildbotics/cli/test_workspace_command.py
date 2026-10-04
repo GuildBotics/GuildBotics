@@ -2,12 +2,52 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import pytest
 
+import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main
 from guildbotics.cli.workspace import workspace
+
+
+@pytest.mark.parametrize("entry", ["use", "member"])
+def test_workspace_permission_refusal_is_a_click_error(monkeypatch, tmp_path, entry):
+    from guildbotics.intelligences.agent_environment import contract
+    from guildbotics.utils import workspace_state
+    from guildbotics.utils.safe_paths import (
+        HostPathPermissionError,
+        filesystem_permission_problem,
+    )
+
+    denied = tmp_path / "protected"
+    problem = filesystem_permission_problem(denied)
+
+    def refuse(*args, **kwargs):
+        raise HostPathPermissionError(denied)
+
+    monkeypatch.setattr(workspace_state, "inspect_host_path", refuse)
+    monkeypatch.setattr(contract, "inspect_host_path", refuse)
+    args = (
+        ["workspace", "use", str(denied)]
+        if entry == "use"
+        else ["member", "--workspace", str(denied), "help"]
+    )
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 1
+    assert problem in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("scope", ["config/intelligences", "local"])
+def test_workspace_use_can_select_and_repair_bad_grants(monkeypatch, tmp_path, scope):
+    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "repair"
+    path = project / ".guildbotics" / scope / "cli_agent_filesystem_grants.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text("documents: [")
+    result = CliRunner().invoke(main, ["workspace", "use", str(project)])
+    assert result.exit_code == 0, result.output
+    assert project.exists()
 
 
 @pytest.mark.parametrize("command", [["environment", "status"], ["secrets", "status"]])

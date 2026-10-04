@@ -80,6 +80,7 @@ const resources = {
           confirm:
             "Remove {{path}} from this device’s protected workspaces? Its files remain, but agents may access the location if you grant its directory later.",
           confirmLabel: "Confirm removal",
+          cancel: "Cancel",
         },
         indicator: {
           aria: "Synchronization: {{state}}",
@@ -2120,6 +2121,7 @@ const resources = {
           confirm:
             "{{path}}をこの端末の保護対象から外しますか？ファイルは残りますが、あとでディレクトリへのアクセスを許可すると、エージェントがこの場所へアクセスできます。",
           confirmLabel: "登録解除を確定",
+          cancel: "キャンセル",
         },
         indicator: {
           aria: "同期: {{state}}",
@@ -2597,7 +2599,7 @@ const resources = {
           shortcuts: "ショートカット",
           sync: "同期",
           verification: "検証",
-          device: "device・Hub",
+          device: "端末とHub",
         },
         verification: {
           title: "検証",

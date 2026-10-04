@@ -15,6 +15,7 @@ environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
 
 from __future__ import annotations
 
+import errno
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -37,6 +38,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.safe_paths import (
+    HostPathPermissionError,
     PathFacts,
     host_path_contains,
     inspect_host_path,
@@ -271,8 +273,6 @@ def _load_grants[T: BaseModel](model: type[T], path: Path, where: str) -> T:
         raw = yaml.safe_load(read_host_file(path))
     except FileNotFoundError:
         return model()
-    except PermissionError:
-        raise
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise AccessContractError(
             t("intelligences.agent_environment.grants.invalid", where=where, error=exc)
@@ -305,7 +305,44 @@ class DeniedPath:
     """A path closed on this device: shipped with GuildBotics, or the user's."""
 
     path: Path
-    builtin: bool
+    kind: Literal["credentials", "workspace", "local"]
+
+    @property
+    def builtin(self) -> bool:
+        return self.kind != "local"
+
+    def refusal(self, source: Path) -> str:
+        params = {"path": source, "protected": self.path}
+        return {
+            "credentials": t("safe_paths.protected_credentials", **params),
+            "workspace": t("safe_paths.protected_workspace", **params),
+            "local": t("safe_paths.protected_local", **params),
+        }[self.kind]
+
+    def facts(self) -> tuple[PathFacts, ...]:
+        """Close the link name and any resolvable destination, for all readers."""
+        lexical = inspect_host_path(
+            self.path, missing=True, directory=False, link_as_missing=True
+        )
+        if not lexical.missing:
+            return (lexical,)
+        try:
+            resolved = self.path.resolve()
+        except RuntimeError:  # Python 3.12 reports link loops this way.
+            return (lexical,)
+        except PermissionError as exc:
+            raise HostPathPermissionError(self.path) from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return (lexical,)
+            raise AccessContractError(
+                t("safe_paths.unavailable", path=self.path, reason=exc)
+            ) from exc
+        return (
+            (lexical, inspect_host_path(resolved, missing=True, directory=False))
+            if resolved != lexical.path
+            else (lexical,)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,8 +366,7 @@ class ResolvedAccess:
         return any(
             inspect_host_path(root).contains(target) for root in opened
         ) and not any(
-            inspect_host_path(denied.path, missing=True).contains(target)
-            for denied in self.denied
+            facts.contains(target) for denied in self.denied for facts in denied.facts()
         )
 
 
@@ -391,14 +427,8 @@ def protected_paths(
     if local is None:
         local = load_local_grants() if workspace is not None else LocalGrants()
     return (
-        *(
-            DeniedPath(path, builtin=True)
-            for path in builtin_denied_paths(home_root, workspace)
-        ),
-        *(
-            DeniedPath(_resolve_deny(path, home_root), builtin=False)
-            for path in local.deny
-        ),
+        *builtin_denied(home_root, workspace),
+        *(DeniedPath(_resolve_deny(path, home_root), "local") for path in local.deny),
     )
 
 
@@ -438,10 +468,11 @@ def _resolve_local(
 
 def _resolve_deny(path: str, home_root: Path) -> Path:
     absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
-    target = inspect_host_path(
-        Path(path) if absolute else home_root / path, missing=True
-    ).path
-    if target == home_root or target == Path(target.anchor):
+    target = normalize_host_path(Path(path) if absolute else home_root / path)
+    if any(
+        facts.path == home_root or facts.path == Path(facts.path.anchor)
+        for facts in DeniedPath(target, "local").facts()
+    ):
         raise AccessContractError(
             t("intelligences.agent_environment.grants.deny_too_broad", path=path)
         )
@@ -534,13 +565,13 @@ def _selected_workspace() -> Path | None:
         return None
 
 
-def builtin_denied_paths(
+def builtin_denied(
     home: Path | None = None, workspace: Path | None = None
-) -> tuple[Path, ...]:
+) -> tuple[DeniedPath, ...]:
     """Protected locations, including inactive workspace state and absent dirs."""
     home_root = normalize_host_path(home or Path.home())
-    paths = {
-        normalize_host_path(home_root / name): None
+    paths: dict[Path, Literal["credentials", "workspace", "local"]] = {
+        normalize_host_path(home_root / name): "credentials"
         for name in SENSITIVE_HOME_DIRECTORIES
     }
     for root in (
@@ -548,8 +579,8 @@ def builtin_denied_paths(
         *((workspace,) if workspace is not None else ()),
     ):
         state = normalize_host_path(root / WORKSPACE_STATE_DIRECTORY)
-        paths[state] = None
-    return tuple(paths)
+        paths[state] = "workspace"
+    return tuple(DeniedPath(path, kind) for path, kind in paths.items())
 
 
 def _grant_path(path: str, home: Path) -> Path:
@@ -572,21 +603,9 @@ def validate_mount_source(
     """
     source = inspect_host_path(path, missing=missing or create, directory=False)
     for closed in denied:
-        # The protected name itself is never opened through a link. Its lexical
-        # ancestry and its current destination are both closed, including when
-        # credentials are managed through dotfiles symlinks or junctions.
-        lexical = inspect_host_path(
-            closed.path, missing=True, directory=False, link_as_missing=True
-        )
-        targets: tuple[PathFacts, ...] = (lexical,)
-        resolved = closed.path.resolve() if lexical.missing else lexical.path
-        if resolved != lexical.path:
-            targets += (inspect_host_path(resolved, missing=True, directory=False),)
-        for protected in targets:
+        for protected in closed.facts():
             if source.contains(protected) or (grant and protected.contains(source)):
-                raise AccessContractError(
-                    t("safe_paths.protected", path=source.path, protected=closed.path)
-                )
+                raise AccessContractError(closed.refusal(source.path))
     return inspect_host_path(
         source.path, create=create, missing=missing, directory=False
     ).path
@@ -596,19 +615,32 @@ def validate_workspace_location(workspace: Path) -> Path:
     """Refuse workspace state inside its own grants or the exchange directory."""
     target = inspect_host_path(workspace, missing=True)
     home = normalize_host_path(Path.home())
-    shared = load_shared_grants(workspace=target.path)
-    local = load_local_grants(workspace=target.path)
-    grants: list[DocumentGrant | LocalPathGrant] = [
-        *shared.documents,
-        *local.paths,
-        EXCHANGE_GRANT,
-    ]
+    # Selection enables editing and synchronization to repair configuration;
+    # it never authorizes execution. Runtime contract loading stays strict.
+    grants: list[DocumentGrant | LocalPathGrant] = []
+    for loader, field_name in (
+        (load_shared_grants, "documents"),
+        (load_local_grants, "paths"),
+    ):
+        try:
+            grants.extend(getattr(loader(workspace=target.path), field_name))
+        except AccessContractError:
+            continue
     for grant in grants:
         opened = _grant_path(grant.path, home)
-        if host_path_contains(opened, target):
+        try:
+            contains = host_path_contains(opened, target)
+        except AccessContractError:
+            continue
+        if contains:
             raise AccessContractError(
                 t("safe_paths.workspace_granted", path=target.path, granted=opened)
             )
+    opened = _grant_path(EXCHANGE_GRANT.path, home)
+    if host_path_contains(opened, target):
+        raise AccessContractError(
+            t("safe_paths.workspace_granted", path=target.path, granted=opened)
+        )
     return target.path
 
 

@@ -63,7 +63,7 @@ function RegisteredWorkspacesCard() {
       void client.invalidateQueries({ queryKey: ["agent-environment-status"] });
     },
   });
-  const error = locations.error ?? remove.error;
+  const error = locations.error;
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
@@ -92,7 +92,10 @@ function RegisteredWorkspacesCard() {
                 config.isError ||
                 path === config.data?.workspace
               }
-              onClick={() => setRemoving(path)}
+              onClick={() => {
+                remove.reset();
+                setRemoving(path);
+              }}
               aria-label={t("sync.registeredWorkspaces.remove", { path })}
             >
               {t("sync.registeredWorkspaces.removeLabel")}
@@ -106,13 +109,23 @@ function RegisteredWorkspacesCard() {
         >
           <Stack>
             <Text>{t("sync.registeredWorkspaces.confirm", { path: removing })}</Text>
-            <Button
-              color="danger"
-              loading={remove.isPending}
-              onClick={() => removing && remove.mutate(removing)}
-            >
-              {t("sync.registeredWorkspaces.confirmLabel")}
-            </Button>
+            {remove.error ? <Alert color="danger">{remove.error.message}</Alert> : null}
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                disabled={remove.isPending}
+                onClick={() => setRemoving(null)}
+              >
+                {t("sync.registeredWorkspaces.cancel")}
+              </Button>
+              <Button
+                color="danger"
+                loading={remove.isPending}
+                onClick={() => removing && remove.mutate(removing)}
+              >
+                {t("sync.registeredWorkspaces.confirmLabel")}
+              </Button>
+            </Group>
           </Stack>
         </Modal>
       </Stack>

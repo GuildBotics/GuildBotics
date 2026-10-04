@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.app_api import agent_environment_status as module
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_images,
@@ -24,6 +23,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
 )
 from guildbotics.intelligences.agent_environment.image import (
+    IMAGE,
     ImageStatus,
     image_load_command,
 )
@@ -32,12 +32,12 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
     ImageInfo,
 )
-from guildbotics.intelligences.agent_environment.image import IMAGE
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.status import (
     DeviceStatus,
     DnsStatus,
     ToolStatus,
+    login_command,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
@@ -487,7 +487,7 @@ def test_a_typed_grant_is_judged_before_it_is_saved(
     expected = t(f"intelligences.agent_environment.grants.{reason}", path=path)
     if reason == "protected":
         assert evaluation.reason == t(
-            "safe_paths.protected", path=home / path, protected=home / path
+            "safe_paths.protected_credentials", path=home / path, protected=home / path
         )
     else:
         assert evaluation.reason == (expected if reason else "")
@@ -780,8 +780,8 @@ async def test_usage_result_is_shared_by_card_and_alerts(
 
 @pytest.mark.asyncio
 async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
-    from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.errors import AppApiError
+    from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.runtime import AppRuntime
     from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
 

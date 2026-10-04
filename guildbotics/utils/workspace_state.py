@@ -17,6 +17,7 @@ from guildbotics.utils.fileio import (
     workspace_root_from_config_dir,
 )
 from guildbotics.utils.safe_paths import (
+    HostPathPermissionError,
     UnsafePathError,
     inspect_host_path,
     normalize_host_path,
@@ -40,6 +41,8 @@ def registered_workspaces() -> tuple[Path, ...]:
         ):
             raise ValueError("Expected a list of workspace paths")
         return tuple(normalize_host_path(Path(p)) for p in payload)
+    except HostPathPermissionError:
+        raise
     except (OSError, ValueError) as exc:
         raise UnsafePathError(t("safe_paths.registry", path=path, reason=exc)) from exc
 

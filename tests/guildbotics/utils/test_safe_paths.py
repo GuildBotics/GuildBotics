@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,11 +10,12 @@ import pytest
 
 from guildbotics.utils import safe_paths
 from guildbotics.utils.safe_paths import (
+    HostPathPermissionError,
     UnsafePathError,
-    inspect_host_path,
-    read_host_file,
-    open_host_file,
     host_path_contains,
+    inspect_host_path,
+    open_host_file,
+    read_host_file,
 )
 
 
@@ -112,7 +113,7 @@ def test_public_path_operations_preserve_absolute_permission_path(
         "visit": lambda: safe_paths.visit_host_directory(path, lambda fd: None),
         "contains": lambda: host_path_contains(path, target),
     }
-    with pytest.raises(PermissionError) as error:
+    with pytest.raises(HostPathPermissionError) as error:
         actions[operation]()
     assert Path(error.value.filename).is_absolute()
     assert Path(error.value.filename).is_relative_to(path)
@@ -145,7 +146,7 @@ def test_workspace_ancestry_does_not_open_an_unrelated_grant(tmp_path, monkeypat
 
     monkeypatch.setattr(os, "open", deny_documents)
     assert not host_path_contains(documents / "exchange", target)
-    with pytest.raises(PermissionError):
+    with pytest.raises(HostPathPermissionError):
         inspect_host_path(documents / "exchange", missing=True)
 
 

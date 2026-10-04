@@ -32,8 +32,27 @@ class UnsafePathError(ValueError):
     """A host path cannot be inspected without following links."""
 
 
-def _permission_error(path: Path, exc: PermissionError) -> PermissionError:
-    return PermissionError(exc.errno, exc.strerror or str(exc), str(path))
+class HostPathPermissionError(UnsafePathError):
+    """A localized permission refusal, still caught as an unsafe host path."""
+
+    def __init__(self, path: Path) -> None:
+        self.filename = str(normalize_host_path(path))
+        super().__init__(filesystem_permission_problem(Path(self.filename)))
+
+
+def filesystem_permission_problem(path: Path) -> str:
+    """One permission message for CLI, command execution, and Desktop."""
+    from guildbotics.utils.processes import launching_app_name
+
+    if sys.platform == "darwin" and path.is_relative_to(Path.home() / "Documents"):
+        app = launching_app_name()
+        return t(
+            "intelligences.agent_environment.filesystem.macos_documents",
+            app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
+            if app
+            else "",
+        )
+    return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
 def normalize_host_path(path: Path) -> Path:
@@ -118,7 +137,7 @@ def inspect_host_path(
                 path, create, directory, link_as_missing=link_as_missing
             )
     except PermissionError as exc:
-        raise _permission_error(path, exc) from exc
+        raise HostPathPermissionError(path) from exc
     except OSError as exc:
         raise UnsafePathError(
             t("safe_paths.unavailable", path=path, reason=exc)
@@ -228,7 +247,7 @@ def host_path_contains(ancestor: Path, target: PathFacts) -> bool:
         )
     except OSError as exc:
         if isinstance(exc, PermissionError):
-            raise _permission_error(ancestor, exc) from exc
+            raise HostPathPermissionError(ancestor) from exc
         raise UnsafePathError(
             t("safe_paths.unavailable", path=ancestor, reason=exc)
         ) from exc
@@ -237,27 +256,33 @@ def host_path_contains(ancestor: Path, target: PathFacts) -> bool:
 
 def read_host_file(path: Path) -> bytes:
     """Read the opened leaf, without reopening its name after inspection."""
+    chunks: list[bytes] = []
+    consume_host_file(path, chunks.append)
+    return b"".join(chunks)
+
+
+def consume_host_file(path: Path, consume: Callable[[bytes], None]) -> None:
+    """Stream an opened regular leaf while its no-follow ancestry is held."""
     path = normalize_host_path(path)
     if os.name == "nt":
-        from guildbotics.utils.safe_paths_windows import read_windows_file
+        from guildbotics.utils.safe_paths_windows import consume_windows_file
 
         try:
-            return read_windows_file(path)
+            consume_windows_file(path, consume)
         except PermissionError as exc:
-            raise _permission_error(path, exc) from exc
-    chunks: list[bytes] = []
+            raise HostPathPermissionError(path) from exc
+        return
 
-    def consume(handle: int) -> None:
+    def read(handle: int) -> None:
         while chunk := os.read(handle, 65536):
-            chunks.append(chunk)
+            consume(chunk)
 
     try:
-        _, missing, _ = _inspect_posix(path, False, False, consume)
+        _, missing, _ = _inspect_posix(path, False, False, read)
     except PermissionError as exc:
-        raise _permission_error(path, exc) from exc
+        raise HostPathPermissionError(path) from exc
     if missing:
         raise FileNotFoundError(str(path))
-    return b"".join(chunks)
 
 
 def open_host_file(path: Path) -> IO[str]:
@@ -269,7 +294,7 @@ def open_host_file(path: Path) -> IO[str]:
         try:
             return open_windows_file(path)
         except PermissionError as exc:
-            raise _permission_error(path, exc) from exc
+            raise HostPathPermissionError(path) from exc
     descriptors: list[int] = []
     try:
         _inspect_posix(
@@ -281,7 +306,7 @@ def open_host_file(path: Path) -> IO[str]:
         )
     except OSError as exc:
         if isinstance(exc, PermissionError):
-            raise _permission_error(path, exc) from exc
+            raise HostPathPermissionError(path) from exc
         raise UnsafePathError(
             t("safe_paths.unavailable", path=path, reason=exc)
         ) from exc
@@ -305,7 +330,7 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
                 path, False, True, lambda _: action(None), stable=True
             )
         except PermissionError as exc:
-            raise _permission_error(path, exc) from exc
+            raise HostPathPermissionError(path) from exc
     else:
 
         def consume(fd: int) -> None:
@@ -315,6 +340,6 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
         try:
             _, absent, _ = _inspect_posix(path, False, True, consume)
         except PermissionError as exc:
-            raise _permission_error(path, exc) from exc
+            raise HostPathPermissionError(path) from exc
     if absent:
         raise UnsafePathError(t("safe_paths.missing", path=path))

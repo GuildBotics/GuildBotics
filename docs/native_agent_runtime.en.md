@@ -182,7 +182,12 @@ The **Device and hub → Registered workspaces** list includes inactive workspac
 remove an entry only when its state no longer needs protection. Removing the entry
 does not delete files. The selected workspace cannot be unregistered, and removing
 another entry requires confirmation. Invalid startup selections leave Desktop
-running with no workspace selected and show the refusal reason. Workspace
+running with no workspace selected and show the refusal reason. Unavailable old
+locations can still be unregistered. Malformed grants allow workspace selection
+for editing or synchronization, but commands remain refused until repaired.
+Input-folder failures have their own alert, cleared by a successful input retry.
+User-selected copy sources follow links before opening; copying checks the 20MiB
+limit throughout the read, including files that grow during the copy. Workspace
 locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
 opening it.

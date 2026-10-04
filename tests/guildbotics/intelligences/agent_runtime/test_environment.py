@@ -407,6 +407,7 @@ def test_linked_package_uses_one_canonical_root_for_code_and_templates(
 ):
     import subprocess
     import sys
+
     from guildbotics.utils.fileio import PACKAGE_ROOT
 
     linked = tmp_path / "launcher"
@@ -419,6 +420,55 @@ def test_linked_package_uses_one_canonical_root_for_code_and_templates(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_installed_folder_name_does_not_change_guest_package_name(tmp_path, symlinks):
+    import subprocess
+    import sys
+
+    from guildbotics.utils.fileio import PACKAGE_ROOT
+
+    renamed = tmp_path / "renamed-install"
+    renamed.mkdir()
+    (renamed / "templates").symlink_to(
+        PACKAGE_ROOT / "templates", target_is_directory=True
+    )
+    code = "from pathlib import Path; import guildbotics.utils.fileio as f; f.PACKAGE_ROOT=Path(__import__('sys').argv[1]); from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, code_path; assert CODE_MOUNT.host == f.PACKAGE_ROOT; assert CODE_MOUNT.guest == '/opt/guildbotics/code/guildbotics'; assert code_path(f.PACKAGE_ROOT / 'runtime/command_entry.py') == '/opt/guildbotics/code/guildbotics/runtime/command_entry.py'"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(renamed)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_boot_permission_refusal_is_a_command_error_and_closes_gateways(
+    monkeypatch, tmp_path
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    closed = []
+
+    class Gateway:
+        async def close(self):
+            closed.append(True)
+
+    shared = object.__new__(environment._SharedEnvironment)
+    shared._gateways = {"codex": Gateway()}
+    problem = HostPathPermissionError(tmp_path / "protected")
+
+    async def boot(self, host):
+        raise problem
+
+    monkeypatch.setattr(environment._SharedEnvironment, "_boot", boot)
+    with pytest.raises(CommandError) as failure:
+        await shared.boot(None)
+    assert str(failure.value) == str(problem)
+    assert closed == [True]
+    assert shared._gateways == {}
 
 
 def _jwt(claims: dict[str, object]) -> str:
@@ -492,14 +542,9 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
 
     import httpx
 
-    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.spec import (
         GUEST_HOST_ALIAS,
         guest_home,
-    )
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentExecutionContext,
-        ConversationKey,
     )
 
     tool = environment.cli_agent_info(tool_name)
@@ -836,7 +881,7 @@ async def test_the_microvm_works_where_the_command_does_and_its_turns_in_the_clo
     settle_contract(
         monkeypatch,
         AccessContract(
-            access=ResolvedAccess(denied=(DeniedPath(path=state, builtin=True),))
+            access=ResolvedAccess(denied=(DeniedPath(path=state, kind="workspace"),))
         ),
     )
     _device(monkeypatch, tmp_path, "claude")
@@ -1211,7 +1256,7 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
     settle_contract(
         monkeypatch,
         AccessContract(
-            access=ResolvedAccess(denied=(DeniedPath(path=denied, builtin=False),))
+            access=ResolvedAccess(denied=(DeniedPath(path=denied, kind="local"),))
         ),
     )
     turn = {

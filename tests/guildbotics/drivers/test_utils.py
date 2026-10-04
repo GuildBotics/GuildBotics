@@ -1,6 +1,5 @@
 import asyncio
 from types import SimpleNamespace
-from typing import List
 
 import pytest
 
@@ -14,8 +13,8 @@ class StubLogger:
     """Minimal logger capturing info/error messages for assertions."""
 
     def __init__(self) -> None:
-        self.infos: List[str] = []
-        self.errors: List[str] = []
+        self.infos: list[str] = []
+        self.errors: list[str] = []
 
     def info(self, msg: str) -> None:  # pragma: no cover - trivial
         self.infos.append(str(msg))
@@ -160,17 +159,15 @@ def test_an_exchange_directory_it_may_not_create_is_told_as_the_environment_tell
     (on macOS: allow the app the Documents folder), not a raw OSError."""
     from guildbotics.commands.errors import CommandError
     from guildbotics.drivers import command_runner
-    from guildbotics.intelligences.agent_environment.contract import AccessContractError
-    from guildbotics.intelligences.agent_environment.status import (
+    from guildbotics.utils.safe_paths import (
+        HostPathPermissionError,
         filesystem_permission_problem,
     )
 
     denied = tmp_path / "Documents" / "GuildBotics"
 
     def refuse(path, *args, **kwargs):
-        raise AccessContractError("denied") from PermissionError(
-            13, "denied", str(path)
-        )
+        raise HostPathPermissionError(path)
 
     monkeypatch.setattr(command_runner, "exchange_dir", lambda: denied)
     monkeypatch.setattr(command_runner, "validate_mount_source", refuse)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -28,10 +29,11 @@ from guildbotics.utils.advisory_lock import (
     unlock_file,
 )
 from guildbotics.utils.safe_paths import (
+    HostPathPermissionError,
+    consume_host_file,
     inspect_host_path,
     normalize_host_path,
     open_host_file,
-    read_host_file,
     visit_host_directory,
 )
 
@@ -71,11 +73,17 @@ class CommandInputFileStore:
         self._directory: Path | None = None
         self._session_lock: IO[str] | None = None
         self._lock = threading.RLock()
+        self.problem = ""
 
     def start(self) -> None:
         """Create this session directory after recovering orphaned sessions."""
         with self._lock:
-            self._start()
+            try:
+                self._start()
+            except AccessContractError as exc:
+                self.problem = str(exc)
+                raise
+            self.problem = ""
 
     def _start(self) -> None:
         if self._directory is not None:
@@ -189,16 +197,31 @@ def copy_command_input_file(directory: Path, source: Path) -> Path:
     Raises:
         ValueError: If ``source`` is not a regular file or exceeds the limit.
     """
-    source = inspect_host_path(source, directory=False, missing=True).path
-    if not source.is_file():
+    # A user's chosen copy source may be a Dropbox/dotfiles link. Resolve it
+    # before the no-follow open; never resolve a checked mount/destination.
+    source = normalize_host_path(source)
+    try:
+        source = normalize_host_path(source.resolve())
+        info = source.stat()
+    except PermissionError as exc:
+        raise HostPathPermissionError(source) from exc
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise ValueError(f"'{source}' is not a file.") from exc
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError(f"'{source}' is not a file.")
-    _check_size(source.stat().st_size)
+    _check_size(info.st_size)
 
     def write(output: IO[bytes]) -> int:
-        content = read_host_file(source)
-        _check_size(len(content))
-        output.write(content)
-        return output.tell()
+        size = 0
+
+        def chunk(content: bytes) -> None:
+            nonlocal size
+            size += len(content)
+            _check_size(size)
+            output.write(content)
+
+        consume_host_file(source, chunk)
+        return size
 
     return _write_command_input_file(
         directory, f"{uuid4().hex[:8]}-{source.name}", write
@@ -317,7 +340,7 @@ def describe_command_input_paths(
         )
         try:
             reachable = access is not None and access.reaches(path, cwd)
-        except (AccessContractError, PermissionError):
+        except AccessContractError:
             reachable = False
         grant = None
         if not reachable and kind != "missing":
@@ -360,9 +383,9 @@ def _remove_orphaned_sessions(root: Path, descriptor: int | None) -> None:
         directory = root / name
         try:
             inspect_host_path(directory)
+            session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
         except AccessContractError:
             continue
-        session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
         try:
             try:
                 lock_file_nonblocking(session_lock)

@@ -879,17 +879,12 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     from microsandbox import Volume
 
     from guildbotics.intelligences.agent_environment.contract import (
-        DeniedPath,
-        builtin_denied_paths,
+        builtin_denied,
         validate_mount_source,
     )
 
     # Another workspace may have been registered since the spec was assembled.
-    denied = tuple(
-        dict.fromkeys(
-            (*spec.denied, *(DeniedPath(p, True) for p in builtin_denied_paths()))
-        )
-    )
+    denied = tuple(dict.fromkeys((*spec.denied, *builtin_denied())))
     for mount in spec.mounts:
         if mount.host is not None:
             checked = validate_mount_source(mount.host, denied, grant=mount.user)

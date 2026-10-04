@@ -48,7 +48,7 @@ from guildbotics.intelligences.agent_environment.auth_gateway import (
 )
 from guildbotics.intelligences.agent_environment.contract import (
     DeniedPath,
-    builtin_denied_paths,
+    builtin_denied,
     validate_mount_source,
 )
 from guildbotics.intelligences.agent_environment.credential_vault import (
@@ -225,7 +225,7 @@ def bind_state(
         dict.fromkeys(
             (
                 *(denied or ()),
-                *(DeniedPath(p, True) for p in builtin_denied_paths(home)),
+                *builtin_denied(home),
             )
         )
     )
