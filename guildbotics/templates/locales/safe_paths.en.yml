@@ -2,6 +2,7 @@ en:
   active_workspace: "The selected workspace cannot be unregistered. Select another workspace first."
   invalid: "Invalid host path: %{path}. Use a local absolute path without traversal."
   unavailable: "Cannot safely open %{path}: %{reason}."
+  protected_unavailable: "Cannot inspect protected path %{protected} or its link target: %{reason}"
   link: "Links are not allowed in %{path}; use the real directory."
   registry: "Cannot read the workspace registry %{path}: %{reason}. Repair this file before selecting a workspace or running commands."
   missing: "Host directory does not exist: %{path}."

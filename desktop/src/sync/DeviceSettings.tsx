@@ -104,7 +104,9 @@ function RegisteredWorkspacesCard() {
         ))}
         <Modal
           opened={removing !== null}
-          onClose={() => setRemoving(null)}
+          onClose={() => !remove.isPending && setRemoving(null)}
+          closeOnEscape={!remove.isPending}
+          closeOnClickOutside={!remove.isPending}
           title={t("sync.registeredWorkspaces.removeLabel")}
         >
           <Stack>

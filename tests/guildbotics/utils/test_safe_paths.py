@@ -16,7 +16,85 @@ from guildbotics.utils.safe_paths import (
     inspect_host_path,
     open_host_file,
     read_host_file,
+    resolve_host_links,
 )
+
+
+@pytest.mark.parametrize(
+    "shape", ["parent", "repeat", "leaf", "missing_parent", "file_parent"]
+)
+def test_link_resolution_preserves_os_component_order(tmp_path, symlinks, shape):
+    public = tmp_path / "public"
+    private = tmp_path / "private"
+    public.mkdir()
+    (private / "base").mkdir(parents=True)
+    (private / "keys").mkdir()
+    (public / "dir").mkdir()
+    link = tmp_path / "link"
+    callbacks = []
+    if shape == "parent":
+        (public / "alias").symlink_to(private / "base", target_is_directory=True)
+        link.symlink_to(public / "alias/../keys", target_is_directory=True)
+        expected = private / "keys"
+    elif shape == "repeat":
+        (public / "alias").symlink_to(public / "dir", target_is_directory=True)
+        link.symlink_to(public / "alias/../alias", target_is_directory=True)
+        expected = public / "dir"
+    elif shape == "leaf":
+        (public / "alias").symlink_to(private / "keys", target_is_directory=True)
+        link.symlink_to(public / "alias", target_is_directory=True)
+        expected = private / "keys"
+    else:
+        if shape == "file_parent":
+            (public / "ordinary").write_text("file")
+        link.symlink_to(public / "ordinary/../dir", target_is_directory=True)
+        if shape == "file_parent":
+            with pytest.raises(UnsafePathError):
+                resolve_host_links(link)
+            return
+        resolution = resolve_host_links(link)
+        assert ".." in resolution.path.parts
+        with pytest.raises(UnsafePathError):
+            inspect_host_path(resolution.path)
+        return
+    resolution = resolve_host_links(
+        link, on_link=lambda path, leaf: callbacks.append((path, leaf))
+    )
+    assert resolution.path == expected
+    assert not resolution.cyclic
+    assert expected in resolution.names
+    if shape == "leaf":
+        assert all(leaf for _, leaf in callbacks)
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX hardlinks to relative symbolic links"
+)
+def test_same_link_inode_at_different_locations_is_not_a_cycle(tmp_path, symlinks):
+    first = tmp_path / "a/link"
+    first.parent.mkdir()
+    first.symlink_to("next/link", target_is_directory=True)
+    second = tmp_path / "a/next/link"
+    second.parent.mkdir()
+    os.link(first, second, follow_symlinks=False)
+    target = tmp_path / "a/next/next/link/keys"
+    target.mkdir(parents=True)
+    resolution = resolve_host_links(first / "keys")
+    assert resolution.path == target
+    assert not resolution.cyclic
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended UNC reparse target")
+def test_unc_link_target_is_refused_without_becoming_a_relative_name(
+    tmp_path, symlinks, monkeypatch
+):
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(os, "readlink", lambda path: r"\\?\UNC\server\share\private")
+    with pytest.raises(UnsafePathError):
+        resolve_host_links(link)
 
 
 def test_missing_directories_are_created_below_checked_parents(tmp_path: Path) -> None:
@@ -95,13 +173,13 @@ def test_absent_equivalent_unicode_names_on_insensitive_filesystems(tmp_path):
 def test_public_path_operations_preserve_absolute_permission_path(
     tmp_path, monkeypatch, operation
 ):
-    path = tmp_path / "private"
+    path = tmp_path / "blocked"
     path.mkdir()
     original = os.open
 
     def deny(name, *args, **kwargs):
-        if name == "private":
-            raise PermissionError(13, "denied", "private")
+        if name == "blocked":
+            raise PermissionError(13, "denied", "blocked")
         return original(name, *args, **kwargs)
 
     target = inspect_host_path(path)
@@ -116,7 +194,54 @@ def test_public_path_operations_preserve_absolute_permission_path(
     with pytest.raises(HostPathPermissionError) as error:
         actions[operation]()
     assert Path(error.value.filename).is_absolute()
-    assert Path(error.value.filename).is_relative_to(path)
+    assert Path(error.value.filename) == path
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX directory-relative permission refusal"
+)
+def test_protected_link_permission_error_names_owner_and_denied_component(
+    tmp_path, monkeypatch, symlinks
+):
+    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+
+    target = tmp_path / "blocked"
+    target.mkdir()
+    protected = tmp_path / "home/.ssh"
+    protected.parent.mkdir()
+    protected.symlink_to(target / "keys", target_is_directory=True)
+    original = os.open
+
+    def deny(name, *args, **kwargs):
+        if name == "blocked":
+            raise PermissionError(13, "denied", name)
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", deny)
+    with pytest.raises(HostPathPermissionError) as failure:
+        DeniedPath(protected, "credentials").facts()
+    assert failure.value.filename == str(target)
+    assert str(protected) in str(failure.value)
+    assert str(target) in str(failure.value)
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_macos_documents_permission_guidance_keeps_absolute_path(
+    tmp_path, monkeypatch, fake_platform, language
+):
+    from guildbotics.utils import i18n_tool, processes
+
+    fake_platform(safe_paths, "darwin")
+    monkeypatch.setattr(processes, "launching_app_name", lambda: "Example App")
+    path = Path.home() / "Documents/blocked"
+    previous = i18n_tool.get_language()
+    i18n_tool.set_language(language)
+    try:
+        message = str(HostPathPermissionError(path))
+    finally:
+        i18n_tool.set_language(previous)
+    assert str(path) in message
+    assert "Example App" in message
 
 
 def test_ordinary_rename_does_not_change_the_object_relationship(

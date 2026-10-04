@@ -29,6 +29,9 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.person_id import (
     PERSON_ID_REQUIREMENT,
     is_valid_person_id,
+    person_config_directory,
+    stored_person_config_directory,
+    validate_member_directory_name,
     validate_person_id,
 )
 from guildbotics.utils.secret_store import (
@@ -344,7 +347,9 @@ class PersonConfigSnapshot(BaseModel):
 
 class PersonUpdateInput(PersonSetupInput):
     original_person_id: str
-    _original_person_id = field_validator("original_person_id")(validate_person_id)
+    _original_person_id = field_validator("original_person_id")(
+        validate_member_directory_name
+    )
     # Revisions this form was composed against; empty for a member being added.
     expected_revisions: dict[str, str] = Field(default_factory=dict)
 
@@ -361,7 +366,12 @@ PROJECT_CONFIG_PATHS = (
 
 def person_config_paths(person_id: str) -> tuple[str, ...]:
     """Return the config files the member screen reads and writes."""
-    return (f"team/members/{validate_person_id(person_id)}/person.yml",)
+    return ((person_config_directory(person_id) / "person.yml").as_posix(),)
+
+
+def stored_person_config_paths(name: str) -> tuple[str, ...]:
+    """Revisions of existing configuration addressed for repair."""
+    return ((stored_person_config_directory(name) / "person.yml").as_posix(),)
 
 
 def _project_config_file(config_dir: Path) -> Path:
@@ -369,7 +379,17 @@ def _project_config_file(config_dir: Path) -> Path:
 
 
 def _person_config_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / f"team/members/{validate_person_id(person_id)}"
+    return config_dir / person_config_directory(person_id)
+
+
+def _stored_person_config_dir(config_dir: Path, name: str) -> Path:
+    path = config_dir / stored_person_config_directory(name)
+    members = config_dir / "team/members"
+    if not members.exists() or not any(
+        child.name == name and child.is_dir() for child in members.iterdir()
+    ):
+        raise SetupServiceError("person_not_found", "Member config was not found.")
+    return path
 
 
 def _person_config_file(config_dir: Path, person_id: str) -> Path:
@@ -829,7 +849,7 @@ class SimplePersonSetupService:
             )
             members.append(
                 PersonConfigSummary(
-                    person_id=str(person_data.get("person_id", person_dir.name)),
+                    person_id=person_dir.name,
                     name=str(person_data.get("name", "")),
                     person_type=str(person_data.get("person_type", "")),
                     is_active=bool(person_data.get("is_active", False)),
@@ -845,7 +865,7 @@ class SimplePersonSetupService:
     def read_person_config(
         self, *, config_dir: Path, person_id: str
     ) -> PersonConfigSnapshot:
-        person_file = _person_config_file(config_dir, person_id)
+        person_file = _stored_person_config_dir(config_dir, person_id) / "person.yml"
         if not person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
         person_data = cast(dict, load_yaml_file(person_file))
@@ -897,13 +917,17 @@ class SimplePersonSetupService:
         avatar_timestamp = 0
         from guildbotics.utils.avatar import find_avatar_file
 
-        avatar_path = find_avatar_file(config_dir, person_id)
+        avatar_path = (
+            find_avatar_file(config_dir, person_id)
+            if is_valid_person_id(person_id)
+            else None
+        )
         if avatar_path is not None:
             with contextlib.suppress(Exception):
                 avatar_timestamp = int(avatar_path.stat().st_mtime)
 
         return PersonConfigSnapshot(
-            person_id=str(person_data.get("person_id", person_id)),
+            person_id=person_id,
             person_name=str(person_data.get("name", "")),
             person_type=person_type,
             github_account_type=github_account_type,
@@ -1027,8 +1051,9 @@ class SimplePersonSetupService:
     @shared_write_operation
     def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
-        original_person_file = _person_config_file(
-            config.config_dir, config.original_person_id
+        original_person_file = (
+            _stored_person_config_dir(config.config_dir, config.original_person_id)
+            / "person.yml"
         )
         if not original_person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")
@@ -1078,7 +1103,7 @@ class SimplePersonSetupService:
     @shared_write_operation
     def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
         files: list[CreatedFile] = []
-        person_dir = _person_config_dir(config_dir, person_id)
+        person_dir = _stored_person_config_dir(config_dir, person_id)
         person_file = person_dir / "person.yml"
         if not person_file.exists():
             raise SetupServiceError("person_not_found", "Member config was not found.")

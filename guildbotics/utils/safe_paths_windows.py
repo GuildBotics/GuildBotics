@@ -14,7 +14,7 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import IO, Any
 
-from guildbotics.utils.safe_paths import UnsafePathError, t
+from guildbotics.utils.safe_paths import HostPathPermissionError, UnsafePathError, t
 
 
 class _ReparsePoint(Exception):
@@ -180,6 +180,7 @@ def inspect_windows_path(
         assert handle.value is not None
         return handle.value
 
+    checked = Path(path.anchor)
     try:
         root = kernel.CreateFileW(
             "\\\\?\\" + path.anchor,
@@ -197,6 +198,7 @@ def inspect_windows_path(
         parent = root
         parts = path.parts[1:]
         for index, name in enumerate(parts):
+            checked = Path(path.anchor).joinpath(*parts[: index + 1])
             require_directory = directory or index < len(parts) - 1
             leaf_file = open_file and index == len(parts) - 1
             try:
@@ -216,6 +218,8 @@ def inspect_windows_path(
         if consume is not None:
             consume(parent)
         return tuple(identities), ()
+    except PermissionError as exc:
+        raise HostPathPermissionError(checked) from exc
     finally:
         for handle in reversed(handles):
             kernel.CloseHandle(handle)

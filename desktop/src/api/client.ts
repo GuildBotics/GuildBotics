@@ -70,6 +70,7 @@ export type TeamSummary = {
   // else the first active non-human member in person id order. Empty only when
   // no member can execute commands.
   default_person_id: string;
+  problem?: string;
 };
 
 export type RuntimeMemberRoutine = {
@@ -315,6 +316,7 @@ export type CommandInputPathStatus = {
   /** The path as the agent inside the environment names it: what the input field carries. */
   guest_path: string;
   grant: CommandInputGrantSuggestion | null;
+  problem: string;
 };
 
 export type CommandInputPathsResponse = {
@@ -1797,8 +1799,11 @@ export async function uploadCommandInputFile(file: File): Promise<CommandInputFi
   return uploadFile("/commands/input-files", file);
 }
 
-export async function copyCommandInputFile(path: string): Promise<CommandInputFileResponse> {
-  return request("/commands/input-files/copy", { method: "POST", body: { path } });
+export async function copyCommandInputFile(
+  path: string,
+  cwd?: string,
+): Promise<CommandInputFileResponse> {
+  return request("/commands/input-files/copy", { method: "POST", body: { path, cwd } });
 }
 
 export async function checkCommandInputPaths(body: {

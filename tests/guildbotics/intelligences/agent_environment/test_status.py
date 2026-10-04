@@ -358,6 +358,7 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
     assert status.setting == "filesystem"
     assert status.refusal == t(
         "intelligences.agent_environment.filesystem.macos_documents",
+        path=target,
         app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
         if app
         else "",
@@ -411,7 +412,9 @@ def test_nofollow_open_permission_error_keeps_macos_guidance(
     permission_platform("darwin")
     monkeypatch.setattr(processes, "launching_app_name", lambda: "")
     assert device_status().refusal == t(
-        "intelligences.agent_environment.filesystem.macos_documents", app=""
+        "intelligences.agent_environment.filesystem.macos_documents",
+        path=target,
+        app="",
     )
 
 

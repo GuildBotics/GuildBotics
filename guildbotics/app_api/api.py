@@ -161,6 +161,7 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
     github_app_key_dir,
     person_config_paths,
+    stored_person_config_paths,
 )
 from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
@@ -176,6 +177,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.person_id import MemberConfigError, MemberDirectoryName, PersonId
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
@@ -392,6 +394,12 @@ def create_app(
         # The exception's own sentence is the reason, passed through verbatim.
         return _error_response(409, "workspace_not_configured", str(exc), {})
 
+    @app.exception_handler(MemberConfigError)
+    async def member_config_error_handler(_, exc: MemberConfigError) -> JSONResponse:
+        return _error_response(
+            400, "member_config_invalid", str(exc), {"path": exc.filename}
+        )
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
         request: Request, exc: RequestValidationError
@@ -491,6 +499,9 @@ def create_app(
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:
+        if input_file_store.problem:
+            with contextlib.suppress(UnsafePathError):
+                input_file_store.start()
         return app_runtime.get_config_status().model_copy(
             update={"input_store_problem": input_file_store.problem}
         )
@@ -744,7 +755,9 @@ def create_app(
         request: CommandInputFileCopyRequest,
         _: None = Depends(require_token),
     ) -> CommandInputFileResponse:
-        return _store_command_input(lambda: input_file_store.copy(request.path))
+        return _store_command_input(
+            lambda: input_file_store.copy(request.path, command_cwd(request.cwd))
+        )
 
     def _store_command_input(
         store: Callable[[], Path],
@@ -788,6 +801,7 @@ def create_app(
                         if entry.grant
                         else None
                     ),
+                    problem=entry.problem,
                 )
                 for entry in describe_command_input_paths(
                     request.paths, command_cwd(request.cwd)
@@ -1236,7 +1250,7 @@ def create_app(
         responses=error_responses,
     )
     def config_intelligences(
-        person_id: str | None = None,
+        person_id: PersonId | None = None,
         _: None = Depends(require_token),
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
@@ -1449,12 +1463,12 @@ def create_app(
         responses=error_responses,
     )
     def config_member(
-        person_id: str,
+        person_id: MemberDirectoryName,
         _: None = Depends(require_token),
     ) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
         revisions = config_repository(config_dir).revisions(
-            person_config_paths(person_id)
+            stored_person_config_paths(person_id)
         )
         try:
             snapshot: PersonConfigSnapshot = (
@@ -1473,7 +1487,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_update(
-        person_id: str,
+        person_id: MemberDirectoryName,
         request: PersonUpdateInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
@@ -1510,7 +1524,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_delete(
-        person_id: str,
+        person_id: MemberDirectoryName,
         request: MemberDeleteRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
@@ -1523,7 +1537,7 @@ def create_app(
                     person_id=person_id,
                 ),
                 report=lambda: config_repository(config_dir).revisions(
-                    person_config_paths(person_id)
+                    stored_person_config_paths(person_id)
                 ),
             )
         except SetupServiceError as exc:
@@ -1679,7 +1693,7 @@ def create_app(
         responses={**error_responses, 404: {"model": ApiError}},
     )
     def config_member_avatar(
-        person_id: str,
+        person_id: PersonId,
         token_query: str | None = Query(default=None, alias="token"),
         provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
     ) -> Response:
@@ -1706,7 +1720,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_avatar_upload(
-        person_id: str,
+        person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
@@ -1742,7 +1756,7 @@ def create_app(
         responses=error_responses,
     )
     async def config_member_avatar_github(
-        person_id: str,
+        person_id: PersonId,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
@@ -1785,7 +1799,7 @@ def create_app(
         responses=error_responses,
     )
     async def config_member_avatar_slack(
-        person_id: str,
+        person_id: PersonId,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)

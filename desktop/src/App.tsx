@@ -227,7 +227,8 @@ export function App() {
             {config.data.workspace_problem}
           </Alert>
         ) : null}
-        {config.data?.input_store_problem ? (
+        {config.data?.input_store_problem &&
+        config.data.input_store_problem !== config.data.workspace_problem ? (
           <Alert color="danger" role="alert">
             {config.data.input_store_problem}
           </Alert>

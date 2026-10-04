@@ -134,14 +134,14 @@ export function CommandInput({
       setUploadError(null);
       setUploadsInFlight((count) => count + 1);
       try {
-        appendPaths([(await copyCommandInputFile(entry.path)).guest_path]);
+        appendPaths([(await copyCommandInputFile(entry.path, cwd)).guest_path]);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {
         setUploadsInFlight((count) => count - 1);
       }
     },
-    [appendPaths],
+    [appendPaths, cwd],
   );
 
   useEffect(() => {
@@ -230,11 +230,17 @@ export function CommandInput({
             <Group key={entry.path} gap="xs" wrap="nowrap">
               <Text size="xs" ff="monospace" style={{ flex: 1, wordBreak: "break-all" }}>
                 {entry.path}
+                {entry.problem ? (
+                  <Text component="span" style={{ display: "block" }} size="xs" c="red">
+                    {entry.problem}
+                  </Text>
+                ) : null}
               </Text>
               {entry.kind === "file" ? (
                 <Button
                   size="compact-xs"
                   variant="light"
+                  disabled={Boolean(entry.problem)}
                   onClick={() => void settleUnreachable(entry, "copy")}
                 >
                   {t("commands.inputPathCopy")}

@@ -172,6 +172,17 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("renders the shared workspace and input-store refusal once", async () => {
+    const status = await getConfigStatus();
+    vi.mocked(getConfigStatus).mockResolvedValue({
+      ...status,
+      workspace_problem: "Registry is invalid",
+      input_store_problem: "Registry is invalid",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findAllByText("Registry is invalid")).toHaveLength(1);
+  });
   it("clears a recovered input-store alert without changing workspace", async () => {
     const status = await getConfigStatus();
     vi.mocked(getConfigStatus).mockResolvedValueOnce({

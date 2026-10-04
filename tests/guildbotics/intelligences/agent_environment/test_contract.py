@@ -37,6 +37,51 @@ _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
 
 @pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("shape", ["chain", "cycle", "parent", "repeat"])
+def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
+    tmp_path, symlinks, name, shape
+):
+    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+
+    protected = tmp_path / "home" / name
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    endpoint = tmp_path / "private/keys"
+    endpoint.mkdir(parents=True)
+    if shape in {"chain", "cycle"}:
+        protected.symlink_to(first / "alias", target_is_directory=True)
+        (first / "alias").symlink_to(second / "alias", target_is_directory=True)
+        (second / "alias").symlink_to(
+            first / "alias" if shape == "cycle" else endpoint, target_is_directory=True
+        )
+        closed_parents = [protected.parent, first, second]
+    elif shape == "parent":
+        (endpoint.parent / "base").mkdir()
+        (first / "alias").symlink_to(endpoint.parent / "base", target_is_directory=True)
+        protected.symlink_to(first / "alias/../keys", target_is_directory=True)
+        closed_parents = [protected.parent, first]
+    else:
+        endpoint = first / "dir/keys"
+        endpoint.mkdir(parents=True)
+        (first / "alias").symlink_to(first / "dir", target_is_directory=True)
+        protected.symlink_to(first / "alias/../alias/keys", target_is_directory=True)
+        closed_parents = [protected.parent, first]
+    denied = (DeniedPath(protected, "credentials"),)
+    for parent in closed_parents:
+        with pytest.raises(AccessContractError):
+            validate_mount_source(parent, denied, grant=True)
+    if shape != "cycle":
+        with pytest.raises(AccessContractError):
+            validate_mount_source(endpoint, denied, grant=True)
+    ordinary = tmp_path / "ordinary"
+    ordinary.mkdir()
+    assert validate_mount_source(ordinary, denied, grant=True) == ordinary
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
 @pytest.mark.parametrize("shape", ["self", "mutual", "broken"])
 def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
     tmp_path, symlinks, name, shape
@@ -706,7 +751,7 @@ def test_the_workspace_state_directory_is_a_builtin_deny(tmp_path: Path) -> None
         (d.path, d.builtin) for d in denied.denied
     ]
     assert not denied.reaches(workspace / ".guildbotics/config/team.yml", workspace)
-    assert denied.reaches(workspace / "README.md", workspace)
+    assert not denied.reaches(workspace / "README.md", workspace)
     bare = resolve_access(
         SharedGrants(), LocalGrants(), home, workspace=tmp_path / "bare"
     )

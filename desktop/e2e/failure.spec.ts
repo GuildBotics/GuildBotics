@@ -58,7 +58,7 @@ test("shows the backend-down error, then recovers on retry once the backend is u
   await retry.click();
   await expect(page.getByText("GuildBotics could not start")).toHaveCount(0, { timeout: 60_000 });
   await expect(page.getByRole("navigation")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("alert").filter({ hasText: "workspace registry" })).toHaveCount(2);
+  await expect(page.getByRole("alert").filter({ hasText: "workspace registry" })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "Setup" })).toBeVisible();
 
   writeFileSync(registry, "[]\n");
@@ -82,11 +82,9 @@ test("shows the backend-down error, then recovers on retry once the backend is u
   writeFileSync(localGrant, "{}\n");
   const repaired = await page.request.get(statusUrl, { headers });
   expect((await repaired.json()).access.problem).toBe("");
-  const retryInput = await page.request.post(`http://${ctx.host}:${ctx.backendPort}/commands/input-files`, {
-    headers,
-    multipart: { file: { name: "retry.png", mimeType: "image/png", buffer: Buffer.from("image") } },
-  });
-  expect(retryInput.ok()).toBe(true);
+  const recovered = await page.request.get(`http://${ctx.host}:${ctx.backendPort}/config/status`, { headers });
+  expect(recovered.ok()).toBe(true);
+  expect((await recovered.json()).input_store_problem).toBe("");
   await page.reload();
   await expect(page.getByRole("navigation")).toBeVisible();
   await expect(page.getByText(/Cannot read the workspace registry/)).toHaveCount(0);

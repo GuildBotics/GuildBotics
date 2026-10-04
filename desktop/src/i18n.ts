@@ -2131,7 +2131,7 @@ const resources = {
           subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
         },
         device: {
-          title: "device・Hub 設定",
+          title: "端末とHub 設定",
           subtitle:
             "ワークスペースではなく、このマシン自体に属する設定です。Hub 役のマシンでは、ここ以外の設定は必要ありません。",
         },

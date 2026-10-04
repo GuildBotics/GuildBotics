@@ -1,9 +1,12 @@
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from guildbotics.entities import Person, Project, Team
 from guildbotics.loader import TeamLoader
 from guildbotics.loader.yaml.yaml_role_loader import YamlRoleLoader
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
+from guildbotics.utils.person_id import MemberConfigError
 
 
 class YamlTeamLoader(TeamLoader):
@@ -36,7 +39,15 @@ class YamlTeamLoader(TeamLoader):
                     continue
 
                 person_data = load_yaml_file(d / "person.yml")
-                person = Person.model_validate(person_data)
+                try:
+                    person = Person.model_validate(person_data)
+                except ValidationError as exc:
+                    raise MemberConfigError(d / "person.yml", exc) from exc
+                if person.person_id != d.name:
+                    raise MemberConfigError(
+                        d / "person.yml",
+                        ValueError("person_id must match its directory name"),
+                    )
                 role_loader.extract_roles_from_profile(person)
 
                 members.append(person)

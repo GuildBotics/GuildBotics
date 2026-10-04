@@ -17,23 +17,31 @@ from fastapi import UploadFile
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
+    LocalGrants,
+    SharedGrants,
     exchange_tmp_dir,
     grant_spelling,
     load_local_grants,
     load_shared_grants,
+    protected_paths,
     resolve_access,
+    validate_mount_source,
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     unlock_file,
 )
+from guildbotics.utils.fileio import WorkspaceNotConfiguredError
 from guildbotics.utils.safe_paths import (
     HostPathPermissionError,
+    UnsafePathError,
     consume_host_file,
     inspect_host_path,
     normalize_host_path,
     open_host_file,
+    resolve_host_links,
+    t,
     visit_host_directory,
 )
 
@@ -122,9 +130,9 @@ class CommandInputFileStore:
         """Save an image in the active App API session directory."""
         return save_command_input_file(self._session_directory(), upload_file)
 
-    def copy(self, source: Path) -> Path:
+    def copy(self, source: Path, cwd: Path | None = None) -> Path:
         """Copy a file of the user's into the active session directory."""
-        return copy_command_input_file(self._session_directory(), source)
+        return copy_command_input_file(self._session_directory(), source, cwd)
 
     def close(self) -> None:
         """Remove everything owned by this App API session."""
@@ -183,7 +191,9 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
     return _write_command_input_file(directory, f"{uuid4().hex}{suffix}", write)
 
 
-def copy_command_input_file(directory: Path, source: Path) -> Path:
+def copy_command_input_file(
+    directory: Path, source: Path, cwd: Path | None = None
+) -> Path:
     """Copy one of the user's files beside the pasted images and return the copy.
 
     The copy keeps the file's name behind a short random prefix: the name is
@@ -197,15 +207,13 @@ def copy_command_input_file(directory: Path, source: Path) -> Path:
     Raises:
         ValueError: If ``source`` is not a regular file or exceeds the limit.
     """
-    # A user's chosen copy source may be a Dropbox/dotfiles link. Resolve it
-    # before the no-follow open; never resolve a checked mount/destination.
-    source = normalize_host_path(source)
+    name = source.name
+    source = _admit_input_path(source, cwd)
     try:
-        source = normalize_host_path(source.resolve())
         info = source.stat()
     except PermissionError as exc:
         raise HostPathPermissionError(source) from exc
-    except (FileNotFoundError, RuntimeError) as exc:
+    except FileNotFoundError as exc:
         raise ValueError(f"'{source}' is not a file.") from exc
     if not stat.S_ISREG(info.st_mode):
         raise ValueError(f"'{source}' is not a file.")
@@ -223,9 +231,57 @@ def copy_command_input_file(directory: Path, source: Path) -> Path:
         consume_host_file(source, chunk)
         return size
 
-    return _write_command_input_file(
-        directory, f"{uuid4().hex[:8]}-{source.name}", write
-    )
+    return _write_command_input_file(directory, f"{uuid4().hex[:8]}-{name}", write)
+
+
+def _input_grants() -> tuple[SharedGrants, LocalGrants]:
+    try:
+        return load_shared_grants(), load_local_grants()
+    except WorkspaceNotConfiguredError:
+        return SharedGrants(), LocalGrants()
+
+
+def _admit_input_path(source: Path, cwd: Path | None) -> Path:
+    """A copy must never borrow the host's authority through a turn's link."""
+    denied = protected_paths()
+
+    def admit_link(link: Path, leaf: bool) -> None:
+        if leaf:
+            raise UnsafePathError(t("safe_paths.link", path=link))
+        parent = inspect_host_path(link.parent)
+        if any(facts.contains(parent) for closed in denied for facts in closed.facts()):
+            raise UnsafePathError(t("safe_paths.link", path=link))
+        # A current cwd cannot prove that a previous turn never wrote here.
+        # Trust only a parent that can never be granted: it contains a fixed
+        # credential/device path. Registered workspace state is removable.
+        if not any(
+            parent.contains(
+                inspect_host_path(
+                    closed.path, missing=True, directory=False, link_as_missing=True
+                )
+            )
+            for closed in denied
+            if closed.kind == "credentials"
+        ):
+            raise UnsafePathError(t("safe_paths.link", path=link))
+        shared, local = _input_grants()
+        access = resolve_access(shared, local, create=False)
+        writable = [
+            grant.path
+            for grant in (*access.documents, *access.paths)
+            if grant.access == "read_write"
+        ]
+        if cwd is not None:
+            writable.append(normalize_host_path(cwd))
+        if any(
+            inspect_host_path(root, missing=True).contains(parent) for root in writable
+        ):
+            raise UnsafePathError(t("safe_paths.link", path=link))
+
+    resolution = resolve_host_links(source, on_link=admit_link)
+    if resolution.cyclic:
+        raise UnsafePathError(t("safe_paths.link", path=source))
+    return validate_mount_source(resolution.path, denied, grant=True, missing=True)
 
 
 def _check_size(size: int) -> None:
@@ -301,6 +357,7 @@ class CommandInputPath:
     reachable: bool
     guest_path: str
     grant: GrantSuggestion | None = None
+    problem: str = ""
 
 
 def command_cwd(cwd: Path | None) -> Path | None:
@@ -343,11 +400,21 @@ def describe_command_input_paths(
         except AccessContractError:
             reachable = False
         grant = None
+        problem = ""
         if not reachable and kind != "missing":
-            real = path.resolve()
-            grant = _grant_for(real if kind == "directory" else real.parent, home)
+            try:
+                real = _admit_input_path(path, cwd)
+            except AccessContractError as exc:
+                problem = str(exc)
+            else:
+                directory = real if kind == "directory" else real.parent
+                with suppress(AccessContractError):
+                    validate_mount_source(directory, protected_paths(), grant=True)
+                    grant = _grant_for(directory, home)
         described.append(
-            CommandInputPath(path, kind, reachable, guest_path(path.absolute()), grant)
+            CommandInputPath(
+                path, kind, reachable, guest_path(path.absolute()), grant, problem
+            )
         )
     return described
 

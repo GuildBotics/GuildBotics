@@ -24,6 +24,108 @@ PROJECT = "team/project.yml"
 CLI_MAPPING = "intelligences/cli_agent_mapping.yml"
 
 
+@pytest.mark.parametrize(
+    "person_id",
+    [
+        "/private/keys",
+        "../../keys",
+        "a/b",
+        "a\\b",
+        "",
+        "con",
+        "aux",
+        "nul",
+        "com1",
+        "lpt1",
+    ],
+)
+def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete(
+    client, config_dir, person_id
+):
+    sentinel = config_dir / "intelligences/keep"
+    sentinel.write_text("keep")
+    before = {
+        str(p.relative_to(config_dir)): p.read_bytes()
+        for p in config_dir.rglob("*")
+        if p.is_file()
+    }
+    response = client.get(
+        "/config/intelligences", headers=AUTH_HEADERS, params={"person_id": person_id}
+    )
+    assert response.status_code == 422
+    response = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(config_dir),
+            "person_id": person_id,
+            "inherit_team_defaults": True,
+        },
+    )
+    assert response.status_code == 422
+    assert {
+        str(p.relative_to(config_dir)): p.read_bytes()
+        for p in config_dir.rglob("*")
+        if p.is_file()
+    } == before
+
+
+@pytest.mark.parametrize("stored_name", ["con", "aux", "nul", "alice"])
+@pytest.mark.parametrize("action", ["rename", "delete"])
+def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
+    client, config_dir, stored_name, action
+):
+    import os
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+    from guildbotics.utils.person_id import MemberConfigError
+
+    if os.name == "nt" and stored_name != "alice":
+        pytest.skip("Windows cannot create a legacy reserved directory")
+    member = config_dir / "team/members" / stored_name
+    member.mkdir(parents=True)
+    person = member / "person.yml"
+    person.write_text(
+        f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n"
+    )
+    with pytest.raises(MemberConfigError, match=str(person)):
+        YamlTeamLoader(str(config_dir / "team")).load()
+    listing = client.get("/team", headers=AUTH_HEADERS)
+    assert stored_name in [p["person_id"] for p in listing.json()["members"]]
+    assert str(person) in listing.json()["problem"]
+    read = client.get(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
+    assert read.status_code == HTTP_OK
+    assert read.json()["person_id"] == stored_name
+    revisions = read.json()["revisions"]
+    if action == "rename":
+        response = client.put(
+            f"/config/members/{stored_name}",
+            headers=AUTH_HEADERS,
+            json=_member_payload(
+                config_dir,
+                revisions,
+                original_person_id=stored_name,
+                person_id="repaired",
+            ),
+        )
+        assert response.status_code == HTTP_OK
+        assert not member.exists()
+        assert (
+            safe_load((config_dir / "team/members/repaired/person.yml").read_text())[
+                "person_id"
+            ]
+            == "repaired"
+        )
+    else:
+        response = client.request(
+            "DELETE",
+            f"/config/members/{stored_name}",
+            headers=AUTH_HEADERS,
+            json={"config_dir": str(config_dir), "expected_revisions": revisions},
+        )
+        assert response.status_code == HTTP_OK
+        assert not member.exists()
+
+
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"

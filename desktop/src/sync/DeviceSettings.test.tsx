@@ -126,6 +126,37 @@ describe("hosting the hub here", () => {
 });
 
 describe("registered workspaces", () => {
+  it("keeps the confirmation open during removal and shows a later failure", async () => {
+    vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one"]);
+    let reject!: (error: Error) => void;
+    vi.mocked(unregisterWorkspace).mockReturnValue(
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+    );
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
+    );
+    await user.keyboard("{Escape}");
+    await user.click(document.body);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }),
+    ).toBeDisabled();
+    reject(new Error("Removal failed"));
+    const error = await screen.findByText("Removal failed");
+    expect(error.closest('[role="dialog"]')).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }),
+    ).toBeEnabled();
+  });
   it("allows cancellation and displays mutation failures inside the confirmation", async () => {
     vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one"]);
     vi.mocked(unregisterWorkspace).mockRejectedValue(new Error("Registry is locked"));

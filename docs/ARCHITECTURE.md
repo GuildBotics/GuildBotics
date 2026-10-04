@@ -364,12 +364,19 @@ links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
 or the exchange directory before registration or initialization.
 Admission permits unavailable grant configuration so editing and synchronization
 can repair it; command contract loading remains strict. Protected link names and
-resolvable destinations share one interpretation for mounts and input previews;
-link loops protect the lexical name. `HostPathPermissionError` keeps absolute
-paths and localized guidance within the common `UnsafePathError` contract.
+intermediate links and actual destinations share one component-wise interpretation
+for mounts and input previews; loops protect every traversed name. Copy sources
+must remain outside protected state. Leaf links are refused. Ancestor links are
+accepted only when their parent contains fixed credential state and therefore
+cannot be shared with a turn; writable grants and working directories also refuse
+such links. Final reads use no-follow opens. `HostPathPermissionError` keeps the
+absolute denied component, its protected owner when relevant, and localized guidance
+within the common `UnsafePathError` contract.
 Input-store failures belong to the store, separate from workspace selection,
-and clear after successful startup retry. Member IDs are single validated path
-components, and the installed package always mounts at
+and status polling retries failed startup. Member IDs are single validated path
+components for both revisions and IO. Invalid stored IDs stop runtime loading with
+the filename; the editor addresses existing safe directory names to rename or delete
+them. The installed package always mounts at
 `/opt/guildbotics/code/guildbotics` regardless of its physical directory name.
 
 ### Model effort

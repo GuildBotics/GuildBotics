@@ -20,7 +20,100 @@ from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
     SharedGrants,
+    SENSITIVE_HOME_DIRECTORIES,
+    DeniedPath,
+    ResolvedAccess,
+    ResolvedGrant,
 )
+
+
+@pytest.mark.parametrize(
+    "protected", [*SENSITIVE_HOME_DIRECTORIES, "workspace", "local"]
+)
+@pytest.mark.parametrize("shape", ["direct", "leaf", "ancestor"])
+def test_copy_and_preview_never_expose_any_protected_source(
+    tmp_path, monkeypatch, symlinks, protected, shape
+):
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    home = Path.home()
+    root = (
+        home / protected
+        if protected not in {"workspace", "local"}
+        else tmp_path / protected
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    secret = root / "private.txt"
+    secret.write_text("private")
+    writable = tmp_path / "writable"
+    writable.mkdir()
+    closed = DeniedPath(
+        root, "credentials" if protected in SENSITIVE_HOME_DIRECTORIES else protected
+    )
+    monkeypatch.setattr(command_input_files, "protected_paths", lambda: (closed,))
+    monkeypatch.setattr(
+        command_input_files,
+        "resolve_access",
+        lambda *a, **k: ResolvedAccess(
+            paths=(ResolvedGrant(writable, "read_write", str(writable)),),
+            denied=(closed,),
+        ),
+    )
+    source = secret
+    if shape == "leaf":
+        source = writable / "chosen.txt"
+        source.symlink_to(secret)
+    elif shape == "ancestor":
+        link = writable / "link"
+        link.symlink_to(root, target_is_directory=True)
+        source = link / secret.name
+    destination = tmp_path / "session"
+    destination.mkdir()
+    with pytest.raises(UnsafePathError):
+        copy_command_input_file(destination, source, cwd=writable)
+    preview = describe_command_input_paths([source], cwd=writable)[0]
+    assert not preview.reachable
+    assert preview.grant is None
+    assert preview.problem
+    assert list(destination.iterdir()) == []
+    assert secret.read_text() == "private"
+
+
+@pytest.mark.parametrize("cwd", [None, "new"])
+def test_old_turn_link_is_refused_after_switching_working_directory(
+    tmp_path, symlinks, cwd
+):
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    old = tmp_path / "old"
+    old.mkdir()
+    private = tmp_path / "private-documents"
+    private.mkdir()
+    (private / "report").write_text("private")
+    (old / "link").symlink_to(private, target_is_directory=True)
+    new = tmp_path / "new"
+    new.mkdir()
+    with pytest.raises(UnsafePathError):
+        copy_command_input_file(tmp_path, old / "link/report", cwd=new if cwd else None)
+    assert not list(tmp_path.glob("*-report"))
+
+
+def test_copy_keeps_selected_basename_and_never_calls_path_resolve(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "selected.txt"
+    source.write_text("public")
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("drive spelling must survive")
+        ),
+    )
+    monkeypatch.setattr(command_input_files, "protected_paths", lambda: ())
+    copied = copy_command_input_file(tmp_path, source)
+    assert copied.name.endswith("-selected.txt")
+    assert copied.read_text() == "public"
 
 
 def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
@@ -63,7 +156,7 @@ def test_user_copy_accepts_linked_sources_and_streams_a_growing_file(
     assert set(destination.iterdir()) == before
 
 
-@pytest.mark.parametrize("stage", ["resolve", "stat"])
+@pytest.mark.parametrize("stage", ["lstat", "stat"])
 def test_copy_permission_refusal_preserves_absolute_path(tmp_path, monkeypatch, stage):
     from guildbotics.utils.safe_paths import HostPathPermissionError
 

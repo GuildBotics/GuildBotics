@@ -459,14 +459,22 @@ class AppRuntime:
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
+        from guildbotics.utils.person_id import MemberConfigError
+
         members: Sequence[Person | PersonConfigSummary]
+        problem = ""
         try:
             context = self._get_context()
-        except AppApiError:
+        except (AppApiError, MemberConfigError) as exc:
             status = self.get_config_status()
-            if status.project_file_exists:
+            if status.project_file_exists and not isinstance(exc, MemberConfigError):
                 raise
-            project = Project()
+            problem = str(exc) if isinstance(exc, MemberConfigError) else ""
+            project = (
+                Project.model_validate(load_yaml_file(status.project_file))
+                if problem and status.project_file is not None
+                else Project()
+            )
             members = (
                 SimplePersonSetupService().list_person_configs(
                     config_dir=status.config_dir
@@ -500,6 +508,7 @@ class AppRuntime:
                 for member in members
             ],
             default_person_id=default_person_id,
+            problem=problem,
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
@@ -1922,12 +1931,15 @@ class AppRuntime:
 
 def _command_roots(person_id: str) -> list[Path]:
     """Physical roots whose logical command names seed the general catalog."""
+    from guildbotics.utils.person_id import person_config_directory
+
+    member_root = person_config_directory(person_id) / "commands"
     try:
         primary = get_primary_config_path(Path())
     except WorkspaceNotConfiguredError:
         return []
     return [
-        primary / "team" / "members" / person_id / "commands",
+        primary / member_root,
         get_shared_commands_root(),
     ]
 

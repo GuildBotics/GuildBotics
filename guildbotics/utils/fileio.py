@@ -399,7 +399,11 @@ def load_person_slot_mapping(person_id: str, path_str: str) -> dict:
         team_mapping = load_yaml_file(team_path)
         if isinstance(team_mapping, dict):
             mapping.update(team_mapping)
-    member_path = get_config_path(f"team/members/{person_id}/{path_str}")
+    from guildbotics.utils.person_id import person_config_directory
+
+    member_path = get_config_path(
+        (person_config_directory(person_id) / path_str).as_posix()
+    )
     if member_path.exists() and member_path != team_path:
         member_mapping = load_yaml_file(member_path)
         if isinstance(member_mapping, dict):
@@ -521,9 +525,11 @@ def get_intelligence_roots(
 ) -> list[Path]:
     """Resolve member, team, and template intelligence configuration roots in priority order."""
     roots: list[Path] = []
-    if person_id:
+    from guildbotics.utils.person_id import person_config_directory
+
+    if person_id is not None:
         roots.append(
-            config_dir / "team/members" / person_id / "intelligences" / sub_dir
+            config_dir / person_config_directory(person_id) / "intelligences" / sub_dir
         )
     roots.append(config_dir / "intelligences" / sub_dir)
     roots.append(get_template_path() / "intelligences" / sub_dir)

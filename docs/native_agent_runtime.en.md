@@ -175,7 +175,7 @@ hole in a larger mount. Existing filesystem objects are compared by identity,
 so another spelling of the same directory does not bypass this check.
 
 Opening, creating, or joining a workspace registers its location on this device.
-Credential symlinks protect both their original location and destination; they
+Credential symlinks protect their original location, intermediate links, and actual destination; they
 do not prevent commands in unrelated directories. The trusted installed package
 is canonicalized once before inspection, and code and templates share that root.
 The **Device and hub → Registered workspaces** list includes inactive workspaces;
@@ -186,7 +186,13 @@ running with no workspace selected and show the refusal reason. Unavailable old
 locations can still be unregistered. Malformed grants allow workspace selection
 for editing or synchronization, but commands remain refused until repaired.
 Input-folder failures have their own alert, cleared by a successful input retry.
-User-selected copy sources follow links before opening; copying checks the 20MiB
+Copy sources must remain outside protected state. Leaf links are refused. Ancestor
+links such as `~/Dropbox/report.pdf` are accepted only when the parent contains fixed
+credential state and cannot be shared with a turn; otherwise select the file in its
+real directory. The preview shows the refusal and offers no unsafe grant. Status
+polling retries an unavailable input store and clears its error after recovery.
+Invalid stored member IDs show their config filename and can be renamed or deleted
+in setup, while runtime loading remains refused until repair. Copying checks the 20MiB
 limit throughout the read, including files that grow during the copy. Workspace
 locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before

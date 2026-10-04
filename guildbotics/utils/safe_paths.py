@@ -11,6 +11,7 @@ import os
 import stat
 import sys
 import unicodedata
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from typing import IO, Any
 
 # These APIs exist only on POSIX; callers select this branch before using them.
 _POSIX: Any = os
+MAX_HOST_LINKS = 40
 
 
 def t(key: str, **values: object) -> str:
@@ -35,9 +37,14 @@ class UnsafePathError(ValueError):
 class HostPathPermissionError(UnsafePathError):
     """A localized permission refusal, still caught as an unsafe host path."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, protected: Path | None = None) -> None:
         self.filename = str(normalize_host_path(path))
-        super().__init__(filesystem_permission_problem(Path(self.filename)))
+        reason = filesystem_permission_problem(Path(self.filename))
+        super().__init__(
+            t("safe_paths.protected_unavailable", protected=protected, reason=reason)
+            if protected is not None
+            else reason
+        )
 
 
 def filesystem_permission_problem(path: Path) -> str:
@@ -48,6 +55,7 @@ def filesystem_permission_problem(path: Path) -> str:
         app = launching_app_name()
         return t(
             "intelligences.agent_environment.filesystem.macos_documents",
+            path=path,
             app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
             if app
             else "",
@@ -60,11 +68,6 @@ def normalize_host_path(path: Path) -> Path:
     path = path.expanduser().absolute()
     if ".." in path.parts or "\x00" in str(path):
         raise UnsafePathError(t("safe_paths.invalid", path=path))
-    if sys.platform == "darwin":
-        for alias in ("/tmp", "/var", "/etc"):
-            root = Path(alias)
-            if path.is_relative_to(root):
-                return Path("/private") / path.relative_to("/")
     if os.name == "nt" and (
         not path.drive.endswith(":")
         or any(
@@ -73,7 +76,99 @@ def normalize_host_path(path: Path) -> Path:
         )
     ):
         raise UnsafePathError(t("safe_paths.invalid", path=path))
+    return _host_alias(path)
+
+
+def _host_alias(path: Path) -> Path:
+    if sys.platform == "darwin":
+        for alias in ("/tmp", "/var", "/etc"):
+            if path.is_relative_to(alias):
+                return Path("/private") / path.relative_to("/")
     return path
+
+
+@dataclass(frozen=True)
+class HostPathResolution:
+    """All names traversed before no-follow inspection, including link loops."""
+
+    path: Path
+    names: tuple[Path, ...]
+    cyclic: bool = False
+
+
+@dataclass(frozen=True)
+class _LinkEnd:
+    key: tuple[int, int, Path]
+
+
+def resolve_host_links(
+    path: Path, *, on_link: Callable[[Path, bool], None] | None = None
+) -> HostPathResolution:
+    """Walk links explicitly, retaining ordinary drive spelling and every hop.
+
+    Admit each link before reading its target. The resulting file must still
+    be opened without following links, using the held ancestry.
+    """
+    path = normalize_host_path(path)
+    names = [path]
+    active: set[tuple[int, int, Path]] = set()
+    links = 0
+    pending: deque[str | _LinkEnd] = deque(path.parts[1:])
+    current = Path(path.anchor)
+    while pending:
+        component = pending.popleft()
+        if isinstance(component, _LinkEnd):
+            active.remove(component.key)
+            continue
+        if component == "..":
+            current = current.parent
+            continue
+        candidate = current / component
+        leaf = not any(isinstance(part, str) for part in pending)
+        try:
+            info = candidate.lstat()
+            linked = stat.S_ISLNK(info.st_mode) or bool(
+                getattr(info, "st_file_attributes", 0)
+                & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            )
+            if not linked:
+                inspect_host_path(candidate, directory=not leaf)
+                current = candidate
+                continue
+            names.append(candidate)
+            key = (info.st_dev, info.st_ino, candidate)
+            links += 1
+            if key in active or links > MAX_HOST_LINKS:
+                return HostPathResolution(candidate, tuple(dict.fromkeys(names)), True)
+            active.add(key)
+            if on_link is not None:
+                on_link(candidate, leaf)
+            target = os.readlink(candidate)
+            if os.name == "nt" and target.startswith("\\\\?\\"):
+                target = (
+                    "\\\\" + target[8:]
+                    if target.startswith("\\\\?\\UNC\\")
+                    else target[4:]
+                )
+                if not Path(target).drive.endswith(":"):
+                    raise UnsafePathError(t("safe_paths.invalid", path=target))
+            destination = Path(target)
+            if not destination.is_absolute():
+                destination = candidate.parent / destination
+            destination = _host_alias(destination)
+            current = Path(destination.anchor)
+            pending = deque((*destination.parts[1:], _LinkEnd(key), *pending))
+        except FileNotFoundError:
+            current = candidate
+            for component in pending:
+                if isinstance(component, _LinkEnd):
+                    continue
+                current = current / component
+            break
+        except PermissionError as exc:
+            raise HostPathPermissionError(candidate) from exc
+    names.append(current)
+    return HostPathResolution(current, tuple(dict.fromkeys(names)))
 
 
 @dataclass(frozen=True)
@@ -160,11 +255,13 @@ def _inspect_posix(
     identities: list[tuple[int, int]] = []
     parts = path.parts[1:]
     flags = os.O_RDONLY | _POSIX.O_NOFOLLOW | _POSIX.O_NONBLOCK
+    checked = Path(path.anchor)
     try:
         parent = os.open(path.anchor, flags | _POSIX.O_DIRECTORY)
         descriptors.append(parent)
         identities.append(_identity(os.fstat(parent)))
         for index, part in enumerate(parts):
+            checked = Path(path.anchor).joinpath(*parts[: index + 1])
             is_directory = directory or index < len(parts) - 1
             leaf_file = open_file and index == len(parts) - 1
             try:
@@ -220,6 +317,8 @@ def _inspect_posix(
         if consume is not None:
             consume(parent)
         return tuple(identities), (), True
+    except PermissionError as exc:
+        raise HostPathPermissionError(checked) from exc
     finally:
         for handle in reversed(descriptors):
             os.close(handle)

@@ -244,6 +244,43 @@ def test_api_starts_unselected_when_input_store_cannot_be_initialized(
         assert response.json()["input_store_problem"]
 
 
+def test_status_poll_retries_only_failed_input_store(tmp_path, monkeypatch):
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    original = store._start
+    attempts = []
+    refused = True
+
+    def start():
+        attempts.append(True)
+        if refused:
+            raise HostPathPermissionError(tmp_path / "inputs")
+        original()
+
+    monkeypatch.setattr(store, "_start", start)
+    with TestClient(
+        create_app(
+            session_token="secret",
+            runtime=RuntimeStub(tmp_path),
+            command_input_file_store=store,
+        )
+    ) as client:
+        first = client.get("/config/status", headers=AUTH_HEADERS)
+        assert first.json()["input_store_problem"]
+        refused = False
+        recovered = client.get("/config/status", headers=AUTH_HEADERS)
+        assert recovered.json()["input_store_problem"] == ""
+        count = len(attempts)
+        assert (
+            client.get("/config/status", headers=AUTH_HEADERS).json()[
+                "input_store_problem"
+            ]
+            == ""
+        )
+        assert len(attempts) == count
+
+
 def _runtime_status(
     *,
     scheduler_state: str = "stopped",
@@ -1016,18 +1053,20 @@ def test_command_input_paths_report_what_a_turn_would_reach(
     reachable = home / "Documents/GuildBotics/tmp/a.png"
     reachable.parent.mkdir(parents=True)
     reachable.write_bytes(b"x")
-    unreachable = tmp_path / "shot.png"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unreachable = outside / "shot.png"
     unreachable.write_bytes(b"x")
 
     with TestClient(app) as client:
         response = client.post(
             "/commands/input-paths",
             headers=AUTH_HEADERS,
-            json={"paths": [str(reachable), str(unreachable), str(tmp_path)]},
+            json={"paths": [str(reachable), str(unreachable), str(outside)]},
         )
 
     assert response.status_code == HTTP_OK
-    device = {"scope": "device", "path": str(tmp_path.resolve())}
+    device = {"scope": "device", "path": str(outside.resolve())}
     assert response.json() == {
         "paths": [
             {
@@ -1036,6 +1075,7 @@ def test_command_input_paths_report_what_a_turn_would_reach(
                 "reachable": True,
                 "guest_path": guest_path(reachable),
                 "grant": None,
+                "problem": "",
             },
             {
                 "path": str(unreachable),
@@ -1043,13 +1083,15 @@ def test_command_input_paths_report_what_a_turn_would_reach(
                 "reachable": False,
                 "guest_path": guest_path(unreachable),
                 "grant": device,
+                "problem": "",
             },
             {
-                "path": str(tmp_path),
+                "path": str(outside),
                 "kind": "directory",
                 "reachable": False,
-                "guest_path": guest_path(tmp_path),
+                "guest_path": guest_path(outside),
                 "grant": device,
+                "problem": "",
             },
         ]
     }

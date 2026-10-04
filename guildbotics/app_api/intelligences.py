@@ -48,6 +48,7 @@ from guildbotics.intelligences.effort import (
 )
 from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
+from guildbotics.utils.person_id import person_config_directory
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
@@ -62,7 +63,11 @@ def intelligence_config_dir(person_id: str | None) -> str:
     pruning others -- so it is the directory, not a fixed file list, that a
     stale-write check has to compare.
     """
-    return f"team/members/{person_id}/intelligences" if person_id else "intelligences"
+    return (
+        (person_config_directory(person_id) / "intelligences").as_posix()
+        if person_id is not None
+        else "intelligences"
+    )
 
 
 class IntelligenceConfigResult:
@@ -93,7 +98,7 @@ class IntelligenceConfigService:
         inherited_model_slots: list[str] = []
         inherited_cli_slots: list[str] = []
         inherited_brain_features: list[str] = []
-        if person_id:
+        if person_id is not None:
             inherited_model_slots = list(
                 self._read_merged_mapping(config_dir, None, "model_mapping.yml")
             )
@@ -159,13 +164,13 @@ class IntelligenceConfigService:
                 self._to_brain_config(assignment)
         base_dir = self._scope_dir(request.config_dir, request.person_id)
         target_dir = base_dir / "intelligences"
-        if request.person_id and request.inherit_team_defaults:
+        if request.person_id is not None and request.inherit_team_defaults:
             if target_dir.exists():
                 shutil.rmtree(target_dir)
             return IntelligenceConfigResult(
                 [CreatedFile(path=target_dir, action="delete")]
             )
-        if request.person_id:
+        if request.person_id is not None:
             return self._update_member_overrides(request, target_dir)
 
         files: list[CreatedFile] = []
@@ -529,8 +534,8 @@ class IntelligenceConfigService:
         return agent.path
 
     def _scope_dir(self, config_dir: Path, person_id: str | None) -> Path:
-        if person_id:
-            return config_dir / "team/members" / person_id
+        if person_id is not None:
+            return config_dir / person_config_directory(person_id)
         return config_dir
 
     def _read_scoped_mapping(
@@ -559,9 +564,12 @@ class IntelligenceConfigService:
                 get_template_path() / "intelligences" / file_name
             )
         merged: dict[str, Any] = dict(team)
-        if person_id:
+        if person_id is not None:
             member = self._read_optional_yaml(
-                config_dir / "team/members" / person_id / "intelligences" / file_name
+                config_dir
+                / person_config_directory(person_id)
+                / "intelligences"
+                / file_name
             )
             merged.update(member)
         return merged
@@ -569,11 +577,10 @@ class IntelligenceConfigService:
     def _read_scoped_yaml(
         self, config_dir: Path, person_id: str | None, relative_path: str
     ) -> dict[str, Any]:
-        if person_id:
+        if person_id is not None:
             member_file = (
                 config_dir
-                / "team/members"
-                / person_id
+                / person_config_directory(person_id)
                 / "intelligences"
                 / relative_path
             )

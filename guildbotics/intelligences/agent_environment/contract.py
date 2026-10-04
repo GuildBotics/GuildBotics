@@ -15,7 +15,6 @@ environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
 
 from __future__ import annotations
 
-import errno
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -44,6 +43,7 @@ from guildbotics.utils.safe_paths import (
     inspect_host_path,
     normalize_host_path,
     read_host_file,
+    resolve_host_links,
 )
 from guildbotics.utils.safe_paths import UnsafePathError as AccessContractError
 from guildbotics.utils.workspace_state import registered_workspaces
@@ -320,29 +320,23 @@ class DeniedPath:
         }[self.kind]
 
     def facts(self) -> tuple[PathFacts, ...]:
-        """Close the link name and any resolvable destination, for all readers."""
-        lexical = inspect_host_path(
-            self.path, missing=True, directory=False, link_as_missing=True
-        )
-        if not lexical.missing:
-            return (lexical,)
+        """Close every intermediate link name, destination and absent name."""
         try:
-            resolved = self.path.resolve()
-        except RuntimeError:  # Python 3.12 reports link loops this way.
-            return (lexical,)
-        except PermissionError as exc:
-            raise HostPathPermissionError(self.path) from exc
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                return (lexical,)
-            raise AccessContractError(
-                t("safe_paths.unavailable", path=self.path, reason=exc)
+            resolution = resolve_host_links(self.path)
+            return tuple(
+                inspect_host_path(
+                    name, missing=True, directory=False, link_as_missing=True
+                )
+                for name in resolution.names
+            )
+        except HostPathPermissionError as exc:
+            raise HostPathPermissionError(
+                Path(exc.filename), protected=self.path
             ) from exc
-        return (
-            (lexical, inspect_host_path(resolved, missing=True, directory=False))
-            if resolved != lexical.path
-            else (lexical,)
-        )
+        except AccessContractError as exc:
+            raise AccessContractError(
+                t("safe_paths.protected_unavailable", protected=self.path, reason=exc)
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,7 +356,10 @@ class ResolvedAccess:
         target = inspect_host_path(path, missing=True, directory=False)
         opened = [g.path for g in (*self.documents, *self.paths) if g.present]
         if cwd is not None:
-            opened.append(cwd)
+            try:
+                opened.append(validate_mount_source(cwd, self.denied, grant=True))
+            except AccessContractError:
+                return False
         return any(
             inspect_host_path(root).contains(target) for root in opened
         ) and not any(
@@ -626,21 +623,19 @@ def validate_workspace_location(workspace: Path) -> Path:
             grants.extend(getattr(loader(workspace=target.path), field_name))
         except AccessContractError:
             continue
+    grants.append(EXCHANGE_GRANT)
     for grant in grants:
         opened = _grant_path(grant.path, home)
         try:
             contains = host_path_contains(opened, target)
         except AccessContractError:
+            if grant is EXCHANGE_GRANT:
+                raise
             continue
         if contains:
             raise AccessContractError(
                 t("safe_paths.workspace_granted", path=target.path, granted=opened)
             )
-    opened = _grant_path(EXCHANGE_GRANT.path, home)
-    if host_path_contains(opened, target):
-        raise AccessContractError(
-            t("safe_paths.workspace_granted", path=target.path, granted=opened)
-        )
     return target.path
 
 
