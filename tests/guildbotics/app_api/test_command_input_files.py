@@ -39,6 +39,17 @@ def test_session_operations_never_reopen_a_swapped_ancestor(tmp_path, symlinks, 
     store = CommandInputFileStore(root=root)
     store.start()
     session = store._session_directory().name
+    if os.name == "nt":
+        # A live Windows session lock already prevents moving its ancestors.
+        # Release this fixture's handle to exercise each operation's own
+        # no-follow check as well, without weakening the production lock.
+        with pytest.raises(PermissionError):
+            root.rename(tmp_path / "original")
+        session_lock = store._session_lock
+        assert session_lock is not None
+        command_input_files.unlock_file(session_lock)
+        session_lock.close()
+        store._session_lock = None
     root.rename(tmp_path / "original")
     outside = tmp_path / "outside"
     (outside / session).mkdir(parents=True)
