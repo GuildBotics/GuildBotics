@@ -65,6 +65,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowSource,
 )
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
+from guildbotics.utils.safe_paths import normalize_host_path
 
 __all__ = [
     "HostRunLedger",
@@ -143,6 +144,8 @@ def host_command_cwd() -> Path:
     cwd = exchange_dir()
     try:
         cwd = validate_mount_source(cwd, protected_paths(), grant=True, create=True)
+    except PermissionError as exc:
+        raise CommandError(filesystem_permission_problem(cwd)) from exc
     except AccessContractError as exc:
         if not isinstance(exc.__cause__, PermissionError):
             raise CommandError(str(exc)) from exc
@@ -204,7 +207,7 @@ def _prepared(
         context,
         command_name,
         [str(arg) for arg in command_args],
-        cwd,
+        normalize_host_path(cwd),
         path,
         command_access(path),
     )

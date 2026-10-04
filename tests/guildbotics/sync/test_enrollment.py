@@ -97,6 +97,9 @@ def test_an_empty_hub_receives_this_workspace_as_its_first_content(
     result = enrollment.enroll(str(hub), root)
 
     assert result.mode == "register"
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    assert root in registered_workspaces()
     assert result.rejection_id is None
     assert _hub_file(hub, CONFIG) == "name: demo\n"
     assert _hub_file(hub, "state/workspace.json") is not None
@@ -133,6 +136,10 @@ def test_a_new_machine_takes_the_hub_content_as_its_workspace(
     registered = enrollment.enroll(str(hub), source)
 
     workspace_id = enrollment.clone_workspace(str(hub), tmp_path / "windows")
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    assert source in registered_workspaces()
+    assert tmp_path / "windows" in registered_workspaces()
 
     assert workspace_id == registered.workspace_id
     assert (

@@ -892,7 +892,7 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     )
     for mount in spec.mounts:
         if mount.host is not None:
-            checked = validate_mount_source(mount.host, denied)
+            checked = validate_mount_source(mount.host, denied, grant=mount.user)
             if checked != mount.host:
                 raise AgentEnvironmentError(f"Unnormalized mount source: {mount.host}")
 

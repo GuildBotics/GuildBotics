@@ -382,7 +382,9 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         if mount != code
     )
     assert (
-        EnvironmentMount(guest_path(checkout), None if read_only else checkout, False)
+        EnvironmentMount(
+            guest_path(checkout), None if read_only else checkout, False, user=True
+        )
         in spec.mounts
     )
 
@@ -398,6 +400,25 @@ def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
 
     assert "diagnostics" not in directories
     assert directories["config"] == guest_path(tmp_path / ".guildbotics" / "config")
+
+
+def test_linked_package_uses_one_canonical_root_for_code_and_templates(
+    tmp_path, symlinks
+):
+    import subprocess
+    import sys
+    from guildbotics.utils.fileio import PACKAGE_ROOT
+
+    linked = tmp_path / "launcher"
+    linked.symlink_to(PACKAGE_ROOT.parent, target_is_directory=True)
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import guildbotics; from guildbotics.utils.fileio import PACKAGE_ROOT, get_template_path; from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, code_path, command_path; assert sys.argv[1] in guildbotics.__file__; assert CODE_MOUNT.host == PACKAGE_ROOT; assert code_path(get_template_path()).startswith(CODE_MOUNT.guest); assert command_path(get_template_path() / 'ask.en.md').startswith(CODE_MOUNT.guest)"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(linked)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _jwt(claims: dict[str, object]) -> str:

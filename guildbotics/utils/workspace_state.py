@@ -17,9 +17,11 @@ from guildbotics.utils.fileio import (
     workspace_root_from_config_dir,
 )
 from guildbotics.utils.safe_paths import (
+    UnsafePathError,
     inspect_host_path,
     normalize_host_path,
     read_host_file,
+    t,
 )
 
 ACTIVE_WORKSPACE_FILE = "active-workspace.json"
@@ -31,10 +33,15 @@ def registered_workspaces() -> tuple[Path, ...]:
     path = normalize_host_path(get_machine_state_path(REGISTERED_WORKSPACES_FILE))
     if not inspect_host_path(path, directory=False, missing=True).present:
         return ()
-    payload = json.loads(read_host_file(path))
-    if not isinstance(payload, list) or any(not isinstance(p, str) for p in payload):
-        raise ValueError("Invalid workspace registry")
-    return tuple(normalize_host_path(Path(p)) for p in payload)
+    try:
+        payload = json.loads(read_host_file(path))
+        if not isinstance(payload, list) or any(
+            not isinstance(p, str) for p in payload
+        ):
+            raise ValueError("Expected a list of workspace paths")
+        return tuple(normalize_host_path(Path(p)) for p in payload)
+    except (OSError, ValueError) as exc:
+        raise UnsafePathError(t("safe_paths.registry", path=path, reason=exc)) from exc
 
 
 def register_workspace(workspace: Path) -> Path:

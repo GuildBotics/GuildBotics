@@ -496,11 +496,25 @@ def test_a_typed_grant_is_judged_before_it_is_saved(
 
 def test_a_deny_that_would_close_the_home_is_refused(home: Path) -> None:
     refused = evaluate_grant("deny", str(home))
-
     assert refused.valid is False
     assert refused.reason == t(
         "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
     )
+
+
+@pytest.mark.parametrize("scope", ["document", "local", "deny"])
+def test_preview_includes_existing_shared_grants_and_local_denies(
+    home, monkeypatch, scope
+):
+    from guildbotics.app_api import agent_environment_status as status
+
+    (home / "shared/private").mkdir(parents=True)
+    shared = SharedGrants(documents=[DocumentGrant(path="shared", access="read")])
+    local = LocalGrants(deny=["shared/private"]) if scope != "deny" else LocalGrants()
+    monkeypatch.setattr(status, "load_shared_grants", lambda: shared)
+    monkeypatch.setattr(status, "load_local_grants", lambda: local)
+    path = "shared/private" if scope != "local" else str(home / "shared/private")
+    assert not evaluate_grant(scope, path).valid
 
 
 def test_the_sandbox_endpoints_answer_from_this_device(

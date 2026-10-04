@@ -1,6 +1,7 @@
 """One reading of the device answers the CLI, the Desktop, and a refused turn."""
 
 from __future__ import annotations
+import os
 
 import errno
 from pathlib import Path
@@ -357,6 +358,31 @@ def test_grant_preflight_checks_parents_without_creating_directories(
         "intelligences.agent_environment.filesystem.permission_denied", path=documents
     )
     assert not (documents / "GuildBotics").exists()
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX directory-relative permission failure"
+)
+def test_nofollow_open_permission_error_keeps_macos_guidance(
+    device, monkeypatch, tmp_path, fake_platform
+):
+    from guildbotics.utils import safe_paths
+
+    target = tmp_path / "Documents"
+    target.mkdir()
+    original = safe_paths.os.open
+
+    def open_path(path, *args, **kwargs):
+        if path == "Documents":
+            raise PermissionError(errno.EACCES, "denied", "Documents")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(safe_paths.os, "open", open_path)
+    fake_platform(module, "darwin")
+    monkeypatch.setattr(module, "launching_app_name", lambda: "")
+    assert device_status().refusal == t(
+        "intelligences.agent_environment.filesystem.macos_documents", app=""
+    )
 
 
 @pytest.mark.parametrize("scope", ["document", "local", "denied"])

@@ -172,6 +172,21 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("shows the refused workspace reason while leaving setup accessible", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+      cwd: "/exchange",
+      workspace: null,
+      config_dir: null,
+      project_file: null,
+      project_file_exists: false,
+      storage_dir: null,
+      workspace_problem: "Workspace registry needs repair",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findByText("Workspace registry needs repair")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Setup/ })).toBeInTheDocument();
+  });
   it("renders the service page with runtime controls", async () => {
     window.location.hash = "#/service";
     renderApp();

@@ -76,6 +76,10 @@ const resources = {
           empty: "No workspaces are registered on this device.",
           removeLabel: "Remove registration",
           remove: "Remove registration for {{path}}",
+          active: "Selected",
+          confirm:
+            "Remove {{path}} from this device’s protected workspaces? Its files remain, but agents may access the location if you grant its directory later.",
+          confirmLabel: "Confirm removal",
         },
         indicator: {
           aria: "Synchronization: {{state}}",
@@ -2112,6 +2116,10 @@ const resources = {
           empty: "この端末に登録されたワークスペースはありません。",
           removeLabel: "登録を外す",
           remove: "{{path}}の登録を外す",
+          active: "選択中",
+          confirm:
+            "{{path}}をこの端末の保護対象から外しますか？ファイルは残りますが、あとでディレクトリへのアクセスを許可すると、エージェントがこの場所へアクセスできます。",
+          confirmLabel: "登録解除を確定",
         },
         indicator: {
           aria: "同期: {{state}}",

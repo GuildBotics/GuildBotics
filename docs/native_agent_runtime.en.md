@@ -169,15 +169,21 @@ unchanged to microsandbox; it is checked again immediately before startup.
 A host source containing a protected directory is refused, including a read-only
 source. Protected directories include credentials, `~/.guildbotics`, every
 registered workspace's `.guildbotics`, and device-local `deny` entries, even when
-absent. Grants also refuse paths inside protected directories. Share a safe child
+absent. User working directories and grants also refuse paths inside protected directories. Share a safe child
 directory instead of a parent containing private data; a `deny` does not carve a
 hole in a larger mount. Existing filesystem objects are compared by identity,
 so another spelling of the same directory does not bypass this check.
 
 Opening, creating, or joining a workspace registers its location on this device.
+Credential symlinks protect both their original location and destination; they
+do not prevent commands in unrelated directories. The trusted installed package
+is canonicalized once before inspection, and code and templates share that root.
 The **Device and hub → Registered workspaces** list includes inactive workspaces;
 remove an entry only when its state no longer needs protection. Removing the entry
-does not delete files. Workspace locations must be outside the current grants and
+does not delete files. The selected workspace cannot be unregistered, and removing
+another entry requires confirmation. Invalid startup selections leave Desktop
+running with no workspace selected and show the refusal reason. Workspace
+locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
 opening it.
 

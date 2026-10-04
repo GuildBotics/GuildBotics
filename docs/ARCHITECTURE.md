@@ -355,12 +355,12 @@ opens provide ancestry identities and anchor directory creation. Windows uses
 relative handles and refuses reparse points. The contract's protected-path table
 includes absent credential directories, device state, all registered workspace
 state, and local denies. Sources containing protected state are refused; user
-grants also refuse descendants. Explicit host-owned children such as member
+working directories and grants also refuse descendants. Explicit host-owned children such as member
 clones remain mountable. `spec.py` checks every host mount and `runtime._volumes`
 checks again before passing the same name to `Volume.bind`, without resolving
 links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
 (`data/workspaces.json`); Desktop lists and unregisters entries through
-`/device/workspaces`. Workspace admission rejects locations under current grants
+`/device/workspaces`. Workspace admission rejects locations under the target's grants
 or the exchange directory before registration or initialization.
 
 ### Model effort

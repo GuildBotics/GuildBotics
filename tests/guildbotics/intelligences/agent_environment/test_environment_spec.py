@@ -77,7 +77,9 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
 
     assert spec.cwd == guest_path(cwd)
     assert spec.home == guest_path(tmp_path.resolve())
-    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
+    assert spec.mounts == (
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+    )
     assert spec.env == host_facts
 
 
@@ -105,15 +107,18 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
     assert spec.home == guest_path(home)
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
-        EnvironmentMount(guest_path(cwd), cwd, readonly=False),
-        EnvironmentMount(guest_path(exchange), exchange, readonly=False),
-        EnvironmentMount(guest_path(home / "out"), home / "out", readonly=False),
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+        EnvironmentMount(guest_path(exchange), exchange, readonly=False, user=True),
+        EnvironmentMount(
+            guest_path(home / "out"), home / "out", readonly=False, user=True
+        ),
         EnvironmentMount(
             guest_path(home / "Documents" / "notes"),
             home / "Documents" / "notes",
             readonly=True,
+            user=True,
         ),
-        EnvironmentMount(guest_path(cache), cache, readonly=True),
+        EnvironmentMount(guest_path(cache), cache, readonly=True, user=True),
     }
 
 
@@ -134,7 +139,7 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     assert depths == sorted(depths)
     # The working directory is read-write even where a grant names it read.
     assert [m for m in spec.mounts if m.guest == guest_path(cwd)] == [
-        EnvironmentMount(guest_path(cwd), cwd, readonly=False)
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True)
     ]
 
 
@@ -169,7 +174,7 @@ def test_an_absent_grant_is_not_mounted(tmp_path: Path) -> None:
         )
     )
     spec = build_environment_spec(_contract(access), cwd)
-    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, False),)
+    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, False, user=True),)
 
 
 def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
@@ -200,13 +205,16 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
 
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
-        EnvironmentMount(guest_path(cwd), None, readonly=False),
-        EnvironmentMount(guest_path(exchange), exchange, readonly=True),
-        EnvironmentMount(guest_path(home / "out"), home / "out", readonly=True),
+        EnvironmentMount(guest_path(cwd), None, readonly=False, user=True),
+        EnvironmentMount(guest_path(exchange), exchange, readonly=True, user=True),
+        EnvironmentMount(
+            guest_path(home / "out"), home / "out", readonly=True, user=True
+        ),
         EnvironmentMount(
             guest_path(home / "Documents" / "notes"),
             home / "Documents" / "notes",
             readonly=True,
+            user=True,
         ),
     }
 
@@ -215,7 +223,7 @@ def test_read_only_cwd_is_guest_owned_and_writable(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     spec = build_environment_spec(_contract(read_only=True), home, home=home)
-    assert spec.mounts == (EnvironmentMount(guest_path(home), None, False),)
+    assert spec.mounts == (EnvironmentMount(guest_path(home), None, False, user=True),)
 
 
 def test_what_guildbotics_binds_itself_keeps_its_access_on_a_read_only_turn(
@@ -440,9 +448,33 @@ def test_workspace_root_is_refused_but_its_explicit_clone_is_allowed(
     access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
     with pytest.raises(AccessContractError):
         build_environment_spec(_contract(access), workspace, home=home)
-    spec = build_environment_spec(_contract(access), clone, home=home)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), clone, home=home)
+    spec = build_environment_spec(
+        _contract(access), _work(tmp_path), home=home, worktrees=[clone]
+    )
     assert EnvironmentMount(guest_path(clone), clone, False) in spec.mounts
     assert all(m.host is not None for m in spec.mounts)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".ssh/sub",
+        ".guildbotics/data/run",
+        "workspace/.guildbotics/state",
+        "workspace/.guildbotics/local/member_git/aiko",
+    ],
+)
+def test_user_cwd_never_opens_a_protected_descendant(tmp_path, name):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = home / "workspace"
+    cwd = home / name
+    cwd.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd, home=home)
 
 
 @pytest.mark.parametrize("read_only", [False, True])

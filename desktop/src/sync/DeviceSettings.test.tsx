@@ -9,6 +9,7 @@ import {
   getDeviceSshKey,
   getHubStatus,
   getRegisteredWorkspaces,
+  getConfigStatus,
   unregisterWorkspace,
 } from "../api/client";
 import i18n from "../i18n";
@@ -26,6 +27,7 @@ vi.mock("../api/client", async () => {
     getDeviceSshKey: vi.fn(),
     getHubStatus: vi.fn(),
     getRegisteredWorkspaces: vi.fn(),
+    getConfigStatus: vi.fn(),
     unregisterWorkspace: vi.fn(),
   };
 });
@@ -44,6 +46,9 @@ function renderSettings() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRegisteredWorkspaces).mockResolvedValue([]);
+  vi.mocked(getConfigStatus).mockResolvedValue({ workspace: null } as Awaited<
+    ReturnType<typeof getConfigStatus>
+  >);
   vi.mocked(getDeviceSshKey).mockResolvedValue({
     exists: false,
     path: null,
@@ -121,6 +126,20 @@ describe("hosting the hub here", () => {
 });
 
 describe("registered workspaces", () => {
+  it("marks the selected workspace and disables its removal", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValue({ workspace: "/work/one" } as Awaited<
+      ReturnType<typeof getConfigStatus>
+    >);
+    vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one"]);
+    renderSettings();
+    expect(await screen.findByText(t("sync.registeredWorkspaces.active"))).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+      }),
+    ).toBeDisabled();
+    expect(unregisterWorkspace).not.toHaveBeenCalled();
+  });
   it("lists every location and removes only the requested registration", async () => {
     vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one", "/work/two"]);
     vi.mocked(unregisterWorkspace).mockResolvedValue(["/work/two"]);
@@ -130,6 +149,10 @@ describe("registered workspaces", () => {
       await screen.findByRole("button", {
         name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
       }),
+    );
+    expect(unregisterWorkspace).not.toHaveBeenCalled();
+    await user.click(
+      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
     );
     expect(unregisterWorkspace).toHaveBeenCalledWith("/work/one", expect.anything());
     await waitFor(() => expect(screen.queryByText("/work/one")).not.toBeInTheDocument());

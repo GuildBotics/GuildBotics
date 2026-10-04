@@ -52,6 +52,9 @@ def test_write_project_creates_cli_compatible_files(tmp_path: Path) -> None:
     )
 
     created_paths = {created_file.path for created_file in result.files}
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    assert tmp_path in registered_workspaces()
     assert config_dir / "team/project.yml" in created_paths
     assert config_dir / "intelligences/model_mapping.yml" in created_paths
     assert config_dir / "intelligences/cli_agent_mapping.yml" in created_paths

@@ -1,4 +1,17 @@
-import { Alert, Button, Card, Code, CopyButton, Group, Stack, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Code,
+  CopyButton,
+  Group,
+  Modal,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Server } from "lucide-react";
@@ -9,6 +22,7 @@ import {
   getDeviceSshKey,
   getHubStatus,
   getRegisteredWorkspaces,
+  getConfigStatus,
   unregisterWorkspace,
 } from "../api/client";
 
@@ -35,6 +49,8 @@ export function DeviceSettings() {
 function RegisteredWorkspacesCard() {
   const { t } = useTranslation();
   const client = useQueryClient();
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const [removing, setRemoving] = useState<string | null>(null);
   const locations = useQuery({
     queryKey: ["registered-workspaces"],
     queryFn: getRegisteredWorkspaces,
@@ -43,6 +59,7 @@ function RegisteredWorkspacesCard() {
     mutationFn: unregisterWorkspace,
     onSuccess: (paths) => {
       client.setQueryData(["registered-workspaces"], paths);
+      setRemoving(null);
       void client.invalidateQueries({ queryKey: ["agent-environment-status"] });
     },
   });
@@ -61,19 +78,43 @@ function RegisteredWorkspacesCard() {
         {locations.data?.map((path) => (
           <Group key={path} justify="space-between">
             <Code style={{ overflowWrap: "anywhere" }}>{path}</Code>
+            {path === config.data?.workspace ? (
+              <Badge>{t("sync.registeredWorkspaces.active")}</Badge>
+            ) : null}
             <Button
               size="xs"
               variant="light"
               color="danger"
               loading={remove.isPending && remove.variables === path}
-              disabled={remove.isPending}
-              onClick={() => remove.mutate(path)}
+              disabled={
+                remove.isPending ||
+                config.isPending ||
+                config.isError ||
+                path === config.data?.workspace
+              }
+              onClick={() => setRemoving(path)}
               aria-label={t("sync.registeredWorkspaces.remove", { path })}
             >
               {t("sync.registeredWorkspaces.removeLabel")}
             </Button>
           </Group>
         ))}
+        <Modal
+          opened={removing !== null}
+          onClose={() => setRemoving(null)}
+          title={t("sync.registeredWorkspaces.removeLabel")}
+        >
+          <Stack>
+            <Text>{t("sync.registeredWorkspaces.confirm", { path: removing })}</Text>
+            <Button
+              color="danger"
+              loading={remove.isPending}
+              onClick={() => removing && remove.mutate(removing)}
+            >
+              {t("sync.registeredWorkspaces.confirmLabel")}
+            </Button>
+          </Stack>
+        </Modal>
       </Stack>
     </Card>
   );

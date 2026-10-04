@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import stat
 import sys
+import unicodedata
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -29,6 +30,10 @@ def t(key: str, **values: object) -> str:
 
 class UnsafePathError(ValueError):
     """A host path cannot be inspected without following links."""
+
+
+def _permission_error(path: Path, exc: PermissionError) -> PermissionError:
+    return PermissionError(exc.errno, exc.strerror or str(exc), str(path))
 
 
 def normalize_host_path(path: Path) -> Path:
@@ -74,7 +79,9 @@ class PathFacts:
 
         def names(parts: tuple[str, ...]) -> tuple[str, ...]:
             return tuple(
-                p if self.case_sensitive and other.case_sensitive else p.casefold()
+                p
+                if self.case_sensitive and other.case_sensitive
+                else unicodedata.normalize("NFD", p).casefold()
                 for p in parts
             )
 
@@ -82,7 +89,12 @@ class PathFacts:
 
 
 def inspect_host_path(
-    path: Path, *, create: bool = False, missing: bool = False, directory: bool = True
+    path: Path,
+    *,
+    create: bool = False,
+    missing: bool = False,
+    directory: bool = True,
+    link_as_missing: bool = False,
 ) -> PathFacts:
     """Open every component without following links, optionally making dirs.
 
@@ -97,10 +109,16 @@ def inspect_host_path(
         if os.name == "nt":
             from guildbotics.utils.safe_paths_windows import inspect_windows_path
 
-            identities, absent = inspect_windows_path(path, create, directory)
+            identities, absent = inspect_windows_path(
+                path, create, directory, link_as_missing=link_as_missing
+            )
             case_sensitive = False
         else:
-            identities, absent, case_sensitive = _inspect_posix(path, create, directory)
+            identities, absent, case_sensitive = _inspect_posix(
+                path, create, directory, link_as_missing=link_as_missing
+            )
+    except PermissionError as exc:
+        raise _permission_error(path, exc) from exc
     except OSError as exc:
         raise UnsafePathError(
             t("safe_paths.unavailable", path=path, reason=exc)
@@ -117,6 +135,7 @@ def _inspect_posix(
     consume: Callable[[int], None] | None = None,
     open_file: bool = False,
     ancestor_of: PathFacts | None = None,
+    link_as_missing: bool = False,
 ) -> tuple[tuple[tuple[int, int], ...], tuple[str, ...], bool]:
     descriptors: list[int] = []
     identities: list[tuple[int, int]] = []
@@ -130,10 +149,18 @@ def _inspect_posix(
             is_directory = directory or index < len(parts) - 1
             leaf_file = open_file and index == len(parts) - 1
             try:
-                if ancestor_of is not None:
+                try:
                     info = os.stat(part, dir_fd=parent, follow_symlinks=False)
-                    if stat.S_ISLNK(info.st_mode):
-                        raise OSError(f"Symbolic link: {part}")
+                except FileNotFoundError:
+                    if not leaf_file:
+                        raise
+                    info = None
+                if info is not None and stat.S_ISLNK(info.st_mode):
+                    if link_as_missing:
+                        return tuple(identities), parts[index:], False
+                    raise UnsafePathError(t("safe_paths.link", path=path))
+                if ancestor_of is not None:
+                    assert info is not None
                     identity = _identity(info)
                     if identity not in ancestor_of.identities:
                         # This object cannot contain the independently opened
@@ -200,6 +227,8 @@ def host_path_contains(ancestor: Path, target: PathFacts) -> bool:
             ancestor, False, True, ancestor_of=target
         )
     except OSError as exc:
+        if isinstance(exc, PermissionError):
+            raise _permission_error(ancestor, exc) from exc
         raise UnsafePathError(
             t("safe_paths.unavailable", path=ancestor, reason=exc)
         ) from exc
@@ -212,14 +241,20 @@ def read_host_file(path: Path) -> bytes:
     if os.name == "nt":
         from guildbotics.utils.safe_paths_windows import read_windows_file
 
-        return read_windows_file(path)
+        try:
+            return read_windows_file(path)
+        except PermissionError as exc:
+            raise _permission_error(path, exc) from exc
     chunks: list[bytes] = []
 
     def consume(handle: int) -> None:
         while chunk := os.read(handle, 65536):
             chunks.append(chunk)
 
-    _, missing, _ = _inspect_posix(path, False, False, consume)
+    try:
+        _, missing, _ = _inspect_posix(path, False, False, consume)
+    except PermissionError as exc:
+        raise _permission_error(path, exc) from exc
     if missing:
         raise FileNotFoundError(str(path))
     return b"".join(chunks)
@@ -231,7 +266,10 @@ def open_host_file(path: Path) -> IO[str]:
     if os.name == "nt":
         from guildbotics.utils.safe_paths_windows import open_windows_file
 
-        return open_windows_file(path)
+        try:
+            return open_windows_file(path)
+        except PermissionError as exc:
+            raise _permission_error(path, exc) from exc
     descriptors: list[int] = []
     try:
         _inspect_posix(
@@ -242,6 +280,8 @@ def open_host_file(path: Path) -> IO[str]:
             open_file=True,
         )
     except OSError as exc:
+        if isinstance(exc, PermissionError):
+            raise _permission_error(path, exc) from exc
         raise UnsafePathError(
             t("safe_paths.unavailable", path=path, reason=exc)
         ) from exc
@@ -260,15 +300,21 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
     if os.name == "nt":
         from guildbotics.utils.safe_paths_windows import inspect_windows_path
 
-        _, absent = inspect_windows_path(
-            path, False, True, lambda _: action(None), stable=True
-        )
+        try:
+            _, absent = inspect_windows_path(
+                path, False, True, lambda _: action(None), stable=True
+            )
+        except PermissionError as exc:
+            raise _permission_error(path, exc) from exc
     else:
 
         def consume(fd: int) -> None:
             _POSIX.fchmod(fd, 0o700)
             action(fd)
 
-        _, absent, _ = _inspect_posix(path, False, True, consume)
+        try:
+            _, absent, _ = _inspect_posix(path, False, True, consume)
+        except PermissionError as exc:
+            raise _permission_error(path, exc) from exc
     if absent:
         raise UnsafePathError(t("safe_paths.missing", path=path))

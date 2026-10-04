@@ -81,6 +81,43 @@ def test_missing_names_use_the_ancestor_filesystem_case_rules(tmp_path: Path) ->
     assert first.contains(second) is not first.case_sensitive
 
 
+def test_absent_equivalent_unicode_names_on_insensitive_filesystems(tmp_path):
+    first = inspect_host_path(tmp_path / "caf\u00e9", missing=True)
+    second = inspect_host_path(tmp_path / "cafe\u0301/child", missing=True)
+    assert first.contains(second) is not first.case_sensitive
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX directory-relative permission failure"
+)
+@pytest.mark.parametrize("operation", ["inspect", "read", "open", "visit", "contains"])
+def test_public_path_operations_preserve_absolute_permission_path(
+    tmp_path, monkeypatch, operation
+):
+    path = tmp_path / "private"
+    path.mkdir()
+    original = os.open
+
+    def deny(name, *args, **kwargs):
+        if name == "private":
+            raise PermissionError(13, "denied", "private")
+        return original(name, *args, **kwargs)
+
+    target = inspect_host_path(path)
+    monkeypatch.setattr(os, "open", deny)
+    actions = {
+        "inspect": lambda: inspect_host_path(path),
+        "read": lambda: read_host_file(path),
+        "open": lambda: open_host_file(path / "file"),
+        "visit": lambda: safe_paths.visit_host_directory(path, lambda fd: None),
+        "contains": lambda: host_path_contains(path, target),
+    }
+    with pytest.raises(PermissionError) as error:
+        actions[operation]()
+    assert Path(error.value.filename).is_absolute()
+    assert Path(error.value.filename).is_relative_to(path)
+
+
 def test_ordinary_rename_does_not_change_the_object_relationship(
     tmp_path: Path,
 ) -> None:
@@ -108,7 +145,7 @@ def test_workspace_ancestry_does_not_open_an_unrelated_grant(tmp_path, monkeypat
 
     monkeypatch.setattr(os, "open", deny_documents)
     assert not host_path_contains(documents / "exchange", target)
-    with pytest.raises(UnsafePathError):
+    with pytest.raises(PermissionError):
         inspect_host_path(documents / "exchange", missing=True)
 
 

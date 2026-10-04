@@ -11,9 +11,15 @@ from pathlib import Path
 import uvicorn
 
 from guildbotics.app_api.api import create_app
-from guildbotics.utils.fileio import apply_workspace_root, get_workspace_root
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_CONFIG_DIR,
+    GUILDBOTICS_WORKSPACE_ROOT,
+    apply_workspace_root,
+    get_workspace_root,
+)
 from guildbotics.utils.local_api import LocalApiEndpoint
 from guildbotics.utils.processes import pid_exists
+from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
     has_explicit_workspace_source,
@@ -86,12 +92,12 @@ def _restore_active_workspace() -> Path:
     if state is None:
         return startup_cwd
     validate_workspace_location(state.workspace)
+    register_workspace(state.workspace)
     try:
         os.chdir(state.workspace)
     except OSError:
         return startup_cwd
     apply_workspace_environment(state)
-    register_workspace(state.workspace)
     return state.workspace
 
 
@@ -133,12 +139,19 @@ def main() -> None:
 
     token = _read_session_token()
     allowed_origins = _read_allowed_origins()
-    _restore_active_workspace()
+    workspace_problem = ""
+    try:
+        _restore_active_workspace()
+    except (UnsafePathError, OSError) as exc:
+        workspace_problem = str(exc)
+        for key in (GUILDBOTICS_WORKSPACE_ROOT, GUILDBOTICS_CONFIG_DIR):
+            os.environ.pop(key, None)
 
     app = create_app(
         session_token=token,
         allowed_origins=allowed_origins,
         restore_workspace_environment=True,
+        workspace_problem=workspace_problem,
     )
     endpoint = LocalApiEndpoint(
         port=args.port,

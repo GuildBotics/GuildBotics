@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { readStackContext } from "./stack-context";
 
@@ -40,6 +42,12 @@ test("shows the backend-down error, then recovers on retry once the backend is u
   // endpoint only returns once `/health` is green, so the retry below cannot race
   // ahead of a ready backend.
   const controlUrl = `http://${ctx.host}:${ctx.controlPort}/control/start-backend`;
+  // The service must also remain recoverable when selection encounters a
+  // corrupt device registry; this exercises real startup and its HTTP contract.
+  const machineState = join(ctx.homeDir, ".guildbotics", "data");
+  mkdirSync(machineState, { recursive: true });
+  const registry = join(machineState, "workspaces.json");
+  writeFileSync(registry, "{");
   const response = await page.request.post(controlUrl);
   expect(response.ok()).toBe(true);
   expect((await response.json()).status).toBe("ready");
@@ -50,4 +58,17 @@ test("shows the backend-down error, then recovers on retry once the backend is u
   await retry.click();
   await expect(page.getByText("GuildBotics could not start")).toHaveCount(0, { timeout: 60_000 });
   await expect(page.getByRole("navigation")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("alert").filter({ hasText: "workspace registry" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Setup" })).toBeVisible();
+
+  writeFileSync(registry, "[]\n");
+  const selected = await page.request.post(`http://${ctx.host}:${ctx.backendPort}/workspace`, {
+    headers: { "X-GuildBotics-Session-Token": ctx.token },
+    data: { workspace_dir: ctx.workspaceDir },
+  });
+  expect(selected.ok()).toBe(true);
+  expect((await selected.json()).workspace_problem).toBe("");
+  await page.reload();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByText(/Cannot read the workspace registry/)).toHaveCount(0);
 });

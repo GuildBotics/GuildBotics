@@ -12,6 +12,10 @@ CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
 GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
 
+# Installed launchers may enter through a symlink/junction. Canonicalize the
+# trusted package once, before any mount inspection, and share that spelling.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+
 
 class WorkspaceNotConfiguredError(RuntimeError):
     """Raised when a workspace path is required but none is selected."""
@@ -25,7 +29,7 @@ def find_package_subdir(subpath: Path) -> Path:
     Returns:
         Path: The path to the found subdirectory.
     """
-    current = Path(__file__).resolve().parent
+    current = PACKAGE_ROOT
     while True:
         candidate = current / subpath
         if candidate.exists():

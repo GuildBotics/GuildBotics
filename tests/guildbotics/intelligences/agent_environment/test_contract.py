@@ -36,6 +36,54 @@ from guildbotics.utils.i18n_tool import t
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
 
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
+    tmp_path, monkeypatch, symlinks, name
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    target = tmp_path / "dotfiles" / "private"
+    target.mkdir(parents=True)
+    link = home / name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target, target_is_directory=True)
+    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+
+    denied = (DeniedPath(link, True),)
+    unrelated = tmp_path / "work"
+    unrelated.mkdir()
+    assert validate_mount_source(unrelated, denied, grant=True) == unrelated
+    for source in (link.parent, target, target.parent, target / "new"):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(source, denied, grant=True, create=True)
+    assert not (target / "new").exists()
+
+
+def test_workspace_admission_reads_target_grants_independently_of_current_selection(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    old = tmp_path / "old"
+    old.mkdir()
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(old))
+    target = home / "shared/team"
+    config = target / ".guildbotics/config" / FILESYSTEM_GRANTS_PATH
+    config.parent.mkdir(parents=True)
+    config.write_text("documents:\n  - path: shared\n    access: read\n")
+    with pytest.raises(AccessContractError):
+        validate_workspace_location(target)
+    config.write_text("documents: []\n")
+    old_config = old / ".guildbotics/config" / FILESYSTEM_GRANTS_PATH
+    old_config.parent.mkdir(parents=True)
+    old_config.write_text("invalid: [yaml")
+    assert validate_workspace_location(target) == target
+
+
 @pytest.mark.parametrize("state_exists", [False, True])
 def test_an_inactive_registered_workspace_is_protected_before_creation(
     tmp_path, monkeypatch, state_exists
@@ -80,9 +128,11 @@ def test_workspace_locations_inside_grants_or_exchange_are_refused(
     monkeypatch.setattr(
         contract,
         "load_shared_grants",
-        lambda: SharedGrants(documents=[DocumentGrant(path="shared", access="read")]),
+        lambda **_: SharedGrants(
+            documents=[DocumentGrant(path="shared", access="read")]
+        ),
     )
-    monkeypatch.setattr(contract, "load_local_grants", LocalGrants)
+    monkeypatch.setattr(contract, "load_local_grants", lambda **_: LocalGrants())
     for target in (home / "shared/workspace", home / "Documents/GuildBotics/workspace"):
         with pytest.raises(AccessContractError):
             validate_workspace_location(target)

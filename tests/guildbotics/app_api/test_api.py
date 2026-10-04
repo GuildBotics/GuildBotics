@@ -157,6 +157,56 @@ def test_registered_workspaces_are_authenticated_and_removal_preserves_files(
     assert workspace.is_dir()
 
 
+def test_selected_workspace_registration_cannot_be_removed(tmp_path):
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    register_workspace(tmp_path)
+    response = _client(RuntimeStub(tmp_path)).request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(tmp_path)},
+    )
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "unsafe_host_path"
+    assert tmp_path in registered_workspaces()
+
+
+@pytest.mark.parametrize("problem", ["registry", "permission"])
+def test_api_starts_unselected_when_input_store_cannot_be_initialized(
+    tmp_path, monkeypatch, problem
+):
+    from guildbotics.app_api import api
+    from guildbotics.utils.fileio import (
+        GUILDBOTICS_CONFIG_DIR,
+        GUILDBOTICS_WORKSPACE_ROOT,
+    )
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    for key in (GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT):
+        monkeypatch.delenv(key, raising=False)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+
+    def fail():
+        raise (
+            UnsafePathError("registry is invalid")
+            if problem == "registry"
+            else PermissionError("Documents denied")
+        )
+
+    monkeypatch.setattr(store, "start", fail)
+    with TestClient(
+        api.create_app(session_token="secret", command_input_file_store=store)
+    ) as client:
+        response = client.get("/config/status", headers=AUTH_HEADERS)
+        assert response.status_code == HTTP_OK
+        assert response.json()["workspace"] is None
+        assert response.json()["workspace_problem"]
+
+
 def _runtime_status(
     *,
     scheduler_state: str = "stopped",

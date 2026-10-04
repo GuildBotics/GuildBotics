@@ -31,6 +31,58 @@ def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
     )
 
 
+@pytest.mark.parametrize("action", ["save", "copy", "close"])
+def test_session_operations_never_reopen_a_swapped_ancestor(tmp_path, symlinks, action):
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    root = tmp_path / "inputs"
+    store = CommandInputFileStore(root=root)
+    store.start()
+    session = store._session_directory().name
+    root.rename(tmp_path / "original")
+    outside = tmp_path / "outside"
+    (outside / session).mkdir(parents=True)
+    sentinel = outside / session / "keep"
+    sentinel.write_bytes(b"private")
+    root.symlink_to(outside, target_is_directory=True)
+    source = tmp_path / "input"
+    source.write_bytes(b"input")
+    try:
+        if action == "close":
+            store.close()
+        else:
+            with pytest.raises(UnsafePathError):
+                store.save(_upload(b"image")) if action == "save" else store.copy(
+                    source
+                )
+        assert list((outside / session).iterdir()) == [sentinel]
+        assert sentinel.read_bytes() == b"private"
+    finally:
+        store.close()
+
+
+def test_concurrent_lazy_uploads_share_one_live_session(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    barrier = Barrier(8)
+
+    def save(_):
+        barrier.wait(timeout=5)
+        return store.save(_upload(b"image"))
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            files = list(workers.map(save, range(8)))
+        assert len({p.parent for p in files}) == 1
+        assert len(list(files[0].parent.parent.glob("session-*"))) == 1
+        assert all(p.read_bytes() == b"image" for p in files)
+    finally:
+        store.close()
+    assert not list((tmp_path / "inputs").glob("session-*"))
+
+
 def test_save_command_input_file_uses_private_random_path(tmp_path: Path) -> None:
     directory = tmp_path / "session"
     directory.mkdir(mode=0o755)
@@ -41,6 +93,36 @@ def test_save_command_input_file_uses_private_random_path(tmp_path: Path) -> Non
     assert saved.suffix == ".png"
     assert saved.read_bytes() == b"png-data"
     assert not list(saved.parent.glob(".*.upload"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX OS aliases")
+def test_command_cwd_and_input_paths_use_the_normalized_os_name(
+    tmp_path, monkeypatch, fake_platform
+):
+    from guildbotics.utils import safe_paths
+
+    fake_platform(safe_paths, "darwin")
+    assert command_cwd(Path("/tmp/work")) == Path("/private/tmp/work")
+    described = describe_command_input_paths([Path("/tmp/work/file")])
+    assert described[0].guest_path == "/private/tmp/work/file"
+
+
+def test_input_preview_classifies_symlinks_without_failing_other_paths(
+    tmp_path, monkeypatch, symlinks
+):
+    from guildbotics.intelligences.agent_environment.contract import (
+        ResolvedAccess,
+        ResolvedGrant,
+    )
+
+    original = tmp_path / "file"
+    original.write_bytes(b"public")
+    link = tmp_path / "link"
+    link.symlink_to(original)
+    access = ResolvedAccess(paths=(ResolvedGrant(tmp_path, "read", str(tmp_path)),))
+    monkeypatch.setattr(command_input_files, "resolve_access", lambda *a, **k: access)
+    described = describe_command_input_paths([original, link])
+    assert [p.reachable for p in described] == [True, False]
 
 
 def test_command_input_files_are_readable_only_by_their_owner(
@@ -72,7 +154,7 @@ def test_save_command_input_file_does_not_recreate_missing_session(
 ) -> None:
     directory = tmp_path / "missing"
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError):
         save_command_input_file(directory, _upload(b"png-data"))
 
     assert not directory.exists()

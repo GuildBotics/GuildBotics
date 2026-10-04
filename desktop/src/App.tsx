@@ -218,6 +218,11 @@ export function App() {
       </aside>
 
       <section className="workspace" style={{ position: "relative" }}>
+        {config.data?.workspace_problem ? (
+          <Alert color="danger" role="alert">
+            {config.data.workspace_problem}
+          </Alert>
+        ) : null}
         <div
           data-tauri-drag-region
           style={{

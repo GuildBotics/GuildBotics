@@ -19,6 +19,39 @@ from guildbotics.utils.workspace_state import (
 import pytest
 
 
+@pytest.mark.parametrize("payload", ["{", "{}", "[1]", '["/bad/../path"]'])
+def test_invalid_registry_is_a_descriptive_safe_path_error(
+    tmp_path, monkeypatch, payload
+):
+    from guildbotics.utils.safe_paths import UnsafePathError
+    from guildbotics.utils.workspace_state import REGISTERED_WORKSPACES_FILE
+
+    _set_home(monkeypatch, tmp_path / "home")
+    registry = active_workspace_file().with_name(REGISTERED_WORKSPACES_FILE)
+    registry.parent.mkdir(parents=True)
+    registry.write_text(payload)
+    with pytest.raises(UnsafePathError, match="registry"):
+        registered_workspaces()
+
+
+@pytest.mark.parametrize("source", ["argument", "environment", "active"])
+def test_each_cli_selection_registers_the_workspace_without_prior_registry(
+    tmp_path, monkeypatch, source
+):
+    _set_home(monkeypatch, tmp_path / "home")
+    workspace = tmp_path / "selected"
+    workspace.mkdir()
+    monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
+    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
+    if source == "environment":
+        monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace))
+    elif source == "active":
+        write_active_workspace(workspace)
+        active_workspace_file().with_name("workspaces.json").unlink()
+    apply_workspace_for_cli(workspace if source == "argument" else None)
+    assert registered_workspaces() == (workspace,)
+
+
 def _set_home(monkeypatch, path) -> None:
     monkeypatch.setenv("HOME", str(path))
     monkeypatch.setenv("USERPROFILE", str(path))

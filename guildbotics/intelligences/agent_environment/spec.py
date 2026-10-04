@@ -83,6 +83,7 @@ class EnvironmentMount:
     guest: str
     host: Path | None
     readonly: bool
+    user: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +186,7 @@ def build_environment_spec(
                 raise AgentEnvironmentSpecError(
                     f"Mount source must use its normalized OS spelling: {mount.host}"
                 )
-            validate_mount_source(mount.host, denied)
+            validate_mount_source(mount.host, denied, grant=mount.user)
     return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
         home=guest_home(home),
@@ -301,7 +302,7 @@ def _mounts(
     """
     opened: dict[str, EnvironmentMount] = {
         guest_path(cwd): EnvironmentMount(
-            guest_path(cwd), None if read_only else cwd, readonly=False
+            guest_path(cwd), None if read_only else cwd, readonly=False, user=True
         )
     }
     for worktree in worktrees:
@@ -318,6 +319,7 @@ def _mounts(
                     guest_path(grant.path),
                     grant.path,
                     readonly=read_only or grant.access == "read",
+                    user=True,
                 ),
             )
     mounts = list(opened.values())

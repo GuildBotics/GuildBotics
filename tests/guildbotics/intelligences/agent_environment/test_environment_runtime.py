@@ -425,23 +425,31 @@ async def test_checked_source_replaced_by_a_link_is_refused_before_sdk_boot(
     assert sandbox.created == {}
 
 
-def test_bind_keeps_the_checked_name_even_if_it_changes_inside_the_sdk(
+def test_bind_keeps_the_checked_name_after_validation_and_before_the_sdk(
     sandbox, tmp_path, monkeypatch, symlinks
 ):
     source = tmp_path / "checked"
     source.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
+    from guildbotics.intelligences.agent_environment import contract
+
+    validate = contract.validate_mount_source
     bind = microsandbox.Volume.bind
     names = []
 
-    def swap(name, *, readonly):
-        names.append(name)
+    def validate_then_swap(path, *args, **kwargs):
+        checked = validate(path, *args, **kwargs)
         source.rename(tmp_path / "original")
         source.symlink_to(outside, target_is_directory=True)
+        return checked
+
+    def record(name, *, readonly):
+        names.append(name)
         return bind(name, readonly=readonly)
 
-    monkeypatch.setattr(microsandbox.Volume, "bind", swap)
+    monkeypatch.setattr(contract, "validate_mount_source", validate_then_swap)
+    monkeypatch.setattr(microsandbox.Volume, "bind", record)
     volume = runtime._volumes(
         _spec(mounts=(EnvironmentMount("/work", source, False),))
     )["/work"]

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Literal
@@ -28,7 +29,9 @@ from guildbotics.utils.advisory_lock import (
 )
 from guildbotics.utils.safe_paths import (
     inspect_host_path,
+    normalize_host_path,
     open_host_file,
+    read_host_file,
     visit_host_directory,
 )
 
@@ -67,9 +70,14 @@ class CommandInputFileStore:
         self._root = root or exchange_tmp_dir()
         self._directory: Path | None = None
         self._session_lock: IO[str] | None = None
+        self._lock = threading.RLock()
 
     def start(self) -> None:
         """Create this session directory after recovering orphaned sessions."""
+        with self._lock:
+            self._start()
+
+    def _start(self) -> None:
         if self._directory is not None:
             return
         from guildbotics.intelligences.agent_environment.contract import (
@@ -112,6 +120,10 @@ class CommandInputFileStore:
 
     def close(self) -> None:
         """Remove everything owned by this App API session."""
+        with self._lock:
+            self._close()
+
+    def _close(self) -> None:
         directory = self._directory
         session_lock = self._session_lock
         self._directory = None
@@ -122,11 +134,15 @@ class CommandInputFileStore:
             finally:
                 session_lock.close()
         if directory is not None:
-            shutil.rmtree(directory, ignore_errors=True)
+            with suppress(AccessContractError, OSError):
+                visit_host_directory(
+                    directory.parent, lambda fd: _remove_session(directory, fd)
+                )
 
     def _session_directory(self) -> Path:
         if self._directory is None:
-            raise RuntimeError("Command input file store is not running.")
+            self.start()
+        assert self._directory is not None
         return self._directory
 
 
@@ -173,13 +189,15 @@ def copy_command_input_file(directory: Path, source: Path) -> Path:
     Raises:
         ValueError: If ``source`` is not a regular file or exceeds the limit.
     """
+    source = inspect_host_path(source, directory=False, missing=True).path
     if not source.is_file():
         raise ValueError(f"'{source}' is not a file.")
     _check_size(source.stat().st_size)
 
     def write(output: IO[bytes]) -> int:
-        with source.open("rb") as input_file:
-            shutil.copyfileobj(input_file, output)
+        content = read_host_file(source)
+        _check_size(len(content))
+        output.write(content)
         return output.tell()
 
     return _write_command_input_file(
@@ -197,19 +215,42 @@ def _check_size(size: int) -> None:
 def _write_command_input_file(
     directory: Path, name: str, write: Callable[[IO[bytes]], int]
 ) -> Path:
-    directory.chmod(0o700)
+    directory = normalize_host_path(directory)
     destination = directory / name
     temporary = directory / f".{name}.upload"
-    try:
-        with temporary.open("xb") as output:
-            size = write(output)
-        if size == 0:
-            raise ValueError("File is empty.")
-        os.replace(temporary, destination)
-        destination.chmod(0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination.resolve()
+
+    def save(fd: int | None) -> None:
+        try:
+            # Windows holds every ancestor without delete sharing; on POSIX
+            # the descriptor anchors the complete write/rename/cleanup.
+            handle = os.open(
+                temporary if fd is None else temporary.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=fd,
+            )
+            with os.fdopen(handle, "wb") as output:
+                size = write(output)
+            if size == 0:
+                raise ValueError("File is empty.")
+            os.replace(
+                temporary if fd is None else temporary.name,
+                destination if fd is None else destination.name,
+                src_dir_fd=fd,
+                dst_dir_fd=fd,
+            )
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary if fd is None else temporary.name, dir_fd=fd)
+
+    visit_host_directory(directory, save)
+    return destination
+
+
+def _remove_session(directory: Path, fd: int | None) -> None:
+    shutil.rmtree(
+        directory if fd is None else directory.name, dir_fd=fd, ignore_errors=True
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,7 +292,7 @@ def command_cwd(cwd: Path | None) -> Path | None:
     expanded = cwd.expanduser()
     if not expanded.is_absolute():
         raise AppApiError("command_cwd_not_absolute", params={"cwd": str(cwd)})
-    return expanded
+    return normalize_host_path(expanded)
 
 
 def describe_command_input_paths(
@@ -267,13 +308,17 @@ def describe_command_input_paths(
         access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
     except AccessContractError:
         access = None
-    home = Path.home().resolve()
+    home = normalize_host_path(Path.home())
     described = []
-    for path in paths:
+    for original in paths:
+        path = normalize_host_path(original)
         kind: InputPathKind = (
             "directory" if path.is_dir() else "file" if path.exists() else "missing"
         )
-        reachable = access is not None and access.reaches(path, cwd)
+        try:
+            reachable = access is not None and access.reaches(path, cwd)
+        except (AccessContractError, PermissionError):
+            reachable = False
         grant = None
         if not reachable and kind != "missing":
             real = path.resolve()

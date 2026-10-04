@@ -1,6 +1,9 @@
 en:
+  active_workspace: "The selected workspace cannot be unregistered. Select another workspace first."
   invalid: "Invalid host path: %{path}. Use a local absolute path without traversal."
-  unavailable: "Cannot safely open %{path}: %{reason}. Links are not allowed; use the real directory."
+  unavailable: "Cannot safely open %{path}: %{reason}."
+  link: "Links are not allowed in %{path}; use the real directory."
+  registry: "Cannot read the workspace registry %{path}: %{reason}. Repair this file before selecting a workspace or running commands."
   missing: "Host directory does not exist: %{path}."
-  protected: "Cannot share %{path}: it overlaps protected directory %{protected}. Share a directory that contains no protected state."
+  protected: "Cannot share %{path}: it overlaps protected directory %{protected}. Keep the workspace outside the working repository, or choose another working directory. For a workspace no longer used on this device, remove its registration in Device and Hub → Registered workspaces."
   workspace_granted: "Cannot open or create workspace %{path}: it is inside granted directory %{granted}. Choose a location outside the grants and exchange directory."

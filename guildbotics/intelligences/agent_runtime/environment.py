@@ -42,7 +42,6 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-import guildbotics
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess, InspectionScope
 from guildbotics.intelligences.agent_environment.auth_gateway import (
@@ -114,6 +113,7 @@ from guildbotics.runtime.person_lease import (
     current_person_lease,
 )
 from guildbotics.utils.fileio import (
+    PACKAGE_ROOT,
     get_template_path,
     get_workspace_config_dir,
     get_workspace_local_path,
@@ -152,7 +152,7 @@ _MAX_LOG_LINE_BYTES = 1 << 14
 _LOG_DRAIN_SECONDS = 2.0
 #: A line the entry logs: its level, then its message.
 _LOG_LINE = re.compile(r"(DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)", re.DOTALL)
-_PACKAGE = normalize_host_path(Path(guildbotics.__file__).parent)
+_PACKAGE = normalize_host_path(PACKAGE_ROOT)
 CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / _PACKAGE.name), _PACKAGE, readonly=True)
 
 

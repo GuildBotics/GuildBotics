@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
+import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -33,15 +34,16 @@ from guildbotics.utils.fileio import (
     get_config_path,
     get_workspace_local_path,
     get_workspace_root,
-    load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.safe_paths import UnsafePathError as AccessContractError
 from guildbotics.utils.safe_paths import (
+    PathFacts,
     host_path_contains,
     inspect_host_path,
     normalize_host_path,
+    read_host_file,
 )
+from guildbotics.utils.safe_paths import UnsafePathError as AccessContractError
 from guildbotics.utils.workspace_state import registered_workspaces
 
 NetworkMode = Literal["deny", "allowlist", "unrestricted"]
@@ -244,22 +246,38 @@ def _parse[T: BaseModel](model: type[T], raw: Any, where: str) -> T:
         ) from exc
 
 
-def load_shared_grants() -> SharedGrants:
+def load_shared_grants(*, workspace: Path | None = None) -> SharedGrants:
     """The workspace's shared grants; no file means none beyond the built-in."""
-    path = get_config_path(FILESYSTEM_GRANTS_PATH)
-    if not path.exists():
-        return SharedGrants()
-    return parse_shared_grants(load_yaml_file(path), where=FILESYSTEM_GRANTS_PATH)
-
-
-def load_local_grants() -> LocalGrants:
-    """This device's own grants; no file means none."""
-    path = get_workspace_local_path(LOCAL_GRANTS_FILENAME)
-    if not path.exists():
-        return LocalGrants()
-    return parse_local_grants(
-        load_yaml_file(path), where=f"local/{LOCAL_GRANTS_FILENAME}"
+    path = (
+        workspace / ".guildbotics/config" / FILESYSTEM_GRANTS_PATH
+        if workspace is not None
+        else get_config_path(FILESYSTEM_GRANTS_PATH)
     )
+    return _load_grants(SharedGrants, path, FILESYSTEM_GRANTS_PATH)
+
+
+def load_local_grants(*, workspace: Path | None = None) -> LocalGrants:
+    """This device's own grants; no file means none."""
+    path = (
+        workspace / ".guildbotics/local" / LOCAL_GRANTS_FILENAME
+        if workspace is not None
+        else get_workspace_local_path(LOCAL_GRANTS_FILENAME)
+    )
+    return _load_grants(LocalGrants, path, f"local/{LOCAL_GRANTS_FILENAME}")
+
+
+def _load_grants[T: BaseModel](model: type[T], path: Path, where: str) -> T:
+    try:
+        raw = yaml.safe_load(read_host_file(path))
+    except FileNotFoundError:
+        return model()
+    except PermissionError:
+        raise
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise AccessContractError(
+            t("intelligences.agent_environment.grants.invalid", where=where, error=exc)
+        ) from exc
+    return _parse(model, raw, where)
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,24 +572,32 @@ def validate_mount_source(
     """
     source = inspect_host_path(path, missing=missing or create, directory=False)
     for closed in denied:
-        protected = inspect_host_path(closed.path, missing=True, directory=False)
-        if source.contains(protected) or (grant and protected.contains(source)):
-            raise AccessContractError(
-                t("safe_paths.protected", path=source.path, protected=protected.path)
-            )
+        # The protected name itself is never opened through a link. Its lexical
+        # ancestry and its current destination are both closed, including when
+        # credentials are managed through dotfiles symlinks or junctions.
+        lexical = inspect_host_path(
+            closed.path, missing=True, directory=False, link_as_missing=True
+        )
+        targets: tuple[PathFacts, ...] = (lexical,)
+        resolved = closed.path.resolve() if lexical.missing else lexical.path
+        if resolved != lexical.path:
+            targets += (inspect_host_path(resolved, missing=True, directory=False),)
+        for protected in targets:
+            if source.contains(protected) or (grant and protected.contains(source)):
+                raise AccessContractError(
+                    t("safe_paths.protected", path=source.path, protected=closed.path)
+                )
     return inspect_host_path(
         source.path, create=create, missing=missing, directory=False
     ).path
 
 
 def validate_workspace_location(workspace: Path) -> Path:
-    """Refuse workspace state inside a currently granted/exchange directory."""
+    """Refuse workspace state inside its own grants or the exchange directory."""
     target = inspect_host_path(workspace, missing=True)
     home = normalize_host_path(Path.home())
-    shared = (
-        load_shared_grants() if _selected_workspace() is not None else SharedGrants()
-    )
-    local = load_local_grants() if _selected_workspace() is not None else LocalGrants()
+    shared = load_shared_grants(workspace=target.path)
+    local = load_local_grants(workspace=target.path)
     grants: list[DocumentGrant | LocalPathGrant] = [
         *shared.documents,
         *local.paths,

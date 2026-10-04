@@ -175,6 +175,7 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
@@ -238,6 +239,7 @@ def create_app(
     diagnostics_store: DiagnosticsStore | None = None,
     command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
+    workspace_problem: str = "",
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
     store = diagnostics_store or DiagnosticsStore()
@@ -249,6 +251,7 @@ def create_app(
             bus,
             diagnostics_store=store,
             load_workspace_environment=True,
+            workspace_problem=workspace_problem,
         )
     else:
         app_runtime = AppRuntime(bus, diagnostics_store=store)
@@ -276,7 +279,10 @@ def create_app(
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
         added_app_handler = False
         added_uvicorn_handler = False
-        input_file_store.start()
+        try:
+            input_file_store.start()
+        except (UnsafePathError, PermissionError) as exc:
+            app_runtime.workspace_problem = app_runtime.workspace_problem or str(exc)
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
@@ -338,6 +344,21 @@ def create_app(
         request: Request, exc: UnsafePathError
     ) -> JSONResponse:
         return _error_response(400, "unsafe_host_path", str(exc), {})
+
+    @app.exception_handler(PermissionError)
+    async def path_permission_handler(
+        request: Request, exc: PermissionError
+    ) -> JSONResponse:
+        from guildbotics.intelligences.agent_environment.status import (
+            filesystem_permission_problem,
+        )
+
+        return _error_response(
+            400,
+            "unsafe_host_path",
+            filesystem_permission_problem(Path(exc.filename or Path.home())),
+            {},
+        )
 
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
@@ -430,6 +451,14 @@ def create_app(
     def remove_device_workspace(
         request: WorkspaceChangeRequest, _: None = Depends(require_token)
     ) -> list[str]:
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        selected = app_runtime.get_config_status().workspace
+        if selected is not None:
+            current = inspect_host_path(selected, missing=True)
+            removing = inspect_host_path(request.workspace_dir, missing=True)
+            if current.contains(removing) and removing.contains(current):
+                raise UnsafePathError(t("safe_paths.active_workspace"))
         unregister_workspace(request.workspace_dir)
         return [str(path) for path in registered_workspaces()]
 

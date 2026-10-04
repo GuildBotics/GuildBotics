@@ -303,8 +303,10 @@ class AppRuntime:
         stop_timeout_seconds: float = 10.0,
         diagnostics_store: DiagnosticsStore | None = None,
         load_workspace_environment: bool = False,
+        workspace_problem: str = "",
     ) -> None:
         self._event_bus = event_bus
+        self.workspace_problem = workspace_problem
         self._diagnostics_store = diagnostics_store
         self._system_service_run_id = new_id()
         self._system_alerts = SystemAlertService(diagnostics_store)
@@ -375,6 +377,7 @@ class AppRuntime:
             config_dir / "team" / "project.yml" if config_dir is not None else None
         )
         return ConfigStatus(
+            workspace_problem=self.workspace_problem,
             cwd=exchange_dir(),
             workspace=workspace,
             config_dir=config_dir,
@@ -451,6 +454,7 @@ class AppRuntime:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
             self._diagnostics_store.start_maintenance()
         self._workspace_sync.activate()
+        self.workspace_problem = ""
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
@@ -2489,5 +2493,9 @@ def _assistant_cwd(name: str) -> Path:
     """Where a Desktop assistant's turns work: its own directory under
     ``.guildbotics/local/work``."""
     cwd = get_workspace_work_path(name, workspace_root=get_workspace_root())
-    cwd.mkdir(parents=True, exist_ok=True)
-    return cwd
+    from guildbotics.intelligences.agent_environment.contract import (
+        protected_paths,
+        validate_mount_source,
+    )
+
+    return validate_mount_source(cwd, protected_paths(), create=True)

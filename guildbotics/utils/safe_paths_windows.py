@@ -14,6 +14,13 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import IO, Any
 
+from guildbotics.utils.safe_paths import UnsafePathError, t
+
+
+class _ReparsePoint(Exception):
+    pass
+
+
 # ctypes exposes these APIs only on Windows.
 _WINDOWS: Any = ctypes
 
@@ -68,6 +75,7 @@ def inspect_windows_path(
     *,
     open_file: bool = False,
     stable: bool = False,
+    link_as_missing: bool = False,
 ) -> tuple[tuple[tuple[int, int], ...], tuple[str, ...]]:
     """Inspect/create one child at a time and return its ancestry identities."""
     kernel = _WINDOWS.WinDLL("kernel32", use_last_error=True)
@@ -116,10 +124,10 @@ def inspect_windows_path(
         info = _FileInformation()
         if not kernel.GetFileInformationByHandle(handle, ctypes.byref(info)):
             raise _WINDOWS.WinError(_WINDOWS.get_last_error())
-        if info.attributes & 0x400 or (
-            require_directory and not info.attributes & 0x10
-        ):
-            raise OSError(f"Reparse point or non-directory: {path}")
+        if info.attributes & 0x400:
+            raise _ReparsePoint
+        if require_directory and not info.attributes & 0x10:
+            raise NotADirectoryError(str(path))
         file_id = _FileIdInformation()
         if not kernel.GetFileInformationByHandleEx(
             handle, 18, ctypes.byref(file_id), ctypes.sizeof(file_id)
@@ -198,7 +206,12 @@ def inspect_windows_path(
                     return tuple(identities), parts[index:]
                 handle = child(parent, name, True, True)
             handles.append(handle)
-            identities.append(identity(handle, require_directory))
+            try:
+                identities.append(identity(handle, require_directory))
+            except _ReparsePoint:
+                if link_as_missing:
+                    return tuple(identities), parts[index:]
+                raise UnsafePathError(t("safe_paths.link", path=path)) from None
             parent = handle
         if consume is not None:
             consume(parent)
