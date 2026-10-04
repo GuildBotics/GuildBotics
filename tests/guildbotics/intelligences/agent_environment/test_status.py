@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +39,33 @@ from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.utils import processes, safe_paths
 from guildbotics.utils.i18n_tool import t
+
+
+@pytest.fixture
+def permission_platform(monkeypatch):
+    """Simulate message wording without changing native filesystem probes."""
+    original = safe_paths.filesystem_permission_problem
+
+    def configure(platform):
+        def permission(path):
+            with monkeypatch.context() as patch:
+                patch.setattr(safe_paths, "sys", SimpleNamespace(platform=platform))
+                return original(path)
+
+        monkeypatch.setattr(safe_paths, "filesystem_permission_problem", permission)
+        monkeypatch.setattr(module, "filesystem_permission_problem", permission)
+
+    return configure
+
+
+def test_permission_platform_preserves_native_path_inspection(
+    tmp_path, permission_platform
+):
+    permission_platform("darwin")
+    assert safe_paths.sys is sys
+    assert safe_paths.inspect_host_path(tmp_path).present
+    safe_paths.filesystem_permission_problem(tmp_path)
+    assert safe_paths.sys is sys
 
 
 @pytest.fixture
@@ -310,7 +339,7 @@ def test_a_build_this_process_just_started_reads_as_building(device) -> None:
 @pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
 @pytest.mark.parametrize("app", ["Visual Studio Code", ""])
 def test_unreadable_exchange_directory_refuses_with_macos_guidance(
-    device, monkeypatch, tmp_path, error_number, app, fake_platform
+    device, monkeypatch, tmp_path, error_number, app, permission_platform
 ):
     target = tmp_path / "Documents/GuildBotics"
     target.mkdir(parents=True)
@@ -322,7 +351,7 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    fake_platform(safe_paths, "darwin")
+    permission_platform("darwin")
     monkeypatch.setattr(processes, "launching_app_name", lambda: app)
 
     status = device_status()
@@ -340,7 +369,7 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
 
 
 def test_grant_preflight_checks_parents_without_creating_directories(
-    device, monkeypatch, tmp_path, fake_platform
+    device, monkeypatch, tmp_path, permission_platform
 ):
     documents = tmp_path / "Documents"
     documents.mkdir()
@@ -352,7 +381,7 @@ def test_grant_preflight_checks_parents_without_creating_directories(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    fake_platform(safe_paths, "linux")
+    permission_platform("linux")
     status = device_status()
     assert status.setting == "filesystem"
     assert status.refusal == t(
@@ -365,7 +394,7 @@ def test_grant_preflight_checks_parents_without_creating_directories(
     os.name == "nt", reason="POSIX directory-relative permission failure"
 )
 def test_nofollow_open_permission_error_keeps_macos_guidance(
-    device, monkeypatch, tmp_path, fake_platform
+    device, monkeypatch, tmp_path, permission_platform
 ):
     from guildbotics.utils import safe_paths
 
@@ -379,7 +408,7 @@ def test_nofollow_open_permission_error_keeps_macos_guidance(
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(safe_paths.os, "open", open_path)
-    fake_platform(safe_paths, "darwin")
+    permission_platform("darwin")
     monkeypatch.setattr(processes, "launching_app_name", lambda: "")
     assert device_status().refusal == t(
         "intelligences.agent_environment.filesystem.macos_documents", app=""
