@@ -219,13 +219,16 @@ def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
         assert package in scripts["pdf"]
     # GuildBotics' own Python: the pinned list verbatim, installed into its
     # own environment, and WeasyPrint proven loadable before the snapshot is.
-    assert f"uv venv --no-cache --python 3.12 {snapshot.VENV}" in scripts["python"]
+    assert (
+        f"uv venv --no-cache --python {snapshot.PYTHON_VERSION} {snapshot.VENV}"
+        in scripts["python"]
+    )
     assert snapshot.REQUIREMENTS.read_text(encoding="utf-8") in scripts["python"]
     assert f"-r {snapshot.VENV}/requirements.txt" in scripts["python"]
     # Only that environment finds the code every microVM mounts.
     assert (
-        f"echo {snapshot.CODE_ROOT} > {snapshot.VENV}/lib/python3.12/site-packages/"
-        "guildbotics.pth"
+        f"echo {snapshot.CODE_ROOT} > {snapshot.VENV}/lib/python{snapshot.PYTHON_VERSION}/"
+        "site-packages/guildbotics.pth"
     ) in scripts["python"]
     assert scripts["python"].endswith("-c 'import weasyprint'")
     # Member git runs every git of a member's clone in the environment, so a
