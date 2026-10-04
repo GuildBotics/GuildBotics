@@ -366,23 +366,24 @@ def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
     assert not access.reaches(home / ".ssh/id_ed25519", home)
 
 
-def test_the_builtin_denies_are_the_credential_directories_that_exist(
+def test_the_builtin_denies_include_absent_credential_directories(
     tmp_path: Path,
 ) -> None:
     home = _home(tmp_path)
     (home / ".ssh").mkdir()
     (home / ".local/share/keyrings").mkdir(parents=True)
+    private = tmp_path / "private"
 
     access = resolve_access(
         SharedGrants(),
-        LocalGrants(deny=["/opt/homebrew/etc", ".local/share/some-app"]),
+        LocalGrants(deny=[str(private), ".local/share/some-app"]),
         home,
     )
 
     assert [(d.path, d.builtin) for d in access.denied] == [
         *((home / name, True) for name in SENSITIVE_HOME_DIRECTORIES),
         (tmp_path / ".guildbotics", True),
-        (Path("/opt/homebrew/etc"), False),
+        (private, False),
         (home / ".local/share/some-app", False),
     ]
     too_broad = t(

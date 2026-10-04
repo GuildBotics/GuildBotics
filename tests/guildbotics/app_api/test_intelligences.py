@@ -1378,6 +1378,7 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
 ) -> None:
     config_dir = tmp_path / "config"
     (Path.home() / ".cache/uv").mkdir(parents=True)
+    private = tmp_path / "private"
     grants_file = _team_intelligences(config_dir) / "cli_agent_filesystem_grants.yml"
     local_file = tmp_path / "local/cli_agent_filesystem_grants.yml"
     _write_yaml(grants_file, {"documents": [{"path": "Documents", "access": "read"}]})
@@ -1395,7 +1396,7 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
             ),
             "local_grants": LocalGrants(
                 paths=[LocalPathGrant(path=".cache/uv", access="read_write")],
-                deny=["/opt/homebrew/etc"],
+                deny=[str(private)],
             ),
         }
     )
@@ -1407,8 +1408,8 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
     }
     # The device's own file lives beside the shared config, never inside it.
     assert load_yaml_file(local_file) == {
-        "paths": [{"path": ".cache/uv", "access": "read_write"}],
-        "deny": ["/opt/homebrew/etc"],
+        "paths": [{"path": str(Path(".cache/uv")), "access": "read_write"}],
+        "deny": [str(private)],
     }
 
 
