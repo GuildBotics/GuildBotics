@@ -158,7 +158,11 @@ from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
-from guildbotics.intelligences.agent_environment.contract import exchange_dir
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    exchange_dir,
+    validate_workspace_location,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     doctor,
@@ -393,7 +397,16 @@ class AppRuntime:
             return self._set_workspace(workspace_dir)
 
     def _set_workspace(self, workspace_dir: Path) -> ConfigStatus:
-        workspace = workspace_dir.expanduser().resolve()
+        try:
+            workspace = validate_workspace_location(workspace_dir)
+        except AccessContractError as exc:
+            if isinstance(exc.__cause__, NotADirectoryError):
+                raise AppApiError(
+                    "workspace_not_directory",
+                    context={"workspace_dir": str(workspace_dir)},
+                    status_code=400,
+                ) from exc
+            raise
         if not workspace.exists():
             raise AppApiError(
                 "workspace_not_found",

@@ -123,6 +123,40 @@ def _client(runtime: "RuntimeStub") -> TestClient:
     return TestClient(create_app(session_token="secret", runtime=runtime))
 
 
+def test_registered_workspaces_are_authenticated_and_removal_preserves_files(
+    tmp_path: Path,
+) -> None:
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    workspace = tmp_path / "registered"
+    workspace.mkdir()
+    register_workspace(workspace)
+    client = _client(RuntimeStub(tmp_path))
+    assert client.get("/device/workspaces").status_code == HTTP_UNAUTHORIZED
+    assert (
+        client.request(
+            "DELETE", "/device/workspaces", json={"workspace_dir": str(workspace)}
+        ).status_code
+        == HTTP_UNAUTHORIZED
+    )
+    response = client.get("/device/workspaces", headers=AUTH_HEADERS)
+    assert response.status_code == HTTP_OK
+    assert str(workspace) in response.json()
+    response = client.request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(workspace)},
+    )
+    assert response.status_code == HTTP_OK
+    assert str(workspace) not in response.json()
+    assert workspace not in registered_workspaces()
+    assert workspace.is_dir()
+
+
 def _runtime_status(
     *,
     scheduler_state: str = "stopped",

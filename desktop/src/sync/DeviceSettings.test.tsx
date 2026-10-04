@@ -3,7 +3,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDeviceSshKey, createHub, getDeviceSshKey, getHubStatus } from "../api/client";
+import {
+  createDeviceSshKey,
+  createHub,
+  getDeviceSshKey,
+  getHubStatus,
+  getRegisteredWorkspaces,
+  unregisterWorkspace,
+} from "../api/client";
 import i18n from "../i18n";
 import { DeviceSettings } from "./DeviceSettings";
 import { TestMantineProvider } from "../test/TestMantineProvider";
@@ -18,6 +25,8 @@ vi.mock("../api/client", async () => {
     createHub: vi.fn(),
     getDeviceSshKey: vi.fn(),
     getHubStatus: vi.fn(),
+    getRegisteredWorkspaces: vi.fn(),
+    unregisterWorkspace: vi.fn(),
   };
 });
 
@@ -34,6 +43,7 @@ function renderSettings() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getRegisteredWorkspaces).mockResolvedValue([]);
   vi.mocked(getDeviceSshKey).mockResolvedValue({
     exists: false,
     path: null,
@@ -107,5 +117,22 @@ describe("hosting the hub here", () => {
     await waitFor(() =>
       expect(screen.getByText(t("sync.host.hosted", { count: 1 }))).toBeInTheDocument(),
     );
+  });
+});
+
+describe("registered workspaces", () => {
+  it("lists every location and removes only the requested registration", async () => {
+    vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one", "/work/two"]);
+    vi.mocked(unregisterWorkspace).mockResolvedValue(["/work/two"]);
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+      }),
+    );
+    expect(unregisterWorkspace).toHaveBeenCalledWith("/work/one", expect.anything());
+    await waitFor(() => expect(screen.queryByText("/work/one")).not.toBeInTheDocument());
+    expect(screen.getByText("/work/two")).toBeInTheDocument();
   });
 });

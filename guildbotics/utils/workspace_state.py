@@ -6,16 +6,63 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
     apply_workspace_root,
+    atomic_write_text,
     get_machine_state_path,
     get_workspace_root,
     workspace_root_from_config_dir,
 )
+from guildbotics.utils.safe_paths import (
+    inspect_host_path,
+    normalize_host_path,
+    read_host_file,
+)
 
 ACTIVE_WORKSPACE_FILE = "active-workspace.json"
+REGISTERED_WORKSPACES_FILE = "workspaces.json"
+
+
+def registered_workspaces() -> tuple[Path, ...]:
+    """Device-local locations, including workspaces that are not selected."""
+    path = normalize_host_path(get_machine_state_path(REGISTERED_WORKSPACES_FILE))
+    if not inspect_host_path(path, directory=False, missing=True).present:
+        return ()
+    payload = json.loads(read_host_file(path))
+    if not isinstance(payload, list) or any(not isinstance(p, str) for p in payload):
+        raise ValueError("Invalid workspace registry")
+    return tuple(normalize_host_path(Path(p)) for p in payload)
+
+
+def register_workspace(workspace: Path) -> Path:
+    """Remember a checked workspace location on this device."""
+    workspace = inspect_host_path(workspace, missing=True).path
+    _update_registry(workspace, remove=False)
+    return workspace
+
+
+def unregister_workspace(workspace: Path) -> None:
+    """Forget a location only when the user explicitly removes its entry."""
+    _update_registry(normalize_host_path(workspace), remove=True)
+
+
+def _update_registry(workspace: Path, *, remove: bool) -> None:
+    path = normalize_host_path(get_machine_state_path(REGISTERED_WORKSPACES_FILE))
+    inspect_host_path(path.parent, create=True)
+    with held_lock(path.with_suffix(".lock"), timeout=30):
+        locations = list(registered_workspaces())
+        if remove:
+            locations = [p for p in locations if p != workspace]
+        elif workspace not in locations:
+            locations.append(workspace)
+        else:
+            return
+        atomic_write_text(
+            path, json.dumps([str(p) for p in locations], ensure_ascii=False) + "\n"
+        )
 
 
 @dataclass(frozen=True)
@@ -35,7 +82,7 @@ def active_workspace_file() -> Path:
 
 
 def workspace_state(workspace: Path) -> WorkspaceState:
-    resolved = workspace.expanduser().resolve(strict=False)
+    resolved = inspect_host_path(workspace, missing=True).path
     return WorkspaceState(
         workspace=resolved,
         config_dir=resolved / ".guildbotics" / "config",
@@ -46,8 +93,9 @@ def write_active_workspace(workspace: Path) -> WorkspaceState:
     state = workspace_state(workspace)
     if not state.workspace.is_dir():
         raise NotADirectoryError(str(state.workspace))
+    register_workspace(state.workspace)
     path = active_workspace_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    inspect_host_path(path.parent, create=True)
     path.write_text(
         json.dumps(state.to_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -100,10 +148,11 @@ def apply_workspace_for_cli(workspace: Path | None = None) -> WorkspaceState | N
         if not state.workspace.is_dir():
             raise NotADirectoryError(str(state.workspace))
         apply_workspace_environment(state)
+        register_workspace(state.workspace)
         return state
 
     if has_explicit_workspace_source():
-        apply_workspace_root(get_workspace_root())
+        apply_workspace_root(register_workspace(get_workspace_root()))
         return None
 
     active_state = read_active_workspace()
@@ -113,6 +162,7 @@ def apply_workspace_for_cli(workspace: Path | None = None) -> WorkspaceState | N
             "`guildbotics workspace use <path>`, or set GUILDBOTICS_WORKSPACE_ROOT."
         )
     apply_workspace_environment(active_state)
+    register_workspace(active_state.workspace)
     return active_state
 
 

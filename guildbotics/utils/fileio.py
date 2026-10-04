@@ -144,7 +144,9 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
 
 def workspace_root_from_config_dir(config_dir: Path) -> Path | None:
     """Return the workspace root when ``config_dir`` is ``<ws>/.guildbotics/config``."""
-    resolved = resolve_from_existing_ancestor(config_dir)
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    resolved = inspect_host_path(config_dir, missing=True).path
     if resolved.name == "config" and resolved.parent.name == ".guildbotics":
         return resolved.parent.parent
     return None
@@ -161,10 +163,14 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
     The process cwd and member working clones are never used as a workspace.
     """
     if workspace_root is not None:
-        return resolve_from_existing_ancestor(workspace_root)
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        return inspect_host_path(workspace_root, missing=True).path
     configured = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
     if configured:
-        return resolve_from_existing_ancestor(Path(configured))
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        return inspect_host_path(Path(configured), missing=True).path
     config_dir = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
     if config_dir:
         derived = workspace_root_from_config_dir(Path(config_dir))
@@ -178,7 +184,9 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
 
 def apply_workspace_root(workspace_root: Path) -> Path:
     """Publish the selected workspace root and its config dir."""
-    resolved = resolve_from_existing_ancestor(workspace_root)
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    resolved = inspect_host_path(workspace_root, missing=True).path
     os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(resolved)
     os.environ[GUILDBOTICS_CONFIG_DIR] = str(resolved / ".guildbotics" / "config")
     return resolved

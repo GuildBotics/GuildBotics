@@ -18,6 +18,7 @@ from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
     has_explicit_workspace_source,
     read_active_workspace,
+    register_workspace,
 )
 
 TOKEN_ENV = "GUILDBOTICS_APP_API_TOKEN"
@@ -69,20 +70,28 @@ def _restore_active_workspace() -> Path:
     workspace-shaped ``GUILDBOTICS_CONFIG_DIR``) wins over the persisted
     active workspace, matching the CLI resolution order.
     """
+    from guildbotics.intelligences.agent_environment.contract import (
+        validate_workspace_location,
+    )
+
     startup_cwd = Path.cwd()
     if has_explicit_workspace_source():
-        workspace = apply_workspace_root(get_workspace_root())
+        workspace = apply_workspace_root(
+            register_workspace(validate_workspace_location(get_workspace_root()))
+        )
         with contextlib.suppress(OSError):
             os.chdir(workspace)
         return workspace
     state = read_active_workspace()
     if state is None:
         return startup_cwd
+    validate_workspace_location(state.workspace)
     try:
         os.chdir(state.workspace)
     except OSError:
         return startup_cwd
     apply_workspace_environment(state)
+    register_workspace(state.workspace)
     return state.workspace
 
 

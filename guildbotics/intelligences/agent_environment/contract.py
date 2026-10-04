@@ -36,6 +36,13 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.safe_paths import UnsafePathError as AccessContractError
+from guildbotics.utils.safe_paths import (
+    host_path_contains,
+    inspect_host_path,
+    normalize_host_path,
+)
+from guildbotics.utils.workspace_state import registered_workspaces
 
 NetworkMode = Literal["deny", "allowlist", "unrestricted"]
 GrantAccess = Literal["read", "read_write"]
@@ -57,10 +64,6 @@ EXCHANGE_TMP_DIRECTORY = "tmp"
 LOCAL_GRANTS_FILENAME = "cli_agent_filesystem_grants.yml"
 _HOME_TOKEN = "$HOME"
 _WORKSPACE_TOKEN = "<workspace>"
-
-
-class AccessContractError(ValueError):
-    """Raised when a sandbox setting is malformed or cannot be honoured."""
 
 
 class NetworkPolicy(BaseModel):
@@ -201,10 +204,8 @@ def exchange_tmp_dir(home: Path | None = None) -> Path:
 class LocalGrants(BaseModel):
     """The device-local part of what agents may reach, and may not.
 
-    ``deny`` closes directories this device would otherwise open: a whole
-    tree the PATH derived, or a corner of one. Absolute or relative to the
-    home directory; it need not exist, since closing what is absent costs
-    nothing and keeps the file true when the directory appears.
+    ``deny`` protects directories against sharing their contents or parents.
+    Absolute or relative to the home directory; absent paths are protected too.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -303,12 +304,15 @@ class ResolvedAccess:
         The same answer the mounts give: under the working directory or a
         granted directory that exists here, and not under a closed one.
         """
-        target = path.resolve()
+        target = inspect_host_path(path, missing=True, directory=False)
         opened = [g.path for g in (*self.documents, *self.paths) if g.present]
         if cwd is not None:
-            opened.append(cwd.resolve())
-        return any(target.is_relative_to(root) for root in opened) and not any(
-            target.is_relative_to(denied.path) for denied in self.denied
+            opened.append(cwd)
+        return any(
+            inspect_host_path(root).contains(target) for root in opened
+        ) and not any(
+            inspect_host_path(denied.path, missing=True).contains(target)
+            for denied in self.denied
         )
 
 
@@ -333,8 +337,18 @@ def resolve_access(
     workspace, whose own ``.guildbotics`` is closed like a credential
     directory; it is read from the selection when not given.
     """
-    home_root = (home or Path.home()).resolve()
+    home_root = normalize_host_path(home or Path.home())
     workspace = workspace or _selected_workspace()
+    denied = protected_paths(home_root, workspace, local=local)
+    # Judge every planned grant before creating any of its directories.
+    grants: list[DocumentGrant | LocalPathGrant] = [
+        *shared.documents,
+        *local.paths,
+        EXCHANGE_GRANT,
+    ]
+    for grant in grants:
+        target = _grant_path(grant.path, home_root)
+        validate_mount_source(target, denied, grant=True, missing=True)
     documents = (
         _resolve_document(EXCHANGE_GRANT, home_root, create, builtin=True),
         *(
@@ -344,7 +358,21 @@ def resolve_access(
         ),
     )
     paths = tuple(_resolve_local(grant, home_root, create) for grant in local.paths)
-    denied = (
+    return ResolvedAccess(documents=documents, paths=paths, denied=denied)
+
+
+def protected_paths(
+    home: Path | None = None,
+    workspace: Path | None = None,
+    *,
+    local: LocalGrants | None = None,
+) -> tuple[DeniedPath, ...]:
+    """The one protected-path table, including absent paths and local denies."""
+    home_root = normalize_host_path(home or Path.home())
+    workspace = workspace or _selected_workspace()
+    if local is None:
+        local = load_local_grants() if workspace is not None else LocalGrants()
+    return (
         *(
             DeniedPath(path, builtin=True)
             for path in builtin_denied_paths(home_root, workspace)
@@ -354,43 +382,15 @@ def resolve_access(
             for path in local.deny
         ),
     )
-    return ResolvedAccess(documents=documents, paths=paths, denied=denied)
 
 
 def _resolve_document(
     grant: DocumentGrant, home_root: Path, create: bool, *, builtin: bool = False
 ) -> ResolvedGrant:
-    target = home_root / grant.path
-    if create:
-        try:
-            target.mkdir(parents=True, exist_ok=True)
-        except FileExistsError as exc:
-            raise AccessContractError(
-                t(
-                    "intelligences.agent_environment.grants.document_not_a_directory",
-                    path=grant.path,
-                )
-            ) from exc
-    elif not target.exists():
-        return ResolvedGrant(
-            target, grant.access, grant.path, present=False, builtin=builtin
-        )
-    real = target.resolve()
-    if not real.is_dir():
-        raise AccessContractError(
-            t(
-                "intelligences.agent_environment.grants.document_not_a_directory",
-                path=grant.path,
-            )
-        )
-    if real == home_root or not real.is_relative_to(home_root):
-        raise AccessContractError(
-            t(
-                "intelligences.agent_environment.grants.document_outside_home",
-                path=grant.path,
-            )
-        )
-    return ResolvedGrant(real, grant.access, grant.path, builtin=builtin)
+    facts = inspect_host_path(home_root / grant.path, create=create, missing=not create)
+    return ResolvedGrant(
+        facts.path, grant.access, grant.path, present=facts.present, builtin=builtin
+    )
 
 
 def local_path_missing(path: str) -> str:
@@ -402,12 +402,12 @@ def local_path_missing(path: str) -> str:
 def _resolve_local(
     grant: LocalPathGrant, home_root: Path, strict: bool
 ) -> ResolvedGrant:
-    target = Path(grant.path) if grant.absolute else home_root / grant.path
-    real = target.resolve()
-    if not real.is_dir():
+    facts = inspect_host_path(_grant_path(grant.path, home_root), missing=True)
+    if not facts.present:
         if strict:
             raise AccessContractError(local_path_missing(grant.path))
-        return ResolvedGrant(real, grant.access, grant.path, present=False)
+        return ResolvedGrant(facts.path, grant.access, grant.path, present=False)
+    real = facts.path
     if real == home_root or real == Path(real.anchor):
         raise AccessContractError(
             t(
@@ -420,7 +420,9 @@ def _resolve_local(
 
 def _resolve_deny(path: str, home_root: Path) -> Path:
     absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
-    target = (Path(path) if absolute else home_root / path).resolve()
+    target = inspect_host_path(
+        Path(path) if absolute else home_root / path, missing=True
+    ).path
     if target == home_root or target == Path(target.anchor):
         raise AccessContractError(
             t("intelligences.agent_environment.grants.deny_too_broad", path=path)
@@ -481,11 +483,8 @@ class AccessContract:
         }
 
 
-#: Home directories that hold credentials or the provider's own state. Two
-#: things follow from the one list: a path the user grants under one of these
-#: is warned about, and every one that exists is closed with a deny on top of
-#: whatever is open, so a grant that merely *contains* one (`~/.local` around
-#: `~/.local/share/keyrings`) can still be read around it.
+#: Credential and device-state directories. Their contents and every parent
+#: containing them are refused as user grants, even when they do not exist.
 SENSITIVE_HOME_DIRECTORIES: tuple[str, ...] = (
     ".ssh",
     ".gnupg",
@@ -505,10 +504,8 @@ SENSITIVE_HOME_DIRECTORIES: tuple[str, ...] = (
 
 
 #: The workspace's own directory: its shared configuration and state, and
-#: this device's clones of every member. A turn run in the workspace root
-#: (the Desktop names it, or the CLI is used there) would otherwise open all
-#: of it; a turn run in a member's clone below it is not affected, since a
-#: deny outside an opened tree closes nothing.
+#: this device's clones of every member. Only explicitly selected host-owned
+#: children are mounted; sharing the workspace root is refused.
 WORKSPACE_STATE_DIRECTORY = ".guildbotics"
 
 
@@ -519,47 +516,74 @@ def _selected_workspace() -> Path | None:
         return None
 
 
-def _sensitive_directories(
-    home: Path | None, workspace: Path | None
-) -> dict[Path, str]:
-    """Every sensitive directory, resolved, with the name a warning gives it."""
-    home_root = (home or Path.home()).resolve()
-    named = {
-        (home_root / name).resolve(): f"~/{name}" for name in SENSITIVE_HOME_DIRECTORIES
-    }
-    if workspace is not None:
-        state = (workspace / WORKSPACE_STATE_DIRECTORY).resolve()
-        named.setdefault(state, f"{_WORKSPACE_TOKEN}/{WORKSPACE_STATE_DIRECTORY}")
-    return named
-
-
 def builtin_denied_paths(
     home: Path | None = None, workspace: Path | None = None
 ) -> tuple[Path, ...]:
-    """The sensitive directories that exist on this device, to be closed."""
-    return tuple(
-        path for path in _sensitive_directories(home, workspace) if path.is_dir()
+    """Protected locations, including inactive workspace state and absent dirs."""
+    home_root = normalize_host_path(home or Path.home())
+    paths = {
+        normalize_host_path(home_root / name): None
+        for name in SENSITIVE_HOME_DIRECTORIES
+    }
+    for root in (
+        *registered_workspaces(),
+        *((workspace,) if workspace is not None else ()),
+    ):
+        state = normalize_host_path(root / WORKSPACE_STATE_DIRECTORY)
+        paths[state] = None
+    return tuple(paths)
+
+
+def _grant_path(path: str, home: Path) -> Path:
+    target = Path(path)
+    return normalize_host_path(target if target.is_absolute() else home / target)
+
+
+def validate_mount_source(
+    path: Path,
+    denied: tuple[DeniedPath, ...],
+    *,
+    grant: bool = False,
+    missing: bool = False,
+    create: bool = False,
+) -> Path:
+    """Reject links and protected ancestors before reading or making a source.
+
+    Explicit host-owned mounts may name a precise child of protected state.
+    A user grant may never name that child. Neither may share the parent.
+    """
+    source = inspect_host_path(path, missing=missing or create, directory=False)
+    for closed in denied:
+        protected = inspect_host_path(closed.path, missing=True, directory=False)
+        if source.contains(protected) or (grant and protected.contains(source)):
+            raise AccessContractError(
+                t("safe_paths.protected", path=source.path, protected=protected.path)
+            )
+    return inspect_host_path(
+        source.path, create=create, missing=missing, directory=False
+    ).path
+
+
+def validate_workspace_location(workspace: Path) -> Path:
+    """Refuse workspace state inside a currently granted/exchange directory."""
+    target = inspect_host_path(workspace, missing=True)
+    home = normalize_host_path(Path.home())
+    shared = (
+        load_shared_grants() if _selected_workspace() is not None else SharedGrants()
     )
-
-
-def sensitive_grant_reason(
-    path: str, home: Path | None = None, workspace: Path | None = None
-) -> str:
-    """Why a grant would expose credentials, provider state, or the
-    workspace's own state, or ""."""
-    home_root = (home or Path.home()).resolve()
-    if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
-        target = Path(path).resolve()
-    else:
-        target = (home_root / path).resolve()
-    if target == home_root or home_root.is_relative_to(target):
-        return t("intelligences.agent_environment.grants.sensitive_home")
-    for sensitive, name in _sensitive_directories(
-        home_root, workspace or _selected_workspace()
-    ).items():
-        if target.is_relative_to(sensitive) or sensitive.is_relative_to(target):
-            return name
-    return ""
+    local = load_local_grants() if _selected_workspace() is not None else LocalGrants()
+    grants: list[DocumentGrant | LocalPathGrant] = [
+        *shared.documents,
+        *local.paths,
+        EXCHANGE_GRANT,
+    ]
+    for grant in grants:
+        opened = _grant_path(grant.path, home)
+        if host_path_contains(opened, target):
+            raise AccessContractError(
+                t("safe_paths.workspace_granted", path=target.path, granted=opened)
+            )
+    return target.path
 
 
 def grant_spelling(path: PurePath, home: PurePath) -> str:

@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import pytest
 
 from click.testing import CliRunner
 
 from guildbotics.cli import main
 from guildbotics.cli.workspace import workspace
+
+
+@pytest.mark.parametrize("command", [["environment", "status"], ["secrets", "status"]])
+@pytest.mark.parametrize("explicit", [True, False])
+def test_every_cli_workspace_selection_refuses_exchange_locations(
+    monkeypatch, command, explicit
+):
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    target = Path.home() / "Documents/GuildBotics/workspace"
+    target.mkdir(parents=True)
+    before = registered_workspaces()
+    args = [*command]
+    if explicit:
+        args = [command[0], "--workspace", str(target), *command[1:]]
+    else:
+        monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(target))
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "inside granted directory" in result.output
+    assert registered_workspaces() == before
 
 
 def test_workspace_use_persists_active_workspace(monkeypatch, tmp_path):

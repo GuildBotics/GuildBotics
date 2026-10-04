@@ -253,6 +253,21 @@ def _write_project(config_dir: Path, body: str = "language: en\n") -> Path:
     return project_file
 
 
+def test_opening_workspace_inside_exchange_has_no_selection_side_effect(
+    isolated_home: Path,
+) -> None:
+    from guildbotics.utils.safe_paths import UnsafePathError
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    target = Path.home() / "Documents/GuildBotics/workspace"
+    target.mkdir(parents=True)
+    before = registered_workspaces()
+    runtime = AppRuntime(EventBus())
+    with pytest.raises(UnsafePathError):
+        runtime.set_workspace(target)
+    assert registered_workspaces() == before
+
+
 # --- get_config_status() ----------------------------------------------------
 
 

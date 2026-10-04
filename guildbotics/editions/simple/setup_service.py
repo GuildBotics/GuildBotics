@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.entities.team import Person
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    validate_workspace_location,
+)
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
@@ -27,6 +31,7 @@ from guildbotics.utils.secret_store import (
     resolve_secret_store,
 )
 from guildbotics.utils.shared_write_lock import shared_write_operation
+from guildbotics.utils.workspace_state import register_workspace
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -531,7 +536,21 @@ class SimpleProjectSetupService:
 
     @shared_write_operation
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
+        if (
+            config.config_dir.name == "config"
+            and config.config_dir.parent.name == ".guildbotics"
+        ):
+            try:
+                register_workspace(
+                    validate_workspace_location(config.config_dir.parent.parent)
+                )
+            except AccessContractError as exc:
+                raise SetupServiceError("invalid_workspace_location", str(exc)) from exc
         files: list[CreatedFile] = []
+
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        inspect_host_path(config.config_dir, create=True)
 
         project_config_file = _project_config_file(config.config_dir)
         project_config_file.parent.mkdir(parents=True, exist_ok=True)

@@ -1,9 +1,16 @@
-import { Button, Card, Code, CopyButton, Group, Stack, Text, Title } from "@mantine/core";
+import { Alert, Button, Card, Code, CopyButton, Group, Stack, Text, Title } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Server } from "lucide-react";
 
-import { createDeviceSshKey, createHub, getDeviceSshKey, getHubStatus } from "../api/client";
+import {
+  createDeviceSshKey,
+  createHub,
+  getDeviceSshKey,
+  getHubStatus,
+  getRegisteredWorkspaces,
+  unregisterWorkspace,
+} from "../api/client";
 
 /**
  * Settings that belong to this machine rather than to a workspace: its SSH
@@ -20,7 +27,55 @@ export function DeviceSettings() {
       </Text>
       <SshKeyCard />
       <HostThisMachineCard />
+      <RegisteredWorkspacesCard />
     </Stack>
+  );
+}
+
+function RegisteredWorkspacesCard() {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const locations = useQuery({
+    queryKey: ["registered-workspaces"],
+    queryFn: getRegisteredWorkspaces,
+  });
+  const remove = useMutation({
+    mutationFn: unregisterWorkspace,
+    onSuccess: (paths) => {
+      client.setQueryData(["registered-workspaces"], paths);
+      void client.invalidateQueries({ queryKey: ["agent-environment-status"] });
+    },
+  });
+  const error = locations.error ?? remove.error;
+  return (
+    <Card withBorder radius="md" p="md">
+      <Stack gap="sm">
+        <Title order={4}>{t("sync.registeredWorkspaces.title")}</Title>
+        <Text size="sm" c="dimmed">
+          {t("sync.registeredWorkspaces.body")}
+        </Text>
+        {error ? <Alert color="danger">{error.message}</Alert> : null}
+        {locations.data?.length === 0 ? (
+          <Text size="sm">{t("sync.registeredWorkspaces.empty")}</Text>
+        ) : null}
+        {locations.data?.map((path) => (
+          <Group key={path} justify="space-between">
+            <Code style={{ overflowWrap: "anywhere" }}>{path}</Code>
+            <Button
+              size="xs"
+              variant="light"
+              color="danger"
+              loading={remove.isPending && remove.variables === path}
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(path)}
+              aria-label={t("sync.registeredWorkspaces.remove", { path })}
+            >
+              {t("sync.registeredWorkspaces.removeLabel")}
+            </Button>
+          </Group>
+        ))}
+      </Stack>
+    </Card>
   );
 }
 

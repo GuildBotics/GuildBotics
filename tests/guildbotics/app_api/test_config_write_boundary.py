@@ -54,6 +54,10 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 #: is not one.
 ELSEWHERE = {
     (
+        "DELETE",
+        "/device/workspaces",
+    ): "device-local workspace registry; no workspace config",
+    (
         "POST",
         "/intelligences/decisions/credential",
     ): "OS secret store and atomic index update; no edited config snapshot",

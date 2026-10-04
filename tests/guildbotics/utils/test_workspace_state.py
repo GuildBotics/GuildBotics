@@ -4,6 +4,9 @@ import os
 
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
+    register_workspace,
+    registered_workspaces,
+    unregister_workspace,
     GUILDBOTICS_CONFIG_DIR,
     WorkspaceUnresolvedError,
     active_workspace_file,
@@ -19,6 +22,24 @@ import pytest
 def _set_home(monkeypatch, path) -> None:
     monkeypatch.setenv("HOME", str(path))
     monkeypatch.setenv("USERPROFILE", str(path))
+
+
+def test_registry_preserves_unselected_workspaces_and_only_forgets_locations(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path / "home")
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    write_active_workspace(first)
+    write_active_workspace(second)
+    register_workspace(first)
+    assert registered_workspaces() == (first, second)
+    unregister_workspace(first)
+    assert registered_workspaces() == (second,)
+    assert first.is_dir() and second.is_dir()
+    assert read_active_workspace().workspace == second
 
 
 def test_write_and_read_active_workspace(monkeypatch, tmp_path):

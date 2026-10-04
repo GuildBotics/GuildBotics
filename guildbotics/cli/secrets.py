@@ -18,6 +18,7 @@ from pathlib import Path
 
 import click
 
+from guildbotics.cli._options import apply_workspace_option
 from guildbotics.hub import HubUnreachableError, connection
 from guildbotics.hub.secret_host import HubSecretError
 from guildbotics.hub.secret_service import HubDesktopRequiredError
@@ -43,10 +44,6 @@ from guildbotics.utils.secret_store import (
     write_env_text,
 )
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
-from guildbotics.utils.workspace_state import (
-    WorkspaceUnresolvedError,
-    apply_workspace_for_cli,
-)
 
 
 class _SecretsContext:
@@ -87,14 +84,9 @@ class _SecretsContext:
 )
 def secrets(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Manage workspace secrets (API keys and tokens)."""
-    try:
-        applied_workspace = apply_workspace_for_cli(workspace_dir)
-    except NotADirectoryError as exc:
-        raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    except WorkspaceUnresolvedError as exc:
-        raise click.ClickException(str(exc)) from exc
+    applied_workspace = apply_workspace_option(workspace_dir, load_env=False)
     root = applied_workspace.workspace if applied_workspace else get_workspace_root()
-    ctx.obj = _SecretsContext(root.resolve())
+    ctx.obj = _SecretsContext(root)
 
 
 @secrets.command(name="status")

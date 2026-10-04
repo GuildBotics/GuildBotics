@@ -391,10 +391,9 @@ def test_preflight_checks_all_open_grants(device, monkeypatch, tmp_path, scope):
 
     monkeypatch.setattr(module.os, "scandir", scandir)
     status = device_status()
-    assert status.ready == (scope == "denied")
-    if scope != "denied":
-        assert status.setting == "filesystem"
-        assert str(target) in status.refusal
+    assert not status.ready
+    assert status.setting == "filesystem"
+    assert str(target) in status.refusal
 
 
 @pytest.mark.parametrize("existing_file", [False, True])
@@ -410,8 +409,9 @@ def test_preflight_leaves_missing_local_grants_for_their_row(
         lambda: LocalGrants(paths=[LocalPathGrant(path=str(target), access="read")]),
     )
     status = device_status()
-    assert status.ready
-    assert not status.access.paths[0].present
+    assert status.ready is not existing_file
+    if not existing_file:
+        assert not status.access.paths[0].present
 
 
 def test_preflight_reports_filesystem_changes_during_enumeration(

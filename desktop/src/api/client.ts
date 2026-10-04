@@ -945,7 +945,6 @@ export type GrantEvaluation = {
   valid: boolean;
   reason: string;
   present: boolean;
-  sensitive: string;
 };
 
 // A document or local path grant as it resolves on this device. `path` is for
@@ -1470,6 +1469,14 @@ export async function trustHub(body: HubTrustRequest): Promise<HubConnection> {
 
 export async function getDeviceSshKey(): Promise<DeviceSshKey> {
   return request("/hub/ssh-key");
+}
+
+export async function getRegisteredWorkspaces(): Promise<string[]> {
+  return request("/device/workspaces");
+}
+
+export async function unregisterWorkspace(workspace: string): Promise<string[]> {
+  return request("/device/workspaces", { method: "DELETE", body: { workspace_dir: workspace } });
 }
 
 export async function createDeviceSshKey(): Promise<DeviceSshKey> {

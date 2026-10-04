@@ -141,9 +141,10 @@ def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
     (store / ".claude.json").symlink_to(elsewhere / "secret.json")
     (store / "projects").symlink_to(elsewhere / "projects", target_is_directory=True)
 
-    assert bind_state(CLAUDE, home) == (
-        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
-    )
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    with pytest.raises(UnsafePathError):
+        bind_state(CLAUDE, home)
 
 
 def test_the_login_runs_with_its_state_root_in_memory_and_egress_open(

@@ -46,7 +46,9 @@ def run(
 ) -> None:
     """Run a command through the matching Desktop when open, otherwise locally."""
     workspace = selected_workspace()
-    command_cwd = Path(cwd).expanduser().resolve(strict=False) if cwd else Path.cwd()
+    from guildbotics.utils.safe_paths import normalize_host_path
+
+    command_cwd = normalize_host_path(Path(cwd) if cwd else Path.cwd())
     message = "" if sys.stdin.isatty() else sys.stdin.read()
     command_name, inline_person = _parse_command_spec(custom_command)
     output = run_on_desktop(

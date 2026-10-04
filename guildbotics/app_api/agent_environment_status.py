@@ -46,7 +46,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     local_path_missing,
     redact_path,
     resolve_access,
-    sensitive_grant_reason,
 )
 from guildbotics.intelligences.agent_environment.image import (
     IMAGE,
@@ -307,7 +306,6 @@ def evaluate_grant(
             access=access,
             valid=True,
             present=resolved.documents[-1].present,
-            sensitive=sensitive_grant_reason(path, home),
         )
     if scope == "deny":
         try:
@@ -315,7 +313,7 @@ def evaluate_grant(
         except ValidationError as exc:
             return _invalid(scope, path, "", _reason(exc))
         try:
-            resolve_access(SharedGrants(), local, home)
+            resolve_access(SharedGrants(), local, home, create=False)
         except AccessContractError as exc:
             return _invalid(scope, path, "", str(exc))
         return GrantEvaluation(scope="deny", path=path, valid=True, present=True)
@@ -326,16 +324,17 @@ def evaluate_grant(
     except ValidationError as exc:
         return _invalid("local", path, access, _reason(exc))
     try:
-        resolve_access(SharedGrants(), local, home)
+        resolved = resolve_access(SharedGrants(), local, home, create=False)
     except AccessContractError as exc:
         return _invalid("local", path, access, str(exc))
+    if not resolved.paths[0].present:
+        return _invalid("local", path, access, local_path_missing(path))
     return GrantEvaluation(
         scope="local",
-        path=path,
+        path=resolved.paths[0].grant,
         access=access,
         valid=True,
         present=True,
-        sensitive=sensitive_grant_reason(path, home),
     )
 
 

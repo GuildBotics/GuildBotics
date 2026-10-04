@@ -22,9 +22,13 @@ from guildbotics.intelligences.agent_environment.contract import (
     LOCAL_GRANTS_FILENAME,
     AccessContractError,
     LocalGrants,
+    LocalPathGrant,
     SharedGrants,
+    grant_spelling,
+    local_path_missing,
     parse_local_grants,
     parse_shared_grants,
+    resolve_access,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     TOOLCHAIN_PATH,
@@ -121,6 +125,35 @@ class IntelligenceConfigService:
     def update_config(
         self, request: IntelligenceConfigUpdateRequest
     ) -> IntelligenceConfigResult:
+        if request.filesystem_grants is not None or request.local_grants is not None:
+            shared = request.filesystem_grants or self._read_shared_grants(
+                request.config_dir
+            )
+            local = request.local_grants or self._read_local_grants(request.config_dir)
+            try:
+                resolved = resolve_access(
+                    shared,
+                    local,
+                    create=False,
+                    workspace=request.config_dir.parent.parent,
+                )
+                for grant in resolved.paths:
+                    if not grant.present:
+                        raise AccessContractError(local_path_missing(grant.grant))
+            except AccessContractError as exc:
+                raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+            if request.local_grants is not None:
+                request.local_grants.paths = [
+                    LocalPathGrant(
+                        path=grant_spelling(g.path, Path.home()), access=g.access
+                    )
+                    for g in resolved.paths
+                ]
+                request.local_grants.deny = [
+                    grant_spelling(d.path, Path.home())
+                    for d in resolved.denied
+                    if not d.builtin
+                ]
         if request.brain_mapping is not None:
             for assignment in request.brain_mapping:
                 self._to_brain_config(assignment)

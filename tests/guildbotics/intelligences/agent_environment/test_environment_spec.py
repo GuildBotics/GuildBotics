@@ -13,6 +13,7 @@ import tzlocal
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
+    AccessContractError,
     DeniedPath,
     DocumentGrant,
     LocalGrants,
@@ -55,6 +56,12 @@ def _contract(
         access=access or ResolvedAccess(),
         read_only=read_only,
     )
+
+
+def _work(root: Path) -> Path:
+    path = root / "work"
+    path.mkdir(exist_ok=True)
+    return path
 
 
 # --- filesystem -----------------------------------------------------------------
@@ -131,68 +138,38 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     ]
 
 
-def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
-    tmp_path: Path,
-) -> None:
-    """Nested grants share one guest path per host path, so one cover."""
-    home = tmp_path / "home"
-    cwd = home / "Documents" / "repo"
-    secret = cwd / "private"
-    secret.mkdir(parents=True)
-    access = resolve_access(
-        SharedGrants(documents=[DocumentGrant(path="Documents", access="read")]),
-        LocalGrants(deny=[str(secret)]),
-        home=home,
+@pytest.mark.parametrize("read_only", [False, True])
+def test_a_grant_containing_a_deny_is_refused(tmp_path: Path, read_only: bool) -> None:
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    granted = tmp_path / "granted"
+    granted.mkdir()
+    access = ResolvedAccess(
+        documents=(ResolvedGrant(granted, "read", "granted"),),
+        denied=(DeniedPath(granted / "private", False),),
     )
-
-    spec = build_environment_spec(_contract(access), cwd, home=home)
-
-    covers = [m for m in spec.mounts if m.host is None]
-    assert covers == [
-        EnvironmentMount(f"{guest_path(cwd)}/private", None, readonly=False)
-    ]
-    guests = [m.guest for m in spec.mounts]
-    assert guests.index(f"{guest_path(cwd)}/private") > guests.index(guest_path(cwd))
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access, read_only=read_only), cwd)
 
 
-def test_a_deny_outside_every_mount_or_absent_on_disk_covers_nothing(
-    tmp_path: Path,
-) -> None:
-    """Nothing of the host is mounted unless granted, so there is nothing to
-    close; and an empty mount needs a directory on the host to sit on."""
+def test_a_missing_denied_corner_also_refuses_its_parent(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     cwd.mkdir()
-    (tmp_path / "elsewhere").mkdir()
-    access = ResolvedAccess(
-        denied=(
-            DeniedPath(tmp_path / "elsewhere", builtin=False),
-            DeniedPath(cwd / "never-created", builtin=False),
-        )
-    )
-
-    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
-
-    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
+    access = ResolvedAccess(denied=(DeniedPath(cwd / "not-created", False),))
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd)
 
 
-def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    cwd = home / "repo"
-    closed = home / "closed"
-    missing = home / "missing"
-    for directory in (cwd, closed):
-        directory.mkdir(parents=True)
+def test_an_absent_grant_is_not_mounted(tmp_path: Path) -> None:
+    cwd = tmp_path / "work"
+    cwd.mkdir()
     access = ResolvedAccess(
         documents=(
-            ResolvedGrant(closed, "read", "closed"),
-            ResolvedGrant(missing, "read", "missing", present=False),
-        ),
-        denied=(DeniedPath(closed, builtin=False),),
+            ResolvedGrant(tmp_path / "missing", "read", "missing", present=False),
+        )
     )
-
-    spec = build_environment_spec(_contract(access), cwd, home=home)
-
-    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
+    spec = build_environment_spec(_contract(access), cwd)
+    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, False),)
 
 
 def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
@@ -205,7 +182,7 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
     still covered."""
     home = tmp_path / "home"
     cwd = home / "work"
-    secret = home / "out" / "private"
+    secret = home / "private"
     for directory in (cwd, secret, home / "Documents" / "notes"):
         directory.mkdir(parents=True)
     access = resolve_access(
@@ -231,51 +208,23 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
             home / "Documents" / "notes",
             readonly=True,
         ),
-        EnvironmentMount(guest_path(secret), None, readonly=False),
     }
 
 
-@pytest.mark.parametrize("read_only", [False, True])
-def test_nothing_of_the_microvms_own_is_read_only(
-    tmp_path: Path, read_only: bool
-) -> None:
-    """A mount nested under an empty directory of the microVM's own needs a
-    mount point made there, which a read-only one refuses: the microVM does
-    not start. Such a directory holds nothing of the host and is discarded
-    with the microVM, so it is writable, whatever the turn is; what is bound
-    under it keeps its own access."""
+def test_read_only_cwd_is_guest_owned_and_writable(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    cwd = home
-    granted = home / "Documents" / "notes"
-    secret = home / "Documents" / "notes" / "private"
-    for directory in (secret, home / ".ssh" / "keys"):
-        directory.mkdir(parents=True)
-    access = resolve_access(
-        SharedGrants(
-            documents=[DocumentGrant(path="Documents/notes", access="read_write")]
-        ),
-        LocalGrants(deny=[str(secret), str(home / ".ssh")]),
-        home=home,
-    )
-
-    spec = build_environment_spec(
-        _contract(access, read_only=read_only), cwd, home=home
-    )
-
-    own = [mount for mount in spec.mounts if mount.host is None]
-    assert own
-    assert not [mount for mount in own if mount.readonly]
-    assert (
-        EnvironmentMount(guest_path(granted), granted, readonly=read_only)
-        in spec.mounts
-    )
+    home.mkdir()
+    spec = build_environment_spec(_contract(read_only=True), home, home=home)
+    assert spec.mounts == (EnvironmentMount(guest_path(home), None, False),)
 
 
 def test_what_guildbotics_binds_itself_keeps_its_access_on_a_read_only_turn(
     tmp_path: Path,
 ) -> None:
     """The provider's sessions are resumed, so they stay writable."""
-    sessions = EnvironmentMount("/home/x/.codex/sessions", tmp_path, readonly=False)
+    store = tmp_path / "sessions"
+    store.mkdir()
+    sessions = EnvironmentMount("/home/x/.codex/sessions", store, readonly=False)
 
     spec = build_environment_spec(
         _contract(read_only=True), tmp_path, home=tmp_path, mounts=[sessions]
@@ -324,7 +273,7 @@ def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
 ) -> None:
     spec = build_environment_spec(
         _contract(),
-        tmp_path,
+        _work(tmp_path),
         host_ports=[43123, 43123],
         provider_domains=["api.openai.com", "*.openai.com"],
         home=tmp_path,
@@ -345,7 +294,7 @@ def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> No
             allowed_domains=["pypi.org", "files.pythonhosted.org", "api.openai.com"],
             allow_local_network=True,
         ),
-        tmp_path,
+        _work(tmp_path),
         provider_domains=["api.openai.com"],
         home=tmp_path,
         nameservers=["10.0.0.53"],
@@ -360,7 +309,7 @@ def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> No
 def test_unrestricted_opens_all_egress(tmp_path: Path) -> None:
     spec = build_environment_spec(
         _contract(mode="unrestricted"),
-        tmp_path,
+        _work(tmp_path),
         provider_domains=["api.openai.com"],
         home=tmp_path,
     )
@@ -408,7 +357,7 @@ def test_the_environment_is_what_the_caller_states_and_the_host_facts(
 
     spec = build_environment_spec(
         _contract(),
-        tmp_path,
+        _work(tmp_path),
         env={"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"},
         home=tmp_path,
     )
@@ -480,71 +429,42 @@ def test_windows_zone_names_map_to_iana_names() -> None:
     assert win_tz["Pacific Standard Time"] == "America/Los_Angeles"
 
 
-def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
+def test_workspace_root_is_refused_but_its_explicit_clone_is_allowed(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
-    workspace = tmp_path / "ws"
-    (home / "Documents/GuildBotics").mkdir(parents=True)
-    (workspace / ".guildbotics/local/clones/aiko").mkdir(parents=True)
-    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
-
-    spec = build_environment_spec(
-        AccessContract(network=NetworkPolicy(), access=access),
-        workspace,
-        nameservers=_NAMESERVERS,
-        home=home,
-    )
-
-    state = guest_path((workspace / ".guildbotics").resolve())
-    assert EnvironmentMount(state, None, readonly=False) in spec.mounts
-    # A turn in a member's clone below it is not affected: the deny is
-    # outside the opened tree.
-    below = build_environment_spec(
-        AccessContract(network=NetworkPolicy(), access=access),
-        workspace / ".guildbotics/local/clones/aiko",
-        nameservers=_NAMESERVERS,
-        home=home,
-    )
-    assert all(mount.host is not None for mount in below.mounts)
-
-
-@pytest.mark.parametrize("in_root", [True, False], ids=["workspace root", "exchange"])
-@pytest.mark.parametrize("read_only", [False, True])
-def test_the_members_clone_is_opened_read_write_unless_the_contract_is_read_only(
-    tmp_path: Path, in_root: bool, read_only: bool
-) -> None:
-    """The clone is opened for its own sake, not granted: the workspace's
-    state directory it sits in is denied, and a command working in the
-    workspace root has that covered, so the clone is mounted inside the
-    cover, after it. A command working in the exchange directory opens no
-    tree the deny is inside, so nothing is covered. A read-only command
-    changes nothing, so it has no clone (nor a workspace root of the host's
-    to cover)."""
-    home = tmp_path / "home"
-    workspace = (tmp_path / "ws").resolve()
-    exchange = home / "Documents/GuildBotics"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
     clone = workspace / ".guildbotics/local/clones/aiko"
-    for directory in (exchange, clone):
-        directory.mkdir(parents=True)
+    clone.mkdir(parents=True)
     access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), workspace, home=home)
+    spec = build_environment_spec(_contract(access), clone, home=home)
+    assert EnvironmentMount(guest_path(clone), clone, False) in spec.mounts
+    assert all(m.host is not None for m in spec.mounts)
 
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_clone_is_opened_only_for_writable_commands(
+    tmp_path: Path, read_only: bool
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    clone = workspace / ".guildbotics/local/clones/aiko"
+    clone.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    cwd = home / "Documents/GuildBotics"
     spec = build_environment_spec(
-        _contract(access, read_only=read_only),
-        workspace if in_root else exchange,
-        worktrees=[clone],
-        home=home,
+        _contract(access, read_only=read_only), cwd, home=home, worktrees=[clone]
     )
-
-    guests = [mount.guest for mount in spec.mounts]
-    cover = guest_path(workspace / ".guildbotics")
-    assert (cover in guests) == (in_root and not read_only)
-    if read_only:
-        assert not [mount for mount in spec.mounts if mount.guest == guest_path(clone)]
-        return
-    assert EnvironmentMount(guest_path(clone), clone, readonly=False) in spec.mounts
-    if in_root:
-        assert guests.index(guest_path(clone)) > guests.index(cover)
+    assert (EnvironmentMount(guest_path(clone), clone, False) in spec.mounts) == (
+        not read_only
+    )
+    assert not any(
+        m.guest == guest_path(workspace / ".guildbotics") for m in spec.mounts
+    )
 
 
 def _ui_language_on(platform: str, setting: str, monkeypatch, fake_platform) -> None:

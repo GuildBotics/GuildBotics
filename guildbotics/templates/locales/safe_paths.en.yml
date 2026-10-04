@@ -1,0 +1,6 @@
+en:
+  invalid: "Invalid host path: %{path}. Use a local absolute path without traversal."
+  unavailable: "Cannot safely open %{path}: %{reason}. Links are not allowed; use the real directory."
+  missing: "Host directory does not exist: %{path}."
+  protected: "Cannot share %{path}: it overlaps protected directory %{protected}. Share a directory that contains no protected state."
+  workspace_granted: "Cannot open or create workspace %{path}: it is inside granted directory %{granted}. Choose a location outside the grants and exchange directory."

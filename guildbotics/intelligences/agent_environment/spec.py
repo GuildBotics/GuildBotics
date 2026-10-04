@@ -19,12 +19,10 @@ GuildBotics binds itself (``mounts``) keeps its own access. Nothing else of the 
 mounted except what GuildBotics binds itself (``mounts``), so credentials, the
 workspace configuration, and other members' clones are unreachable rather than
 forbidden -- unless a caller lets its turn inspect the workspace's own state. A
-worktree is opened whatever deny it is under: it is opened for its own sake,
-not granted. A deny inside an opened tree is
-covered with an empty directory of the microVM's own; a deny outside one
-closes nothing that was open. Such a directory holds nothing of the host and is
-discarded with the microVM, so it is writable: what is mounted under it needs a
-mount point made there. The trees a device's PATH derives are not mounted at all: the
+worktree is an explicit child of protected state, opened for its own sake.
+Every host source is checked without following links; a source containing a
+protected directory is refused, including read-only sources. No deny covers
+are mounted. The trees a device's PATH derives are not mounted at all: the
 agent's tools live inside the environment.
 
 Network: the microVM's gateway enforces the one rule the contract states.
@@ -50,10 +48,14 @@ from tzlocal import get_localzone_name, reload_localzone
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
+    DeniedPath,
     NetworkPolicy,
     ResolvedAccess,
+    builtin_denied_paths,
+    validate_mount_source,
 )
 from guildbotics.utils.os_language import os_ui_language
+from guildbotics.utils.safe_paths import normalize_host_path
 
 #: How the guest names the host: the address at which a host port the policy
 #: opens (the member broker's) is reached from inside. The broker accepts it
@@ -72,8 +74,8 @@ class EnvironmentMount:
     """One mount inside the microVM.
 
     ``host`` is the host directory bound at ``guest``, or None for an empty
-    directory of the microVM's own: a read-only turn's working directory, a
-    cover over a denied corner of an opened tree, a login's state. It holds
+    directory of the microVM's own: a read-only turn's working directory or
+    a login's state. It holds
     nothing of the host and is discarded with the microVM, so it is writable:
     a mount nested under it needs a mount point made there.
     """
@@ -114,6 +116,7 @@ class AgentEnvironmentSpec:
     mounts: tuple[EnvironmentMount, ...]
     network: EnvironmentNetwork
     env: Mapping[str, str]
+    denied: tuple[DeniedPath, ...] = ()
 
 
 def build_environment_spec(
@@ -155,18 +158,38 @@ def build_environment_spec(
             own scratch directory. They are the provider's business, not the
             user's grants, so the contract never lists them.
     """
+    denied = tuple(
+        dict.fromkeys(
+            (
+                *contract.access.denied,
+                *(DeniedPath(p, True) for p in builtin_denied_paths(home)),
+            )
+        )
+    )
+    cwd = normalize_host_path(cwd)
+    access = ResolvedAccess(contract.access.documents, contract.access.paths, denied)
+    all_mounts = (
+        *_mounts(
+            access,
+            cwd,
+            () if contract.read_only else worktrees,
+            read_only=contract.read_only,
+        ),
+        *mounts,
+    )
+    # Every host bind, including provider files and code/config mounts, uses
+    # the same path and protected-ancestor check. Guest tmpfs needs no host.
+    for mount in all_mounts:
+        if mount.host is not None:
+            if normalize_host_path(mount.host) != mount.host:
+                raise AgentEnvironmentSpecError(
+                    f"Mount source must use its normalized OS spelling: {mount.host}"
+                )
+            validate_mount_source(mount.host, denied)
     return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
         home=guest_home(home),
-        mounts=(
-            *_mounts(
-                contract.access,
-                cwd,
-                () if contract.read_only else worktrees,
-                read_only=contract.read_only,
-            ),
-            *mounts,
-        ),
+        mounts=all_mounts,
         network=_network(
             contract.reached_network,
             tuple(host_ports),
@@ -174,6 +197,7 @@ def build_environment_spec(
             nameservers,
         ),
         env={**host_environment(), **(env or {})},
+        denied=denied,
     )
 
 
@@ -222,7 +246,7 @@ def guest_home(home: Path | None = None) -> str:
     The snapshot is built with this home and every turn runs with it, so
     both derive it here and cannot disagree.
     """
-    return guest_path((home or Path.home()).resolve())
+    return guest_path(normalize_host_path(home or Path.home()))
 
 
 def guest_path(path: PurePath) -> str:
@@ -270,7 +294,7 @@ def host_path(guest: str) -> Path:
 def _mounts(
     access: ResolvedAccess, cwd: Path, worktrees: Iterable[Path], *, read_only: bool
 ) -> tuple[EnvironmentMount, ...]:
-    """The host-backed mounts, outermost first, then the denies they cover.
+    """The admitted host-backed mounts, outermost first.
 
     A read-only turn has nothing of its own to read, so its working directory
     is an empty directory of the microVM's own rather than the host directory.
@@ -286,8 +310,8 @@ def _mounts(
             EnvironmentMount(guest_path(worktree), worktree, readonly=False),
         )
     for grant in (*access.documents, *access.paths):
-        denied = any(grant.path.is_relative_to(d.path) for d in access.denied)
-        if grant.present and not denied:
+        if grant.present:
+            validate_mount_source(grant.path, access.denied, grant=True)
             opened.setdefault(
                 guest_path(grant.path),
                 EnvironmentMount(
@@ -296,16 +320,7 @@ def _mounts(
                     readonly=read_only or grant.access == "read",
                 ),
             )
-    covers = {
-        f"{mount.guest}/{denied.path.relative_to(mount.host).as_posix()}"
-        for denied in access.denied
-        if denied.path.is_dir()
-        for mount in opened.values()
-        if mount.host is not None
-        and denied.path != mount.host
-        and denied.path.is_relative_to(mount.host)
-    }
-    mounts = [*opened.values(), *(EnvironmentMount(g, None, False) for g in covers)]
+    mounts = list(opened.values())
     return tuple(
         sorted(mounts, key=lambda m: (len(PurePosixPath(m.guest).parts), m.guest))
     )

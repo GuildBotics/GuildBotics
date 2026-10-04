@@ -12,11 +12,14 @@ import click
 from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.workspace_state import (
     WorkspaceState,
     WorkspaceUnresolvedError,
     apply_workspace_for_cli,
+    has_explicit_workspace_source,
+    read_active_workspace,
 )
 
 FormatChoice = click.Choice(["json", "markdown"])
@@ -106,12 +109,15 @@ def selected_workspace() -> Path:
     return applied.workspace if applied is not None else get_workspace_root()
 
 
-def apply_workspace_option(workspace_dir: Path | None) -> WorkspaceState | None:
+def apply_workspace_option(
+    workspace_dir: Path | None, *, load_env: bool = True
+) -> WorkspaceState | None:
     """Select the workspace a command group runs against and load its env.
 
     Args:
         workspace_dir: Value of :data:`workspace_option`, or ``None`` to use the
             persisted active workspace.
+        load_env: Load workspace environment values after selection.
 
     Returns:
         The applied workspace, or ``None`` when the current directory is used.
@@ -120,10 +126,23 @@ def apply_workspace_option(workspace_dir: Path | None) -> WorkspaceState | None:
         click.ClickException: If the requested workspace does not exist.
     """
     try:
+        from guildbotics.intelligences.agent_environment.contract import (
+            validate_workspace_location,
+        )
+
+        candidate = workspace_dir
+        if candidate is None:
+            if has_explicit_workspace_source():
+                candidate = get_workspace_root()
+            elif (state := read_active_workspace()) is not None:
+                candidate = state.workspace
+        if candidate is not None:
+            validate_workspace_location(candidate)
         applied = apply_workspace_for_cli(workspace_dir)
     except NotADirectoryError as exc:
         raise click.ClickException(f"workspace does not exist: {exc}") from exc
-    except WorkspaceUnresolvedError as exc:
+    except (WorkspaceUnresolvedError, UnsafePathError) as exc:
         raise click.ClickException(str(exc)) from exc
-    load_guildbotics_env(override=False)
+    if load_env:
+        load_guildbotics_env(override=False)
     return applied

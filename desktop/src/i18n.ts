@@ -70,6 +70,13 @@ const resources = {
         },
       },
       sync: {
+        registeredWorkspaces: {
+          title: "Registered workspaces",
+          body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
+          empty: "No workspaces are registered on this device.",
+          removeLabel: "Remove registration",
+          remove: "Remove registration for {{path}}",
+        },
         indicator: {
           aria: "Synchronization: {{state}}",
         },
@@ -1067,9 +1074,6 @@ const resources = {
             choose: "Choose a directory",
             accessFor: "Access to {{path}}",
             remove: "Remove {{path}}",
-            sensitiveTitle: "This directory holds credentials or provider state",
-            sensitiveBody:
-              "Granting {{path}} lets agents read what is under {{reason}}. Add it only if the work really needs it.",
             duplicate: "Already added.",
           },
           advanced: "Advanced settings",
@@ -2102,6 +2106,13 @@ const resources = {
         },
       },
       sync: {
+        registeredWorkspaces: {
+          title: "登録済みのワークスペース",
+          body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
+          empty: "この端末に登録されたワークスペースはありません。",
+          removeLabel: "登録を外す",
+          remove: "{{path}}の登録を外す",
+        },
         indicator: {
           aria: "同期: {{state}}",
         },
@@ -2793,9 +2804,6 @@ const resources = {
             choose: "ディレクトリを選択",
             accessFor: "{{path}} のアクセス",
             remove: "{{path}} を削除",
-            sensitiveTitle: "認証情報やプロバイダの状態を含むディレクトリです",
-            sensitiveBody:
-              "{{path}} を許可すると、{{reason}} 配下をエージェントが読めるようになります。作業に本当に必要な場合だけ追加してください。",
             duplicate: "追加済みです。",
           },
           advanced: "詳細設定",

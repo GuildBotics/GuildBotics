@@ -872,18 +872,35 @@ async def _relay_lines(
 def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     """The SDK volumes for the spec's mounts.
 
-    The host side is bound by its resolved path: the runtime cannot bind
-    through a symlinked component (macOS spells its temporary directories
-    under `/var`, a link to `/private/var`). The guest side keeps the spelling
-    the spec gave it, so what the agent is told is where it is.
+    Recheck all host sources without following links and pass the checked
+    names unchanged. A link introduced after this check remains in the name
+    microsandbox receives and is refused there rather than resolved here.
     """
     from microsandbox import Volume
+
+    from guildbotics.intelligences.agent_environment.contract import (
+        DeniedPath,
+        builtin_denied_paths,
+        validate_mount_source,
+    )
+
+    # Another workspace may have been registered since the spec was assembled.
+    denied = tuple(
+        dict.fromkeys(
+            (*spec.denied, *(DeniedPath(p, True) for p in builtin_denied_paths()))
+        )
+    )
+    for mount in spec.mounts:
+        if mount.host is not None:
+            checked = validate_mount_source(mount.host, denied)
+            if checked != mount.host:
+                raise AgentEnvironmentError(f"Unnormalized mount source: {mount.host}")
 
     return {
         mount.guest: (
             Volume.tmpfs(size_mib=_SCRATCH_MIB, readonly=mount.readonly)
             if mount.host is None
-            else Volume.bind(str(mount.host.resolve()), readonly=mount.readonly)
+            else Volume.bind(str(mount.host), readonly=mount.readonly)
         )
         for mount in spec.mounts
     }

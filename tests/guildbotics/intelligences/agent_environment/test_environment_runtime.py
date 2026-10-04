@@ -19,6 +19,7 @@ import pytest
 from microsandbox import Action, DestGroup, MountKind, NetworkDestinationKind, Protocol
 
 from guildbotics.intelligences.agent_environment import runtime
+from guildbotics.intelligences.agent_environment.contract import AccessContractError
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
@@ -165,7 +166,11 @@ class _Sandbox:
 
 
 @pytest.fixture
-def sandbox(monkeypatch) -> type[_Sandbox]:
+def sandbox(monkeypatch, tmp_path) -> type[_Sandbox]:
+    global _HOST_ROOT
+    _HOST_ROOT = tmp_path / "mounts"
+    (_HOST_ROOT / "repo").mkdir(parents=True)
+    (_HOST_ROOT / "documents").mkdir()
     _Sandbox.created = {}
     _Sandbox.instance = None
     _Sandbox.ipv4_only_code = 0
@@ -185,9 +190,9 @@ def _spec(**overrides: Any) -> AgentEnvironmentSpec:
         "cwd": "/work/repo",
         "home": "/home/u",
         "mounts": (
-            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
+            EnvironmentMount("/work/repo", _HOST_ROOT / "repo", readonly=False),
             EnvironmentMount(
-                "/home/u/Documents", Path("/home/u/Documents"), readonly=True
+                "/home/u/Documents", _HOST_ROOT / "documents", readonly=True
             ),
             EnvironmentMount("/work/repo/private", None, readonly=False),
         ),
@@ -352,7 +357,7 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     # device's own resolved spelling of the same directory.
     assert (volumes["/work/repo"].kind, volumes["/work/repo"].bind) == (
         MountKind.BIND,
-        str(Path("/work/repo").resolve()),
+        str(_HOST_ROOT / "repo"),
     )
     assert volumes["/work/repo"].readonly is False
     assert volumes["/home/u/Documents"].readonly is True
@@ -377,7 +382,7 @@ async def test_start_ends_the_sandbox_when_ipv6_cannot_be_switched_off(
 
 
 @pytest.mark.asyncio
-async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
+async def test_start_refuses_a_symlink_mount_without_resolving_it(
     sandbox: type[_Sandbox], tmp_path: Path, symlinks
 ) -> None:
     # macOS spells temporary directories under /var, a symlink to
@@ -389,10 +394,73 @@ async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
     link.symlink_to(real, target_is_directory=True)
     spec = _spec(mounts=(EnvironmentMount("/work/link", link, readonly=False),))
 
-    await AgentEnvironment.start(spec, snapshot="s", **_RESOURCES)
+    with pytest.raises(AgentEnvironmentError):
+        await AgentEnvironment.start(spec, snapshot="s", **_RESOURCES)
+    assert sandbox.created == {}
 
-    volume = sandbox.created["volumes"]["/work/link"]
-    assert (volume.kind, volume.bind) == (MountKind.BIND, str(real.resolve()))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readonly", [False, True])
+@pytest.mark.parametrize("intermediate", [False, True])
+async def test_checked_source_replaced_by_a_link_is_refused_before_sdk_boot(
+    sandbox, tmp_path, symlinks, readonly, intermediate
+):
+    from guildbotics.intelligences.agent_environment.spec import build_environment_spec
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+
+    root = tmp_path / "opened"
+    source = root / "child" if intermediate else root
+    source.mkdir(parents=True)
+    spec = build_environment_spec(AccessContract(), source, nameservers=("1.1.1.1",))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "child").mkdir()
+    root.rename(tmp_path / "original")
+    root.symlink_to(outside, target_is_directory=True)
+    from dataclasses import replace
+
+    spec = replace(spec, mounts=(EnvironmentMount("/work", source, readonly),))
+    with pytest.raises(AgentEnvironmentError):
+        await AgentEnvironment.start(spec, snapshot="s", **_RESOURCES)
+    assert sandbox.created == {}
+
+
+def test_bind_keeps_the_checked_name_even_if_it_changes_inside_the_sdk(
+    sandbox, tmp_path, monkeypatch, symlinks
+):
+    source = tmp_path / "checked"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    bind = microsandbox.Volume.bind
+    names = []
+
+    def swap(name, *, readonly):
+        names.append(name)
+        source.rename(tmp_path / "original")
+        source.symlink_to(outside, target_is_directory=True)
+        return bind(name, readonly=readonly)
+
+    monkeypatch.setattr(microsandbox.Volume, "bind", swap)
+    volume = runtime._volumes(
+        _spec(mounts=(EnvironmentMount("/work", source, False),))
+    )["/work"]
+    assert names == [str(source)]
+    assert volume.bind == str(source)
+    assert volume.bind != str(outside)
+
+
+def test_a_workspace_registered_after_spec_creation_is_protected(sandbox, tmp_path):
+    from guildbotics.utils.workspace_state import register_workspace
+    from guildbotics.intelligences.agent_environment.spec import build_environment_spec
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+
+    source = tmp_path / "shared"
+    source.mkdir()
+    spec = build_environment_spec(AccessContract(), source, nameservers=("1.1.1.1",))
+    register_workspace(source / "new-workspace")
+    with pytest.raises(AccessContractError):
+        runtime._volumes(spec)
 
 
 @pytest.mark.asyncio

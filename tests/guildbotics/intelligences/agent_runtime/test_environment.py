@@ -46,9 +46,9 @@ def _command(
     """A command of aiko, a member configured with ``tools`` (Claude Code by
     default), declaring ``access`` and working in ``cwd`` (``repository`` in
     the test's workspace by default)."""
-    return command_at(
-        cwd or get_workspace_root() / "repository", tools or {"claude"}, access
-    )
+    cwd = cwd or get_workspace_root() / "repository"
+    cwd.mkdir(parents=True, exist_ok=True)
+    return command_at(cwd, tools or {"claude"}, access)
 
 
 def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
@@ -824,6 +824,14 @@ async def test_the_microvm_works_where_the_command_does_and_its_turns_in_the_clo
     clone = get_member_clone_path("aiko")
     in_clone = _turn(tmp_path, cwd=clone / "src")
     turn_context = _turn(tmp_path, cwd=cwd) if read_only else in_clone
+    if where == "workspace root" and not read_only:
+        from guildbotics.commands.errors import CommandError
+
+        with pytest.raises(CommandError):
+            async with _command(cwd=cwd):
+                pass
+        assert not _Booted.booted
+        return
     async with _command(cwd=cwd, access=CommandAccess(read_only=read_only)):
         turn = await environment.start_turn_environment(turn_context, "claude")
         await turn.close()
@@ -976,6 +984,44 @@ def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
     )
 
     assert openers == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+
+
+def test_every_bind_and_microvm_entry_uses_the_checked_mount_boundary() -> None:
+    """New mounts or VM entries must explicitly join the common safety check."""
+    assert _call_sites(
+        lambda call: (
+            getattr(call.func, "attr", None) == "bind"
+            and getattr(getattr(call.func, "value", None), "id", None) == "Volume"
+        )
+    ) == {("guildbotics/intelligences/agent_environment/runtime.py", "_volumes")}
+    assert _call_sites(
+        lambda call: (
+            (
+                getattr(call.func, "attr", None) == "create"
+                and getattr(getattr(call.func, "value", None), "id", None) == "Sandbox"
+            )
+            or (
+                getattr(call.func, "attr", None) == "create"
+                and getattr(getattr(call.func, "value", None), "attr", None)
+                == "Sandbox"
+            )
+        )
+    ) == {
+        ("guildbotics/intelligences/agent_environment/runtime.py", "start"),
+        ("guildbotics/intelligences/agent_environment/runtime.py", "build_snapshot"),
+    }
+    assert _call_sites(
+        lambda call: getattr(call.func, "id", None) == "EnvironmentMount"
+    ) == {
+        ("guildbotics/intelligences/agent_environment/spec.py", "_mounts"),
+        ("guildbotics/intelligences/agent_environment/provider_state.py", "bind_state"),
+        (
+            "guildbotics/intelligences/agent_environment/provider_state.py",
+            "_state_root_spec",
+        ),
+        ("guildbotics/intelligences/agent_runtime/environment.py", "<module>"),
+        ("guildbotics/intelligences/agent_runtime/environment.py", "_inspected_mounts"),
+    }
 
 
 def test_every_command_runs_in_an_environment() -> None:
@@ -1139,7 +1185,7 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
 
     _device(monkeypatch, tmp_path, "claude", "codex")
     repository = tmp_path / "repository"
-    denied = repository / "private"
+    denied = tmp_path / "private"
     denied.mkdir(parents=True)
     settle_contract(
         monkeypatch,
@@ -1674,7 +1720,9 @@ async def test_windows_temp_mount_is_refused_before_boot(
     _device(monkeypatch, tmp_path)
 
     with pytest.raises(CommandError) as failed:
-        async with _command(cwd=mounted if source == "cwd" else tmp_path):
+        async with _command(
+            cwd=mounted if source == "cwd" else tmp_path / "repository"
+        ):
             pass
 
     assert str(mounted) in str(failed.value)

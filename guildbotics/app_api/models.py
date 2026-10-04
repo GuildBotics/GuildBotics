@@ -1191,8 +1191,6 @@ class GrantEvaluation(BaseModel):
     valid: bool
     reason: str = ""
     present: bool = False
-    #: Why the path holds credentials or provider state, or "".
-    sensitive: str = ""
 
 
 class EnvironmentGrantStatus(BaseModel):

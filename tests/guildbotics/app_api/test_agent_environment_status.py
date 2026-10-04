@@ -392,9 +392,11 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
         (str(Path("$HOME/Projects/out")), "Projects/out", False, False),
     ]
     assert not (home / "Projects/out").exists()
-    assert [(d.path, d.builtin) for d in status.access.denied] == [
-        (str(Path("$HOME/.ssh")), True),
-        (str(Path("$HOME/.local/share/x")), False),
+    assert (str(Path("$HOME/.ssh")), True) in [
+        (d.path, d.builtin) for d in status.access.denied
+    ]
+    assert (str(Path("$HOME/.local/share/x")), False) in [
+        (d.path, d.builtin) for d in status.access.denied
     ]
     aiko, kenji = status.members[0].slots[0], status.members[1].slots[0]
     assert (aiko.tool, kenji.tool) == ("codex", "grok")
@@ -455,10 +457,10 @@ def test_an_unresolvable_local_path_is_reported_on_every_slot(
         ("document", "Projects/new", "read_write", True, False, "", ""),
         ("document", "/opt/x", "read", False, False, "path_not_relative", ""),
         ("document", "..", "read", False, False, "path_not_a_directory_name", ""),
-        ("document", ".ssh", "read", True, True, "", "~/.ssh"),
+        ("document", ".ssh", "read", False, False, "protected", ""),
         ("local", "/opt/nowhere", "read", False, False, "local_path_missing", ""),
         ("local", ".cache/uv", "read_write", True, True, "", ""),
-        ("local", ".codex", "read", True, True, "", "~/.codex"),
+        ("local", ".codex", "read", False, False, "protected", ""),
         ("deny", "/opt/homebrew/etc", "", True, True, "", ""),
         ("deny", ".local/share/some-app", "", True, True, "", ""),
         ("deny", "..", "", False, False, "path_not_a_directory_name", ""),
@@ -483,8 +485,12 @@ def test_a_typed_grant_is_judged_before_it_is_saved(
     assert evaluation.present is present
     # ``reason`` names the sentence under intelligences.agent_environment.grants.
     expected = t(f"intelligences.agent_environment.grants.{reason}", path=path)
-    assert evaluation.reason == (expected if reason else "")
-    assert evaluation.sensitive == sensitive
+    if reason == "protected":
+        assert evaluation.reason == t(
+            "safe_paths.protected", path=home / path, protected=home / path
+        )
+    else:
+        assert evaluation.reason == (expected if reason else "")
     assert not (home / "Projects/new").exists()
 
 

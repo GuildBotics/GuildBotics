@@ -175,8 +175,13 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
 )
+from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
+from guildbotics.utils.workspace_state import (
+    registered_workspaces,
+    unregister_workspace,
+)
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 #: The header the Desktop sends naming its display language, so error
@@ -328,6 +333,12 @@ def create_app(
         500: {"model": ApiError},
     }
 
+    @app.exception_handler(UnsafePathError)
+    async def unsafe_path_handler(
+        request: Request, exc: UnsafePathError
+    ) -> JSONResponse:
+        return _error_response(400, "unsafe_host_path", str(exc), {})
+
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
         # The one place a message becomes text: rendered from the error's
@@ -408,6 +419,19 @@ def create_app(
                 "invalid_session_token",
                 status_code=401,
             )
+
+    @app.get("/device/workspaces", response_model=list[str], responses=error_responses)
+    def device_workspaces(_: None = Depends(require_token)) -> list[str]:
+        return [str(path) for path in registered_workspaces()]
+
+    @app.delete(
+        "/device/workspaces", response_model=list[str], responses=error_responses
+    )
+    def remove_device_workspace(
+        request: WorkspaceChangeRequest, _: None = Depends(require_token)
+    ) -> list[str]:
+        unregister_workspace(request.workspace_dir)
+        return [str(path) for path in registered_workspaces()]
 
     @app.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
     async def hub_secret_transfer(

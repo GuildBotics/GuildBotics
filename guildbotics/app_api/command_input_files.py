@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -25,8 +24,12 @@ from guildbotics.intelligences.agent_environment.contract import (
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
-    open_lock_file,
     unlock_file,
+)
+from guildbotics.utils.safe_paths import (
+    inspect_host_path,
+    open_host_file,
+    visit_host_directory,
 )
 
 #: Largest file the Desktop hands a command; not a shared file, so not derived
@@ -69,14 +72,27 @@ class CommandInputFileStore:
         """Create this session directory after recovering orphaned sessions."""
         if self._directory is not None:
             return
-        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._root.chmod(0o700)
+        from guildbotics.intelligences.agent_environment.contract import (
+            protected_paths,
+            validate_mount_source,
+        )
+
+        self._root = validate_mount_source(
+            self._root, protected_paths(), grant=True, create=True
+        )
+        visit_host_directory(self._root, self._start_in_directory)
+
+    def _start_in_directory(self, descriptor: int | None) -> None:
+        """Create a session while the checked exchange ancestry remains open."""
         with _cleanup_lock(self._root):
-            _remove_orphaned_sessions(self._root)
-            directory = Path(
-                tempfile.mkdtemp(prefix=_SESSION_DIRECTORY_PREFIX, dir=self._root)
-            )
-            session_lock = open_lock_file(directory / _SESSION_LOCK_NAME)
+            _remove_orphaned_sessions(self._root, descriptor)
+            name = f"{_SESSION_DIRECTORY_PREFIX}{uuid4().hex}"
+            if descriptor is None:
+                inspect_host_path(self._root / name, create=True)
+            else:
+                os.mkdir(name, mode=0o700, dir_fd=descriptor)
+            directory = self._root / name
+            session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
             try:
                 lock_file_nonblocking(session_lock)
             except Exception:
@@ -278,7 +294,7 @@ def _grant_for(directory: Path, home: Path) -> GrantSuggestion | None:
 
 @contextmanager
 def _cleanup_lock(root: Path) -> Iterator[None]:
-    lock_file = open_lock_file(root / _CLEANUP_LOCK_NAME)
+    lock_file = open_host_file(root / _CLEANUP_LOCK_NAME)
     while True:
         try:
             lock_file_nonblocking(lock_file)
@@ -292,11 +308,16 @@ def _cleanup_lock(root: Path) -> Iterator[None]:
         lock_file.close()
 
 
-def _remove_orphaned_sessions(root: Path) -> None:
-    for directory in root.glob(f"{_SESSION_DIRECTORY_PREFIX}*"):
-        if directory.is_symlink() or not directory.is_dir():
+def _remove_orphaned_sessions(root: Path, descriptor: int | None) -> None:
+    for name in os.listdir(root if descriptor is None else descriptor):
+        if not name.startswith(_SESSION_DIRECTORY_PREFIX):
             continue
-        session_lock = open_lock_file(directory / _SESSION_LOCK_NAME)
+        directory = root / name
+        try:
+            inspect_host_path(directory)
+        except AccessContractError:
+            continue
+        session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
         try:
             try:
                 lock_file_nonblocking(session_lock)
@@ -305,4 +326,7 @@ def _remove_orphaned_sessions(root: Path) -> None:
             unlock_file(session_lock)
         finally:
             session_lock.close()
-        shutil.rmtree(directory, ignore_errors=True)
+        if descriptor is None:
+            shutil.rmtree(directory, ignore_errors=True)
+        else:
+            shutil.rmtree(name, dir_fd=descriptor, ignore_errors=True)

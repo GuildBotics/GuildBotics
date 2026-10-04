@@ -1,4 +1,5 @@
 from io import BytesIO
+import os
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_command_input_files_are_readable_only_by_their_owner(
     assert saved.stat().st_mode & 0o777 == 0o600
     assert copied.stat().st_mode & 0o777 == 0o600
 
-    store = CommandInputFileStore(root=tmp_path)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
     store.start()
     try:
         assert store.save(_upload(b"png-data")).parent.stat().st_mode & 0o777 == 0o700
@@ -154,7 +155,7 @@ def test_store_lives_in_the_exchange_tmp_directory_by_default(
 
 
 def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) -> None:
-    store = CommandInputFileStore(root=tmp_path)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
     store.start()
 
     saved = store.save(_upload(b"png-data"))
@@ -163,7 +164,7 @@ def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) 
     copied = store.copy(source)
     session_directory = saved.parent
 
-    assert session_directory.parent == tmp_path
+    assert session_directory.parent == tmp_path / "inputs"
     assert saved.exists()
     assert copied.parent == session_directory
 
@@ -174,11 +175,11 @@ def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) 
 
 
 def test_store_removes_orphaned_sessions_on_start(tmp_path: Path) -> None:
-    orphan = tmp_path / "session-orphaned"
+    orphan = tmp_path / "inputs/session-orphaned"
     orphan.mkdir(parents=True)
     (orphan / "clipboard.png").write_bytes(b"old")
 
-    store = CommandInputFileStore(root=tmp_path)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
     store.start()
 
     assert not orphan.exists()
@@ -187,17 +188,42 @@ def test_store_removes_orphaned_sessions_on_start(tmp_path: Path) -> None:
 
 
 def test_store_preserves_another_active_session(tmp_path: Path) -> None:
-    first = CommandInputFileStore(root=tmp_path)
+    first = CommandInputFileStore(root=tmp_path / "inputs")
     first.start()
     saved = first.save(_upload(b"active"))
 
-    second = CommandInputFileStore(root=tmp_path)
+    second = CommandInputFileStore(root=tmp_path / "inputs")
     second.start()
 
     assert saved.exists()
 
     second.close()
     first.close()
+
+
+def test_session_creation_refuses_an_exchange_name_swapped_after_validation(
+    tmp_path, monkeypatch, symlinks
+):
+    from guildbotics.intelligences.agent_environment import contract
+    from guildbotics.utils.safe_paths import UnsafePathError
+
+    root = tmp_path / "inputs"
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    validate = contract.validate_mount_source
+
+    def swap(path, *args, **kwargs):
+        checked = validate(path, *args, **kwargs)
+        root.rename(tmp_path / "original")
+        root.symlink_to(outside, target_is_directory=True)
+        return checked
+
+    monkeypatch.setattr(contract, "validate_mount_source", swap)
+    with pytest.raises((UnsafePathError, OSError)):
+        CommandInputFileStore(root=root).start()
+    assert not list(outside.iterdir())
+    if os.name != "nt":
+        assert outside.stat().st_mode & 0o777 == 0o755
 
 
 def test_the_working_directory_expands_the_home_and_refuses_relative_paths(
