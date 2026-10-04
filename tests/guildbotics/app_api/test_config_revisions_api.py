@@ -17,7 +17,9 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
+HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 PROJECT = "team/project.yml"
@@ -52,7 +54,7 @@ def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete
     response = client.get(
         "/config/intelligences", headers=AUTH_HEADERS, params={"person_id": person_id}
     )
-    assert response.status_code == 422
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     response = client.put(
         "/config/intelligences",
         headers=AUTH_HEADERS,
@@ -62,7 +64,7 @@ def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete
             "inherit_team_defaults": True,
         },
     )
-    assert response.status_code == 422
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert {
         str(p.relative_to(config_dir)): p.read_bytes()
         for p in config_dir.rglob("*")
@@ -76,6 +78,7 @@ def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
     client, config_dir, stored_name, action
 ):
     import os
+
     from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
     from guildbotics.utils.person_id import MemberConfigError
 
@@ -623,5 +626,5 @@ def test_a_revision_naming_something_outside_config_is_a_bad_request(
         json=_project_payload(config_dir, {"../state/workspace.json": "abc"}),
     )
 
-    assert response.status_code == 400
+    assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "config_revision_invalid"

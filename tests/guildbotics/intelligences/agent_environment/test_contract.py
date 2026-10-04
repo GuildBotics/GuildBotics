@@ -482,18 +482,12 @@ def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
     outside.mkdir()
     (home / "link").symlink_to(outside, target_is_directory=True)
 
-    not_a_directory = t(
-        "intelligences.agent_environment.grants.document_not_a_directory", path="notes"
-    )
     with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
             LocalGrants(),
             home,
         )
-    outside = t(
-        "intelligences.agent_environment.grants.document_outside_home", path="link"
-    )
     with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="link", access="read")]),
@@ -614,9 +608,6 @@ def test_a_local_path_must_exist_on_this_device(tmp_path: Path) -> None:
     assert [(g.path, g.present) for g in preview.paths] == [
         (Path("/opt/nowhere").resolve(), False)
     ]
-    too_broad = t(
-        "intelligences.agent_environment.grants.local_path_too_broad", path=str(home)
-    )
     with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(),
