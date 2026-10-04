@@ -1912,19 +1912,23 @@ async def test_a_copied_working_directory_is_written_back_when_the_command_ended
 async def test_a_turn_works_in_the_copy_and_never_in_its_read_only_original(
     tmp_path, monkeypatch
 ):
-    from guildbotics.intelligences.agent_environment.spec import WORKTREE_SOURCE
-    from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+    from guildbotics.intelligences.agent_environment.spec import (
+        WORKTREE_SOURCE,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.host_client import admits
 
     _device(monkeypatch, tmp_path, "claude")
+    cwd = get_workspace_root() / "repository"
     async with _command():
         turn = await environment.start_turn_environment(
-            _turn(tmp_path, cwd=get_workspace_root() / "repository"), "claude"
+            _turn(tmp_path, cwd=cwd), "claude"
         )
         await turn.close()
-        with pytest.raises(AgentRuntimeError):
-            await environment.start_turn_environment(
-                _turn(tmp_path, cwd=Path(WORKTREE_SOURCE)), "claude"
-            )
+        mounts = environment.running_command()._mounts
+        assert admits(mounts, guest_path(cwd))
+        assert not admits(mounts, WORKTREE_SOURCE)
+        assert not admits(mounts, f"{WORKTREE_SOURCE}/src")
 
 
 @pytest.mark.asyncio
