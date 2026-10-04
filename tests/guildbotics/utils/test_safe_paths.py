@@ -227,11 +227,19 @@ def test_protected_link_permission_error_names_owner_and_denied_component(
 
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_macos_documents_permission_guidance_keeps_absolute_path(
-    tmp_path, monkeypatch, fake_platform, language
+    tmp_path, monkeypatch, language
 ):
     from guildbotics.utils import i18n_tool, processes
 
-    fake_platform(safe_paths, "darwin")
+    original = safe_paths.filesystem_permission_problem
+
+    def macos_permission(path):
+        # Keep inspection on the native OS; only the message uses macOS wording.
+        with monkeypatch.context() as patch:
+            patch.setattr(safe_paths, "sys", SimpleNamespace(platform="darwin"))
+            return original(path)
+
+    monkeypatch.setattr(safe_paths, "filesystem_permission_problem", macos_permission)
     monkeypatch.setattr(processes, "launching_app_name", lambda: "Example App")
     path = Path.home() / "Documents/blocked"
     previous = i18n_tool.get_language()
@@ -242,6 +250,7 @@ def test_macos_documents_permission_guidance_keeps_absolute_path(
         i18n_tool.set_language(previous)
     assert str(path) in message
     assert "Example App" in message
+    assert safe_paths.sys is sys
 
 
 def test_ordinary_rename_does_not_change_the_object_relationship(
