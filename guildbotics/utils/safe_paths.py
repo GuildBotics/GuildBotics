@@ -14,14 +14,17 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
+
+# These APIs exist only on POSIX; callers select this branch before using them.
+_POSIX: Any = os
 
 
 def t(key: str, **values: object) -> str:
     # Workspace selection also uses this module during i18n initialization.
-    from guildbotics.utils.i18n_tool import t as translate
+    from guildbotics.utils import i18n_tool
 
-    return translate(key, **values)
+    return i18n_tool.t(key, **values)
 
 
 class UnsafePathError(ValueError):
@@ -118,9 +121,9 @@ def _inspect_posix(
     descriptors: list[int] = []
     identities: list[tuple[int, int]] = []
     parts = path.parts[1:]
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    flags = os.O_RDONLY | _POSIX.O_NOFOLLOW | _POSIX.O_NONBLOCK
     try:
-        parent = os.open(path.anchor, flags | os.O_DIRECTORY)
+        parent = os.open(path.anchor, flags | _POSIX.O_DIRECTORY)
         descriptors.append(parent)
         identities.append(_identity(os.fstat(parent)))
         for index, part in enumerate(parts):
@@ -138,9 +141,9 @@ def _inspect_posix(
                         return (*identities, identity), (), True
                 handle = os.open(
                     part,
-                    (os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    (os.O_RDWR | os.O_CREAT | _POSIX.O_NOFOLLOW | _POSIX.O_NONBLOCK)
                     if leaf_file
-                    else flags | (os.O_DIRECTORY if is_directory else 0),
+                    else flags | (_POSIX.O_DIRECTORY if is_directory else 0),
                     0o600,
                     dir_fd=parent,
                 )
@@ -149,7 +152,7 @@ def _inspect_posix(
                     # Darwin reports the opened volume's case rules. Elsewhere
                     # absent protected names are compared conservatively.
                     sensitive = (
-                        os.fpathconf(parent, 11) if sys.platform == "darwin" else 0
+                        _POSIX.fpathconf(parent, 11) if sys.platform == "darwin" else 0
                     )
                     if sensitive < 0:
                         raise OSError(
@@ -158,7 +161,7 @@ def _inspect_posix(
                     return tuple(identities), parts[index:], bool(sensitive)
                 with suppress(FileExistsError):
                     os.mkdir(part, mode=0o700, dir_fd=parent)
-                handle = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
+                handle = os.open(part, flags | _POSIX.O_DIRECTORY, dir_fd=parent)
             descriptors.append(handle)
             info = os.fstat(handle)
             if not (
@@ -263,7 +266,7 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
     else:
 
         def consume(fd: int) -> None:
-            os.fchmod(fd, 0o700)
+            _POSIX.fchmod(fd, 0o700)
             action(fd)
 
         _, absent, _ = _inspect_posix(path, False, True, consume)

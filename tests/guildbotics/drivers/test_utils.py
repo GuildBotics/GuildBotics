@@ -158,21 +158,22 @@ def test_an_exchange_directory_it_may_not_create_is_told_as_the_environment_tell
     """A host-started command whose exchange directory cannot be made fails
     with the refusal the isolated environment gives for the same directory
     (on macOS: allow the app the Documents folder), not a raw OSError."""
-    from pathlib import Path
-
     from guildbotics.commands.errors import CommandError
     from guildbotics.drivers import command_runner
+    from guildbotics.intelligences.agent_environment.contract import AccessContractError
     from guildbotics.intelligences.agent_environment.status import (
         filesystem_permission_problem,
     )
 
     denied = tmp_path / "Documents" / "GuildBotics"
 
-    def refuse(self, *args, **kwargs):
-        raise PermissionError(13, "denied", str(self))
+    def refuse(path, *args, **kwargs):
+        raise AccessContractError("denied") from PermissionError(
+            13, "denied", str(path)
+        )
 
     monkeypatch.setattr(command_runner, "exchange_dir", lambda: denied)
-    monkeypatch.setattr(Path, "mkdir", refuse)
+    monkeypatch.setattr(command_runner, "validate_mount_source", refuse)
 
     with pytest.raises(CommandError) as refused:
         host_command_cwd()

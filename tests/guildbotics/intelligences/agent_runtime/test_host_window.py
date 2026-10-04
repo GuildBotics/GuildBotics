@@ -170,6 +170,7 @@ async def _command(
     _device(monkeypatch, tmp_path, *(logins or tools))
     ledger = _Ledger()
     repository = get_workspace_root() / "repository"
+    repository.mkdir()
     grant = HostWindow(
         "aiko", _RUN, work_kind, workspace_root=get_workspace_root(), ledger=ledger
     )

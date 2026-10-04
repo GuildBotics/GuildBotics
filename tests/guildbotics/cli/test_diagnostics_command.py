@@ -181,6 +181,11 @@ def test_workspace_option_selects_another_workspace(
 
 
 def test_reading_diagnostics_never_writes_to_the_workspace(workspace: Path) -> None:
+    from guildbotics.utils.workspace_state import register_workspace
+
+    # Selecting a workspace registers it on the device. This fixture keeps
+    # the device home inside the workspace, so perform selection first.
+    register_workspace(workspace)
     before = {
         path: path.read_bytes()
         for path in sorted(workspace.rglob("*"))
