@@ -34,11 +34,12 @@ def _record(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a workspace data root with an index and two transcripts."""
-    run_dir = tmp_path / ".guildbotics" / "local" / "run"
+    root = tmp_path / "workspace"
+    run_dir = root / ".guildbotics" / "local" / "run"
     sessions = run_dir / "sessions"
     sessions.mkdir(parents=True)
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(root))
+    monkeypatch.chdir(root)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
@@ -83,7 +84,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
         encoding="utf-8",
     )
-    return tmp_path
+    return root
 
 
 def _run(*args: str) -> dict[str, Any]:
@@ -181,11 +182,6 @@ def test_workspace_option_selects_another_workspace(
 
 
 def test_reading_diagnostics_never_writes_to_the_workspace(workspace: Path) -> None:
-    from guildbotics.utils.workspace_state import register_workspace
-
-    # Selecting a workspace registers it on the device. This fixture keeps
-    # the device home inside the workspace, so perform selection first.
-    register_workspace(workspace)
     before = {
         path: path.read_bytes()
         for path in sorted(workspace.rglob("*"))
