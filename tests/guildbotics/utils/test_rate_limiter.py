@@ -1,7 +1,9 @@
 import asyncio
 import importlib
 import sys
+import threading
 import time as _time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -93,3 +95,100 @@ async def test_rate_limiter_inmemory_one_minute_window(monkeypatch):
 
     # The fake time should have advanced by exactly 60 seconds
     assert clock.now == pytest.approx(10_060.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_site", ["registry", "timestamps"])
+async def test_cancellation_at_lock_acquisition_releases_lock(monkeypatch, lock_site):
+    """Cancellation at the worker/coroutine handoff must not orphan either lock."""
+    module = _import_inmemory_rate_limiter(monkeypatch)
+    loop = asyncio.get_running_loop()
+    acquired = threading.Lock()
+    task = None
+
+    class CancelOnAcquire:
+        def acquire(self):
+            acquired.acquire()
+            loop.call_soon_threadsafe(task.cancel)
+            return True
+
+        def release(self):
+            acquired.release()
+
+        def __enter__(self):
+            self.acquire()
+
+        def __exit__(self, *args):
+            self.release()
+
+    limiter = module.RateLimiter("cancel", 10)
+    module._limiters["cancel"] = limiter
+    owner, attribute = (
+        (module, "_limiters_lock") if lock_site == "registry" else (limiter, "_lock")
+    )
+    monkeypatch.setattr(owner, attribute, CancelOnAcquire())
+
+    async def request():
+        await module.acquire("cancel", 10)
+        # Synchronous acquisition also delivers cancellation at the next await.
+        await asyncio.sleep(0)
+
+    task = asyncio.create_task(request())
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not acquired.locked()
+    finally:
+        # A regression must fail without stranding the test executor's workers.
+        if acquired.locked():
+            acquired.release()
+
+    monkeypatch.setattr(owner, attribute, acquired)
+    await asyncio.wait_for(module.acquire("cancel", 10), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_rate_limit_sleep_preserves_next_request(monkeypatch):
+    module = _import_inmemory_rate_limiter(monkeypatch)
+    clock = FakeClock()
+    monkeypatch.setattr(_time, "time", clock.time)
+    sleeping = asyncio.Event()
+
+    async def sleep(seconds):
+        assert seconds == 60
+        assert not module._limiters_lock.locked()
+        assert not module._limiters["limited"]._lock.locked()
+        sleeping.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    await module.acquire("limited", 1)
+    task = asyncio.create_task(module.acquire("limited", 1))
+    await asyncio.wait_for(sleeping.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(module.acquire("other", 1), timeout=1)
+    clock.now += 60
+    await asyncio.wait_for(module.acquire("limited", 1), timeout=1)
+    assert module._limiters["limited"]._request_timestamps == [clock.now]
+
+
+def test_limiter_is_shared_across_threads_and_event_loops(monkeypatch):
+    module = _import_inmemory_rate_limiter(monkeypatch)
+    barrier = threading.Barrier(4)
+
+    def request():
+        barrier.wait(timeout=5)
+
+        async def acquire_many():
+            for _ in range(10):
+                await module.acquire("shared", 100)
+            return module._limiters["shared"]
+
+        return asyncio.run(acquire_many())
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        limiters = list(executor.map(lambda _: request(), range(4)))
+    assert all(limiter is limiters[0] for limiter in limiters)
+    assert len(limiters[0]._request_timestamps) == 40
