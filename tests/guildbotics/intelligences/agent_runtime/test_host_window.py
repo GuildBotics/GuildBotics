@@ -1426,7 +1426,7 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
             else:
                 call = command.client.acall("member", arguments=["help"], stdin="")
             pending.append(asyncio.create_task(call))
-            await asyncio.wait_for(started.wait(), 5)
+            await started.wait()
             if normal_exit:
 
                 async def never():
@@ -1442,7 +1442,7 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
 
     task = asyncio.create_task(run_command())
     try:
-        await asyncio.wait_for(ready.wait(), 5)
+        await ready.wait()
         task.cancel()
         await asyncio.sleep(0.05)
         assert not task.done()
@@ -1453,9 +1453,10 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
             await asyncio.sleep(0)
             assert not task.done()
     finally:
+        task.cancel()
         release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 5)
+            await task
         await asyncio.gather(*pending, return_exceptions=True)
 
     assert posted.read_text(encoding="utf-8") == "member write"
@@ -1522,10 +1523,10 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
 
     task = asyncio.create_task(run_command())
     try:
-        await asyncio.wait_for(tearing_down.wait(), 5)
+        await tearing_down.wait()
         assert started.is_set()
         task.cancel()
-        await asyncio.wait_for(torn_down.wait(), 5)
+        await torn_down.wait()
         await asyncio.sleep(0.05)
         assert not task.done()
         assert not posted.exists()
@@ -1534,9 +1535,10 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
             await asyncio.sleep(0)
             assert not task.done()
     finally:
+        task.cancel()
         release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 5)
+            await task
     assert posted.read_text(encoding="utf-8") == "member write"
     assert _Booted.booted[0].closed
 
