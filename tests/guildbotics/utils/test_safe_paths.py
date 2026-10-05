@@ -453,6 +453,9 @@ def test_darwin_tells_the_case_rule_of_the_directory_itself(
     """A volume that does not answer is refused: taking it for
     case-sensitive would let two spellings of one file through as two."""
     fake_platform(safe_paths, "darwin")
+    # Darwin's own aliases (``/tmp`` for ``/private/tmp``) are no part of the
+    # question, and do not hold on the machine running the test.
+    monkeypatch.setattr(safe_paths, "_host_alias", lambda path: path)
     monkeypatch.setattr(safe_paths._POSIX, "fpathconf", lambda fd, name: answer)
 
     if sensitive is None:
