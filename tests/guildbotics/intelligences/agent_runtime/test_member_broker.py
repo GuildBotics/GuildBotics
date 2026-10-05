@@ -301,9 +301,23 @@ async def test_abandon_waits_for_member_writes_even_after_timeout(
 
 
 @pytest.mark.asyncio
-async def test_abandon_waits_for_a_member_write_queued_in_a_busy_executor(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("transport", ["mcp", "host"])
+@pytest.mark.parametrize(
+    ("stop", "timed_out"),
+    [
+        ("abandon", False),
+        ("cancel_settle", False),
+        ("abandon", True),
+        ("cancel_settle", True),
+        ("timeout", True),
+        ("cancel_request", False),
+        ("finish", False),
+    ],
+)
+async def test_queued_member_writes_follow_request_lifetime(
+    monkeypatch, tmp_path, transport: str, stop: str, timed_out: bool
 ) -> None:
+    """Only live requests start queued commands; normal settlement waits them."""
     release = threading.Event()
     submitted = asyncio.Event()
     writes: list[str] = []
@@ -315,7 +329,26 @@ async def test_abandon_waits_for_a_member_write_queued_in_a_busy_executor(
         return 0, "", ""
 
     monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    monkeypatch.setattr(
+        member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05 if timed_out else 30
+    )
     broker = _active_broker(_context(tmp_path))
+
+    async def host(_call, _arguments):
+        return await broker.run(
+            "aiko", ["help"], MemberInvocation(), cwd=tmp_path, stdin=""
+        )
+
+    broker.serve(host, contextvars.Context())
+
+    async def never():
+        await asyncio.Event().wait()
+
+    waiting = None
+    if stop == "cancel_settle":
+        waiting = asyncio.create_task(never())
+        broker._calls.add(waiting)
+        waiting.add_done_callback(broker._calls.discard)
     with ThreadPoolExecutor(max_workers=1) as executor:
         blocker = executor.submit(release.wait, 10)
 
@@ -325,22 +358,57 @@ async def test_abandon_waits_for_a_member_write_queued_in_a_busy_executor(
             return work
 
         monkeypatch.setattr(loop, "run_in_executor", enqueue)
-        call = asyncio.create_task(broker.execute("turn-1", ["help"]))
+        if transport == "mcp":
+            call = asyncio.create_task(broker.execute("turn-1", ["help"]))
+        else:
+
+            async def receive():
+                return {"type": "http.request", "body": b"{}"}
+
+            request = Request(
+                {"type": "http", "path_params": {"call": "member"}}, receive
+            )
+            call = asyncio.create_task(broker._answer(request))
         closing = None
         try:
             await asyncio.wait_for(submitted.wait(), 5)
-            call.cancel()
-            await asyncio.gather(call, return_exceptions=True)
-            closing = asyncio.create_task(broker.settle(abandon=True))
+            workers = tuple(broker._workers)
+            if timed_out:
+                try:
+                    result = await asyncio.wait_for(call, 5)
+                except member_broker.HostCallError as exc:
+                    assert transport == "host" and "timed out" in str(exc)
+                else:
+                    assert result.exit_code == 124
+            if stop == "cancel_request":
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
+            closing = asyncio.create_task(broker.settle(abandon=stop == "abandon"))
             await asyncio.sleep(0.05)
-            assert not closing.done()
+            assert closing.done() == (stop in {"timeout", "cancel_request"})
             assert writes == []
+            if stop in {"abandon", "cancel_settle"}:
+                for _ in range(3):
+                    closing.cancel()
+                    await asyncio.sleep(0)
+                    assert not closing.done()
+                if waiting is not None:
+                    assert waiting.cancelled()
         finally:
             release.set()
+            if waiting is not None:
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
             if closing is not None:
-                await asyncio.wait_for(closing, 5)
+                await asyncio.wait_for(
+                    asyncio.gather(closing, return_exceptions=True), 5
+                )
+            await asyncio.gather(call, return_exceptions=True)
             assert blocker.result(timeout=5)
-    assert writes == ["member write"]
+    await asyncio.gather(*workers, return_exceptions=True)
+    assert writes == (["member write"] if stop == "finish" else [])
+    assert broker._workers == {}
+    assert broker._calls == set()
 
 
 @pytest.mark.asyncio
