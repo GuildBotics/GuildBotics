@@ -1447,8 +1447,9 @@ async def test_review_limit_converts_the_pr_to_a_draft_then_announces_it():
     assert await manager.refresh_task(task) is None
     assert len(manager.comments_added) == 1
 
-    # Ready for review again: the rounds start over after the notice.
+    # Ready for review again: the rounds start over from that point.
     node["isDraft"] = False
+    node["readyForReview"] = {"nodes": [{"createdAt": "2026-01-10T00:00:00Z"}]}
     resumed = await manager.first_task()
     assert resumed is not None
     assert resumed.trigger_reason == "pull_request_review"
@@ -1492,6 +1493,24 @@ async def test_a_failed_draft_conversion_holds_the_pr_without_the_limit_notice()
     assert node["isDraft"] is True
     status = parse_workflow_status_comment(manager.comments_added[1][1])
     assert status is not None and status.reason == "review_limit"
+
+
+@pytest.mark.asyncio
+async def test_marking_ready_after_a_failed_conversion_resumes_the_review():
+    """A human may make the PR a draft by hand and then ready again; that
+    lifts the failure hold and starts the rounds over."""
+    node = _past_the_review_limit()
+    manager = _patrol_manager(node)
+    manager.draft_error = RuntimeError("Resource not accessible by integration")
+    assert await manager.first_task() is None
+    node["comments"]["nodes"].append(_posted(manager, 0, "2026-01-09T00:00:00Z"))
+
+    node["readyForReview"] = {"nodes": [{"createdAt": "2026-01-10T00:00:00Z"}]}
+    resumed = await manager.first_task()
+
+    assert resumed is not None
+    assert resumed.trigger_reason == "pull_request_review"
+    assert len(manager.comments_added) == 1
 
 
 @pytest.mark.parametrize(

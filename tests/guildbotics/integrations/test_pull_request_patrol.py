@@ -196,6 +196,8 @@ def test_query_asks_for_everything_the_decision_reads():
         "replyTo",
         "participants: comments",
         "latest: comments(last: 1)",
+        "readyForReview: timelineItems(last: 1, itemTypes: [READY_FOR_REVIEW_EVENT])",
+        "... on ReadyForReviewEvent { createdAt }",
         *PULL_REQUEST_FEEDBACK_SOURCE_QUERIES.values(),
     ):
         assert field in PULL_REQUEST_QUERY, field
@@ -564,6 +566,84 @@ def test_the_limit_is_reached_again_three_rounds_after_the_notice():
     )
 
     assert _work(node) == REVIEW_LIMIT
+
+
+def _ready(at: str) -> dict[str, Any]:
+    """``readyForReview``: the last time a human marked the PR ready."""
+    return {"nodes": [{"createdAt": at}]}
+
+
+#: My failure and another member's successful hand-over, in either order: my
+#: run may fail before the other member's conversion, or while the PR is
+#: already a draft (a run that started before it, or a snapshot read just
+#: before it).
+HAND_OVERS = {
+    "failed_then_handed_over": [
+        _comment(ME, _notice("failed"), "2026-01-05T00:00:00Z"),
+        _comment("bob", _notice("review_limit"), "2026-01-06T00:00:00Z"),
+    ],
+    "failed_while_draft": [
+        _comment("bob", _notice("review_limit"), "2026-01-05T00:00:00Z"),
+        _comment(ME, _notice("failed"), "2026-01-06T00:00:00Z"),
+    ],
+}
+
+
+@pytest.mark.parametrize("order", HAND_OVERS)
+@pytest.mark.parametrize(
+    ("author", "reviews", "expected"),
+    [(ME, [], FEEDBACK), ("other", _rounds(3), REVIEW)],
+    ids=["author", "reviewer"],
+)
+def test_marking_ready_lifts_a_failure_hold_from_before(
+    order, author, reviews, expected
+):
+    """The human who makes the PR ready again restarts every member, including
+    one whose own run failed around another member's hand-over."""
+    node = _node(
+        author={"login": author},
+        headRefOid="head-2",
+        reviews={"nodes": reviews},
+        reviewThreads={"nodes": [_thread("reviewer", at="2026-01-04T00:00:00Z")]},
+        comments={"nodes": HAND_OVERS[order]},
+    )
+
+    assert _work({**node, "isDraft": True}) is None
+    assert _work({**node, "readyForReview": _ready("2026-01-07T00:00:00Z")}) == (
+        expected
+    )
+    # Without the human's decision (a PR announced before the limit made it a
+    # draft), another member's notice lifts nothing, like any status notice.
+    assert _work(node) is None
+
+
+def test_a_failure_after_marking_ready_still_holds():
+    node = _theirs(
+        reviews={"nodes": _rounds(3)},
+        readyForReview=_ready("2026-01-05T00:00:00Z"),
+        comments={
+            "nodes": [
+                _comment("bob", _notice("review_limit"), "2026-01-04T00:00:00Z"),
+                _comment(ME, _notice("failed"), "2026-01-06T00:00:00Z"),
+            ]
+        },
+    )
+
+    assert _work(node) is None
+
+
+def test_marking_ready_without_a_notice_starts_the_count_over():
+    """A human may make the PR a draft by hand, e.g. after my conversion
+    failed; making it ready again restarts me all the same."""
+    held = _theirs(
+        reviews={"nodes": _rounds(3)},
+        comments={"nodes": [_comment(ME, _notice("failed"), "2026-01-05T00:00:00Z")]},
+    )
+    ready = {**held, "readyForReview": _ready("2026-01-06T00:00:00Z")}
+
+    assert _work(held) is None
+    assert review_rounds(parse_pull_request(ready, "repo"), ME) == set()
+    assert _work(ready) == REVIEW
 
 
 def test_only_explicit_request_outlives_the_limit():

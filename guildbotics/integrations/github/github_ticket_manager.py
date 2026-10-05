@@ -1086,10 +1086,10 @@ class GitHubTicketManager(TicketManager):
     async def _hand_over_at_review_limit(self, task: Task) -> None:
         """Make the PR a draft, then say on it that automatic re-review stopped.
 
-        The notice is where the rounds start over, so it is posted only once
-        the PR is a draft. When the conversion fails, a failure notice takes
-        its place: it holds the PR until someone acts on it, and the rounds
-        stay as they are.
+        The notice tells the human that the PR is theirs until they mark it
+        ready for review, so it is posted only once the PR is a draft. When
+        the conversion fails, a failure notice takes its place: it holds the
+        PR until someone acts on it, and the rounds stay as they are.
         """
         try:
             await self._graphql(CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": task.id})
