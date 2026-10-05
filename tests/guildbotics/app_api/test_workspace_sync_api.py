@@ -14,27 +14,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api import workspace_sync
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import RejectedChangeModel
-from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.hub.host import hub_root
 from guildbotics.runtime.live_state import LiveState
 from guildbotics.sync import (
     activation,
     current_sync_manager,
-    deactivate_workspace_sync,
 )
 from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.utils.sync_lock import sync_lock_path
-from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 from guildbotics.workspace.identity import (
     ensure_workspace_identity,
     read_workspace_identity,
 )
+from tests.guildbotics.app_api.sync_client import workspace_sync_client
 from tests.guildbotics.sync.fake_activation import (
     MemoryRepository,
     install_memory_activation,
@@ -68,27 +64,18 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def client(workspace: Path) -> TestClient:
-    client = TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
-    yield client
-    if not deactivate_workspace_sync():
-        # The test patched stop() to refuse, or the worker is mid-cycle; the
-        # real worker must still stop, or it keeps cycling against later
-        # tests. The slot is then released by hand.
-        manager = current_sync_manager()
-        if manager is not None:
-            assert GitSyncManager.stop(manager, timeout=10), (
-                "a synchronization worker outlived its test"
-            )
-        activation._manager = None
-        activation._workspace = None
-        set_workspace_sync_port(None)
+    del workspace
+    with workspace_sync_client() as client:
+        yield client
 
 
 @pytest.fixture
-def memory_sync(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> GitSyncManager:
+def memory_sync(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> GitSyncManager:
     """Run the real lifecycle while repository state stays in memory."""
+    # The client owns teardown even for lifecycle tests that make no request.
+    del client
     identity = ensure_workspace_identity(workspace)
     install_memory_activation(monkeypatch)
     monkeypatch.setattr(
@@ -400,7 +387,7 @@ def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
     Windows will not rename a directory while a file under it is open. The
     queue does not run in this case; this hub's relay watcher and heartbeat
     are what open those files, so that runtime stops before the directory
-    moves. Other tests may still have a relay thread of the same name.
+    moves.
     """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})

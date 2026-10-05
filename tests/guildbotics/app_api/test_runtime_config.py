@@ -413,8 +413,11 @@ def test_set_workspace_splits_system_session_with_same_service_run_id(
     workspace.mkdir()
     store.start_system_session(runtime.system_service_run_id)
 
-    runtime.set_workspace(workspace)
-    store.finish_system_session()
+    try:
+        runtime.set_workspace(workspace)
+    finally:
+        store.finish_system_session()
+        store.stop_maintenance()
 
     boundaries = [
         json.loads(line)

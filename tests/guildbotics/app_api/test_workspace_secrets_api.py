@@ -14,16 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api import workspace_secrets
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.hub.connection import HubLocation
-from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
-from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.secret_store import KeyringSecretStore
-from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
+from tests.guildbotics.app_api.sync_client import workspace_sync_client
 from tests.guildbotics.secrets.fake_hub import FakeHub
 
 HTTP_OK = 200
@@ -163,17 +158,8 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def client(workspace: Path):
     del workspace
-    client = TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
-    yield client
-    if not deactivate_workspace_sync():
-        manager = current_sync_manager()
-        if manager is not None:
-            assert GitSyncManager.stop(manager, timeout=10)
-        activation._manager = None
-        activation._workspace = None
-    set_workspace_sync_port(None)
+    with workspace_sync_client() as client:
+        yield client
 
 
 @pytest.fixture

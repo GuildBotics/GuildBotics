@@ -678,6 +678,8 @@ def test_scheduler_stop_timeout_marks_failed_with_running_true(
     )
     scheduler = FakeScheduler.instances[0]
     # Prevent the scheduler thread from ever terminating.
+    thread = service._scheduler._thread
+    assert thread is not None
     scheduler.block_shutdown = True
 
     try:
@@ -689,6 +691,8 @@ def test_scheduler_stop_timeout_marks_failed_with_running_true(
         assert FakeServiceLock.instances[0].locked is True
     finally:
         scheduler._stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
 
 
 def test_events_stop_timeout_marks_failed_with_running_true(
