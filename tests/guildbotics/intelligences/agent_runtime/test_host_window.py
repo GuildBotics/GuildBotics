@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
@@ -1329,6 +1330,133 @@ async def test_a_turn_the_command_left_running_is_ended_and_not_resumed(
     assert saved is not None
     assert (saved.healthy, saved.rotation_reason) == (False, "cancelled")
     assert run_id == ""
+
+
+@pytest.mark.asyncio
+async def test_cancelled_save_finishes_before_close_marks_the_conversation(
+    tmp_path, monkeypatch
+):
+    """The broker settles the save's thread before close marks its session."""
+    started, release, finished = (threading.Event() for _ in range(3))
+    conversations = ConversationStore(get_workspace_root())
+    record = conversations.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "session-1"
+    conversations.save(record)
+    save = ConversationStore.save
+
+    def slow_save(store, saved):
+        if saved.healthy:
+            started.set()
+            assert release.wait(10)
+        try:
+            save(store, saved)
+        finally:
+            if saved.healthy:
+                finished.set()
+
+    monkeypatch.setattr(ConversationStore, "save", slow_save)
+    async with _command(monkeypatch, tmp_path) as command:
+        await _begin(command)
+        broker = environment.running_command()._broker
+        saving = asyncio.create_task(command.grant.save(record))
+        # The same host task the broker tracks for a save call.
+        broker._calls.add(saving)
+        saving.add_done_callback(broker._calls.discard)
+        closing = None
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+
+            async def close():
+                await broker.settle(abandon=True)
+                await command.grant.close()
+
+            closing = asyncio.create_task(close())
+            await asyncio.sleep(0.1)
+            ended_early = closing.done()
+        finally:
+            release.set()
+            if closing is not None:
+                await asyncio.wait_for(closing, 5)
+            await asyncio.to_thread(finished.wait, 5)
+        with pytest.raises(asyncio.CancelledError):
+            await saving
+
+    saved = conversations.load(_key())
+    assert saved is not None
+    assert (saved.healthy, saved.rotation_reason) == (False, "cancelled")
+    assert not ended_early
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        "save",
+        "mark_unhealthy",
+        "record_completed",
+        "record_completion_missing",
+        "record",
+        "close",
+    ],
+)
+async def test_host_state_writes_finish_before_cancellation_returns(
+    tmp_path, monkeypatch, call
+):
+    """All host state writers retain their worker through repeated cancellation."""
+    started = asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    conversations = ConversationStore(get_workspace_root())
+    record = conversations.resolve(_key(), ResumePolicy.AUTO)
+    conversations.save(record)
+
+    async with _command(monkeypatch, tmp_path) as command:
+        targets = {
+            "save": (command.grant._conversations, "save", {"record": record}),
+            "mark_unhealthy": (
+                command.grant._conversations,
+                "mark_unhealthy",
+                {"record": record, "reason": "cancelled"},
+            ),
+            "record_completed": (
+                command.ledger,
+                "record_completed",
+                {"run_id": _RUN, "attempt": 1},
+            ),
+            "record_completion_missing": (
+                command.ledger,
+                "record_completion_missing",
+                {"run_id": _RUN, "attempt": 1, "max_attempts": 3, "error": "missing"},
+            ),
+            "record": (command.grant, "_write", {"entries": []}),
+            "close": (command.grant._conversations, "mark_unhealthy", {}),
+        }
+        if call == "close":
+            await _begin(command)
+        target, method, arguments = targets[call]
+        original = getattr(target, method)
+
+        def write(*args):
+            loop.call_soon_threadsafe(started.set)
+            try:
+                assert release.wait(10)
+                return original(*args)
+            finally:
+                finished.set()
+
+        monkeypatch.setattr(target, method, write)
+        task = asyncio.create_task(getattr(command.grant, call)(**arguments))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done()
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+        assert finished.is_set()
 
 
 @pytest.mark.asyncio

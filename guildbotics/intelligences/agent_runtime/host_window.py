@@ -78,6 +78,7 @@ from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
 )
 from guildbotics.observability.session_transcripts import recorded_stderr
+from guildbotics.utils.async_utils import to_thread
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
@@ -270,9 +271,7 @@ class HostWindow:
                 self._conversations.load, context.conversation_key
             )
             if record is not None:
-                await asyncio.to_thread(
-                    self._conversations.mark_unhealthy, record, "cancelled"
-                )
+                await to_thread(self._conversations.mark_unhealthy, record, "cancelled")
         except Exception:
             get_logger().exception("Could not mark the cut-short conversation.")
 
@@ -301,14 +300,14 @@ class HostWindow:
     @validate_call
     async def record_completed(self, run_id: str, attempt: int) -> None:
         self._check_run(run_id)
-        await asyncio.to_thread(self._ledger.record_completed, run_id, attempt)
+        await to_thread(self._ledger.record_completed, run_id, attempt)
 
     @validate_call
     async def record_completion_missing(
         self, run_id: str, attempt: int, max_attempts: int, error: str
     ) -> None:
         self._check_run(run_id)
-        await asyncio.to_thread(
+        await to_thread(
             self._ledger.record_completion_missing,
             run_id,
             attempt,
@@ -337,7 +336,7 @@ class HostWindow:
     @validate_call
     async def save(self, record: ConversationRecord) -> dict[str, Any]:
         self._check_conversation(record.key)
-        await asyncio.to_thread(self._conversations.save, record)
+        await to_thread(self._conversations.save, record)
         return asdict(record)
 
     @validate_call
@@ -345,7 +344,7 @@ class HostWindow:
         self, record: ConversationRecord, reason: str
     ) -> dict[str, Any]:
         self._check_conversation(record.key)
-        await asyncio.to_thread(self._conversations.mark_unhealthy, record, reason)
+        await to_thread(self._conversations.mark_unhealthy, record, reason)
         return asdict(record)
 
     @validate_call
@@ -363,7 +362,7 @@ class HostWindow:
                 self._check_conversation(entry.conversation)
             elif isinstance(entry, (CredentialEntry, SummaryEntry)):
                 self._check_tool(entry.tool)
-        await asyncio.to_thread(self._write, entries)
+        await to_thread(self._write, entries)
 
     @validate_call
     async def member(self, arguments: list[str], stdin: str = "") -> dict[str, Any]:
