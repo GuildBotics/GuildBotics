@@ -1245,9 +1245,7 @@ def _thread(last_author: str, *participants: str, resolved: bool = False) -> dic
                 {"author": {"login": login}} for login in (*participants, last_author)
             ]
         },
-        "latest": {
-            "nodes": [{"author": {"login": last_author}, "reactions": {"nodes": []}}]
-        },
+        "latest": {"nodes": [{"author": {"login": last_author}, "reactionGroups": []}]},
     }
 
 

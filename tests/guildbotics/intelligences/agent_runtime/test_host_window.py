@@ -1388,6 +1388,19 @@ async def test_cancelled_save_finishes_before_close_marks_the_conversation(
     assert not ended_early
 
 
+async def _wait_for_task_event(event: asyncio.Event, task: asyncio.Task[Any]) -> None:
+    """Wait for a checkpoint while surfacing the producing task's failure."""
+    waiting = asyncio.create_task(event.wait())
+    try:
+        await asyncio.wait({waiting, task}, return_when=asyncio.FIRST_COMPLETED)
+        if task.done():
+            task.result()
+        assert event.is_set(), "Task finished before reaching the checkpoint"
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["mcp", "host"])
 @pytest.mark.parametrize("normal_exit", [False, True])
@@ -1426,7 +1439,7 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
             else:
                 call = command.client.acall("member", arguments=["help"], stdin="")
             pending.append(asyncio.create_task(call))
-            await started.wait()
+            await _wait_for_task_event(started, pending[-1])
             if normal_exit:
 
                 async def never():
@@ -1442,7 +1455,7 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
 
     task = asyncio.create_task(run_command())
     try:
-        await ready.wait()
+        await _wait_for_task_event(ready, task)
         task.cancel()
         await asyncio.sleep(0.05)
         assert not task.done()
@@ -1523,10 +1536,10 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
 
     task = asyncio.create_task(run_command())
     try:
-        await tearing_down.wait()
+        await _wait_for_task_event(tearing_down, task)
         assert started.is_set()
         task.cancel()
-        await torn_down.wait()
+        await _wait_for_task_event(torn_down, task)
         await asyncio.sleep(0.05)
         assert not task.done()
         assert not posted.exists()
@@ -1541,6 +1554,90 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
             await task
     assert posted.read_text(encoding="utf-8") == "member write"
     assert _Booted.booted[0].closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "run_test, arguments, failure_at",
+    [
+        (
+            test_cancelled_command_waits_for_member_write_before_discarding_vm,
+            {"transport": transport, "normal_exit": normal_exit},
+            failure_at,
+        )
+        for failure_at in ("begin", "member")
+        for transport in ("mcp", "host")
+        for normal_exit in (False, True)
+    ]
+    + [
+        (
+            test_cancellation_during_teardown_waits_for_timed_out_member_write,
+            {"stage": stage},
+            failure_at,
+        )
+        for failure_at in ("begin", "close")
+        for stage in ("vm", "gateway")
+    ],
+)
+async def test_member_teardown_tests_report_checkpoint_failure(
+    tmp_path, monkeypatch, run_test, arguments, failure_at
+):
+    """All four checkpoints surface producer failures without hanging."""
+    module = sys.modules[__name__]
+    original_begin = _begin
+    failed = asyncio.Event()
+
+    @asynccontextmanager
+    async def command(*_args, **_kwargs):
+        yield None
+
+    failure = RuntimeError("init broke")
+
+    async def fail(*_args, **_kwargs):
+        failed.set()
+        raise failure
+
+    async def begin(command, *args, **kwargs):
+        if failure_at == "begin":
+            return await fail()
+        result = await original_begin(command, *args, **kwargs)
+        broker = environment.running_command()._broker
+        if failure_at == "member":
+            monkeypatch.setattr(broker, "execute", fail)
+            monkeypatch.setattr(command.client, "acall", fail)
+        else:
+            close = broker.close
+
+            async def close_then_fail():
+                await close()
+                await fail()
+
+            monkeypatch.setattr(broker, "close", close_then_fail)
+        return result
+
+    if failure_at == "begin":
+        monkeypatch.setattr(module, "_command", command)
+    monkeypatch.setattr(module, "_begin", begin)
+    before = asyncio.all_tasks()
+
+    async def check():
+        with pytest.raises(RuntimeError) as caught:
+            await run_test(tmp_path, monkeypatch, **arguments)
+        assert caught.value is failure
+
+    checking = asyncio.create_task(check())
+    try:
+        await _wait_for_task_event(failed, checking)
+        # Startup is outside this bound; real command cleanup needs more time.
+        done, _ = await asyncio.wait(
+            {checking}, timeout=1 if failure_at == "begin" else 15
+        )
+        assert checking in done, "Checkpoint failure was not reported"
+        await checking
+    finally:
+        checking.cancel()
+        await asyncio.gather(checking, return_exceptions=True)
+    assert asyncio.all_tasks() == before
 
 
 @pytest.mark.asyncio

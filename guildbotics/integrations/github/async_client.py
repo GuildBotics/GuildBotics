@@ -82,7 +82,7 @@ def get_async_client(
     base = httpx.URL(base_url)
 
     async def request_hook(request: httpx.Request) -> None:
-        check_request(owner, base, request)
+        await check_request(owner, base, request, client)
 
     async def response_hook(response: httpx.Response) -> None:
         max_response_bytes = response.request.extensions.get("max_response_bytes")
@@ -94,7 +94,7 @@ def get_async_client(
             person_id=str(getattr(auth, "person_id", "")),
         )
 
-    return httpx.AsyncClient(
+    client = httpx.AsyncClient(
         base_url=base_url,
         auth=auth,
         timeout=10.0,
@@ -103,3 +103,4 @@ def get_async_client(
             "response": [response_hook],
         },
     )
+    return client

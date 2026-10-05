@@ -15,6 +15,7 @@ from guildbotics.capabilities.member_github import (
     _preserve_issue_links,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
+from guildbotics.integrations.github.repository_scope import ADD_REACTION
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
@@ -2621,6 +2622,40 @@ async def test_reaction_add_uses_target_specific_endpoint():
             {"Accept": "application/vnd.github+json"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_reaction_on_a_review_body_goes_through_graphql():
+    """REST has no reactions for a review; GraphQL reacts to its node."""
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {"node_id": "PRR_55"}
+    fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
+    service._client = fake
+
+    result = await service.reaction_add("owner/repo", "pr-review", 55, "+1", 7)
+
+    assert result == {"content": "+1", "comment_id": 55}
+    assert fake.history == [
+        ("get", "/repos/owner/repo/pulls/7/reviews/55"),
+        ("post", "/graphql"),
+    ]
+    assert fake.posts[0][1] == {
+        "query": ADD_REACTION,
+        "variables": {"subject": "PRR_55", "content": "THUMBS_UP"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_reaction_on_a_review_body_needs_the_pr_number():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="PR number"):
+        await service.reaction_add("owner/repo", "pr-review", 55, "+1")
+
+    assert fake.history == []
 
 
 class _Guest:

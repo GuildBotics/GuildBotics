@@ -85,7 +85,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
-| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
+| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number). |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 | [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
 | [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
@@ -1314,11 +1314,11 @@ guildbotics member github reaction [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
+| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number). |
 
 ## `guildbotics member github reaction add`
 
-React to an issue or review comment.
+React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number).
 
 ```text
 guildbotics member github reaction add [OPTIONS]
@@ -1328,8 +1328,9 @@ guildbotics member github reaction add [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
-| `--target [issue-comment\|pr-review-comment]` | Kind of comment to react to. [required] |
-| `--comment-id INTEGER` | Numeric id of the comment. [required] |
+| `--target [issue-comment\|pr-review-comment\|pr-review]` | Kind of comment to react to; pr-review is a review's body. [required] |
+| `--comment-id INTEGER` | Numeric id of the comment, or of the review for pr-review. [required] |
+| `--pr-number INTEGER` | Number of the pull request the review belongs to (pr-review only). |
 | `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
