@@ -46,6 +46,7 @@ from guildbotics.runtime.worktree_copy import (
     CopiedFile,
 )
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
+from guildbotics.utils.async_utils import finish_on_cancel
 from guildbotics.utils.fileio import get_machine_state_path, host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
@@ -135,17 +136,8 @@ async def write_back(environment: AgentEnvironment, worktree: Worktree) -> None:
             asyncio.to_thread(_write, worktree, changes, cancelled)
         )
         try:
-            await asyncio.shield(work)
+            await finish_on_cancel(work, on_cancel=cancelled.set)
         except asyncio.CancelledError:
-            # A cancelled command still owns what its write-back started:
-            # it stops before putting anything in place, or else finishes
-            # putting, and only then does the command end -- unless the loop
-            # itself is shutting down, which cancels the worker's task too
-            # and leaves the thread to the executor's own shutdown.
-            cancelled.set()
-            while not work.done():
-                with suppress(asyncio.CancelledError):
-                    await asyncio.wait({work})
             _log_cancelled(worktree, work)
             raise
 
