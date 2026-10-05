@@ -197,8 +197,10 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member github reaction add --person <person> --repo <owner/repo> "
-                "--target issue-comment|pr-review-comment --comment-id <id> --reaction <reaction>",
-                "React to an issue or review comment.",
+                "--target issue-comment|pr-review-comment|pr-review --comment-id <id> "
+                "[--pr-number <n>] --reaction <reaction>",
+                "React to an issue comment, a review thread comment, or a review's body "
+                "(pr-review: the review id with --pr-number).",
             ),
         ],
     ),

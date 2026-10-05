@@ -6,19 +6,26 @@ member reviews it. This module holds the GraphQL shape of one PR, its parsing,
 and the decision made from that snapshot; fetching and dispatching live in
 :class:`~guildbotics.integrations.github.github_ticket_manager.GitHubTicketManager`.
 
-Author role (``pull_request_feedback``): an unresolved review thread whose
-last word is someone else's, or a review summary / conversation comment newer
-than the member's last reply, is feedback the member has not answered.
+Both roles read everything someone else says before deciding what it asks
+for, so the patrol does not judge a statement by its kind. A statement is an
+unresolved review thread whose last word is someone else's, a review with a
+body in any state (an approval may carry a suggestion), or a conversation
+comment. The member has answered it with a later comment, review, or thread
+reply, or with a reaction on it. A review without a body has nothing to read;
+its inline comments are threads.
+
+Author role (``pull_request_feedback``): a statement the member has not
+answered.
 
 Reviewer role (``pull_request_review``): the member is a requested reviewer,
-someone else replied in a thread the member took part in, or new commits landed
-after the member's last review. Re-reviews driven by replies from someone else
-or new commits stop after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so
-once on the PR (``REVIEW_LIMIT_REASON``), and only an explicit request reopens
-it.
+new commits landed after the member's last review, or, once the member has
+spoken on the PR, there is a statement the member has not answered (threads
+only those the member took part in). Re-reviews not driven by a request stop
+after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so once on the PR
+(``REVIEW_LIMIT_REASON``), and only an explicit request reopens it.
 
 Workflow status notices (rate limit, failure, review limit) are neither
-feedback nor replies: they only suppress selection or mark the limit.
+statements nor answers: they only suppress selection or mark the limit.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
 PR into their own hands (only humans may change it), and the manager's search
@@ -41,7 +48,6 @@ REVIEW_LIMIT = "pull_request_review_limit"
 REVIEW_LIMIT_REASON = "review_limit"
 MAX_REVIEW_ROUNDS = 3
 
-_FEEDBACK_REVIEW_STATES = frozenset({"COMMENTED", "CHANGES_REQUESTED"})
 PULL_REQUEST_FEEDBACK_SOURCE_QUERIES = {
     "conversation_comments": "comments(last: 100)",
     "review_summaries": "reviews(last: 100)",
@@ -78,10 +84,16 @@ query($owner: String!, $repo: String!, $number: Int!) {
           submittedAt
           commit { oid }
           comments(first: 100) { nodes { replyTo { id } } }
+          reactionGroups { reactors(first: 100) { nodes { ... on Actor { login } } } }
         }
       }
       comments(last: 100) {
-        nodes { author { login } body createdAt }
+        nodes {
+          author { login }
+          body
+          createdAt
+          reactionGroups { reactors(first: 100) { nodes { ... on Actor { login } } } }
+        }
       }
       reviewThreads(first: 100) {
         nodes {
@@ -91,7 +103,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
             nodes {
               author { login }
               createdAt
-              reactions(first: 100) { nodes { user { login } } }
+              reactionGroups { reactors(first: 100) { nodes { ... on Actor { login } } } }
             }
           }
         }
@@ -113,6 +125,7 @@ class Review:
     submitted_at: str
     commit_oid: str
     reply_only: bool
+    reactors: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -122,6 +135,7 @@ class Comment:
     author: str
     body: str
     created_at: str
+    reactors: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -167,6 +181,16 @@ def _nodes(node: object, key: str) -> list[dict]:
     return [item for item in connection.get("nodes") or [] if isinstance(item, dict)]
 
 
+def _reactors(node: dict) -> frozenset[str]:
+    """Who reacted, bots included: ``Reaction.user`` names only users."""
+    return frozenset(
+        _login(reactor)
+        for group in node.get("reactionGroups") or []
+        if isinstance(group, dict)
+        for reactor in _nodes(group, "reactors")
+    )
+
+
 def parse_pull_request(node: dict, repository: str) -> PullRequest:
     """Build a :class:`PullRequest` from a ``PULL_REQUEST_QUERY`` node."""
     reviews = []
@@ -181,6 +205,7 @@ def parse_pull_request(node: dict, repository: str) -> PullRequest:
                 commit_oid=str((review.get("commit") or {}).get("oid") or ""),
                 reply_only=bool(replies)
                 and all(reply.get("replyTo") for reply in replies),
+                reactors=_reactors(review),
             )
         )
     threads = []
@@ -196,10 +221,7 @@ def parse_pull_request(node: dict, repository: str) -> PullRequest:
                 ),
                 last_author=_login(last.get("author")),
                 last_created_at=str(last.get("createdAt") or ""),
-                last_reactors=frozenset(
-                    _login(reaction.get("user"))
-                    for reaction in _nodes(last, "reactions")
-                ),
+                last_reactors=_reactors(last),
             )
         )
     comments = sorted(
@@ -208,6 +230,7 @@ def parse_pull_request(node: dict, repository: str) -> PullRequest:
                 author=_login(comment.get("author")),
                 body=str(comment.get("body") or ""),
                 created_at=str(comment.get("createdAt") or ""),
+                reactors=_reactors(comment),
             )
             for comment in _nodes(node, "comments")
         ),
@@ -255,31 +278,39 @@ def _has_unanswered_thread(pr: PullRequest, me: str, *, mine_only: bool) -> bool
     )
 
 
-def _has_unanswered_feedback(pr: PullRequest, me: str) -> bool:
-    """Feedback on the member's own PR that is newer than the member's last reply.
+def _last_spoken_at(pr: PullRequest, me: str) -> str:
+    """When the member last commented, reviewed, or replied in a thread.
 
-    Feedback is a conversation comment or a review summary (a commented or
-    changes-requested review with a body) from someone else; an approval
-    asks for nothing. Any comment or review by the member answers it. Status
-    notices are on neither side.
+    GitHub records a thread reply as a review, so the reviews cover it.
     """
-    feedback = [
-        comment.created_at
+    return max(
+        [
+            comment.created_at
+            for comment in pr.comments
+            if comment.author == me and not _is_notice(comment)
+        ]
+        + [review.submitted_at for review in pr.reviews if review.author == me],
+        default="",
+    )
+
+
+def _has_unanswered_statement(pr: PullRequest, me: str) -> bool:
+    """A review body or conversation comment by someone else waits on the member.
+
+    Each is answered on its own: by anything the member said after it, or by
+    the member's reaction on it.
+    """
+    spoken = _last_spoken_at(pr, me)
+    statements = [
+        (comment.created_at, comment.reactors)
         for comment in pr.comments
         if comment.author != me and not _is_notice(comment)
     ] + [
-        review.submitted_at
+        (review.submitted_at, review.reactors)
         for review in pr.reviews
-        if review.author != me
-        and review.state in _FEEDBACK_REVIEW_STATES
-        and review.body.strip()
+        if review.author != me and review.body.strip()
     ]
-    replies = [
-        comment.created_at
-        for comment in pr.comments
-        if comment.author == me and not _is_notice(comment)
-    ] + [review.submitted_at for review in pr.reviews if review.author == me]
-    return bool(feedback) and max(feedback) > max(replies, default="")
+    return any(at > spoken and me not in reactors for at, reactors in statements)
 
 
 def _latest_activity_by_others(pr: PullRequest, me: str) -> str:
@@ -337,9 +368,12 @@ def review_limit_announced(pr: PullRequest, me: str) -> bool:
 def _review_work(pr: PullRequest, me: str) -> str | None:
     if me in pr.requested_reviewers:
         return REVIEW
-    has_thread_reply = _has_unanswered_thread(pr, me, mine_only=True)
     rounds = review_rounds(pr, me)
-    if not has_thread_reply and (not rounds or pr.head_oid in rounds):
+    if not (
+        (rounds and pr.head_oid not in rounds)
+        or _has_unanswered_thread(pr, me, mine_only=True)
+        or (_last_spoken_at(pr, me) and _has_unanswered_statement(pr, me))
+    ):
         return None
     if len(rounds) < MAX_REVIEW_ROUNDS:
         return REVIEW
@@ -363,7 +397,7 @@ def pull_request_work(pr: PullRequest, me: str) -> str | None:
         return (
             FEEDBACK
             if _has_unanswered_thread(pr, me, mine_only=False)
-            or _has_unanswered_feedback(pr, me)
+            or _has_unanswered_statement(pr, me)
             else None
         )
     return _review_work(pr, me)

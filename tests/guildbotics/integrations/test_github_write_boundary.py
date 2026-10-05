@@ -21,12 +21,24 @@ A new one fails here until it is classified.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
+import pytest
+
 import guildbotics
-from guildbotics.integrations.github.repository_scope import PROJECT_MUTATIONS
+from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.github import async_client, github_utils
+from guildbotics.integrations.github.repository_scope import (
+    ADD_REACTION,
+    PROJECT_MUTATIONS,
+    REACTION_SUBJECT,
+    RepositoryScopeError,
+)
 
 PACKAGE = Path(guildbotics.__file__).parent
 SCOPE_MODULE = "integrations/github/repository_scope.py"
@@ -53,6 +65,7 @@ WRITES = {
     ("capabilities/member_github.py", "_graphql", "post"): GRAPHQL,
     ("capabilities/member_github.py", "_post_comment", "post"): REPOSITORY,
     ("integrations/github/github_ticket_manager.py", "_graphql", "post"): GRAPHQL,
+    ("integrations/github/repository_scope.py", "_subject_in_scope", "post"): GRAPHQL,
     (
         "integrations/github/github_ticket_manager.py",
         "add_comment_to_ticket",
@@ -260,7 +273,8 @@ def _checked_before(call: ast.Call, ancestors: list[ast.AST]) -> bool:
     return False
 
 
-def test_every_graphql_mutation_is_a_project_mutation_of_the_gate() -> None:
+def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
+    """The Project's own operations, or a reaction whose subject the gate reads."""
     found = {
         (module, node.value)
         for module, tree in (
@@ -273,4 +287,48 @@ def test_every_graphql_mutation_is_a_project_mutation_of_the_gate() -> None:
         and _MUTATION.search(node.value)
     }
 
-    assert found == {(SCOPE_MODULE, document) for document in PROJECT_MUTATIONS}
+    assert found == {
+        (SCOPE_MODULE, document) for document in {*PROJECT_MUTATIONS, ADD_REACTION}
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reaction add --target pr-review`` names the review by repository, but
+    the mutation names only its node: the gate reads where the node lives."""
+    sent: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reviews/55"):
+            return httpx.Response(200, json={"node_id": "PRR_55"})
+        body = json.loads(request.content)
+        sent.append(body)
+        repository = {"name": "demo", "owner": {"login": "other-owner"}}
+        return httpx.Response(200, json={"data": {"node": {"repository": repository}}})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        async_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    project = Project(
+        name="demo",
+        services={"code_hosting_service": {"name": "github", "owner": "acme"}},
+    )
+    service = MemberGitHubCapabilityService(
+        person, Team(project=project, members=[person])
+    )
+    service._client = async_client.get_async_client(
+        "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
+    )
+    try:
+        with pytest.raises(RepositoryScopeError, match="'acme'"):
+            await service.reaction_add("other-owner/demo", "pr-review", 55, "eyes", 7)
+    finally:
+        await service.aclose()
+
+    assert [body["query"] for body in sent] == [REACTION_SUBJECT]

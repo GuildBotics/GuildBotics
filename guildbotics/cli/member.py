@@ -2146,11 +2146,20 @@ def reaction() -> None:
 @click.option(
     "--target",
     required=True,
-    type=click.Choice(["issue-comment", "pr-review-comment"]),
-    help="Kind of comment to react to.",
+    type=click.Choice(["issue-comment", "pr-review-comment", "pr-review"]),
+    help="Kind of comment to react to; pr-review is a review's body.",
 )
 @click.option(
-    "--comment-id", required=True, type=int, help="Numeric id of the comment."
+    "--comment-id",
+    required=True,
+    type=int,
+    help="Numeric id of the comment, or of the review for pr-review.",
+)
+@click.option(
+    "--pr-number",
+    type=int,
+    default=None,
+    help="Number of the pull request the review belongs to (pr-review only).",
 )
 @click.option(
     "--reaction",
@@ -2167,11 +2176,12 @@ def reaction_add(
     repo: str,
     target: str,
     comment_id: int,
+    pr_number: int | None,
     reaction_content: str,
     output_format: str,
 ) -> None:
     _run(
-        _reaction_add(person, repo, target, comment_id, reaction_content),
+        _reaction_add(person, repo, target, comment_id, pr_number, reaction_content),
         output_format=output_format,
     )
 
@@ -2181,12 +2191,15 @@ async def _reaction_add(
     repo: str,
     target: str,
     comment_id: int,
+    pr_number: int | None,
     reaction_content: str,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.reaction_add(repo, target, comment_id, reaction_content)
+        result = await service.reaction_add(
+            repo, target, comment_id, reaction_content, pr_number
+        )
         TaskRunStore().append_evidence(current_task_run_id(), "reaction_add", result)
         return result
     finally:
