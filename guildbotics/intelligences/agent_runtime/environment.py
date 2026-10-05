@@ -761,21 +761,27 @@ class _SharedEnvironment:
 
     async def close(self, *, abandon: bool = False) -> None:
         """Stop answering the microVM's calls, once those being answered end
-        -- or at once when ``abandon``: the command did not end well, and
-        what it asked for is no longer wanted -- then discard the microVM, and
-        stop the gateways and the broker; the stand-ins open nothing once the
-        microVM is gone. Idempotent."""
-        await self._broker.settle(abandon=abandon)
-        environment, self._environment = self._environment, None
+        -- or cancel them when ``abandon``. Cancellation waits for started
+        member CLI threads, even if it arrives during teardown or repeats.
+        The stand-ins open nothing once the microVM is gone. Idempotent."""
         try:
-            if environment is not None:
-                await environment.close()
-        finally:
             try:
-                for gateway in self._gateways.values():
-                    await gateway.close()
+                await self._broker.settle(abandon=abandon)
             finally:
-                await self._broker.close()
+                environment, self._environment = self._environment, None
+                try:
+                    if environment is not None:
+                        await environment.close()
+                finally:
+                    try:
+                        for gateway in self._gateways.values():
+                            await gateway.close()
+                    finally:
+                        await self._broker.close()
+        except asyncio.CancelledError:
+            # A successful command can be cancelled after its calls settled.
+            await self._broker.settle(abandon=True)
+            raise
 
 
 async def _read_reply(stdout: asyncio.StreamReader) -> bytes:

@@ -4,6 +4,7 @@ the client and the real window in one process, over the broker's server."""
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -1385,6 +1386,258 @@ async def test_cancelled_save_finishes_before_close_marks_the_conversation(
     assert saved is not None
     assert (saved.healthy, saved.rotation_reason) == (False, "cancelled")
     assert not ended_early
+
+
+async def _wait_for_task_event(event: asyncio.Event, task: asyncio.Task[Any]) -> None:
+    """Wait for a checkpoint while surfacing the producing task's failure."""
+    waiting = asyncio.create_task(event.wait())
+    try:
+        await asyncio.wait({waiting, task}, return_when=asyncio.FIRST_COMPLETED)
+        if task.done():
+            task.result()
+        assert event.is_set(), "Task finished before reaching the checkpoint"
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["mcp", "host"])
+@pytest.mark.parametrize("normal_exit", [False, True])
+async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
+    tmp_path, monkeypatch, transport, normal_exit
+):
+    """Command cancellation settles both member transports before teardown."""
+    started, ready = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    posted = tmp_path / "posted.txt"
+    active: list[Any] = []
+    pending: list[asyncio.Task[Any]] = []
+    closed_at_write: list[bool] = []
+
+    def run_in_process(*_args, **_kwargs):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        closed_at_write.append(_Booted.booted[0].closed)
+        posted.write_text("member write", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        importlib.import_module("guildbotics.cli.member"),
+        "run_in_process",
+        run_in_process,
+    )
+
+    async def run_command():
+        async with _command(monkeypatch, tmp_path) as command:
+            await _begin(command)
+            shared = environment.running_command()
+            active.append(shared)
+            if transport == "mcp":
+                call = shared._broker.execute(shared._broker.turn_grant, ["help"])
+            else:
+                call = command.client.acall("member", arguments=["help"], stdin="")
+            pending.append(asyncio.create_task(call))
+            await _wait_for_task_event(started, pending[-1])
+            if normal_exit:
+
+                async def never():
+                    await asyncio.Event().wait()
+
+                waiting = asyncio.create_task(never())
+                shared._broker._calls.add(waiting)
+                waiting.add_done_callback(shared._broker._calls.discard)
+            ready.set()
+            if normal_exit:
+                return
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(run_command())
+    try:
+        await _wait_for_task_event(ready, task)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert not _Booted.booted[0].closed
+        assert not posted.exists()
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+    finally:
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    assert posted.read_text(encoding="utf-8") == "member write"
+    assert closed_at_write == [False]
+    assert _Booted.booted[0].closed
+    assert active[0]._environment is None
+    assert active[0]._broker._server is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["vm", "gateway"])
+async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
+    tmp_path, monkeypatch, stage
+):
+    """A timeout remains prompt, but cancellation during teardown drains it."""
+    from guildbotics.intelligences.agent_runtime import member_broker
+
+    started, tearing_down, torn_down = (asyncio.Event() for _ in range(3))
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    posted = tmp_path / "posted.txt"
+
+    def run_in_process(*_args, **_kwargs):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        posted.write_text("member write", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        importlib.import_module("guildbotics.cli.member"),
+        "run_in_process",
+        run_in_process,
+    )
+    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+
+    async def run_command():
+        async with _command(monkeypatch, tmp_path) as command:
+            await _begin(command)
+            shared = environment.running_command()
+            close_broker = shared._broker.close
+
+            async def broker_closed():
+                await close_broker()
+                torn_down.set()
+
+            monkeypatch.setattr(shared._broker, "close", broker_closed)
+            target = (
+                _Booted.booted[0]
+                if stage == "vm"
+                else next(iter(shared._gateways.values()))
+            )
+            close = target.close
+
+            async def slow_close():
+                tearing_down.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await close()
+
+            monkeypatch.setattr(target, "close", slow_close)
+            result = await shared._broker.execute(shared._broker.turn_grant, ["help"])
+            assert result.exit_code == 124
+
+    task = asyncio.create_task(run_command())
+    try:
+        await _wait_for_task_event(tearing_down, task)
+        assert started.is_set()
+        task.cancel()
+        await _wait_for_task_event(torn_down, task)
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert not posted.exists()
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+    finally:
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert posted.read_text(encoding="utf-8") == "member write"
+    assert _Booted.booted[0].closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "run_test, arguments, failure_at",
+    [
+        (
+            test_cancelled_command_waits_for_member_write_before_discarding_vm,
+            {"transport": transport, "normal_exit": normal_exit},
+            failure_at,
+        )
+        for failure_at in ("begin", "member")
+        for transport in ("mcp", "host")
+        for normal_exit in (False, True)
+    ]
+    + [
+        (
+            test_cancellation_during_teardown_waits_for_timed_out_member_write,
+            {"stage": stage},
+            failure_at,
+        )
+        for failure_at in ("begin", "close")
+        for stage in ("vm", "gateway")
+    ],
+)
+async def test_member_teardown_tests_report_checkpoint_failure(
+    tmp_path, monkeypatch, run_test, arguments, failure_at
+):
+    """All four checkpoints surface producer failures without hanging."""
+    module = sys.modules[__name__]
+    original_begin = _begin
+    failed = asyncio.Event()
+
+    @asynccontextmanager
+    async def command(*_args, **_kwargs):
+        yield None
+
+    failure = RuntimeError("init broke")
+
+    async def fail(*_args, **_kwargs):
+        failed.set()
+        raise failure
+
+    async def begin(command, *args, **kwargs):
+        if failure_at == "begin":
+            return await fail()
+        result = await original_begin(command, *args, **kwargs)
+        broker = environment.running_command()._broker
+        if failure_at == "member":
+            monkeypatch.setattr(broker, "execute", fail)
+            monkeypatch.setattr(command.client, "acall", fail)
+        else:
+            close = broker.close
+
+            async def close_then_fail():
+                await close()
+                await fail()
+
+            monkeypatch.setattr(broker, "close", close_then_fail)
+        return result
+
+    if failure_at == "begin":
+        monkeypatch.setattr(module, "_command", command)
+    monkeypatch.setattr(module, "_begin", begin)
+    before = asyncio.all_tasks()
+
+    async def check():
+        with pytest.raises(RuntimeError) as caught:
+            await run_test(tmp_path, monkeypatch, **arguments)
+        assert caught.value is failure
+
+    checking = asyncio.create_task(check())
+    try:
+        await _wait_for_task_event(failed, checking)
+        # Startup is outside this bound; real command cleanup needs more time.
+        done, _ = await asyncio.wait(
+            {checking}, timeout=1 if failure_at == "begin" else 15
+        )
+        assert checking in done, "Checkpoint failure was not reported"
+        await checking
+    finally:
+        checking.cancel()
+        await asyncio.gather(checking, return_exceptions=True)
+    assert asyncio.all_tasks() == before
 
 
 @pytest.mark.asyncio
