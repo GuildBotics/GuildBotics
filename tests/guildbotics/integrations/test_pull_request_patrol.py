@@ -400,6 +400,32 @@ def test_activity_after_a_failure_notice_lifts_the_suppression(later_activity):
     assert _work(node) == FEEDBACK
 
 
+def test_another_members_notice_does_not_lift_my_failure_hold():
+    """Two members whose runs keep failing would otherwise take turns."""
+    node = _theirs(
+        reviews={"nodes": _rounds(3)},
+        comments={
+            "nodes": [
+                _comment(ME, _notice("failed"), "2026-01-05T00:00:00Z"),
+                _comment("bob", _notice("failed"), "2026-01-06T00:00:00Z"),
+            ]
+        },
+    )
+    lifted = _theirs(
+        reviews={"nodes": _rounds(3)},
+        comments={
+            "nodes": [
+                _comment(ME, _notice("failed"), "2026-01-05T00:00:00Z"),
+                _comment("bob", _notice("failed"), "2026-01-06T00:00:00Z"),
+                _comment("other", "Please retry", "2026-01-07T00:00:00Z"),
+            ]
+        },
+    )
+
+    assert _work(node) is None
+    assert _work(lifted) == REVIEW_LIMIT
+
+
 def test_thread_reply_after_a_failure_notice_restarts_review_work():
     node = _theirs(
         reviewThreads={"nodes": [_thread(ME, "other", at="2026-01-04T00:00:00Z")]},
@@ -474,15 +500,70 @@ def test_re_review_stops_at_the_round_limit():
     assert _work(_theirs(reviews={"nodes": _rounds(3)})) == REVIEW_LIMIT
 
 
-def test_review_limit_is_announced_only_once():
-    announced = _theirs(
-        reviews={"nodes": _rounds(3)},
-        comments={
-            "nodes": [_comment(ME, _notice("review_limit"), "2026-01-05T00:00:00Z")]
-        },
+def _limit_notice(author: str = ME) -> dict[str, Any]:
+    return _comment(author, _notice("review_limit"), "2026-01-05T00:00:00Z")
+
+
+@pytest.mark.parametrize("announcer", [ME, "bob"], ids=["mine", "another_members"])
+def test_rounds_are_counted_from_the_last_limit_notice(announcer):
+    """A human made the PR ready again after whichever member handed it over,
+    so every reviewer starts over; otherwise the next one drafts it again."""
+    after = [
+        _review(ME, commit=f"after-{index}", at=f"2026-01-0{index}T12:00:00Z")
+        for index in (5, 6)
+    ]
+    node = _theirs(
+        reviews={"nodes": [*_rounds(4), *after]},
+        comments={"nodes": [_limit_notice(announcer)]},
     )
 
-    assert _work(announced) is None
+    assert review_rounds(parse_pull_request(node, "repo"), ME) == {
+        "after-5",
+        "after-6",
+    }
+    unannounced = _theirs(reviews={"nodes": [*_rounds(4), *after]})
+    assert len(review_rounds(parse_pull_request(unannounced, "repo"), ME)) == 6
+
+
+THIRD = "2026-01-03T00:00:00Z"
+#: Each way the reviewer is started, on a PR with three rounds behind it.
+RESTARTS = {
+    "new_commits": {"reviews": {"nodes": _rounds(3)}},
+    "thread_reply": {
+        "reviews": {"nodes": [*_rounds(2), _review(ME, commit="head-2", at=THIRD)]},
+        "reviewThreads": {"nodes": [_thread(ME, "other", at="2026-01-06T00:00:00Z")]},
+    },
+    "unanswered_statement": {
+        "reviews": {"nodes": [*_rounds(2), _review(ME, commit="head-2", at=THIRD)]},
+        "comments": {"nodes": [_comment("other", "Fixed", "2026-01-06T00:00:00Z")]},
+    },
+}
+
+
+@pytest.mark.parametrize("trigger", RESTARTS)
+def test_the_limit_notice_starts_the_count_over_once_the_pr_is_ready(trigger):
+    """The notice follows the conversion to a draft, so a PR without it is past
+    the limit, a draft PR is the human's, and a ready one after it starts over."""
+    overrides = RESTARTS[trigger]
+    comments = overrides.get("comments", {"nodes": []})["nodes"]
+    announced = {**overrides, "comments": {"nodes": [_limit_notice(), *comments]}}
+
+    assert _work(_theirs(**overrides)) == REVIEW_LIMIT
+    assert _work(_theirs(**announced, isDraft=True)) is None
+    assert _work(_theirs(**announced)) == REVIEW
+
+
+def test_the_limit_is_reached_again_three_rounds_after_the_notice():
+    after = [
+        _review(ME, commit=f"after-{index}", at=f"2026-01-0{index}T12:00:00Z")
+        for index in (5, 6, 7)
+    ]
+    node = _theirs(
+        reviews={"nodes": [*_rounds(3), *after]},
+        comments={"nodes": [_limit_notice()]},
+    )
+
+    assert _work(node) == REVIEW_LIMIT
 
 
 def test_only_explicit_request_outlives_the_limit():
@@ -497,18 +578,6 @@ def test_only_explicit_request_outlives_the_limit():
 
     assert _work(requested) == REVIEW
     assert _work(replied) == REVIEW_LIMIT
-
-
-def test_thread_reply_after_the_review_limit_notice_asks_nothing():
-    node = _theirs(
-        reviews={"nodes": _rounds(3)},
-        comments={
-            "nodes": [_comment(ME, _notice("review_limit"), "2026-01-05T00:00:00Z")]
-        },
-        reviewThreads={"nodes": [_thread(ME, "other", at="2026-01-06T00:00:00Z")]},
-    )
-
-    assert _work(node) is None
 
 
 def test_thread_reply_before_the_review_limit_is_review_work():
@@ -594,15 +663,5 @@ def test_statements_count_toward_the_review_limit():
         reviews={"nodes": rounds},
         comments={"nodes": [_comment("other", "Fixed", "2026-01-06T00:00:00Z")]},
     )
-    announced = _theirs(
-        reviews={"nodes": rounds},
-        comments={
-            "nodes": [
-                _comment(ME, _notice("review_limit"), "2026-01-05T00:00:00Z"),
-                _comment("other", "Fixed", "2026-01-06T00:00:00Z"),
-            ]
-        },
-    )
 
     assert _work(commented) == REVIEW_LIMIT
-    assert _work(announced) is None

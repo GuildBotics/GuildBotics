@@ -21,15 +21,19 @@ Reviewer role (``pull_request_review``): the member is a requested reviewer,
 new commits landed after the member's last review, or, once the member has
 spoken on the PR, there is a statement the member has not answered (threads
 only those the member took part in). Re-reviews not driven by a request stop
-after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so once on the PR
-(``REVIEW_LIMIT_REASON``), and only an explicit request reopens it.
+after :data:`MAX_REVIEW_ROUNDS` rounds (``REVIEW_LIMIT``): the manager makes
+the PR a draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
+counted from the last such notice by any member, so a PR a human marks ready
+for review again starts a new count for every reviewer; nothing else is
+stored.
 
 Workflow status notices (rate limit, failure, review limit) are neither
 statements nor answers: they only suppress selection or mark the limit.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
-PR into their own hands (only humans may change it), and the manager's search
-excludes drafts before any snapshot is loaded.
+PR into their own hands, and the manager's search excludes drafts before any
+snapshot is loaded. Besides humans, only the manager changes it, and only to
+hand a PR over at the review limit; a member's turn cannot.
 """
 
 from __future__ import annotations
@@ -314,9 +318,17 @@ def _has_unanswered_statement(pr: PullRequest, me: str) -> bool:
 
 
 def _latest_activity_by_others(pr: PullRequest, me: str) -> str:
-    """When someone other than the member last did anything on the PR."""
+    """When someone other than the member last did anything on the PR.
+
+    Another member's status notice is not acting on the PR: counting it would
+    let two members whose runs keep failing lift each other's hold forever.
+    """
     return max(
-        [comment.created_at for comment in pr.comments if comment.author != me]
+        [
+            comment.created_at
+            for comment in pr.comments
+            if comment.author != me and not _is_notice(comment)
+        ]
         + [review.submitted_at for review in pr.reviews if review.author != me]
         + [thread.last_created_at for thread in pr.threads if thread.last_author != me],
         default="",
@@ -331,19 +343,19 @@ def _is_suppressed(pr: PullRequest, me: str) -> bool:
     reply in a thread) lifts the notice, so a thread reply can restart work
     that a failure put on hold.
     """
-    if not pr.comments:
+    mine = [comment for comment in pr.comments if comment.author == me]
+    if not mine:
         return False
-    latest = pr.comments[-1]
-    if latest.author != me:
-        return False
+    latest = mine[-1]
     status = parse_workflow_status_comment(latest.body)
     if status is None or not suppresses_ticket_selection(status):
         return False
     return _latest_activity_by_others(pr, me) <= latest.created_at
 
 
-def review_rounds(pr: PullRequest, me: str) -> set[str]:
-    """Head commits the member reviewed, excluding reply-only submissions.
+def _reviewed_heads(pr: PullRequest, me: str, since: str = "") -> set[str]:
+    """Head commits the member reviewed after *since*, excluding reply-only
+    submissions.
 
     A thread reply is recorded by GitHub as a review at the current head, so
     counting it would both inflate the rounds and hide the commits it landed on
@@ -352,32 +364,47 @@ def review_rounds(pr: PullRequest, me: str) -> set[str]:
     return {
         review.commit_oid
         for review in pr.reviews
-        if review.author == me and not review.reply_only and review.commit_oid
+        if review.author == me
+        and not review.reply_only
+        and review.commit_oid
+        and review.submitted_at > since
     }
 
 
-def review_limit_announced(pr: PullRequest, me: str) -> bool:
-    return any(
-        comment.author == me
-        and (status := parse_workflow_status_comment(comment.body)) is not None
-        and status.reason == REVIEW_LIMIT_REASON
-        for comment in pr.comments
+def _last_review_limit_at(pr: PullRequest) -> str:
+    """When a member last announced the review limit on the PR."""
+    return max(
+        (
+            comment.created_at
+            for comment in pr.comments
+            if (status := parse_workflow_status_comment(comment.body)) is not None
+            and status.reason == REVIEW_LIMIT_REASON
+        ),
+        default="",
     )
+
+
+def review_rounds(pr: PullRequest, me: str) -> set[str]:
+    """Head commits the member reviewed since the last review-limit notice.
+
+    The notice follows the PR becoming a draft, and only a human makes it
+    ready for review again. That decision is about the PR, not about the
+    member who reached the limit, so every reviewer's count starts over.
+    """
+    return _reviewed_heads(pr, me, _last_review_limit_at(pr))
 
 
 def _review_work(pr: PullRequest, me: str) -> str | None:
     if me in pr.requested_reviewers:
         return REVIEW
-    rounds = review_rounds(pr, me)
+    reviewed = _reviewed_heads(pr, me)
     if not (
-        (rounds and pr.head_oid not in rounds)
+        (reviewed and pr.head_oid not in reviewed)
         or _has_unanswered_thread(pr, me, mine_only=True)
         or (_last_spoken_at(pr, me) and _has_unanswered_statement(pr, me))
     ):
         return None
-    if len(rounds) < MAX_REVIEW_ROUNDS:
-        return REVIEW
-    return None if review_limit_announced(pr, me) else REVIEW_LIMIT
+    return REVIEW if len(review_rounds(pr, me)) < MAX_REVIEW_ROUNDS else REVIEW_LIMIT
 
 
 def pull_request_work(pr: PullRequest, me: str) -> str | None:
@@ -389,7 +416,7 @@ def pull_request_work(pr: PullRequest, me: str) -> str | None:
 
     Returns:
         ``FEEDBACK`` or ``REVIEW`` for work to dispatch, ``REVIEW_LIMIT`` when
-        the re-review budget is exhausted and not yet announced, else ``None``.
+        the re-review budget is exhausted, else ``None``.
     """
     if pr.state != "OPEN" or pr.is_draft or _is_suppressed(pr, me):
         return None

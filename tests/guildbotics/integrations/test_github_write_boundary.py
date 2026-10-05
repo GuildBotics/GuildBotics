@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -33,10 +34,12 @@ import guildbotics
 from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github import async_client, github_utils
+from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.repository_scope import (
-    ADD_REACTION,
+    CONVERT_PULL_REQUEST_TO_DRAFT,
+    NODE_MUTATIONS,
+    NODE_REPOSITORY,
     PROJECT_MUTATIONS,
-    REACTION_SUBJECT,
     RepositoryScopeError,
 )
 
@@ -65,7 +68,7 @@ WRITES = {
     ("capabilities/member_github.py", "_graphql", "post"): GRAPHQL,
     ("capabilities/member_github.py", "_post_comment", "post"): REPOSITORY,
     ("integrations/github/github_ticket_manager.py", "_graphql", "post"): GRAPHQL,
-    ("integrations/github/repository_scope.py", "_subject_in_scope", "post"): GRAPHQL,
+    ("integrations/github/repository_scope.py", "_node_in_scope", "post"): GRAPHQL,
     (
         "integrations/github/github_ticket_manager.py",
         "add_comment_to_ticket",
@@ -274,7 +277,7 @@ def _checked_before(call: ast.Call, ancestors: list[ast.AST]) -> bool:
 
 
 def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
-    """The Project's own operations, or a reaction whose subject the gate reads."""
+    """The Project's own operations, or a write whose node the gate reads."""
     found = {
         (module, node.value)
         for module, tree in (
@@ -288,7 +291,7 @@ def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
     }
 
     assert found == {
-        (SCOPE_MODULE, document) for document in {*PROJECT_MUTATIONS, ADD_REACTION}
+        (SCOPE_MODULE, document) for document in {*PROJECT_MUTATIONS, *NODE_MUTATIONS}
     }
 
 
@@ -331,4 +334,57 @@ async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_
     finally:
         await service.aclose()
 
-    assert [body["query"] for body in sent] == [REACTION_SUBJECT]
+    assert [body["query"] for body in sent] == [NODE_REPOSITORY]
+
+
+@pytest.mark.asyncio
+async def test_a_draft_conversion_outside_the_owner_is_refused_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The patrol converts a PR to a draft by its node: the gate reads where the
+    node lives before the ticket manager's mutation goes out."""
+    sent: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        repository = {"name": "demo", "owner": {"login": "other-owner"}}
+        return httpx.Response(200, json={"data": {"node": {"repository": repository}}})
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        async_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        person_type="agent",
+        account_info={"github_username": "aiko-gh"},
+    )
+    project = Project(
+        name="demo",
+        services={
+            "ticket_manager": {
+                "name": "GitHub",
+                "owner": "acme",
+                "project_id": "1",
+                "url": "https://github.com/orgs/acme/projects/1",
+            }
+        },
+    )
+    manager = GitHubTicketManager(
+        logging.getLogger("test"), person, Team(project=project, members=[person])
+    )
+    manager.client = async_client.get_async_client(
+        "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
+    )
+    try:
+        with pytest.raises(RepositoryScopeError, match="'acme'"):
+            await manager._graphql(
+                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": "PR_1"}
+            )
+    finally:
+        await manager.client.aclose()
+
+    assert sent == [{"query": NODE_REPOSITORY, "variables": {"id": "PR_1"}}]

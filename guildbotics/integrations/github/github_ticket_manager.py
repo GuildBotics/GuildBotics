@@ -30,6 +30,7 @@ from guildbotics.integrations.github.pull_request_patrol import (
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
+    CONVERT_PULL_REQUEST_TO_DRAFT,
     CREATE_PROJECT_FIELD,
     UPDATE_PROJECT_FIELD_OPTIONS,
     UPDATE_PROJECT_ITEM_STATUS,
@@ -960,7 +961,7 @@ class GitHubTicketManager(TicketManager):
                 continue
             task = self._pull_request_task(pull_request, work)
             if work == REVIEW_LIMIT:
-                await self._announce_review_limit(task)
+                await self._hand_over_at_review_limit(task)
                 continue
             candidates.append(task)
 
@@ -994,7 +995,7 @@ class GitHubTicketManager(TicketManager):
                 return None
             task = self._pull_request_task(pull_request, work)
             if work == REVIEW_LIMIT:
-                await self._announce_review_limit(task)
+                await self._hand_over_at_review_limit(task)
                 return None
             return task
 
@@ -1021,8 +1022,9 @@ class GitHubTicketManager(TicketManager):
         request a review from).
 
         Draft PRs are left out at the search: a draft is the human's "hands
-        off" switch, so neither role acts on it until someone marks the PR
-        ready for review.
+        off" switch (the patrol flips it only to hand a PR over at the review
+        limit), so neither role acts on it until someone marks the PR ready for
+        review.
         """
         client = await self.login()
         found: dict[str, dict[str, Any]] = {}
@@ -1081,17 +1083,37 @@ class GitHubTicketManager(TicketManager):
             trigger_reason=trigger_reason,
         )
 
-    async def _announce_review_limit(self, task: Task) -> None:
-        """Say once on the PR that automatic re-review has stopped."""
+    async def _hand_over_at_review_limit(self, task: Task) -> None:
+        """Make the PR a draft, then say on it that automatic re-review stopped.
+
+        The notice is where the rounds start over, so it is posted only once
+        the PR is a draft. When the conversion fails, a failure notice takes
+        its place: it holds the PR until someone acts on it, and the rounds
+        stay as they are.
+        """
+        try:
+            await self._graphql(CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": task.id})
+        except Exception as exc:
+            self.logger.warning(
+                f"Could not convert {task.pull_request_url} to a draft: {exc}"
+            )
+            reason = "failed"
+            body = t(
+                "integrations.github.github_ticket_manager.review_limit_draft_failed",
+                count=MAX_REVIEW_ROUNDS,
+            )
+        else:
+            reason = REVIEW_LIMIT_REASON
+            body = t(
+                "integrations.github.github_ticket_manager.review_limit_reached",
+                count=MAX_REVIEW_ROUNDS,
+            )
         await self.add_comment_to_ticket(
             task,
             render_workflow_status_comment(
-                body=t(
-                    "integrations.github.github_ticket_manager.review_limit_reached",
-                    count=MAX_REVIEW_ROUNDS,
-                ),
+                body=body,
                 payload=workflow_status_fields(
-                    reason=REVIEW_LIMIT_REASON,
+                    reason=reason,
                     person_id=self.person.person_id,
                     run_id="",
                     subject_id=task.pull_request_url or "",

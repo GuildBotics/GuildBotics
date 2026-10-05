@@ -98,8 +98,22 @@ mutation($subject: ID!, $content: ReactionContent!) {
 }
 """
 
-#: Where the subject of a reaction lives, read before the reaction is sent.
-REACTION_SUBJECT = """
+#: The patrol's hand-off of a pull request to a human: REST cannot make an
+#: open pull request a draft.
+CONVERT_PULL_REQUEST_TO_DRAFT = """
+mutation($pullRequest: ID!) {
+  convertPullRequestToDraft(input: {pullRequestId: $pullRequest}) {
+    pullRequest { isDraft }
+  }
+}
+"""
+
+#: The GraphQL writes that name a node in some repository, each with the
+#: variable that carries the node: the gate reads where the node lives first.
+NODE_MUTATIONS = {ADD_REACTION: "subject", CONVERT_PULL_REQUEST_TO_DRAFT: "pullRequest"}
+
+#: Where the node of a ``NODE_MUTATIONS`` write lives, read before it is sent.
+NODE_REPOSITORY = """
 query($id: ID!) {
   node(id: $id) {
     ... on RepositoryNode { repository { name owner { login } } }
@@ -108,8 +122,8 @@ query($id: ID!) {
 """
 
 #: The GraphQL writes that name no node outside the configured owner: the
-#: configured Project's own operations. With ``ADD_REACTION`` they are the only
-#: mutation documents GuildBotics sends, so they are matched as written.
+#: configured Project's own operations. With ``NODE_MUTATIONS`` they are the
+#: only mutation documents GuildBotics sends, so they are matched as written.
 PROJECT_MUTATIONS = frozenset(
     {
         ADD_PROJECT_ITEM,
@@ -159,7 +173,7 @@ async def check_request(
             request's path starts with its path (``/api/v3`` on GitHub
             Enterprise Server).
         request: The request about to be sent.
-        client: The client sending it, which reads the subject of a reaction.
+        client: The client sending it, which reads where a node it writes lives.
 
     Raises:
         RepositoryScopeError: If the request goes to another host or writes
@@ -208,20 +222,16 @@ async def _graphql_permitted(
         return False
     if not isinstance(body, dict) or not isinstance(document := body.get("query"), str):
         return False
-    if document == ADD_REACTION:
+    if (variable := NODE_MUTATIONS.get(document)) is not None:
         variables = body.get("variables")
-        subject = variables.get("subject") if isinstance(variables, dict) else None
-        return isinstance(subject, str) and await _subject_in_scope(
-            scope, subject, client
-        )
+        node = variables.get(variable) if isinstance(variables, dict) else None
+        return isinstance(node, str) and await _node_in_scope(scope, node, client)
     return document in PROJECT_MUTATIONS or not _MUTATION.search(document)
 
 
-async def _subject_in_scope(
-    scope: str, subject: str, client: httpx.AsyncClient
-) -> bool:
+async def _node_in_scope(scope: str, node: str, client: httpx.AsyncClient) -> bool:
     response = await client.post(
-        "/graphql", json={"query": REACTION_SUBJECT, "variables": {"id": subject}}
+        "/graphql", json={"query": NODE_REPOSITORY, "variables": {"id": node}}
     )
     try:
         repository = response.json()["data"]["node"]["repository"]

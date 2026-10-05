@@ -1,3 +1,4 @@
 ja:
   add_custom_field_options: "\n\nカスタムフィールド%{field}に以下を追加してください:%{options}\n"
-  review_limit_reached: "この pull request の自動再レビューが上限の %{count} 回に達したため、新しいコミットや thread への返信では再レビューを開始しません。personal token のメンバーは GitHub の review request で再開できます。GitHub App のメンバーには review request を出せないため、Slack または対話セッションから依頼してください。"
+  review_limit_reached: "この pull request の自動再レビューが上限の %{count} 回に達したため、Draft にしました。Draft の間は、新しいコミット・thread への返信・会話コメント・review の本文のどれがあっても、作成者もレビュワーも巡回では動きません。このまま続けてよければ Ready for review に戻してください（回数は数え直しになります）。進め方を見直すなら、Slack または対話セッションで指示し、区切りがついたら Ready for review に戻してください。"
+  review_limit_draft_failed: "この pull request の自動再レビューが上限の %{count} 回に達しましたが、Draft に変換できなかったため、レビューを止めています。この PR でコメント・review・thread への返信のどれかがあると、次の巡回で Draft への変換をやり直します。"

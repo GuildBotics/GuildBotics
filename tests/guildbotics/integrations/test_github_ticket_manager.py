@@ -9,6 +9,9 @@ from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.repository_scope import (
+    CONVERT_PULL_REQUEST_TO_DRAFT,
+)
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     render_workflow_status_comment,
@@ -95,6 +98,8 @@ class _Manager(GitHubTicketManager):
         self.pull_request_nodes: dict[int, dict[str, Any]] = {}
         self.comments_added: list[tuple[Task, str]] = []
         self.graphql_queries: list[str] = []
+        #: What GitHub answers a draft conversion with, when it fails.
+        self.draft_error: Exception | None = None
 
     async def login(self):
         return self.client_stub
@@ -119,6 +124,13 @@ class _Manager(GitHubTicketManager):
 
     async def _graphql(self, query: str, variables: dict) -> dict:
         self.graphql_queries.append(query)
+        if query == CONVERT_PULL_REQUEST_TO_DRAFT:
+            if self.draft_error is not None:
+                raise self.draft_error
+            for node in self.pull_request_nodes.values():
+                if node["id"] == variables["pullRequest"]:
+                    node["isDraft"] = True
+            return {"convertPullRequestToDraft": {"pullRequest": {"isDraft": True}}}
         node = self.pull_request_nodes.get(int(variables.get("number") or 0))
         return {"repository": {"pullRequest": node}}
 
@@ -1378,9 +1390,9 @@ async def test_reviewed_pr_with_new_commits_is_review_work():
     assert task.trigger_reason == "pull_request_review"
 
 
-@pytest.mark.asyncio
-async def test_review_limit_is_announced_once_and_not_dispatched():
-    node = _pull_request_node(
+def _past_the_review_limit() -> dict[str, Any]:
+    """Someone else's PR with three rounds behind the member and a new head."""
+    return _pull_request_node(
         author="other",
         head="head-4",
         reviews=[
@@ -1392,11 +1404,36 @@ async def test_review_limit_is_announced_once_and_not_dispatched():
             for index in (1, 2, 3)
         ],
     )
+
+
+def _posted(manager: _Manager, index: int, at: str) -> dict[str, Any]:
+    """The member's comment ``index`` as the next snapshot shows it."""
+    return {
+        "author": {"login": "aiko-gh"},
+        "body": manager.comments_added[index][1],
+        "createdAt": at,
+    }
+
+
+@pytest.mark.asyncio
+async def test_review_limit_converts_the_pr_to_a_draft_then_announces_it():
+    node = _past_the_review_limit()
     manager = _patrol_manager(node)
+    drafts_when_commented: list[int] = []
+    comment = manager.add_comment_to_ticket
+
+    async def add_comment(task: Task, body: str) -> None:
+        drafts_when_commented.append(
+            manager.graphql_queries.count(CONVERT_PULL_REQUEST_TO_DRAFT)
+        )
+        await comment(task, body)
+
+    manager.add_comment_to_ticket = add_comment  # type: ignore[method-assign]
 
     assert await manager.first_task() is None
-    assert len(manager.comments_added) == 1
-    task, body = manager.comments_added[0]
+    assert node["isDraft"] is True
+    assert drafts_when_commented == [1]
+    [(task, body)] = manager.comments_added
     assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
     status = parse_workflow_status_comment(body)
     assert status is not None and status.reason == "review_limit"
@@ -1405,26 +1442,92 @@ async def test_review_limit_is_announced_once_and_not_dispatched():
         in body
     )
 
-    # Once the notice is on the PR, later patrols stay quiet.
-    node["comments"]["nodes"].append(
-        {
-            "author": {"login": "aiko-gh"},
-            "body": body,
-            "createdAt": "2026-01-09T00:00:00Z",
-        }
+    # The draft is the human's: neither patrol acts on it.
+    node["comments"]["nodes"].append(_posted(manager, 0, "2026-01-09T00:00:00Z"))
+    assert await manager.refresh_task(task) is None
+    assert len(manager.comments_added) == 1
+
+    # Ready for review again: the rounds start over after the notice.
+    node["isDraft"] = False
+    resumed = await manager.first_task()
+    assert resumed is not None
+    assert resumed.trigger_reason == "pull_request_review"
+    assert manager.graphql_queries.count(CONVERT_PULL_REQUEST_TO_DRAFT) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_draft_conversion_holds_the_pr_without_the_limit_notice():
+    node = _past_the_review_limit()
+    manager = _patrol_manager(node)
+    manager.draft_error = RuntimeError("Resource not accessible by integration")
+
+    assert await manager.first_task() is None
+    assert not node.get("isDraft")
+    [(_, body)] = manager.comments_added
+    status = parse_workflow_status_comment(body)
+    assert status is not None and status.reason == "failed"
+    assert (
+        t(
+            "integrations.github.github_ticket_manager.review_limit_draft_failed",
+            count=3,
+        )
+        in body
     )
+
+    # The failure notice holds the PR until someone else acts on it.
+    node["comments"]["nodes"].append(_posted(manager, 0, "2026-01-09T00:00:00Z"))
     assert await manager.first_task() is None
     assert len(manager.comments_added) == 1
 
+    # Then the limit still stands, and the conversion is tried again.
+    node["comments"]["nodes"].append(
+        {
+            "author": {"login": "other"},
+            "body": "Fixed",
+            "createdAt": "2026-01-10T00:00:00Z",
+        }
+    )
+    manager.draft_error = None
+    assert await manager.first_task() is None
+    assert node["isDraft"] is True
+    status = parse_workflow_status_comment(manager.comments_added[1][1])
+    assert status is not None and status.reason == "review_limit"
+
 
 @pytest.mark.parametrize(
-    ("language", "expected_phrases"),
+    ("language", "expected_phrases", "dropped_phrase"),
     [
-        ("en", ("request my review", "Slack", "interactive session")),
-        ("ja", ("review request", "Slack", "対話セッション")),
+        (
+            "en",
+            (
+                "converted it to a draft",
+                "conversation comments",
+                "review bodies",
+                "Ready for review",
+                "starts over",
+                "Slack",
+                "interactive session",
+            ),
+            "request my review",
+        ),
+        (
+            "ja",
+            (
+                "Draft にしました",
+                "会話コメント",
+                "review の本文",
+                "Ready for review",
+                "数え直し",
+                "Slack",
+                "対話セッション",
+            ),
+            "review request",
+        ),
     ],
 )
-def test_review_limit_notice_explains_how_to_restart(language, expected_phrases):
+def test_review_limit_notice_explains_how_to_restart(
+    language, expected_phrases, dropped_phrase
+):
     set_language(language)
 
     message = t(
@@ -1432,6 +1535,7 @@ def test_review_limit_notice_explains_how_to_restart(language, expected_phrases)
     )
 
     assert all(phrase in message for phrase in expected_phrases)
+    assert dropped_phrase not in message
 
 
 @pytest.mark.asyncio
