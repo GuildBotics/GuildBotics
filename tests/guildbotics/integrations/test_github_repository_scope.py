@@ -17,9 +17,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from guildbotics.integrations.github import async_client, github_utils, repository_scope
 from guildbotics.integrations.github.repository_scope import (
-    ADD_REACTION,
+    NODE_MUTATIONS,
+    NODE_REPOSITORY,
     PROJECT_MUTATIONS,
-    REACTION_SUBJECT,
     RepositoryScopeError,
     check_repository,
 )
@@ -53,7 +53,7 @@ def _client(
     auth: httpx.Auth | None = None,
     node: object = None,
 ) -> httpx.AsyncClient:
-    """``node`` is what GitHub answers to ``REACTION_SUBJECT``, or its response."""
+    """``node`` is what GitHub answers to ``NODE_REPOSITORY``, or its response."""
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
@@ -310,36 +310,58 @@ def test_project_mutations_are_mutations_of_the_configured_project() -> None:
     }
 
 
-def _reaction(variables: object) -> dict[str, Any]:
-    return {"json": {"query": ADD_REACTION, "variables": variables}}
+#: Each write that names a node, with the variable carrying it.
+NODE_WRITES = pytest.mark.parametrize(
+    ("document", "variable"),
+    list(NODE_MUTATIONS.items()),
+    ids=list(NODE_MUTATIONS.values()),
+)
+
+
+def _node_write(document: str, variables: object) -> dict[str, Any]:
+    return {"json": {"query": document, "variables": variables}}
 
 
 def _subject(owner: str, name: str = "demo") -> dict[str, Any]:
     return {"repository": {"name": name, "owner": {"login": owner}}}
 
 
+def test_node_mutations_are_a_reaction_and_the_patrols_draft_conversion() -> None:
+    operations = {
+        re.search(r"\{\s*(\w+)\(", document).group(1): variable
+        for document, variable in NODE_MUTATIONS.items()
+    }
+
+    assert operations == {
+        "addReaction": "subject",
+        "convertPullRequestToDraft": "pullRequest",
+    }
+
+
+@NODE_WRITES
 @pytest.mark.parametrize("owner", ["acme", "ACME"])
 @pytest.mark.asyncio
-async def test_a_reaction_is_sent_once_its_subject_is_in_the_owners_repository(
-    monkeypatch, sent, refusals, owner
+async def test_a_node_write_is_sent_once_its_node_is_in_the_owners_repository(
+    monkeypatch, sent, refusals, owner, document, variable
 ):
     client = _client(monkeypatch, sent, node=_subject(owner))
     try:
         await client.post(
-            "/graphql", **_reaction({"subject": "PRR_1", "content": "EYES"})
+            "/graphql", **_node_write(document, {variable: "N_1", "content": "EYES"})
         )
     finally:
         await client.aclose()
 
-    lookup, reaction = sent
+    lookup, write = sent
     assert json.loads(lookup.content) == {
-        "query": REACTION_SUBJECT,
-        "variables": {"id": "PRR_1"},
+        "query": NODE_REPOSITORY,
+        "variables": {"id": "N_1"},
     }
-    assert json.loads(reaction.content)["query"] == ADD_REACTION
+    assert json.loads(write.content)["query"] == document
     assert refusals == []
 
 
+@NODE_WRITES
 @pytest.mark.parametrize(
     "node",
     [
@@ -348,7 +370,7 @@ async def test_a_reaction_is_sent_once_its_subject_is_in_the_owners_repository(
         {},  # a node outside any repository
         None,  # no such node
         {"repository": {"name": 1, "owner": {"login": "acme"}}},
-        "PRR_1",
+        "N_1",
         httpx.Response(200, content=b"not json"),
         httpx.Response(200, json=["acme"]),
     ],
@@ -364,33 +386,37 @@ async def test_a_reaction_is_sent_once_its_subject_is_in_the_owners_repository(
     ],
 )
 @pytest.mark.asyncio
-async def test_a_reaction_outside_the_owner_is_refused_before_it_is_sent(
-    monkeypatch, sent, refusals, node
+async def test_a_node_write_outside_the_owner_is_refused_before_it_is_sent(
+    monkeypatch, sent, refusals, node, document, variable
 ):
     client = _client(monkeypatch, sent, node=node)
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
             await client.post(
-                "/graphql", **_reaction({"subject": "PRR_1", "content": "EYES"})
+                "/graphql",
+                **_node_write(document, {variable: "N_1", "content": "EYES"}),
             )
     finally:
         await client.aclose()
 
     [lookup] = sent
-    assert json.loads(lookup.content)["query"] == REACTION_SUBJECT
+    assert json.loads(lookup.content)["query"] == NODE_REPOSITORY
     assert len(refusals) == 1
 
 
-@pytest.mark.parametrize("variables", [{}, {"subject": 1}, None, ["PRR_1"]])
+@NODE_WRITES
 @pytest.mark.asyncio
-async def test_a_reaction_without_a_subject_is_refused_unread(
-    monkeypatch, sent, refusals, variables
+async def test_a_node_write_without_its_node_is_refused_unread(
+    monkeypatch, sent, refusals, document, variable
 ):
+    """Only the variable the document names carries the node."""
     client = _client(monkeypatch, sent, node=_subject("acme"))
     try:
-        with pytest.raises(RepositoryScopeError):
-            await client.post("/graphql", **_reaction(variables))
+        for variables in ({}, {"other": "N_1"}, {variable: 1}, None, ["N_1"]):
+            with pytest.raises(RepositoryScopeError):
+                await client.post("/graphql", **_node_write(document, variables))
     finally:
         await client.aclose()
 
     assert sent == []
+    assert len(refusals) == 5
