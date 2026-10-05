@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import secrets
 import ssl
-import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -47,6 +46,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.cli_agents import CredentialBroker
+from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.loopback_server import LoopbackServer
 
 #: Hands out the access token to send; given the token the upstream just
@@ -394,7 +394,8 @@ def _issue(context: ssl.SSLContext, names: tuple[str, ...]) -> bytes:
         )
         .sign(ca_key, hashes.SHA256())
     )
-    with tempfile.TemporaryDirectory() as held:  # The context loads files only.
+    # The context loads files only.
+    with host_temporary_directory("guildbotics-gateway-") as held:
         chain, private = Path(held, "chain.pem"), Path(held, "key.pem")
         chain.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
         private.write_bytes(

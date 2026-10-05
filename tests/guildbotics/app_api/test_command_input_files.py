@@ -476,19 +476,23 @@ def test_copy_command_input_file_refuses_directories_and_large_files(
     assert list(directory.iterdir()) == []
 
 
-def test_store_lives_in_the_exchange_tmp_directory_by_default(
+def test_store_lives_where_no_microvm_writes_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Under the machine-local state root: no grant may open it, and its
+    session directory is mounted read-only into the commands it runs."""
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
 
     store = CommandInputFileStore()
+    assert store.directory is None
     store.start()
     try:
         saved = store.save(_upload(b"png-data"))
-        # Under the default document grant, so a turn reaches it at this path.
-        assert saved.is_relative_to(home / "Documents/GuildBotics/tmp")
+        assert saved.parent == store.directory
+        assert saved.is_relative_to(home / ".guildbotics/data/command_inputs")
+        assert not saved.is_relative_to(home / "Documents")
     finally:
         store.close()
 
@@ -548,15 +552,15 @@ def test_session_creation_refuses_an_exchange_name_swapped_after_validation(
     root = tmp_path / "inputs"
     outside = tmp_path / "outside"
     outside.mkdir(mode=0o755)
-    validate = command_input_files.validate_mount_source
+    inspect = command_input_files.inspect_host_path
 
     def swap(path, *args, **kwargs):
-        checked = validate(path, *args, **kwargs)
+        checked = inspect(path, *args, **kwargs)
         root.rename(tmp_path / "original")
         root.symlink_to(outside, target_is_directory=True)
         return checked
 
-    monkeypatch.setattr(command_input_files, "validate_mount_source", swap)
+    monkeypatch.setattr(command_input_files, "inspect_host_path", swap)
     with pytest.raises((UnsafePathError, OSError)):
         CommandInputFileStore(root=root).start()
     assert not list(outside.iterdir())

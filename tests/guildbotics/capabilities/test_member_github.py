@@ -1,8 +1,8 @@
+import json
+import re
 from copy import deepcopy
 from io import BytesIO
-import json
 from pathlib import Path
-import re
 from zipfile import ZipFile
 
 import pytest
@@ -21,6 +21,7 @@ from guildbotics.runtime.member_invocation import (
     MemberInvocation,
     member_invocation_scope,
 )
+from guildbotics.utils.fileio import host_temporary_root
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 HTTP_BAD_REQUEST = 400
@@ -2699,8 +2700,8 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
         f"/guest{destination}",
     ]
     assert run["read"] == archive
-    # Held where the environment has nothing: not under anything it works in.
-    assert not Path(str(run["stdin"])).is_relative_to(tmp_path)
+    # Held where no environment ever writes: the host's own temporary root.
+    assert Path(str(run["stdin"])).is_relative_to(host_temporary_root())
     assert not Path(str(run["stdin"])).exists()
     assert list(outside.iterdir()) == []
     assert (result["destination"], result["files"]) == (

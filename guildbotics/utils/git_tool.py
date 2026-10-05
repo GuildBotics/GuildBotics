@@ -2,6 +2,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from guildbotics.utils.fileio import host_temporary_root
+
 
 def create_git_askpass_script() -> Path:
     with tempfile.NamedTemporaryFile(
@@ -10,6 +12,7 @@ def create_git_askpass_script() -> Path:
         delete=False,
         prefix="guildbotics-git-askpass-",
         suffix=".sh",
+        dir=host_temporary_root(),
     ) as askpass:
         askpass.write(
             "#!/bin/sh\n"

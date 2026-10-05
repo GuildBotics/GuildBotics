@@ -97,7 +97,14 @@ class EnvironmentGuest:
                 "The command's environment is run from another thread than"
                 " its own loop's."
             )
-        coroutine = self._run(tuple(argv), cwd, dict(env), stdin, stdout, stdout_limit)
+        coroutine = self.run_here(
+            argv,
+            cwd=cwd,
+            env=env,
+            stdin=stdin,
+            stdout=stdout,
+            stdout_limit=stdout_limit,
+        )
         try:
             future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         except RuntimeError as exc:
@@ -110,15 +117,18 @@ class EnvironmentGuest:
             future.cancel()
             raise GuestProcessError("The member command ran out of time.") from exc
 
-    async def _run(
+    async def run_here(
         self,
-        argv: tuple[str, ...],
+        argv: Sequence[str],
+        *,
         cwd: str,
-        env: dict[str, str],
-        stdin: bytes | Path,
-        stdout: Path | None,
+        env: Mapping[str, str],
+        stdin: bytes | Path = b"",
+        stdout: Path | None = None,
         stdout_limit: int,
     ) -> GuestResult:
+        """Run a process as :meth:`run` does, from the command's own loop,
+        for as long as it takes."""
         environment = self._environment()
         if environment is None:
             raise GuestProcessError("No environment runs for this command.")

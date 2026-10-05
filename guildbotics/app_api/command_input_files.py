@@ -17,7 +17,6 @@ from fastapi import UploadFile
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
-    exchange_tmp_dir,
     grant_spelling,
     load_local_grants,
     load_shared_grants,
@@ -30,6 +29,7 @@ from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     unlock_file,
 )
+from guildbotics.utils.fileio import get_machine_state_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.safe_paths import (
     HostPathPermissionError,
@@ -65,16 +65,17 @@ GrantScope = Literal["document", "device"]
 class CommandInputFileStore:
     """Own what the Desktop hands a command for one App API session.
 
-    Everything lives in the exchange directory's ``tmp`` (see
-    :mod:`guildbotics.intelligences.agent_environment.contract`), which the
-    default grant opens to every turn read-write, so a path pasted into the
-    input field means the same file inside the environment. It is all
-    temporary by nature -- a clipboard image exists nowhere else, a copy has
-    its original elsewhere -- and goes with the session that made it.
+    Everything lives under the machine-local state root, which no microVM
+    ever mounts but this session's own directory, read-only, into the
+    commands the session runs (:attr:`directory`), at the same path: a path
+    pasted into the input field means the same file inside the environment,
+    and no command can change what the host saved there. It is all temporary
+    by nature -- a clipboard image exists nowhere else, a copy has its
+    original elsewhere -- and goes with the session that made it.
     """
 
     def __init__(self, *, root: Path | None = None) -> None:
-        self._root = root or exchange_tmp_dir()
+        self._root = root or get_machine_state_path("command_inputs")
         self._directory: Path | None = None
         self._session_lock: IO[str] | None = None
         self._lock = threading.RLock()
@@ -93,9 +94,7 @@ class CommandInputFileStore:
     def _start(self) -> None:
         if self._directory is not None:
             return
-        self._root = validate_mount_source(
-            self._root, protected_paths(), grant=True, create=True
-        )
+        self._root = inspect_host_path(self._root, create=True).path
         visit_host_directory(self._root, self._start_in_directory)
 
     def _start_in_directory(self, descriptor: int | None) -> None:
@@ -117,6 +116,12 @@ class CommandInputFileStore:
                 raise
             self._directory = directory
             self._session_lock = session_lock
+
+    @property
+    def directory(self) -> Path | None:
+        """This session's directory, which the commands it runs read; none
+        until the session started."""
+        return self._directory
 
     def save(self, upload_file: UploadFile) -> Path:
         """Save an image in the active App API session directory."""

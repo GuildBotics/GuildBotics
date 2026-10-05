@@ -7,7 +7,9 @@ GuildBotics' own command execution machinery in it
 AI CLI turns among them all run there, and the microVM is discarded when the
 command ends, however it ends. It is shaped once for all, from the command,
 since a running microVM cannot be reshaped: the command's working directory
-and access contract, the running member's clone opened read-write for a
+(or, where no grant lets it write, a copy of it the host writes back from;
+see :mod:`.worktree`) and access contract, the files the Desktop handed over
+read-only, the running member's clone opened read-write for a
 command that may write, the persisted state of every AI CLI tool the member
 is configured with, the running process's own GuildBotics code, the
 workspace's configuration, and whatever else of the workspace's own state the
@@ -75,6 +77,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
 from guildbotics.intelligences.agent_environment.snapshot import CODE_ROOT
 from guildbotics.intelligences.agent_environment.spec import (
     GUEST_HOST_ALIAS,
+    WORKTREE_SOURCE,
     AgentEnvironmentSpec,
     EnvironmentMount,
     build_environment_spec,
@@ -104,6 +107,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+)
+from guildbotics.intelligences.agent_runtime.worktree import (
+    Worktree,
+    copy_worktree,
+    write_back,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.runtime.member_invocation import MemberInvocation
@@ -245,6 +253,7 @@ async def command_environment(
     cwd: Path,
     workspace_root: Path,
     clone: Path,
+    inputs: Path | None = None,
     host: CommandGrant,
 ) -> AsyncIterator[_SharedEnvironment]:
     """Boot the microVM one command execution runs in, for as long as it runs.
@@ -265,6 +274,8 @@ async def command_environment(
         clone: The running member's clone, where a turn works on its tickets
             and chats; unless the command is read-only, made on the host
             before the microVM boots when absent, and mounted read-write.
+        inputs: The directory of the files handed over for the command,
+            mounted read-only at its own path.
         host: The command's grant, which answers what its microVM asks of
             the host, in the command's context.
 
@@ -282,6 +293,7 @@ async def command_environment(
         cwd=cwd,
         workspace_root=workspace_root,
         clone=clone,
+        inputs=inputs,
         where=_device(),
     )
     token = _COMMAND.set(shared)
@@ -418,6 +430,7 @@ class _SharedEnvironment:
         cwd: Path,
         workspace_root: Path,
         clone: Path,
+        inputs: Path | None,
         where: LoginEnvironment,
     ) -> None:
         #: What the command declared; every turn of it is held to this.
@@ -436,6 +449,7 @@ class _SharedEnvironment:
         self._cwd = cwd
         self._workspace_root = workspace_root
         self._clone = clone
+        self._inputs = inputs
         #: What this device boots microVMs from.
         self._where = where
         self._environment: AgentEnvironment | None = None
@@ -450,6 +464,9 @@ class _SharedEnvironment:
         self._gateways: dict[str, CredentialGateway] = {}
         #: The relays running, each started by its tool's first turn.
         self._relays: dict[str, EnvironmentProcess] = {}
+        #: The copy of the working directory the command works on, when no
+        #: grant lets it write there.
+        self._worktree: Worktree | None = None
 
     @property
     def endpoint(self) -> MemberBrokerEndpoint:
@@ -597,6 +614,13 @@ class _SharedEnvironment:
             *_inspected_mounts(
                 {"config", *self.access.inspects}, self._workspace_root
             ).values(),
+            # What the host saved for the command, which it reads and cannot
+            # change.
+            *(
+                ()
+                if self._inputs is None
+                else (EnvironmentMount(guest_path(self._inputs), self._inputs, True),)
+            ),
         )
         # What is mounted must exist before the microVM boots; a read-only
         # command mounts no clone and changes nothing on the host.
@@ -620,13 +644,17 @@ class _SharedEnvironment:
         )
         _reject_windows_temp_mounts(spec)
         # Work happens only inside what the contract opened, backed by the
-        # host or the microVM's own working directory; never in what
-        # GuildBotics bound for itself, nor under a cover over a deny.
+        # host or the microVM's own working directory -- a copy of the host's
+        # included; never in what GuildBotics bound for itself, nor in the
+        # read-only original of the copy.
         self._mounts = {
             mount.guest: mount not in binds
+            and mount.guest != WORKTREE_SOURCE
             and (mount.host is not None or mount.guest == spec.cwd)
             for mount in spec.mounts
         }
+        if spec.worktree is not None:
+            self._mounts[spec.cwd] = True
         spec = replace(
             spec,
             env={
@@ -637,15 +665,21 @@ class _SharedEnvironment:
         self._environment = await _start(
             spec, self._where, before_stop=self._stop_relays
         )
+        if spec.worktree is not None:
+            self._worktree = await copy_worktree(
+                self._environment, spec.worktree, spec.cwd
+            )
 
     async def execute(self, request: CommandRequest) -> CommandReply:
         """Run the command in the microVM, and read how it ended.
 
-        What it logs is logged on the host, line by line, as it comes.
+        What it logs is logged on the host, line by line, as it comes. What
+        a command that ended well changed in its copy of the working
+        directory is written back to the host's.
 
         Raises:
             CommandError: When it ended without saying how, or said more than
-                the host reads.
+                the host reads, or its changes could not be written back.
         """
         environment = self._environment
         assert environment is not None
@@ -668,7 +702,7 @@ class _SharedEnvironment:
         finally:
             logging_task.cancel()
         try:
-            return CommandReply.model_validate_json(reply)
+            answer = CommandReply.model_validate_json(reply)
         except ValidationError as exc:
             raise CommandError(
                 t(
@@ -676,6 +710,10 @@ class _SharedEnvironment:
                     code=await process.wait(),
                 )
             ) from exc
+        # What a command that failed changed in its copy is not written back.
+        if self._worktree is not None and answer.failure is None:
+            await write_back(environment, self._worktree)
+        return answer
 
     def _admit(self, context: AgentExecutionContext) -> None:
         """Refuse a turn working where the running microVM does not let work

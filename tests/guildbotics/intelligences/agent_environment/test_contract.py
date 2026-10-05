@@ -20,7 +20,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     SharedGrants,
     exchange_dir,
-    exchange_tmp_dir,
     grant_spelling,
     load_local_grants,
     load_shared_grants,
@@ -540,10 +539,8 @@ def test_the_exchange_directory_is_under_the_home(tmp_path: Path) -> None:
     home = _home(tmp_path)
 
     assert exchange_dir(home) == home / "Documents/GuildBotics"
-    assert exchange_tmp_dir(home) == home / "Documents/GuildBotics/tmp"
-    # The built-in grant and the directory the Desktop writes to are the same
-    # place, so a pasted file is reachable whatever the grants file says -- an
-    # entry for it there is ignored, not merged into a second row.
+    # The built-in grant is there whatever the grants file says -- an entry
+    # for it there is ignored, not merged into a second row.
     listed = SharedGrants(
         documents=[DocumentGrant(path="Documents/GuildBotics", access="read")]
     )

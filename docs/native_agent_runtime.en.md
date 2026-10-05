@@ -205,9 +205,42 @@ the exchange directory. Move an existing workspace out of those locations before
 opening it. Host-created hard links to protected files are not distinguished by copy
 admission; turns cannot create such links because protected files are not mounted.
 
-- **Working directory**: the command's working directory is bound
-  read/write at the same path it has on the host (a read-only command gets an
-  empty directory of the microVM's own there instead). A command the host
+- **Working directory**: the working directory itself opens nothing for
+  writing; only a grant does. A command that may write works in it directly,
+  bound read/write at its host path, only when a read/write grant (a document
+  directory, a device path, or the exchange directory) contains it. Any other
+  working directory -- a repository named with `guildbotics run --cwd`, for
+  example -- is bound read-only, its `.git` included, copied onto the
+  microVM's own disk at the same path, and the command works on the copy.
+  When the command ends well, the host writes back the regular files that
+  changed in the copy, reaching each from the working directory without
+  following a link; links, anything inside `.git`, and anything outside the
+  working directory are never written back. If a file changed on the host
+  while the command ran, nothing is written back and the command fails naming
+  those files; a command that failed has nothing written back. A written file
+  keeps its host mode, and its executable bit is written back only when the
+  command changed it, refused like a content change when the host changed it
+  meanwhile. Write-backs on a device take turns, so of two commands that
+  copied the same files -- through one working directory, or one inside the
+  other's -- only the first that ends writes back. A working directory
+  replaced while the command ran, and two changed names the host takes for
+  one file (differing only in case or Unicode form), refuse the write-back
+  too. Every file is written beside its place before any is put
+  in place; a failure while putting them in place names the files already
+  written back. A directory the command removed stays on the host, and a
+  link (one in a `.venv` or `node_modules`, for example) is missing from the
+  copy. The copy is made on the microVM's own disk (about 4 GB on the default
+  image) when the command starts, and its file list is limited to 64 MiB.
+  When the original's `.git` is a directory, the copy's `.git` names it
+  read-only, so `git status` and `git diff` work and nothing can be
+  committed; when it is a file (a `git worktree` checkout or a submodule),
+  the repository it names is not mounted, and git sees no repository in the
+  copy. A command that may write is refused in a working
+  directory only a read-only grant contains, and a read-only command gets an
+  empty directory of the microVM's own there instead. Do not keep a
+  repository inside the exchange directory or a read/write grant: a command
+  can change its `.git` (hooks, configuration) there, and git on the host runs
+  what it finds. A command the host
   starts on its own (a scheduled or routine command, the ticket patrol, a
   chat dispatch) works in the exchange directory (`Documents/GuildBotics`,
   below); a Desktop run works where the screen says (the exchange directory
@@ -238,13 +271,15 @@ admission; turns cannot create such links because protected files are not mounte
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
   Apart from that file, `Documents/GuildBotics` (the exchange directory) is
-  always granted read/write: what the Desktop hands over (a pasted image, a copy of a
-  file the environment could not reach) is placed in its `tmp/` and removed
-  when the app session ends, a Desktop run that names no working directory
+  always granted read/write: a Desktop run that names no working directory
   runs there, and what an agent makes for the user goes under it unless the
-  request names a destination. A path the Desktop puts in the input field is
-  spelled as the environment names it (`/c/...` on Windows, never `C:\...`), so
-  the agent opens it as written.
+  request names a destination. What the Desktop hands over (a pasted image, a
+  copy of a file the environment could not reach) is kept in GuildBotics' own
+  storage (`~/.guildbotics/data/command_inputs`), bound read-only at the same
+  path into the runs the Desktop starts, and removed when the app session
+  ends. A path the Desktop puts in the input field is spelled as the
+  environment names it (`/c/...` on Windows, never `C:\...`), so the agent
+  opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that protect directories from sharing, in
   `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential

@@ -26,8 +26,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
 )
 from guildbotics.intelligences.agent_environment.spec import (
+    WORKTREE_SOURCE,
     AgentEnvironmentSpecError,
     EnvironmentMount,
+    WorktreeCopy,
     guest_path,
     host_environment,
 )
@@ -35,6 +37,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec as _build_environment_spec,
 )
 from guildbotics.utils import os_language
+from guildbotics.utils.safe_paths import inspect_host_path
 
 _NAMESERVERS = ("10.0.0.53",)
 
@@ -67,9 +70,12 @@ def _work(root: Path) -> Path:
 # --- filesystem -----------------------------------------------------------------
 
 
-def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
+def test_a_working_directory_no_grant_opens_is_worked_on_as_a_copy(
     tmp_path: Path, host_facts: dict[str, str]
 ) -> None:
+    """The working directory itself opens nothing for writing: outside every
+    grant it is mounted read-only, its ``.git`` with it, to be copied onto
+    the microVM's own disk at its own path."""
     cwd = tmp_path / "repo"
     cwd.mkdir()
 
@@ -78,9 +84,72 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
     assert spec.cwd == guest_path(cwd)
     assert spec.home == guest_path(tmp_path.resolve())
     assert spec.mounts == (
-        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+        EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
     )
+    assert spec.worktree == WorktreeCopy(cwd, inspect_host_path(cwd).identities[-1])
     assert spec.env == host_facts
+
+
+def test_a_working_directory_a_read_write_grant_opens_is_written_directly(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    cwd = home / "out" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="out", access="read_write")]),
+        LocalGrants(),
+        home=home,
+    )
+
+    spec = build_environment_spec(_contract(access), cwd, home=home)
+
+    assert EnvironmentMount(guest_path(cwd), cwd, False, user=True) in spec.mounts
+    assert not any(mount.guest == WORKTREE_SOURCE for mount in spec.mounts)
+    assert spec.worktree is None
+
+
+def test_a_command_that_may_write_is_refused_where_only_a_read_grant_opens(
+    tmp_path: Path,
+) -> None:
+    """The user said the turns may only read there; a read-only command,
+    which changes nothing, still runs."""
+    from guildbotics.utils.i18n_tool import t
+
+    home = tmp_path / "home"
+    cwd = home / "notes" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
+        LocalGrants(),
+        home=home,
+    )
+
+    with pytest.raises(AccessContractError) as refused:
+        build_environment_spec(_contract(access), cwd, home=home)
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.read_only_cwd", path=cwd
+    )
+    spec = build_environment_spec(_contract(access, read_only=True), cwd, home=home)
+    assert spec.worktree is None
+
+
+def test_a_grant_nested_in_a_copied_working_directory_is_left_out_of_the_copy(
+    tmp_path: Path,
+) -> None:
+    """It is a mount of its own, reached directly as its grant says."""
+    cwd = tmp_path / "repo"
+    docs = cwd / "docs" / "shared"
+    docs.mkdir(parents=True)
+    access = ResolvedAccess(paths=(ResolvedGrant(docs, "read_write", str(docs)),))
+
+    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
+
+    assert spec.worktree == WorktreeCopy(
+        cwd, inspect_host_path(cwd).identities[-1], ("docs/shared",)
+    )
+    assert EnvironmentMount(guest_path(docs), docs, False, user=True) in spec.mounts
 
 
 def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
@@ -107,7 +176,7 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
     assert spec.home == guest_path(home)
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
-        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+        EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
         EnvironmentMount(guest_path(exchange), exchange, readonly=False, user=True),
         EnvironmentMount(
             guest_path(home / "out"), home / "out", readonly=False, user=True
@@ -127,9 +196,10 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     home = tmp_path / "home"
     cwd = home / "Projects" / "repo"
     cwd.mkdir(parents=True)
+    (cwd / "docs").mkdir()
     access = resolve_access(
         SharedGrants(documents=[DocumentGrant(path="Projects", access="read_write")]),
-        LocalGrants(paths=[LocalPathGrant(path=str(cwd), access="read")]),
+        LocalGrants(paths=[LocalPathGrant(path=str(cwd / "docs"), access="read")]),
         home=home,
     )
 
@@ -137,10 +207,28 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
 
     depths = [len(PurePosixPath(m.guest).parts) for m in spec.mounts]
     assert depths == sorted(depths)
-    # The working directory is read-write even where a grant names it read.
-    assert [m for m in spec.mounts if m.guest == guest_path(cwd)] == [
-        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True)
+    assert [m for m in spec.mounts if m.guest.startswith(guest_path(cwd))] == [
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+        EnvironmentMount(guest_path(cwd / "docs"), cwd / "docs", True, user=True),
     ]
+
+
+def test_the_innermost_grant_holding_the_working_directory_decides(
+    tmp_path: Path,
+) -> None:
+    """A read grant inside a read-write one is mounted over it, so a command
+    that may write is refused there as under the read grant alone."""
+    home = tmp_path / "home"
+    cwd = home / "Projects" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="Projects", access="read_write")]),
+        LocalGrants(paths=[LocalPathGrant(path=str(cwd), access="read")]),
+        home=home,
+    )
+
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd, home=home)
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -174,7 +262,7 @@ def test_an_absent_grant_is_not_mounted(tmp_path: Path) -> None:
         )
     )
     spec = build_environment_spec(_contract(access), cwd)
-    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, False, user=True),)
+    assert spec.mounts == (EnvironmentMount(WORKTREE_SOURCE, cwd, True, user=True),)
 
 
 def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(

@@ -178,6 +178,15 @@ class _Booted:
             await self.before_stop(self)
 
 
+def _member_programs(booted: _Booted) -> list[_Program]:
+    """What ran in the microVM beside the copy of the working directory."""
+    return [
+        program
+        for program in booted.programs
+        if "guildbotics.runtime.worktree_copy" not in program.command
+    ]
+
+
 def _device(monkeypatch, tmp_path, *logins: str, where=None):
     """This device, able to run every tool, with ``logins`` logged in: the
     microVMs it boots are recorded in :attr:`_Booted.booted`."""
@@ -353,6 +362,7 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
     checkout it runs from still writes the package there."""
     import guildbotics
     from guildbotics.intelligences.agent_environment.spec import (
+        WORKTREE_SOURCE,
         EnvironmentMount,
         guest_path,
     )
@@ -382,11 +392,10 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         if mount != code
     )
     assert (
-        EnvironmentMount(
-            guest_path(checkout), None if read_only else checkout, False, user=True
-        )
-        in spec.mounts
-    )
+        EnvironmentMount(guest_path(checkout), None, False, user=True)
+        if read_only
+        else EnvironmentMount(WORKTREE_SOURCE, checkout, True, user=True)
+    ) in spec.mounts
 
 
 def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
@@ -1087,6 +1096,7 @@ def test_every_bind_and_microvm_entry_uses_the_checked_mount_boundary() -> None:
         ),
         ("guildbotics/intelligences/agent_runtime/environment.py", "<module>"),
         ("guildbotics/intelligences/agent_runtime/environment.py", "_inspected_mounts"),
+        ("guildbotics/intelligences/agent_runtime/environment.py", "_boot"),
     }
 
 
@@ -1372,7 +1382,7 @@ async def test_a_member_command_runs_nothing_it_would_have_to_wait_for_itself(
             await asyncio.to_thread(partial(guest.run, ["git", "status"], **options))
         await turn.close()
 
-    assert _Booted.booted[0].programs == []
+    assert _member_programs(_Booted.booted[0]) == []
 
 
 @pytest.mark.asyncio
@@ -1397,7 +1407,7 @@ async def test_a_member_command_the_broker_gave_up_on_leaves_nothing_running(
         await turn.close()
 
     [booted] = _Booted.booted
-    assert [program.killed for program in booted.programs] == [True, True]
+    assert [program.killed for program in _member_programs(booted)] == [True, True]
 
 
 @pytest.mark.asyncio
@@ -1619,8 +1629,11 @@ async def _executed(tmp_path, monkeypatch, entry: _Entry):
     _device(monkeypatch, tmp_path, "claude")
     async with _command() as shared:
         (booted,) = _Booted.booted
+        program = booted.run
 
-        async def run(*argv, limit, **_):
+        async def run(*argv, limit, **kwargs):
+            if "guildbotics.runtime.command_entry" not in argv:
+                return await program(*argv, limit=limit, **kwargs)
             entry.argv = argv
             return entry
 
@@ -1852,3 +1865,187 @@ async def test_windows_temp_mount_is_not_rejected_on_other_platforms(
         pass
 
     assert len(_Booted.booted) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True], ids=["ended-well", "failed"])
+async def test_a_copied_working_directory_is_written_back_when_the_command_ended_well(
+    tmp_path, monkeypatch, failed
+):
+    """The microVM copies the read-only original before the command runs;
+    what a command that failed changed in the copy is not written back."""
+    from guildbotics.intelligences.agent_environment.spec import (
+        WORKTREE_SOURCE,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.host_client import (
+        CommandFailure,
+        CommandReply,
+    )
+
+    written: list[object] = []
+
+    async def write_back(_, worktree):
+        written.append(worktree)
+
+    monkeypatch.setattr(environment, "write_back", write_back)
+    failure = CommandFailure(command=True, type="CommandError", message="x")
+    answer = CommandReply(failure=failure if failed else None)
+
+    reply, _ = await _executed(
+        tmp_path, monkeypatch, _Entry(answer.model_dump_json().encode() + b"\n")
+    )
+
+    assert reply == answer
+    [booted] = _Booted.booted
+    cwd = guest_path(get_workspace_root() / "repository")
+    [copy] = [
+        program
+        for program in booted.programs
+        if "guildbotics.runtime.worktree_copy" in program.command
+    ]
+    assert copy.command[-3:] == ("copy", WORKTREE_SOURCE, cwd)
+    assert [each.guest for each in written] == ([] if failed else [cwd])
+
+
+@pytest.mark.asyncio
+async def test_a_turn_works_in_the_copy_and_never_in_its_read_only_original(
+    tmp_path, monkeypatch
+):
+    from guildbotics.intelligences.agent_environment.spec import (
+        WORKTREE_SOURCE,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.host_client import admits
+
+    _device(monkeypatch, tmp_path, "claude")
+    cwd = get_workspace_root() / "repository"
+    async with _command():
+        turn = await environment.start_turn_environment(
+            _turn(tmp_path, cwd=cwd), "claude"
+        )
+        await turn.close()
+        mounts = environment.running_command()._mounts
+        assert admits(mounts, guest_path(cwd))
+        assert not admits(mounts, WORKTREE_SOURCE)
+        assert not admits(mounts, f"{WORKTREE_SOURCE}/src")
+
+
+@pytest.mark.asyncio
+async def test_the_files_handed_over_are_read_only_and_no_place_to_work(
+    tmp_path, monkeypatch
+):
+    """The host's own copy of what the Desktop handed over is mounted at its
+    own path, read-only, so the path in the command's input opens it; no
+    turn works there and nothing of the command changes it."""
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+    from guildbotics.utils.fileio import get_machine_state_path
+
+    inputs = get_machine_state_path("command_inputs", "session-1")
+    inputs.mkdir(parents=True)
+    cwd = get_workspace_root() / "repository"
+    cwd.mkdir(parents=True, exist_ok=True)
+    _device(monkeypatch, tmp_path, "claude")
+
+    async with command_at(cwd, {"claude"}, inputs=inputs):
+        [booted] = _Booted.booted
+        assert EnvironmentMount(guest_path(inputs), inputs, True) in booted.spec.mounts
+        with pytest.raises(AgentRuntimeError):
+            await environment.start_turn_environment(
+                _turn(tmp_path, cwd=inputs), "claude"
+            )
+
+
+#: Where GuildBotics uses the OS temporary directory, and why it may: the
+#: host keeps what it names by path in :func:`host_temporary_root` instead,
+#: since a grant may open the OS temporary directory to a command.
+_OS_TEMPORARY = {
+    ("guildbotics/capabilities/artifact_archive.py", "main"): (
+        "runs inside the command's microVM, unpacking an artifact there"
+    ),
+    ("guildbotics/commands/shell_script_command.py", "run"): (
+        "runs inside the command's microVM, with the command"
+    ),
+    ("guildbotics/app_api/diagnostics.py", "_check_cli_agent_brain"): (
+        "names the working directory of a read-only command, whose microVM"
+        " mounts no host directory there"
+    ),
+}
+
+
+def test_the_host_keeps_what_it_names_by_path_where_no_microvm_writes() -> None:
+    """A script git runs, a key a TLS context loads, a bundle or an artifact
+    the host reads: under the OS temporary directory, which a grant may open
+    read-write, a command could change it between the host writing and
+    using it. A new use of the OS temporary directory is classified here."""
+    functions = {
+        "TemporaryDirectory",
+        "NamedTemporaryFile",
+        "TemporaryFile",
+        "SpooledTemporaryFile",
+        "mkstemp",
+        "mkdtemp",
+        "gettempdir",
+    }
+
+    def uses_the_os_directory(call: ast.Call) -> bool:
+        return (
+            getattr(call.func, "attr", None) in functions
+            and getattr(getattr(call.func, "value", None), "id", None) == "tempfile"
+            and not any(keyword.arg == "dir" for keyword in call.keywords)
+        )
+
+    assert _call_sites(uses_the_os_directory) == set(_OS_TEMPORARY)
+
+
+#: Who names a place a command's microVM can write, and what the host does
+#: there: never more than make it before the microVM boots, or name it.
+_GUEST_WRITABLE = {
+    ("guildbotics/drivers/command_runner.py", "host_command_cwd"): (
+        "makes the exchange directory, the default working directory, before"
+        " the microVM boots"
+    ),
+    ("guildbotics/drivers/command_runner.py", "run_in_environment"): (
+        "names the member's clone, which the environment makes before the microVM boots"
+    ),
+    ("guildbotics/app_api/runtime.py", "get_config_status"): (
+        "shows the exchange directory"
+    ),
+    ("guildbotics/drivers/command_runner.py", "prepare_host_command"): (
+        "names the working directory of a command the host starts"
+    ),
+    ("guildbotics/app_api/runtime.py", "run_command"): (
+        "names the working directory of a Desktop run"
+    ),
+    ("guildbotics/intelligences/agent_environment/status.py", "filesystem_status"): (
+        "enumerates the exchange directory for the OS's permission prompt"
+    ),
+    ("guildbotics/capabilities/member_git.py", "__init__"): (
+        "names the clones, whose git runs in the command's microVM"
+    ),
+    ("guildbotics/templates/commands/workflows/ticket_driven_workflow.py", "main"): (
+        "runs inside the command's microVM"
+    ),
+    (
+        "guildbotics/templates/commands/workflows/chat_conversation_workflow.py",
+        "main",
+    ): "runs inside the command's microVM",
+}
+
+
+def test_the_host_does_nothing_in_a_place_a_microvm_writes_but_name_it() -> None:
+    """What the host reads, runs or trusts is never where a command can
+    write: a working directory a grant opens, a clone, the exchange
+    directory. A new caller naming one is classified here."""
+    namers = {"get_member_clone_path", "exchange_dir", "host_command_cwd"}
+
+    def names_a_writable_place(call: ast.Call) -> bool:
+        return (getattr(call.func, "id", None) or getattr(call.func, "attr", None)) in (
+            namers
+        )
+
+    assert _call_sites(names_a_writable_place) == set(_GUEST_WRITABLE)

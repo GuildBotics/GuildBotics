@@ -65,7 +65,10 @@ def test_delegated_prompt_matches_across_languages():
     assert _instruction_step_count(bodies[0]) == _instruction_step_count(bodies[1])
     for body in bodies:
         assert "guildbotics_execution_mode=delegated" in body
-        assert "--workspace-mode current" in body
+        # The delegate works on a copy whose `.git` is read-only, and the
+        # requester publishes what is written back.
+        assert "--workspace-mode current" not in body
+        assert "`.git`" in body
         assert "{workflow_contract}" not in body
         assert "guildbotics_execution_mode=workflow" not in body
         assert "AgentResponse" not in body

@@ -384,3 +384,82 @@ def test_creation_keeps_the_opened_parent_when_its_name_is_swapped(
     assert not (outside / "new").exists()
     with pytest.raises(UnsafePathError):
         inspect_host_path(parent / "new")
+
+
+def test_a_tree_directory_is_made_with_default_permissions_and_left_so(
+    tmp_path: Path, posix_permissions: None
+) -> None:
+    """A directory of the user's own is neither made nor left private."""
+    from pathlib import PurePosixPath
+
+    root = tmp_path / "repo"
+    root.mkdir(mode=0o755)
+    os.chmod(root, 0o755)
+    seen: list[int | None] = []
+
+    assert safe_paths.visit_host_tree(
+        root, PurePosixPath("a/b"), seen.append, create=True
+    )
+
+    assert len(seen) == 1
+    umask = os.umask(0)
+    os.umask(umask)
+    assert (root / "a" / "b").stat().st_mode & 0o777 == 0o777 & ~umask
+    assert root.stat().st_mode & 0o777 == 0o755
+
+
+def test_a_missing_tree_directory_is_not_made_or_acted_in_without_create(
+    tmp_path: Path,
+) -> None:
+    from pathlib import PurePosixPath
+
+    seen: list[int | None] = []
+
+    assert not safe_paths.visit_host_tree(
+        tmp_path, PurePosixPath("a/b"), seen.append, create=False
+    )
+    assert seen == []
+    assert not (tmp_path / "a").exists()
+
+
+def test_a_link_inside_a_tree_is_never_followed(tmp_path: Path, symlinks: None) -> None:
+    from pathlib import PurePosixPath
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo" / "docs").symlink_to(elsewhere, target_is_directory=True)
+
+    for create in (True, False):
+        with pytest.raises(UnsafePathError):
+            safe_paths.visit_host_tree(
+                tmp_path / "repo",
+                PurePosixPath("docs/x"),
+                lambda _: None,
+                create=create,
+            )
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize(("answer", "sensitive"), [(1, True), (0, False), (-1, None)])
+def test_darwin_tells_the_case_rule_of_the_directory_itself(
+    tmp_path: Path,
+    monkeypatch,
+    fake_platform,
+    posix_permissions: None,
+    answer: int,
+    sensitive: bool | None,
+) -> None:
+    """A volume that does not answer is refused: taking it for
+    case-sensitive would let two spellings of one file through as two."""
+    fake_platform(safe_paths, "darwin")
+    # Darwin's own aliases (``/tmp`` for ``/private/tmp``) are no part of the
+    # question, and do not hold on the machine running the test.
+    monkeypatch.setattr(safe_paths, "_host_alias", lambda path: path)
+    monkeypatch.setattr(safe_paths._POSIX, "fpathconf", lambda fd, name: answer)
+
+    if sensitive is None:
+        with pytest.raises(OSError, match="no case-sensitivity"):
+            safe_paths.host_directory_case_sensitive(tmp_path)
+    else:
+        assert safe_paths.host_directory_case_sensitive(tmp_path) is sensitive

@@ -84,6 +84,8 @@ class PreparedCommand:
     workflow run's invocation is in its ``shared_state``. ``path`` is the
     command's file, and ``access`` what it declares. ``result_type`` is what
     the caller reads the main command's own result as, if it reads one.
+    ``inputs`` is the directory of the files the Desktop handed over for the
+    command, which its microVM reads.
     """
 
     context: Context
@@ -93,6 +95,7 @@ class PreparedCommand:
     path: Path
     access: CommandAccess
     result_type: type[BaseModel] | None = None
+    inputs: Path | None = None
 
 
 class HostRunLedger:
@@ -353,6 +356,7 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
             cwd=command.cwd,
             workspace_root=workspace_root,
             clone=get_member_clone_path(person_id, workspace_root),
+            inputs=command.inputs,
             host=window,
         ) as environment:
             reply = await environment.execute(request)

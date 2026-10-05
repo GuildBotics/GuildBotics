@@ -26,6 +26,7 @@ def command_at(
     *,
     person_id: str = "aiko",
     host: HostCalls | None = None,
+    inputs: Path | None = None,
 ) -> AbstractAsyncContextManager[None]:
     """The environment of a command of ``person_id``, configured with
     ``tools`` and declaring ``access``, working in ``cwd`` of the test's
@@ -38,6 +39,7 @@ def command_at(
         cwd=cwd,
         workspace_root=workspace_root,
         clone=get_member_clone_path(person_id, workspace_root),
+        inputs=inputs,
         host=host
         or HostWindow(
             person_id, "turn", "", workspace_root=workspace_root, ledger=Mock()

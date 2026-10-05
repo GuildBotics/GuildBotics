@@ -15,7 +15,7 @@ from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
 # These APIs exist only on POSIX; callers select this branch before using them.
@@ -434,3 +434,105 @@ def visit_host_directory(path: Path, action: Callable[[int | None], None]) -> No
             raise HostPathPermissionError(path) from exc
     if absent:
         raise UnsafePathError(t("safe_paths.missing", path=path))
+
+
+def visit_host_tree(
+    root: Path,
+    relative: PurePosixPath,
+    action: Callable[[int | None], None],
+    *,
+    create: bool,
+) -> bool:
+    """Act in the directory ``relative`` under ``root`` while its no-follow
+    ancestry from the filesystem root is held.
+
+    Unlike :func:`visit_host_directory`, this is for a directory of the
+    user's own: what it makes (when ``create``) takes the default
+    permissions, and nothing is made private. POSIX actions receive a
+    directory descriptor for relative operations; Windows keeps
+    non-delete-shared handles open instead.
+
+    Returns:
+        Whether the directory was there to act in; without ``create``, a
+        missing one is not acted in.
+    """
+    root = normalize_host_path(root)
+    target = root.joinpath(*relative.parts)
+    acted: list[None] = []
+
+    def act(fd: int | None) -> None:
+        action(fd)
+        acted.append(None)
+
+    if os.name == "nt":
+        from guildbotics.utils.safe_paths_windows import inspect_windows_path
+
+        try:
+            _, absent = inspect_windows_path(
+                target, create, True, lambda _: act(None), stable=True
+            )
+        except PermissionError as exc:
+            raise HostPathPermissionError(target) from exc
+        if len(absent) > len(relative.parts):
+            raise UnsafePathError(t("safe_paths.missing", path=root))
+        return bool(acted)
+
+    def descend(parent: int) -> None:
+        handles: list[int] = []
+        try:
+            for part in relative.parts:
+                if create:
+                    with suppress(FileExistsError):
+                        os.mkdir(part, dir_fd=parent)
+                try:
+                    parent = os.open(
+                        part,
+                        os.O_RDONLY | _POSIX.O_NOFOLLOW | _POSIX.O_DIRECTORY,
+                        dir_fd=parent,
+                    )
+                except FileNotFoundError:
+                    return
+                except PermissionError:
+                    raise
+                except OSError as exc:
+                    raise UnsafePathError(
+                        t("safe_paths.unavailable", path=target, reason=exc)
+                    ) from exc
+                handles.append(parent)
+            act(parent)
+        finally:
+            for handle in reversed(handles):
+                os.close(handle)
+
+    try:
+        _, absent, _ = _inspect_posix(root, False, True, descend)
+    except PermissionError as exc:
+        raise HostPathPermissionError(target) from exc
+    if absent:
+        raise UnsafePathError(t("safe_paths.missing", path=root))
+    return bool(acted)
+
+
+def host_directory_case_sensitive(path: Path) -> bool:
+    """Whether the file system holding the directory tells names apart by
+    case. Darwin is asked of the directory itself, as it answers per volume;
+    Windows never does; elsewhere there is no portable question, and the
+    volume is taken to (a case-insensitive one mounted on Linux is not told).
+
+    Raises:
+        OSError: When Darwin's volume does not answer.
+    """
+    if os.name == "nt":
+        return False
+    if sys.platform != "darwin":
+        return True
+    answers: list[int] = []
+    visit_host_tree(
+        path,
+        PurePosixPath(),
+        lambda fd: answers.append(_POSIX.fpathconf(fd, 11)),
+        create=False,
+    )
+    if answers[0] < 0:
+        raise OSError(f"'{path}' supplies no case-sensitivity information")
+    return answers[0] > 0

@@ -237,7 +237,7 @@ class HostWindow:
             "env": turn.spec.env,
             "cwd": turn.spec.cwd,
             "home": turn.spec.home,
-            "mounts": {mount.guest: mount.readonly for mount in turn.spec.mounts},
+            "mounts": turn.spec.directories,
             "member": {
                 "name": endpoint.name,
                 "url": endpoint.guest_url,

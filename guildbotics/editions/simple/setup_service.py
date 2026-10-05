@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
-import tempfile
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -24,6 +23,7 @@ from guildbotics.intelligences.cli_agents import (
 )
 from guildbotics.utils.fileio import (
     get_template_path,
+    host_temporary_root,
     load_yaml_file,
     save_yaml_file,
 )
@@ -59,12 +59,12 @@ DEFAULT_LANE_DONE = "Done"
 
 
 def github_app_key_dir() -> Path:
-    """OS temporary directory for PEM files from GitHub App registration.
+    """Where PEM files from GitHub App registration are kept for a moment.
 
     Generated keys are absorbed into the OS secret store and then deleted.
     User-supplied key files live elsewhere and are never touched.
     """
-    return Path(tempfile.gettempdir()) / "guildbotics-github-apps"
+    return host_temporary_root() / "github-apps"
 
 
 def _to_int_or_none(value: object) -> int | None:

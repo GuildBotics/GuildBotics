@@ -350,7 +350,8 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     assert created["ephemeral"] is True
     assert (created["memory"], created["cpus"]) == (3072, 3)
     assert "log_level" not in created
-    assert created["workdir"] == "/work/repo"
+    # A copied working directory is made after the boot; every process names its own.
+    assert created["workdir"] == "/"
     volumes = created["volumes"]
     assert list(volumes) == ["/work/repo", "/home/u/Documents", "/work/repo/private"]
     # The guest keeps the name the spec gave it; the host side is bound by the

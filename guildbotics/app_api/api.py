@@ -263,6 +263,8 @@ def create_app(
         app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
     )
     input_file_store = command_input_file_store or CommandInputFileStore()
+    if isinstance(app_runtime, AppRuntime):
+        app_runtime.command_inputs = lambda: input_file_store.directory
     # The service holds no state of its own: the queue it starts and stops
     # is process-wide, so this instance and the runtime's act on the same one.
     # The runtime owns the common execution boundary; the sync service only

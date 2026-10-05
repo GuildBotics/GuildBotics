@@ -22,7 +22,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 from collections.abc import (
     Awaitable,
     Callable,
@@ -43,7 +42,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentNetwork,
 )
-from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.fileio import get_machine_state_path, host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
@@ -406,7 +405,8 @@ class AgentEnvironment:
                 ephemeral=True,
                 memory=memory_mib,
                 cpus=cpus,
-                workdir=spec.cwd,
+                # The working directory may be a copy made after the boot.
+                workdir="/",
                 volumes=_volumes(spec),
                 network=_network(spec),
             )
@@ -676,7 +676,7 @@ def _anonymous_registry() -> Iterator[None]:
     directory instead of the user's.
     """
     previous = os.environ.get("DOCKER_CONFIG")
-    with tempfile.TemporaryDirectory(prefix="guildbotics-registry-") as empty:
+    with host_temporary_directory("guildbotics-registry-") as empty:
         os.environ["DOCKER_CONFIG"] = empty
         try:
             yield
