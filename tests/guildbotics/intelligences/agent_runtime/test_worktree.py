@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -489,7 +490,7 @@ async def test_a_later_write_back_waits_and_finds_the_earlier(
 
     def run(name, copied):
         try:
-            worktree._write(copied, changes[name])
+            worktree._write(copied, changes[name], threading.Event())
         except BaseException as exc:
             errors[name] = exc
 
@@ -616,3 +617,152 @@ def test_a_mount_nested_in_the_directory_is_closed_under_every_spelling_of_it(
     else:
         with pytest.raises(ValueError, match="mounted on its own"):
             list(told)
+
+
+async def _cancel_while(
+    monkeypatch, step: str, copied: worktree.Worktree
+) -> tuple[list[str], bool]:
+    """Cancel a write-back while its worker is held at its first ``step``
+    (``_stage`` or ``_put``); return the steps it took after, and whether the
+    cancelled task ended before the worker was let go."""
+    import asyncio
+    import threading
+
+    reached, release = threading.Event(), threading.Event()
+    taken: list[str] = []
+    original = getattr(worktree, step)
+
+    def held(*args):
+        if not reached.is_set():
+            reached.set()
+            assert release.wait(10)
+        taken.append(step)
+        return original(*args)
+
+    monkeypatch.setattr(worktree, step, held)
+    task = asyncio.create_task(worktree.write_back(object(), copied))
+    assert await asyncio.to_thread(reached.wait, 10)
+    task.cancel()
+    await asyncio.sleep(0.1)
+    ended_early = task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+    return taken, ended_early
+
+
+@pytest.mark.asyncio
+async def test_a_write_back_cancelled_while_staging_ends_with_nothing_written(
+    tmp_path: Path, monkeypatch, repository: Path
+) -> None:
+    """The cancelled command ends only once its worker has stopped, with
+    nothing put in place and nothing left beside the files."""
+    copied = await _copy(
+        monkeypatch,
+        repository,
+        tmp_path / "copy",
+        changes=[_write("a.txt", b"guest"), _write("src/b.py", b"guest")],
+    )
+    put: list[str] = []
+    monkeypatch.setattr(worktree, "_put", lambda *args: put.append("put"))
+
+    taken, ended_early = await _cancel_while(monkeypatch, "_stage", copied)
+
+    assert not ended_early
+    assert taken == ["_stage"]
+    assert put == []
+    assert (repository / "a.txt").read_text(encoding="utf-8") == "a"
+    assert _leftovers(repository) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_back_cancelled_while_putting_in_place_finishes_first(
+    tmp_path: Path, monkeypatch, repository: Path, caplog
+) -> None:
+    """Once files are being put in place, stopping would leave a part of
+    them: the command ends after all of them are."""
+    copied = await _copy(
+        monkeypatch,
+        repository,
+        tmp_path / "copy",
+        changes=[_write("a.txt", b"guest"), _write("src/b.py", b"guest")],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="guildbotics"):
+        taken, ended_early = await _cancel_while(monkeypatch, "_put", copied)
+
+    assert any("were written back to" in record.message for record in caplog.records)
+    assert not ended_early
+    assert taken == ["_put", "_put"]
+    assert (repository / "a.txt").read_text(encoding="utf-8") == "guest"
+    assert (repository / "src" / "b.py").read_text(encoding="utf-8") == "guest"
+    assert _leftovers(repository) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_back_cancelled_while_waiting_for_another_stops_waiting(
+    tmp_path: Path, monkeypatch, repository: Path
+) -> None:
+    import asyncio
+
+    from guildbotics.utils.advisory_lock import held_lock
+    from guildbotics.utils.fileio import get_machine_state_path
+
+    import threading
+
+    monkeypatch.setattr(worktree, "_LOCK_POLL_SECONDS", 0.05)
+    copied = await _copy(
+        monkeypatch, repository, tmp_path / "copy", changes=[_write("a.txt", b"x")]
+    )
+    lock = get_machine_state_path("run", "worktree-write-back.lock")
+    finished = threading.Event()
+    write = worktree._write
+
+    def writing(*args):
+        try:
+            write(*args)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(worktree, "_write", writing)
+
+    with held_lock(lock):
+        task = asyncio.create_task(worktree.write_back(object(), copied))
+        await asyncio.sleep(0.2)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+        # It stopped waiting, rather than outliving the command.
+        assert finished.is_set()
+
+    assert (repository / "a.txt").read_text(encoding="utf-8") == "a"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_of_a_cancelled_write_back_is_logged(
+    tmp_path: Path, monkeypatch, repository: Path, caplog
+) -> None:
+    """Putting files in place that fails after the command was cancelled
+    is told in the log, as the command itself ends as cancelled."""
+    copied = await _copy(
+        monkeypatch,
+        repository,
+        tmp_path / "copy",
+        changes=[_write("a.txt", b"guest"), _write("src/b.py", b"guest")],
+    )
+    put = worktree._put
+
+    def fail_second(root, path, temporary):
+        if path.as_posix() == "src/b.py":
+            raise OSError("Permission denied")
+        return put(root, path, temporary)
+
+    monkeypatch.setattr(worktree, "_put", fail_second)
+
+    with caplog.at_level(logging.ERROR, logger="guildbotics"):
+        await _cancel_while(monkeypatch, "_put", copied)
+
+    [logged] = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert "Permission denied" in logged.getMessage()
+    assert "a.txt" in logged.getMessage()

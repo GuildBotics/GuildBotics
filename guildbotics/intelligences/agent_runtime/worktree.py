@@ -20,6 +20,8 @@ import json
 import os
 import stat
 import sys
+import threading
+import time
 import unicodedata
 from collections.abc import Iterator
 from contextlib import ExitStack, suppress
@@ -43,9 +45,10 @@ from guildbotics.runtime.worktree_copy import (
     ChangedFile,
     CopiedFile,
 )
-from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import get_machine_state_path, host_temporary_directory
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.safe_paths import (
     UnsafePathError,
     host_directory_case_sensitive,
@@ -56,6 +59,8 @@ from guildbotics.utils.safe_paths import (
 _MODULE = "guildbotics.runtime.worktree_copy"
 #: How long a write-back waits for another one on this device.
 _WRITE_BACK_WAIT_SECONDS = 600.0
+#: How often a waiting write-back looks whether its command was cancelled.
+_LOCK_POLL_SECONDS = 0.5
 _CHUNK_BYTES = 1 << 20
 #: Never a link, and on Windows never text: what is written is the bytes.
 _OPEN = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
@@ -125,12 +130,53 @@ async def write_back(environment: AgentEnvironment, worktree: Worktree) -> None:
             raise _collect_failed(result.stderr.decode(errors="replace").strip())
         # Waiting for another write-back and hashing the files take as long
         # as they take; the command's loop answers its microVM meanwhile.
-        await asyncio.to_thread(_write, worktree, changes)
+        cancelled = threading.Event()
+        work = asyncio.ensure_future(
+            asyncio.to_thread(_write, worktree, changes, cancelled)
+        )
+        try:
+            await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # A cancelled command still owns what its write-back started:
+            # it stops before putting anything in place, or else finishes
+            # putting, and only then does the command end -- unless the loop
+            # itself is shutting down, which cancels the worker's task too
+            # and leaves the thread to the executor's own shutdown.
+            cancelled.set()
+            while not work.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait({work})
+            _log_cancelled(worktree, work)
+            raise
 
 
-def _write(worktree: Worktree, changes: Path) -> None:
+def _log_cancelled(worktree: Worktree, work: asyncio.Future[None]) -> None:
+    """Log what a cancelled command's write-back did after all: the command
+    ends as cancelled, so a write-back that put files in place, or failed
+    otherwise than by stopping, is told nowhere else."""
+    if work.cancelled():
+        return
+    error = work.exception()
+    if error is None:
+        get_logger().warning(
+            "The cancelled command's changes were written back to %s.",
+            worktree.copy.host,
+        )
+    elif not isinstance(error.__cause__, _Cancelled):
+        get_logger().error("The cancelled command's write-back failed: %s", error)
+
+
+class _Cancelled(ValueError):
+    """The command was cancelled before anything was put in place: what was
+    staged is discarded as for any refusal."""
+
+
+def _write(worktree: Worktree, changes: Path, cancelled: threading.Event) -> None:
     """Check every change and stage every file beside its place, then put
     them in place: a write that cannot be made leaves nothing written.
+
+    ``cancelled`` stops it at the next step until files are put in place;
+    from then on it finishes, so it never leaves a part of them.
 
     One write-back at a time on this device, from checking to putting in
     place, across processes -- the working directories of two commands may
@@ -147,24 +193,21 @@ def _write(worktree: Worktree, changes: Path) -> None:
     staged: list[tuple[PurePosixPath, str | None]] = []
     with ExitStack() as held:
         try:
-            held.enter_context(
-                held_lock(
-                    get_machine_state_path("run", "worktree-write-back.lock"),
-                    timeout=_WRITE_BACK_WAIT_SECONDS,
-                )
-            )
+            _hold_write_back_lock(held, cancelled)
             if inspect_host_path(root).identities[-1] != worktree.copy.identity:
                 raise UnsafePathError(f"'{root}' was replaced while the command ran.")
             case_sensitive = host_directory_case_sensitive(root)
-            conflicts = [
-                change["path"]
-                for change in _changes(changes, excluded, case_sensitive)
-                if not _unchanged(root, change, worktree.copied)
-            ]
+            conflicts: list[str] = []
+            for change in _changes(changes, excluded, case_sensitive):
+                _go_on(cancelled)
+                if not _unchanged(root, change, worktree.copied):
+                    conflicts.append(change["path"])
             if not conflicts:
                 for change in _changes(changes, excluded, case_sensitive):
+                    _go_on(cancelled)
                     path = PurePosixPath(change["path"])
                     staged.append((path, _stage(root, path, change)))
+                _go_on(cancelled)
         except (OSError, ValueError) as exc:
             _discard(root, staged)
             raise CommandError(
@@ -197,6 +240,40 @@ def _write(worktree: Worktree, changes: Path) -> None:
                     reason=exc,
                 )
             ) from exc
+
+
+def _hold_write_back_lock(held: ExitStack, cancelled: threading.Event) -> None:
+    """Take the device's write-back lock, giving up when the command is
+    cancelled meanwhile or the wait runs out.
+
+    Raises:
+        _Cancelled: When the command was cancelled.
+        LockTimeoutError: When another write-back held it too long.
+    """
+    deadline = time.monotonic() + _WRITE_BACK_WAIT_SECONDS
+    while True:
+        _go_on(cancelled)
+        try:
+            held.enter_context(
+                held_lock(
+                    get_machine_state_path("run", "worktree-write-back.lock"),
+                    timeout=_LOCK_POLL_SECONDS,
+                )
+            )
+            return
+        except LockTimeoutError:
+            if time.monotonic() >= deadline:
+                raise
+
+
+def _go_on(cancelled: threading.Event) -> None:
+    """Go on unless the command was cancelled.
+
+    Raises:
+        _Cancelled: When it was.
+    """
+    if cancelled.is_set():
+        raise _Cancelled("The command was cancelled.")
 
 
 def _guest(environment: AgentEnvironment) -> EnvironmentGuest:
