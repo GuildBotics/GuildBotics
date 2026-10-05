@@ -7,6 +7,7 @@ what is asserted is what would have reached GitHub.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from typing import Any
 
@@ -16,7 +17,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from guildbotics.integrations.github import async_client, github_utils, repository_scope
 from guildbotics.integrations.github.repository_scope import (
+    ADD_REACTION,
     PROJECT_MUTATIONS,
+    REACTION_SUBJECT,
     RepositoryScopeError,
     check_repository,
 )
@@ -48,13 +51,20 @@ def _client(
     base_url: str = API,
     owner: str = "acme",
     auth: httpx.Auth | None = None,
+    node: object = None,
 ) -> httpx.AsyncClient:
+    """``node`` is what GitHub answers to ``REACTION_SUBJECT``, or its response."""
+
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         if request.url.path.endswith("/access_tokens"):
             return httpx.Response(
                 201, json={"token": "fresh", "expires_at": "2099-01-01T00:00:00Z"}
             )
+        if b"RepositoryNode" in request.content:
+            if isinstance(node, httpx.Response):
+                return node
+            return httpx.Response(200, json={"data": {"node": node}})
         return httpx.Response(200, json={})
 
     client_type = httpx.AsyncClient
@@ -298,3 +308,89 @@ def test_project_mutations_are_mutations_of_the_configured_project() -> None:
         "updateProjectV2Field",
         "createProjectV2Field",
     }
+
+
+def _reaction(variables: object) -> dict[str, Any]:
+    return {"json": {"query": ADD_REACTION, "variables": variables}}
+
+
+def _subject(owner: str, name: str = "demo") -> dict[str, Any]:
+    return {"repository": {"name": name, "owner": {"login": owner}}}
+
+
+@pytest.mark.parametrize("owner", ["acme", "ACME"])
+@pytest.mark.asyncio
+async def test_a_reaction_is_sent_once_its_subject_is_in_the_owners_repository(
+    monkeypatch, sent, refusals, owner
+):
+    client = _client(monkeypatch, sent, node=_subject(owner))
+    try:
+        await client.post(
+            "/graphql", **_reaction({"subject": "PRR_1", "content": "EYES"})
+        )
+    finally:
+        await client.aclose()
+
+    lookup, reaction = sent
+    assert json.loads(lookup.content) == {
+        "query": REACTION_SUBJECT,
+        "variables": {"id": "PRR_1"},
+    }
+    assert json.loads(reaction.content)["query"] == ADD_REACTION
+    assert refusals == []
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        _subject("other-owner"),
+        _subject("acme", ".."),
+        {},  # a node outside any repository
+        None,  # no such node
+        {"repository": {"name": 1, "owner": {"login": "acme"}}},
+        "PRR_1",
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json=["acme"]),
+    ],
+    ids=[
+        "other_owner",
+        "bad_name",
+        "not_in_a_repository",
+        "missing",
+        "not_a_name",
+        "not_a_node",
+        "not_json",
+        "not_an_object",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_reaction_outside_the_owner_is_refused_before_it_is_sent(
+    monkeypatch, sent, refusals, node
+):
+    client = _client(monkeypatch, sent, node=node)
+    try:
+        with pytest.raises(RepositoryScopeError, match="'acme'"):
+            await client.post(
+                "/graphql", **_reaction({"subject": "PRR_1", "content": "EYES"})
+            )
+    finally:
+        await client.aclose()
+
+    [lookup] = sent
+    assert json.loads(lookup.content)["query"] == REACTION_SUBJECT
+    assert len(refusals) == 1
+
+
+@pytest.mark.parametrize("variables", [{}, {"subject": 1}, None, ["PRR_1"]])
+@pytest.mark.asyncio
+async def test_a_reaction_without_a_subject_is_refused_unread(
+    monkeypatch, sent, refusals, variables
+):
+    client = _client(monkeypatch, sent, node=_subject("acme"))
+    try:
+        with pytest.raises(RepositoryScopeError):
+            await client.post("/graphql", **_reaction(variables))
+    finally:
+        await client.aclose()
+
+    assert sent == []

@@ -59,6 +59,7 @@ def _review(
     state: str = "COMMENTED",
     body: str = "",
     replies: list[bool] | None = None,
+    reactors: list[str] | None = None,
 ) -> dict[str, Any]:
     comments = [
         {"replyTo": {"id": "root"} if reply else None} for reply in (replies or [])
@@ -70,11 +71,26 @@ def _review(
         "submittedAt": at,
         "commit": {"oid": commit},
         "comments": {"nodes": comments},
+        "reactionGroups": _reactions(reactors),
     }
 
 
-def _comment(author: str, body: str, at: str) -> dict[str, Any]:
-    return {"author": {"login": author}, "body": body, "createdAt": at}
+def _reactions(reactors: list[str] | None) -> list[dict[str, Any]]:
+    """``reactionGroups``: one group per content, reactors of any actor type."""
+    return [{"reactors": {"nodes": [{"login": r}]}} for r in reactors or []] + [
+        {"reactors": {"nodes": []}}
+    ]
+
+
+def _comment(
+    author: str, body: str, at: str, *, reactors: list[str] | None = None
+) -> dict[str, Any]:
+    return {
+        "author": {"login": author},
+        "body": body,
+        "createdAt": at,
+        "reactionGroups": _reactions(reactors),
+    }
 
 
 def _thread(
@@ -91,9 +107,7 @@ def _thread(
                 {
                     "author": {"login": authors[-1]},
                     "createdAt": at,
-                    "reactions": {
-                        "nodes": [{"user": {"login": r}} for r in reactors or []]
-                    },
+                    "reactionGroups": _reactions(reactors),
                 }
             ]
         },
@@ -120,13 +134,18 @@ def test_parse_lower_cases_logins_and_orders_by_time():
             reviews={
                 "nodes": [
                     _review("Bob", at="2026-01-03T00:00:00Z", replies=[True]),
-                    _review("bob", at="2026-01-02T00:00:00Z", replies=[True, False]),
+                    _review(
+                        "bob",
+                        at="2026-01-02T00:00:00Z",
+                        replies=[True, False],
+                        reactors=["Aiko-GH"],
+                    ),
                 ]
             },
             comments={
                 "nodes": [
                     _comment("Bob", "later", "2026-01-05T00:00:00Z"),
-                    _comment("bob", "earlier", "2026-01-04T00:00:00Z"),
+                    _comment("bob", "earlier", "2026-01-04T00:00:00Z", reactors=["X"]),
                 ]
             },
             reviewThreads={"nodes": [_thread("Bob", "Aiko-GH", reactors=["Bob"])]},
@@ -142,7 +161,9 @@ def test_parse_lower_cases_logins_and_orders_by_time():
         "2026-01-03T00:00:00Z",
     ]
     assert [review.reply_only for review in pr.reviews] == [False, True]
+    assert [review.reactors for review in pr.reviews] == [{ME}, set()]
     assert [comment.body for comment in pr.comments] == ["earlier", "later"]
+    assert [comment.reactors for comment in pr.comments] == [{"x"}, set()]
     thread = pr.threads[0]
     assert thread.participants == {"bob", ME}
     assert thread.last_author == ME
@@ -175,10 +196,18 @@ def test_query_asks_for_everything_the_decision_reads():
         "replyTo",
         "participants: comments",
         "latest: comments(last: 1)",
-        "reactions(first: 100)",
         *PULL_REQUEST_FEEDBACK_SOURCE_QUERIES.values(),
     ):
         assert field in PULL_REQUEST_QUERY, field
+    # Reactors on each kind of statement (reviews, comments, thread comments),
+    # read as actors so that a GitHub App's reactions are seen too.
+    assert (
+        PULL_REQUEST_QUERY.count(
+            "reactionGroups { reactors(first: 100) { nodes { ... on Actor { login } } } }"
+        )
+        == 3
+    )
+    assert "user { login }" not in PULL_REQUEST_QUERY
 
 
 # --- author role --------------------------------------------------------- #
@@ -238,16 +267,74 @@ def test_own_pr_review_summary_is_feedback_until_i_reply():
     assert _work(answered) is None
 
 
-@pytest.mark.parametrize(
-    "review",
-    [
-        _review("reviewer", state="APPROVED", body="LGTM"),
-        _review("reviewer", state="COMMENTED", body="   "),
-    ],
-    ids=["approval", "empty_body"],
-)
-def test_own_pr_review_without_a_request_is_not_feedback(review):
-    assert _work(_node(reviews={"nodes": [review]})) is None
+@pytest.mark.parametrize("state", ["APPROVED", "COMMENTED", "CHANGES_REQUESTED"])
+def test_own_pr_review_body_is_feedback_in_any_state(state):
+    """An approval may carry a suggestion; only reading it tells."""
+    review = _review("reviewer", state=state, body="LGTM; maybe also")
+
+    assert _work(_node(reviews={"nodes": [review]})) == FEEDBACK
+
+
+@pytest.mark.parametrize("state", ["APPROVED", "COMMENTED"])
+@pytest.mark.parametrize("body", ["", "   "])
+def test_own_pr_review_without_a_body_is_not_feedback(state, body):
+    assert (
+        _work(_node(reviews={"nodes": [_review("x", state=state, body=body)]})) is None
+    )
+
+
+LATER = "2026-01-05T00:00:00Z"
+# Each kind of statement by someone else, with the member's reaction on it.
+STATEMENTS = {
+    "thread": lambda reactors: {
+        "reviewThreads": {"nodes": [_thread(ME, "other", at=LATER, reactors=reactors)]}
+    },
+    "review_body": lambda reactors: {
+        "reviews": {
+            "nodes": [
+                _review(
+                    "other", state="APPROVED", body="Nit", at=LATER, reactors=reactors
+                )
+            ]
+        }
+    },
+    "conversation_comment": lambda reactors: {
+        "comments": {"nodes": [_comment("other", "Q?", LATER, reactors=reactors)]}
+    },
+}
+
+
+@pytest.mark.parametrize("kind", STATEMENTS)
+def test_own_pr_statement_is_answered_by_my_reaction(kind):
+    assert _work(_node(**STATEMENTS[kind]([]))) == FEEDBACK
+    assert _work(_node(**STATEMENTS[kind](["someone-else"]))) == FEEDBACK
+    assert _work(_node(**STATEMENTS[kind]([ME]))) is None
+
+
+def test_own_pr_statements_are_answered_one_by_one():
+    """A reaction answers only the statement it is on."""
+    node = _node(
+        reviews={
+            "nodes": [
+                _review("reviewer", state="APPROVED", body="Nit", reactors=[ME]),
+            ]
+        },
+        comments={"nodes": [_comment("human", "Q?", "2026-01-03T00:00:00Z")]},
+    )
+
+    assert _work(node) == FEEDBACK
+
+
+def test_own_pr_approval_body_is_answered_by_my_later_reply():
+    review = _review(
+        "reviewer", state="APPROVED", body="Nit", at="2026-01-03T00:00:00Z"
+    )
+    replied = _node(
+        reviews={"nodes": [review]},
+        comments={"nodes": [_comment(ME, "Thanks", "2026-01-04T00:00:00Z")]},
+    )
+
+    assert _work(replied) is None
 
 
 def test_own_pr_status_notices_are_neither_feedback_nor_replies():
@@ -436,3 +523,86 @@ def test_thread_reply_before_the_review_limit_is_review_work():
     )
 
     assert _work(node) == REVIEW
+
+
+# --- reviewer role: statements ------------------------------------------ #
+
+
+def _reviewed(**overrides: Any) -> dict[str, Any]:
+    """Someone else's PR whose current head the member already reviewed."""
+    reviews = overrides.pop("reviews", {"nodes": []})
+    return _theirs(
+        reviews={
+            "nodes": [_review(ME, commit="head-2", body="LGTM"), *reviews["nodes"]]
+        },
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize("kind", STATEMENTS)
+def test_statement_after_my_review_is_review_work_until_answered(kind):
+    assert _work(_reviewed(**STATEMENTS[kind]([]))) == REVIEW
+    assert _work(_reviewed(**STATEMENTS[kind](["someone-else"]))) == REVIEW
+    assert _work(_reviewed(**STATEMENTS[kind]([ME]))) is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        {"comments": {"nodes": [_comment("other", "Fixed", "2026-01-01T12:00:00Z")]}},
+        {
+            "reviews": {
+                "nodes": [
+                    _review(
+                        "bob", state="APPROVED", body="Nit", at="2026-01-01T12:00:00Z"
+                    )
+                ]
+            }
+        },
+    ],
+    ids=["comment", "review_body"],
+)
+def test_statement_before_my_review_was_answered_by_it(statement):
+    assert _work(_reviewed(**statement)) is None
+
+
+def test_statements_on_a_pr_i_never_spoke_on_ask_nothing():
+    node = _theirs(
+        comments={"nodes": [_comment("other", "Q?", LATER)]},
+        reviews={"nodes": [_review("bob", state="APPROVED", body="Nit", at=LATER)]},
+    )
+
+    assert _work(node) is None
+
+
+@pytest.mark.parametrize(
+    "noise",
+    [
+        {"reviews": {"nodes": [_review("bob", state="APPROVED", at=LATER)]}},
+        {"comments": {"nodes": [_comment("other", _notice("failed"), LATER)]}},
+    ],
+    ids=["approval_without_body", "status_notice"],
+)
+def test_reviewer_is_not_started_by_empty_approvals_or_notices(noise):
+    assert _work(_reviewed(**noise)) is None
+
+
+def test_statements_count_toward_the_review_limit():
+    """Three rounds, the last at the current head: only the comment is new."""
+    rounds = [*_rounds(2), _review(ME, commit="head-2", at="2026-01-03T00:00:00Z")]
+    commented = _theirs(
+        reviews={"nodes": rounds},
+        comments={"nodes": [_comment("other", "Fixed", "2026-01-06T00:00:00Z")]},
+    )
+    announced = _theirs(
+        reviews={"nodes": rounds},
+        comments={
+            "nodes": [
+                _comment(ME, _notice("review_limit"), "2026-01-05T00:00:00Z"),
+                _comment("other", "Fixed", "2026-01-06T00:00:00Z"),
+            ]
+        },
+    )
+
+    assert _work(commented) == REVIEW_LIMIT
+    assert _work(announced) is None

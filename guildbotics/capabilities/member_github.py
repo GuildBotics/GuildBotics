@@ -44,6 +44,7 @@ from guildbotics.integrations.github.pull_requests import (
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
+    ADD_REACTION,
 )
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -58,6 +59,17 @@ _REVIEW_EVENTS = {
     "approve": "APPROVE",
     "request-changes": "REQUEST_CHANGES",
     "comment": "COMMENT",
+}
+#: REST reaction names as GraphQL's ``ReactionContent`` spells them.
+_GRAPHQL_REACTIONS = {
+    "+1": "THUMBS_UP",
+    "-1": "THUMBS_DOWN",
+    "laugh": "LAUGH",
+    "confused": "CONFUSED",
+    "heart": "HEART",
+    "hooray": "HOORAY",
+    "rocket": "ROCKET",
+    "eyes": "EYES",
 }
 
 
@@ -698,9 +710,20 @@ class MemberGitHubCapabilityService(GitHubPullRequests):
         }
 
     async def reaction_add(
-        self, repo: str, target: str, comment_id: int, reaction: str
+        self,
+        repo: str,
+        target: str,
+        comment_id: int,
+        reaction: str,
+        pr_number: int | None = None,
     ) -> dict[str, Any]:
         owner, repo_name = self.parse_repo(repo)
+        if target == "pr-review":
+            if pr_number is None:
+                raise MemberCapabilityError("A review reaction needs the PR number.")
+            return await self._review_reaction_add(
+                owner, repo_name, pr_number, comment_id, reaction
+            )
         if target == "issue-comment":
             endpoint = (
                 f"/repos/{owner}/{repo_name}/issues/comments/{comment_id}/reactions"
@@ -725,6 +748,25 @@ class MemberGitHubCapabilityService(GitHubPullRequests):
             "content": payload.get("content", reaction),
             "comment_id": comment_id,
         }
+
+    async def _review_reaction_add(
+        self, owner: str, repo: str, pr_number: int, review_id: int, reaction: str
+    ) -> dict[str, Any]:
+        """React to a review's body, which only GraphQL reaches."""
+        client = await self._get_client()
+        resp = await client.get(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}"
+        )
+        _raise_for_status(resp)
+        ensure_chat_current(self.person.person_id)
+        await self._graphql(
+            ADD_REACTION,
+            {
+                "subject": str(resp.json()["node_id"]),
+                "content": _GRAPHQL_REACTIONS[reaction],
+            },
+        )
+        return {"content": reaction, "comment_id": review_id}
 
     async def default_branch(self, owner: str, repo: str) -> str:
         client = await self._get_client()

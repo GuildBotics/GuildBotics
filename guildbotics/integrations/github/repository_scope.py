@@ -8,7 +8,8 @@ request of a member's GitHub client passes the judgment here before it is
 sent (``get_async_client``), as does every push of a member's git.
 
 Reads are not limited by owner, but nothing is sent to a host other than the
-client's API. What is not recognized as a read or as a write to the
+client's API. A GraphQL write names a node rather than a repository, so the
+gate reads where that node lives before it lets the write through. What is not recognized as a read or as a write to the
 configured owner is refused, so a new kind of write is refused until it is
 classified here.
 """
@@ -87,8 +88,28 @@ mutation(
 }
 """
 
-#: The GraphQL writes: the configured Project's own operations. They are the
-#: only mutation documents GuildBotics sends, so they are matched as written.
+#: A reaction on anything GitHub reacts to through GraphQL only: REST has no
+#: endpoint for a review's body.
+ADD_REACTION = """
+mutation($subject: ID!, $content: ReactionContent!) {
+  addReaction(input: {subjectId: $subject, content: $content}) {
+    reaction { content }
+  }
+}
+"""
+
+#: Where the subject of a reaction lives, read before the reaction is sent.
+REACTION_SUBJECT = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on RepositoryNode { repository { name owner { login } } }
+  }
+}
+"""
+
+#: The GraphQL writes that name no node outside the configured owner: the
+#: configured Project's own operations. With ``ADD_REACTION`` they are the only
+#: mutation documents GuildBotics sends, so they are matched as written.
 PROJECT_MUTATIONS = frozenset(
     {
         ADD_PROJECT_ITEM,
@@ -127,7 +148,9 @@ def check_repository(scope: str, owner: str, repository: str) -> None:
         _refuse(scope, "/".join(name for name in (owner, repository) if name))
 
 
-def check_request(scope: str, base_url: httpx.URL, request: httpx.Request) -> None:
+async def check_request(
+    scope: str, base_url: httpx.URL, request: httpx.Request, client: httpx.AsyncClient
+) -> None:
     """Refuse ``request`` unless it reads or writes within ``scope``.
 
     Args:
@@ -136,6 +159,7 @@ def check_request(scope: str, base_url: httpx.URL, request: httpx.Request) -> No
             request's path starts with its path (``/api/v3`` on GitHub
             Enterprise Server).
         request: The request about to be sent.
+        client: The client sending it, which reads the subject of a reaction.
 
     Raises:
         RepositoryScopeError: If the request goes to another host or writes
@@ -150,7 +174,7 @@ def check_request(scope: str, base_url: httpx.URL, request: httpx.Request) -> No
     if base_path and path.startswith(f"{base_path}/"):
         path = path.removeprefix(base_path)
     if path == "/graphql":
-        permitted = _graphql_permitted(request.content)
+        permitted = await _graphql_permitted(scope, request.content, client)
     elif _TOKEN_RENEWAL.fullmatch(path):
         permitted = True
     else:
@@ -175,15 +199,40 @@ def _in_scope(scope: str, owner: str, repository: str) -> bool:
     )
 
 
-def _graphql_permitted(content: bytes) -> bool:
+async def _graphql_permitted(
+    scope: str, content: bytes, client: httpx.AsyncClient
+) -> bool:
     try:
         body = json.loads(content)
     except ValueError:
         return False
-    document = body.get("query") if isinstance(body, dict) else None
-    if not isinstance(document, str):
+    if not isinstance(body, dict) or not isinstance(document := body.get("query"), str):
         return False
+    if document == ADD_REACTION:
+        variables = body.get("variables")
+        subject = variables.get("subject") if isinstance(variables, dict) else None
+        return isinstance(subject, str) and await _subject_in_scope(
+            scope, subject, client
+        )
     return document in PROJECT_MUTATIONS or not _MUTATION.search(document)
+
+
+async def _subject_in_scope(
+    scope: str, subject: str, client: httpx.AsyncClient
+) -> bool:
+    response = await client.post(
+        "/graphql", json={"query": REACTION_SUBJECT, "variables": {"id": subject}}
+    )
+    try:
+        repository = response.json()["data"]["node"]["repository"]
+        owner, name = repository["owner"]["login"], repository["name"]
+    except (ValueError, LookupError, TypeError):
+        return False  # not a node in any repository GitHub would name
+    return (
+        isinstance(owner, str)
+        and isinstance(name, str)
+        and _in_scope(scope, owner, name)
+    )
 
 
 def _refuse(scope: str, target: str) -> None:

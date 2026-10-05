@@ -32,6 +32,12 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "path",
     ): "bounded: one alert or one size-limited page with an explicit continuation token",
     (
+        "guildbotics/capabilities/member_github.py",
+        "_review_reaction_add",
+        "client.get",
+        "f'/repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}'",
+    ): "single_resource: repository, pull request, and review id identify one review",
+    (
         "guildbotics/app_api/avatar.py",
         "get_github_avatar_url",
         "client.get",
