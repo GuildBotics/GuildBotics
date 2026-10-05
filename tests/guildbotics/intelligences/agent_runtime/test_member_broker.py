@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -407,6 +408,59 @@ async def test_queued_member_writes_follow_request_lifetime(
             assert blocker.result(timeout=5)
     await asyncio.gather(*workers, return_exceptions=True)
     assert writes == (["member write"] if stop == "finish" else [])
+    assert broker._workers == {}
+    assert broker._calls == set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_calls_stops_all_queued_workers_before_yielding(
+    monkeypatch, tmp_path
+) -> None:
+    """Executor workers can start before cancelled requests resume on the loop."""
+    loop = asyncio.get_running_loop()
+    queued = []
+    writes: list[str] = []
+
+    def enqueue(_executor, function, *args):
+        work = loop.create_future()
+        queued.append((work, partial(function, *args)))
+        return work
+
+    def run_in_process(*_args, **_kwargs):
+        writes.append("member write")
+        return 0, "", ""
+
+    monkeypatch.setattr(loop, "run_in_executor", enqueue)
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    broker = _active_broker(_context(tmp_path))
+    calls = [
+        asyncio.create_task(
+            broker.run("aiko", ["help"], MemberInvocation(), cwd=tmp_path, stdin="")
+        )
+        for _ in range(2)
+    ]
+    try:
+        await asyncio.sleep(0)
+        assert len(queued) == len(broker._workers) == len(broker._calls) == 2
+        events = tuple(broker._workers.values())
+        assert len({id(event) for event in events}) == 2
+        assert not any(event.is_set() for event in events)
+
+        broker._cancel_calls()
+        # Do not yield: request cancellation handlers must not notify for us.
+        results = [command() for _work, command in queued]
+        assert all(event.is_set() for event in events)
+        assert [result[0] for result in results] == [125, 125]
+        assert writes == []
+        assert all(not work.cancelled() for work, _command in queued)
+    finally:
+        for work, _command in queued:
+            work.set_result((125, "", ""))
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*calls, return_exceptions=True)
+        await broker.settle(abandon=True)
+
     assert broker._workers == {}
     assert broker._calls == set()
 
