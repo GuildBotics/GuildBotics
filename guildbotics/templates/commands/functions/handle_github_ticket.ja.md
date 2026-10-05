@@ -16,7 +16,6 @@ GitHub issue / pull request の内容を理解し、割り当てられた GuildB
 - Pull request URL: {pull_request_url}
 - 起動理由: {trigger_reason}
 - Member workspace: {member_workspace}
-- Workflow run ID: {workflow_run_id}
 - プロジェクトのデフォルト言語: {language}
 </target>
 
@@ -41,6 +40,6 @@ GitHub issue / pull request の内容を理解し、割り当てられた GuildB
 9. follow-up issue の作成は、ticket 本文またはコメントで人間がそれを求めている場合に限り `guildbotics member github issue create --human-approved` で行ってください。別 member が書いた依頼は承認にはなりません。依頼者が人間だと判断できない場合は、ticket コメントで follow-up を提案してください。
 10. 情報が不足している場合の質問は、`issue comment --content-file <file>`、`pr comment --content-file <file>`、または `pr reply --content-file <file>` で GitHub 上に投稿してください。推測しないでください。
 11. 自律 workflow で policy 変更が必要だと判断した場合は、ticket コメントで提案し、新規 issue 作成や policy update はしないでください。
-12. 最後に必ず `guildbotics member task complete --person {person_id} --run-id {workflow_run_id} --ticket-url {ticket_url} --status done|asking|blocked --content-file <file>` を実行し、run summary は member capabilities の一時ファイル契約に従って渡してください。`--status done` は、あなたが作成したか push した open PR の readiness を再検証し、base に対する遅れ、pending、failure、head の更新があれば拒否します。この run 内で解消できない blocker は `asking` または `blocked` で終了してください。
+12. 最後に必ず `guildbotics member task complete --person {person_id} --ticket-url {ticket_url} --status done|asking|blocked --content-file <file>` を実行し、run summary は member capabilities の一時ファイル契約に従って渡してください。`--status done` は、あなたが作成したか push した open PR の readiness を再検証し、base に対する遅れ、pending、failure、head の更新があれば拒否します。この run 内で解消できない blocker は `asking` または `blocked` で終了してください。
 13. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"PR 作成と GitHub コメント投稿を完了しました。"}` / `{"status":"asking","message":"GitHub に質問コメントを投稿しました。"}`
 </instructions>

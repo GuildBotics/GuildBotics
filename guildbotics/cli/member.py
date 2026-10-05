@@ -5,7 +5,7 @@ import io
 import json
 import re
 import traceback
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import wraps
@@ -102,6 +102,8 @@ from guildbotics.workspace.identity import (
 )
 
 WorkspaceMode = Literal["member", "current"]
+#: What a member command's callback returns: the work the command runs.
+_CommandWork = Coroutine[Any, Any, Any]
 SLACK_TS_FRACTION_DIGITS = 6
 _READ_ONLY_COMMAND_ATTRIBUTE = "__guildbotics_member_read_only__"
 
@@ -252,6 +254,18 @@ class _MemberCommand(click.Command):
     def get_help_option(self, ctx: click.Context) -> click.Option | None:
         return _help_to_call(super().get_help_option(ctx))
 
+    def invoke(self, ctx: click.Context) -> Any:
+        """Run the work the callback returns under the member command's guard.
+
+        The callback only reads and checks the command's input, so a usage
+        error needs neither the workspace nor the lease; what the command does
+        is the work it returns, which runs once the guard admits it.
+        """
+        work = super().invoke(ctx)
+        if work is None:
+            return None
+        return _run(work, output_format=ctx.params["output_format"])
+
 
 class _MemberGroup(SharedWriteBusyGroup):
     command_class = _MemberCommand
@@ -280,12 +294,11 @@ def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     help="Also verify the member's provider credentials.",
 )
 @_markdown_format_option
-def context_cmd(person: str, check_credentials: bool, output_format: str) -> None:
+def context_cmd(
+    person: str, check_credentials: bool, output_format: str
+) -> _CommandWork:
     """Show non-secret member context."""
-    _run(
-        _context_cmd(person, check_credentials, output_format),
-        output_format=output_format,
-    )
+    return _context_cmd(person, check_credentials, output_format)
 
 
 @member.command(name="help")
@@ -337,12 +350,9 @@ def agent_conversation_reset(
     work_kind: str,
     work_identity: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     """Reset one exact native provider session without deleting history."""
-    _run(
-        _agent_conversation_reset(person, adapter, work_kind, work_identity),
-        output_format=output_format,
-    )
+    return _agent_conversation_reset(person, adapter, work_kind, work_identity)
 
 
 async def _agent_conversation_reset(
@@ -463,24 +473,21 @@ def memory_record(
     policy_approved: bool,
     set_values: tuple[str, ...],
     output_format: str,
-) -> None:
+) -> _CommandWork:
     title = _validate_title(title)
     body = _read_stdin("memory body")
-    _run(
-        _memory_record(
-            person,
-            scope,
-            title,
-            summary,
-            list(keywords),
-            _source_entries(tickets, prs, channels, threads),
-            kind,
-            pinned,
-            body,
-            policy_approved,
-            _parse_set_values(set_values),
-        ),
-        output_format=output_format,
+    return _memory_record(
+        person,
+        scope,
+        title,
+        summary,
+        list(keywords),
+        _source_entries(tickets, prs, channels, threads),
+        kind,
+        pinned,
+        body,
+        policy_approved,
+        _parse_set_values(set_values),
     )
 
 
@@ -539,11 +546,8 @@ def memory_recall(
     meta_only: bool,
     limit: int,
     output_format: str,
-) -> None:
-    _run(
-        _memory_recall(person, list(queries), meta_only, limit),
-        output_format=output_format,
-    )
+) -> _CommandWork:
+    return _memory_recall(person, list(queries), meta_only, limit)
 
 
 async def _memory_recall(
@@ -568,11 +572,10 @@ async def _memory_recall(
     help="Operate on team memory instead of personal memory.",
 )
 @_json_format_option
-def memory_get(person: str, doc_id: str, team_scope: bool, output_format: str) -> None:
-    _run(
-        _memory_get(person, doc_id, "team" if team_scope else None),
-        output_format=output_format,
-    )
+def memory_get(
+    person: str, doc_id: str, team_scope: bool, output_format: str
+) -> _CommandWork:
+    return _memory_get(person, doc_id, "team" if team_scope else None)
 
 
 async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
@@ -678,29 +681,26 @@ def memory_update(
     policy_approved: bool,
     set_values: tuple[str, ...],
     output_format: str,
-) -> None:
+) -> _CommandWork:
     body = _read_optional_stdin(content_stdin, "memory body")
     if title is not None:
         title = _validate_title(title)
     source = _source_entries(tickets, prs, channels, threads)
-    _run(
-        _memory_update(
-            person=person,
-            doc_id=doc_id,
-            scope="team" if team_scope else None,
-            title=title,
-            summary=summary,
-            keywords=list(keywords) if keywords else None,
-            add_keywords=list(add_keywords),
-            remove_keywords=list(remove_keywords),
-            source=source if source else None,
-            pinned=pin_value,
-            kind=kind,
-            body=body,
-            policy_approved=policy_approved,
-            params=_parse_set_values(set_values),
-        ),
-        output_format=output_format,
+    return _memory_update(
+        person=person,
+        doc_id=doc_id,
+        scope="team" if team_scope else None,
+        title=title,
+        summary=summary,
+        keywords=list(keywords) if keywords else None,
+        add_keywords=list(add_keywords),
+        remove_keywords=list(remove_keywords),
+        source=source if source else None,
+        pinned=pin_value,
+        kind=kind,
+        body=body,
+        policy_approved=policy_approved,
+        params=_parse_set_values(set_values),
     )
 
 
@@ -721,11 +721,8 @@ async def _memory_update(**kwargs: Any) -> dict[str, Any]:
 @_json_format_option
 def memory_touch(
     person: str, doc_id: str, team_scope: bool, output_format: str
-) -> None:
-    _run(
-        _memory_touch(person, doc_id, "team" if team_scope else None),
-        output_format=output_format,
-    )
+) -> _CommandWork:
+    return _memory_touch(person, doc_id, "team" if team_scope else None)
 
 
 async def _memory_touch(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
@@ -756,12 +753,9 @@ def memory_archive(
     team_scope: bool,
     policy_approved: bool,
     output_format: str,
-) -> None:
-    _run(
-        _memory_archive(
-            person, doc_id, "team" if team_scope else None, policy_approved
-        ),
-        output_format=output_format,
+) -> _CommandWork:
+    return _memory_archive(
+        person, doc_id, "team" if team_scope else None, policy_approved
     )
 
 
@@ -780,8 +774,8 @@ async def _memory_archive(
 @_person_option
 @click.option("--id", "doc_id", required=True, help="Memory document id.")
 @_json_format_option
-def memory_promote(person: str, doc_id: str, output_format: str) -> None:
-    _run(_memory_promote(person, doc_id), output_format=output_format)
+def memory_promote(person: str, doc_id: str, output_format: str) -> _CommandWork:
+    return _memory_promote(person, doc_id)
 
 
 async def _memory_promote(person: str, doc_id: str) -> dict[str, Any]:
@@ -833,8 +827,8 @@ def chat() -> None:
 @_person_option
 @_service_option
 @_markdown_format_option
-def chat_identity(person: str, service_name: str, output_format: str) -> None:
-    _run(_chat_identity(person, service_name), output_format=output_format)
+def chat_identity(person: str, service_name: str, output_format: str) -> _CommandWork:
+    return _chat_identity(person, service_name)
 
 
 async def _chat_identity(person: str, service_name: str) -> dict[str, Any]:
@@ -854,14 +848,10 @@ async def _chat_identity(person: str, service_name: str) -> dict[str, Any]:
 
 @chat.command(name="updates")
 @_person_option
-@click.option(
-    "--run-id",
-    required=True,
-    help="Chat workflow run whose source thread should be checked.",
-)
 @_json_format_option
-def chat_updates(person: str, run_id: str, output_format: str) -> None:
-    _run(_chat_updates(person, run_id), output_format=output_format)
+def chat_updates(person: str, output_format: str) -> _CommandWork:
+    run_id = _workflow_run(current_member_invocation().run_id)
+    return _chat_updates(person, run_id)
 
 
 async def _chat_updates(person: str, run_id: str) -> dict[str, Any]:
@@ -913,18 +903,15 @@ def chat_inspect_channel(
     latest_ts: str,
     limit: int,
     output_format: str,
-) -> None:
-    _run(
-        _chat_inspect_channel(
-            person,
-            service_name,
-            channel_id or None,
-            channel_name or None,
-            oldest_ts or None,
-            latest_ts or None,
-            limit,
-        ),
-        output_format=output_format,
+) -> _CommandWork:
+    return _chat_inspect_channel(
+        person,
+        service_name,
+        channel_id or None,
+        channel_name or None,
+        oldest_ts or None,
+        latest_ts or None,
+        limit,
     )
 
 
@@ -965,11 +952,8 @@ async def _chat_inspect_channel(
 @_json_format_option
 def chat_resolve_channel(
     person: str, service_name: str, channel_name: str, output_format: str
-) -> None:
-    _run(
-        _chat_resolve_channel(person, service_name, channel_name),
-        output_format=output_format,
-    )
+) -> _CommandWork:
+    return _chat_resolve_channel(person, service_name, channel_name)
 
 
 async def _chat_resolve_channel(
@@ -1021,7 +1005,7 @@ def chat_inspect_thread(
     message_url: str,
     limit: int,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     ref = _resolve_message_reference(
         channel_id=channel_id or None,
         thread_ts=thread_ts or None,
@@ -1031,16 +1015,13 @@ def chat_inspect_thread(
     resolved_thread_ts = ref["thread_ts"] or ref["message_ts"]
     if not resolved_thread_ts:
         raise click.ClickException("Either --thread-ts or --message-url is required.")
-    _run(
-        _chat_inspect_thread(
-            person,
-            service_name,
-            ref["channel_id"],
-            channel_name or None,
-            resolved_thread_ts,
-            limit,
-        ),
-        output_format=output_format,
+    return _chat_inspect_thread(
+        person,
+        service_name,
+        ref["channel_id"],
+        channel_name or None,
+        resolved_thread_ts,
+        limit,
     )
 
 
@@ -1088,17 +1069,14 @@ def chat_post(
     channel_id: str,
     channel_name: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     body = _read_stdin("message body")
-    _run(
-        _chat_post(
-            person,
-            service_name,
-            channel_id or None,
-            channel_name or None,
-            body,
-        ),
-        output_format=output_format,
+    return _chat_post(
+        person,
+        service_name,
+        channel_id or None,
+        channel_name or None,
+        body,
     )
 
 
@@ -1152,7 +1130,7 @@ def chat_reply(
     thread_ts: str,
     message_url: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     body = _read_stdin("message body")
     ref = _resolve_message_reference(
         channel_id=channel_id or None,
@@ -1163,16 +1141,13 @@ def chat_reply(
     resolved_thread_ts = ref["thread_ts"] or ref["message_ts"]
     if not resolved_thread_ts:
         raise click.ClickException("Either --thread-ts or --message-url is required.")
-    _run(
-        _chat_reply(
-            person,
-            service_name,
-            ref["channel_id"],
-            channel_name or None,
-            resolved_thread_ts,
-            body,
-        ),
-        output_format=output_format,
+    return _chat_reply(
+        person,
+        service_name,
+        ref["channel_id"],
+        channel_name or None,
+        resolved_thread_ts,
+        body,
     )
 
 
@@ -1241,7 +1216,7 @@ def chat_reaction_add(
     message_url: str,
     reaction: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     ref = _resolve_message_reference(
         channel_id=channel_id or None,
         thread_ts=None,
@@ -1250,16 +1225,13 @@ def chat_reaction_add(
     )
     if not ref["message_ts"]:
         raise click.ClickException("Either --message-ts or --message-url is required.")
-    _run(
-        _chat_reaction_add(
-            person,
-            service_name,
-            ref["channel_id"],
-            channel_name or None,
-            ref["message_ts"],
-            reaction,
-        ),
-        output_format=output_format,
+    return _chat_reaction_add(
+        person,
+        service_name,
+        ref["channel_id"],
+        channel_name or None,
+        ref["message_ts"],
+        reaction,
     )
 
 
@@ -1293,7 +1265,6 @@ async def _chat_reaction_add(
 
 @chat.command(name="noop")
 @_person_option
-@click.option("--run-id", required=True, help="Workflow run id.")
 @_service_option
 @click.option("--channel-id", required=True, help="Channel id of the triggering event.")
 @click.option(
@@ -1304,30 +1275,34 @@ async def _chat_reaction_add(
 @_json_format_option
 def chat_noop(
     person: str,
-    run_id: str,
     service_name: str,
     channel_id: str,
     thread_ts: str,
     event_id: str,
     output_format: str,
-) -> None:
-    reason = _read_stdin("no-op reason")
-    _resolve(person)
+) -> _CommandWork:
+    run_id = _workflow_run(current_member_invocation().run_id)
     payload = {
         "service": service_name,
         "channel_id": channel_id,
         "thread_ts": thread_ts,
         "event_id": event_id,
-        "reason": reason,
+        "reason": _read_stdin("no-op reason"),
         "noop": True,
     }
+    return _chat_noop(person, run_id, payload)
+
+
+async def _chat_noop(
+    person: str, run_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    _resolve(person)
     RunStore().append_evidence(run_id, "chat_noop", payload)
-    _emit(payload, output_format)
+    return payload
 
 
 @chat.command(name="complete")
 @_person_option
-@click.option("--run-id", required=True, help="Workflow run id.")
 @_service_option
 @click.option("--channel-id", required=True, help="Channel id of the triggering event.")
 @click.option(
@@ -1344,33 +1319,35 @@ def chat_noop(
 @_json_format_option
 def chat_complete(
     person: str,
-    run_id: str,
     service_name: str,
     channel_id: str,
     thread_ts: str,
     event_id: str,
     status: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
+    run_id = _workflow_run(current_member_invocation().run_id)
     summary = _read_stdin("run summary")
-    _resolve(person)
     subject_id = f"{service_name}:{channel_id}:{thread_ts}:{event_id}"
-    try:
-        payload = (
-            RunStore()
-            .complete_run(
-                run_id,
-                status,
-                summary,
-                subject_type="chat",
-                subject_id=subject_id,
-                person_id=person,
-            )
-            .to_dict()
+    return _chat_complete(person, run_id, status, summary, subject_id)
+
+
+async def _chat_complete(
+    person: str, run_id: str, status: str, summary: str, subject_id: str
+) -> dict[str, Any]:
+    _resolve(person)
+    return (
+        RunStore()
+        .complete_run(
+            run_id,
+            status,
+            summary,
+            subject_type="chat",
+            subject_id=subject_id,
+            person_id=person,
         )
-    except TaskRunError as exc:
-        raise click.ClickException(_safe_error(exc)) from exc
-    _emit(payload, output_format)
+        .to_dict()
+    )
 
 
 @member.group()
@@ -1396,13 +1373,10 @@ def git_prepare(
     repo: str,
     branch: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     _validate_prepare_anchor(issue_url, pr_url, repo, branch)
-    _run(
-        _git_prepare(
-            person, issue_url or None, pr_url or None, repo or None, branch or None
-        ),
-        output_format=output_format,
+    return _git_prepare(
+        person, issue_url or None, pr_url or None, repo or None, branch or None
     )
 
 
@@ -1456,7 +1430,7 @@ def git_commit(
     repo_path: Path,
     workspace_mode: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     """Commit already-staged changes with the member identity.
 
     Stage the files you want with plain git (e.g. ``git add``) first; this
@@ -1464,10 +1438,7 @@ def git_commit(
     that single commit without changing the repository's git config.
     """
     message = _read_stdin("commit message")
-    _run(
-        _git_commit(person, repo_path, message, workspace_mode),
-        output_format=output_format,
-    )
+    return _git_commit(person, repo_path, message, workspace_mode)
 
 
 async def _git_commit(
@@ -1509,11 +1480,8 @@ def git_push(
     repo_path: Path,
     workspace_mode: str,
     output_format: str,
-) -> None:
-    _run(
-        _git_push(person, repo_path, workspace_mode),
-        output_format=output_format,
-    )
+) -> _CommandWork:
+    return _git_push(person, repo_path, workspace_mode)
 
 
 async def _git_push(
@@ -1555,7 +1523,7 @@ def git_publish(
     repo_path: Path,
     workspace_mode: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     """Commit already-staged changes with the member identity, then push.
 
     Stage the files you want with plain git (e.g. ``git add``) first; this
@@ -1563,11 +1531,7 @@ def git_publish(
     branch using the member credential.
     """
     message = _read_stdin("commit message")
-    result = _run(
-        _git_publish(person, repo_path, message, workspace_mode),
-        output_format=output_format,
-    )
-    return result
+    return _git_publish(person, repo_path, message, workspace_mode)
 
 
 async def _git_publish(
@@ -1691,7 +1655,7 @@ def repository_read(
     parameters: str,
     continuation: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     try:
         conditions = json.loads(parameters)
         if not isinstance(conditions, dict):
@@ -1701,16 +1665,13 @@ def repository_read(
             "Expected a JSON object.", param_hint="--params"
         ) from None
     context, _ = _resolve(person)
-    _run(
-        read_repository(
-            context,
-            resource,
-            repo,
-            identifier=identifier,
-            parameters=conditions,
-            continuation=continuation,
-        ),
-        output_format=output_format,
+    return read_repository(
+        context,
+        resource,
+        repo,
+        identifier=identifier,
+        parameters=conditions,
+        continuation=continuation,
     )
 
 
@@ -1723,16 +1684,13 @@ def issue_comment(
     person: str,
     issue_url: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     body = _read_stdin("issue comment body")
-    _run(
-        _github(
-            person,
-            lambda service: service.issue_comment(issue_url, body),
-            evidence="issue_comment",
-            then=record_member_issue_comment_event,
-        ),
-        output_format=output_format,
+    return _github(
+        person,
+        lambda service: service.issue_comment(issue_url, body),
+        evidence="issue_comment",
+        then=record_member_issue_comment_event,
     )
 
 
@@ -1762,19 +1720,16 @@ def issue_create(
     add_to_project: bool,
     human_approved: bool,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     title = _validate_title(title)
     body = _read_stdin("issue body")
-    _run(
-        _github(
-            person,
-            lambda service: service.issue_create(
-                repo, title, body, add_to_project, list(labels), human_approved
-            ),
-            evidence="issue_create",
-            then=record_member_issue_create_event,
+    return _github(
+        person,
+        lambda service: service.issue_create(
+            repo, title, body, add_to_project, list(labels), human_approved
         ),
-        output_format=output_format,
+        evidence="issue_create",
+        then=record_member_issue_create_event,
     )
 
 
@@ -1818,7 +1773,7 @@ def issue_update(
     state_reason: str | None,
     human_approved: bool,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     if state_reason and state != "closed":
         raise click.UsageError("--state-reason requires --state closed.")
     if not (content_stdin or title is not None or add_labels or remove_labels or state):
@@ -1828,23 +1783,20 @@ def issue_update(
         )
     body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    _run(
-        _github(
-            person,
-            lambda service: service.issue_update(
-                issue_url,
-                body=body,
-                title=new_title,
-                add_labels=list(add_labels),
-                remove_labels=list(remove_labels),
-                state=state,
-                state_reason=state_reason,
-                human_approved=human_approved,
-            ),
-            evidence="issue_update",
-            then=record_member_issue_close_event,
+    return _github(
+        person,
+        lambda service: service.issue_update(
+            issue_url,
+            body=body,
+            title=new_title,
+            add_labels=list(add_labels),
+            remove_labels=list(remove_labels),
+            state=state,
+            state_reason=state_reason,
+            human_approved=human_approved,
         ),
-        output_format=output_format,
+        evidence="issue_update",
+        then=record_member_issue_close_event,
     )
 
 
@@ -1895,23 +1847,20 @@ def pr_create(
     closes_issue: bool,
     draft: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     title = _validate_title(title)
     if closes_issue and not issue_url.strip():
         raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_create(
-                repo, head, base, title, body, issue_url, draft, closes_issue
-            ),
-            evidence="pr_create",
-            then=lambda member, result: record_member_pr_create_event(
-                member, repo, title, result
-            ),
+    return _github(
+        person,
+        lambda service: service.pr_create(
+            repo, head, base, title, body, issue_url, draft, closes_issue
         ),
-        output_format=output_format,
+        evidence="pr_create",
+        then=lambda member, result: record_member_pr_create_event(
+            member, repo, title, result
+        ),
     )
 
 
@@ -1941,7 +1890,7 @@ def pr_update(
     title: str | None,
     drop_issue_links: bool,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     if drop_issue_links and not content_stdin:
         raise click.UsageError(
             "--drop-issue-links requires --content-stdin/--content-file."
@@ -1952,15 +1901,12 @@ def pr_update(
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_update(
-                pr_url, body=body, title=new_title, drop_issue_links=drop_issue_links
-            ),
-            evidence="pr_update",
+    return _github(
+        person,
+        lambda service: service.pr_update(
+            pr_url, body=body, title=new_title, drop_issue_links=drop_issue_links
         ),
-        output_format=output_format,
+        evidence="pr_update",
     )
 
 
@@ -1969,15 +1915,12 @@ def pr_update(
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
 @_required_content_stdin_option
 @_json_format_option
-def pr_comment(person: str, pr_url: str, output_format: str) -> None:
+def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request comment body")
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_comment(pr_url, body),
-            evidence="pr_comment",
-        ),
-        output_format=output_format,
+    return _github(
+        person,
+        lambda service: service.pr_comment(pr_url, body),
+        evidence="pr_comment",
     )
 
 
@@ -1992,15 +1935,12 @@ def pr_comment(person: str, pr_url: str, output_format: str) -> None:
 )
 @_required_content_stdin_option
 @_json_format_option
-def pr_review(person: str, pr_url: str, event: str, output_format: str) -> None:
+def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request review body")
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_review(pr_url, body, event),
-            evidence="pr_review",
-        ),
-        output_format=output_format,
+    return _github(
+        person,
+        lambda service: service.pr_review(pr_url, body, event),
+        evidence="pr_review",
     )
 
 
@@ -2043,21 +1983,18 @@ def pr_review_comment(
     start_line: int | None,
     start_side: str | None,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     if (start_line is None) != (start_side is None):
         raise click.ClickException(
             "--start-line and --start-side must be provided together."
         )
     body = _read_stdin("pull request review comment body")
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_review_comment(
-                pr_url, body, file_path, line, side, start_line, start_side
-            ),
-            evidence="pr_review_comment",
+    return _github(
+        person,
+        lambda service: service.pr_review_comment(
+            pr_url, body, file_path, line, side, start_line, start_side
         ),
-        output_format=output_format,
+        evidence="pr_review_comment",
     )
 
 
@@ -2077,15 +2014,12 @@ def pr_reply(
     pr_url: str,
     reply_target_id: int,
     output_format: str,
-) -> None:
+) -> _CommandWork:
     body = _read_stdin("pull request reply body")
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_reply(pr_url, reply_target_id, body),
-            evidence="pr_reply",
-        ),
-        output_format=output_format,
+    return _github(
+        person,
+        lambda service: service.pr_reply(pr_url, reply_target_id, body),
+        evidence="pr_reply",
     )
 
 
@@ -2125,13 +2059,10 @@ def artifact_download(
     name: str,
     dest: Path,
     output_format: str,
-) -> None:
-    _run(
-        _github(
-            person,
-            lambda service: service.artifact_download(target_url, name, dest),
-        ),
-        output_format=output_format,
+) -> _CommandWork:
+    return _github(
+        person,
+        lambda service: service.artifact_download(target_url, name, dest),
     )
 
 
@@ -2179,11 +2110,8 @@ def reaction_add(
     pr_number: int | None,
     reaction_content: str,
     output_format: str,
-) -> None:
-    _run(
-        _reaction_add(person, repo, target, comment_id, pr_number, reaction_content),
-        output_format=output_format,
-    )
+) -> _CommandWork:
+    return _reaction_add(person, repo, target, comment_id, pr_number, reaction_content)
 
 
 async def _reaction_add(
@@ -2213,7 +2141,6 @@ def task() -> None:
 
 @task.command(name="complete")
 @_person_option
-@click.option("--run-id", required=True, help="Workflow run id.")
 @click.option(
     "--ticket-url", required=True, help="Ticket URL the completed run worked on."
 )
@@ -2227,16 +2154,13 @@ def task() -> None:
 @_json_format_option
 def task_complete(
     person: str,
-    run_id: str,
     ticket_url: str,
     status: str,
     output_format: str,
-) -> None:
+) -> _CommandWork:
+    run_id = _workflow_run(current_member_invocation().task_run_id)
     summary = _read_stdin("run summary")
-    _run(
-        _task_complete(person, run_id, ticket_url, status, summary),
-        output_format=output_format,
-    )
+    return _task_complete(person, run_id, ticket_url, status, summary)
 
 
 async def _task_complete(
@@ -2244,43 +2168,36 @@ async def _task_complete(
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     store = TaskRunStore()
-    try:
-        readiness: list[dict[str, Any]] = []
-        if status == "done":
-            service = MemberGitHubCapabilityService(member_person, context.team)
-            try:
-                readiness = await service.task_completion_readiness(
-                    ticket_url, store.evidence(run_id)
-                )
-            finally:
-                await service.aclose()
-        payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
-        if status == "done":
-            payload["pr_readiness"] = readiness
-        return payload
-    except (MemberCapabilityError, TaskRunError) as exc:
-        raise click.ClickException(_safe_error(exc)) from exc
+    readiness: list[dict[str, Any]] = []
+    if status == "done":
+        service = MemberGitHubCapabilityService(member_person, context.team)
+        try:
+            readiness = await service.task_completion_readiness(
+                ticket_url, store.evidence(run_id)
+            )
+        finally:
+            await service.aclose()
+    payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
+    if status == "done":
+        payload["pr_readiness"] = readiness
+    return payload
 
 
 @task.command(name="status")
 @_read_only_member_command
-@click.option("--run-id", required=True, help="Workflow run id.")
 @click.option(
     "--person",
     default="",
     help="Accepted for consistency with other member commands; not required.",
 )
 @_json_format_option
-def task_status(run_id: str, person: str, output_format: str) -> None:
-    _run(_task_status(run_id, person), output_format=output_format)
+def task_status(person: str, output_format: str) -> _CommandWork:
+    run_id = _workflow_run(current_member_invocation().task_run_id)
+    return _task_status(run_id)
 
 
-async def _task_status(run_id: str, person: str) -> dict[str, Any]:
-    del person
-    try:
-        return TaskRunStore().status(run_id).to_dict()
-    except TaskRunError as exc:
-        raise click.ClickException(_safe_error(exc)) from exc
+async def _task_status(run_id: str) -> dict[str, Any]:
+    return TaskRunStore().status(run_id).to_dict()
 
 
 def _resolve(person: str):
@@ -2293,6 +2210,14 @@ def _resolve(person: str):
         if exc.available:
             message = f"{message} Available members: {', '.join(exc.available)}."
         raise click.ClickException(message) from exc
+
+
+def _workflow_run(run_id: str | None) -> str:
+    """The run of the workflow turn that invoked the command, which is the only
+    run the command may act on; a call outside one is refused."""
+    if not run_id:
+        raise click.ClickException(t("cli.member.run.required"))
+    return run_id
 
 
 def _read_stdin(label: str, *, allow_empty: bool = False) -> str:

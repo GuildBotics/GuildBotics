@@ -39,7 +39,6 @@ async def main(context: Any) -> None:
             "commands.workflows.common.workflow_contract",
             person_id=person_id,
         ),
-        workflow_run_id=turn.run_id,
         service_name=turn.service_name,
         channel_id=turn.channel_id,
         event_id=turn.event_id,

@@ -63,9 +63,6 @@ def _receive_delay_reason(state: ReceiveState) -> str:
 
 def check_chat_updates(person_id: str, run_id: str) -> dict[str, Any]:
     """Deliver new input without acknowledging or removing pending events."""
-    active_run = current_member_invocation().run_id
-    if active_run and active_run != run_id:
-        raise ChatUpdatesRequired(t("cli.member.chat_updates.invalid_run"))
     source, evidence = _source(person_id, run_id)
     result: dict[str, Any] = {
         "run_id": run_id,
@@ -112,6 +109,5 @@ def ensure_chat_current(person_id: str, run_id: str | None = None) -> None:
             "cli.member.chat_updates.required",
             reason=reason,
             person=person_id,
-            run_id=run_id,
         )
     )

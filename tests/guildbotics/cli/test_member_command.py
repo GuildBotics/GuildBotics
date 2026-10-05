@@ -114,10 +114,13 @@ def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
 
 @pytest.fixture
 def bind_invocation():
-    """Bind a member invocation for the rest of the test, as the broker does."""
+    """Bind a member invocation for the rest of the test, as the broker does,
+    releasing the lease it carries when the test ends."""
     with ExitStack() as stack:
 
         def bind(**fields) -> None:
+            if fields.get("lease") is not None:
+                stack.callback(fields["lease"].release)
             stack.enter_context(member_invocation_scope(MemberInvocation(**fields)))
 
         yield bind
@@ -508,7 +511,7 @@ def test_workflow_member_write_rejects_missing_delegation(
     )
 
     assert result.exit_code != 0
-    assert "execution lease delegation is invalid" in result.output
+    assert member_module.t("cli.member.lease.invalid_delegation") in result.output
 
 
 def test_member_memory_record_and_recall_cli(monkeypatch):
@@ -1138,9 +1141,8 @@ CONTENT_COMMANDS = (
     "memory record --person aiko --title Title",
     "chat post --person aiko --channel-id C1",
     "chat reply --person aiko --channel-id C1 --thread-ts 100.1",
-    "chat noop --person aiko --run-id run-1 --channel-id C1 "
-    "--thread-ts 100.1 --event-id E1",
-    "chat complete --person aiko --run-id run-1 --channel-id C1 "
+    "chat noop --person aiko --channel-id C1 --thread-ts 100.1 --event-id E1",
+    "chat complete --person aiko --channel-id C1 "
     "--thread-ts 100.1 --event-id E1 --status done",
     "git commit --person aiko --repo-path .",
     "git publish --person aiko --repo-path .",
@@ -1152,13 +1154,14 @@ CONTENT_COMMANDS = (
     "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
     "github pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
     "--reply-target-id 1",
-    "task complete --person aiko --run-id run-1 "
+    "task complete --person aiko "
     "--ticket-url https://github.com/owner/repo/issues/1 --status done",
 )
 
 
 @pytest.mark.parametrize("command", CONTENT_COMMANDS)
-def test_required_content_commands_reject_empty_stdin(command):
+def test_required_content_commands_reject_empty_stdin(command, bind_invocation):
+    _bind_workflow(bind_invocation, run_id="run-1", task_run_id="run-1")
     result = CliRunner().invoke(
         member_module.member,
         [*command.split(), "--content-stdin"],
@@ -3050,9 +3053,10 @@ def test_member_github_pr_review_comment_rejects_partial_range():
     assert "--start-line and --start-side must be provided together" in result.output
 
 
-def test_member_task_status_cli(monkeypatch, tmp_path):
+def test_member_task_status_cli(monkeypatch, bind_invocation, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    bind_invocation(task_run_id="run-1")
     store = TaskRunStore()
     store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
     store.complete(
@@ -3066,7 +3070,7 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
 
     result = runner.invoke(
         member_module.member,
-        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+        ["task", "status", "--person", "aiko"],
     )
 
     assert result.exit_code == 0
@@ -3074,35 +3078,32 @@ def test_member_task_status_cli(monkeypatch, tmp_path):
     assert '"evidence_types": ["issue_comment"]' in result.output
 
 
-def test_member_task_status_ignores_missing_context_for_interactive_trace(
+def test_member_interactive_trace_leaves_missing_context_to_the_command(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    missing = FileNotFoundError("team/project.yml")
 
     def missing_context(_identifier):
-        raise FileNotFoundError("team/project.yml")
+        raise missing
+
+    class UnexpectedInteractiveTraceStore:
+        def start_or_touch(self, **_fields):
+            raise AssertionError("no session starts for an unresolvable member")
 
     monkeypatch.setattr(member_module, "resolve_member_context", missing_context)
-    store = TaskRunStore()
-    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
-    store.complete(
-        "run-1",
-        "done",
-        "summary",
-        "https://github.com/owner/repo/issues/1",
-        "aiko",
+    monkeypatch.setattr(
+        member_module, "InteractiveTraceStore", UnexpectedInteractiveTraceStore
     )
-    runner = CliRunner()
 
-    result = runner.invoke(
+    result = CliRunner().invoke(
         member_module.member,
-        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+        ["memory", "recall", "--person", "aiko", "--query", "x"],
     )
 
-    assert result.exit_code == 0
-    assert '"completed": true' in result.output
+    assert result.exception is missing
 
 
 def test_member_task_status_skips_interactive_trace_under_workflow(
@@ -3130,7 +3131,7 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
 
     result = runner.invoke(
         member_module.member,
-        ["task", "status", "--person", "aiko", "--run-id", "run-1"],
+        ["task", "status", "--person", "aiko"],
     )
 
     assert result.exit_code == 0
@@ -3180,15 +3181,6 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(
         member_module, "InteractiveTraceStore", FakeInteractiveTraceStore
     )
-    store = TaskRunStore(workspace / ".guildbotics" / "state" / "task-runs")
-    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
-    store.complete(
-        "run-1",
-        "done",
-        "summary",
-        "https://github.com/owner/repo/issues/1",
-        "aiko",
-    )
     runner = CliRunner()
 
     result = runner.invoke(
@@ -3196,16 +3188,16 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
         [
             "--workspace",
             str(workspace),
-            "task",
-            "status",
+            "memory",
+            "recall",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
+            "--query",
+            "x",
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert calls["workspace"] == str(workspace.resolve())
 
 
@@ -3533,9 +3525,10 @@ def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
     assert payload["reaction"] == "ack"
 
 
-def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
+def test_member_chat_noop_and_complete(tmp_path, monkeypatch, bind_invocation):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
 
     def fake_resolve_member_context(identifier):
@@ -3554,8 +3547,6 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
             "noop",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
             "--channel-id",
             "C1",
             "--thread-ts",
@@ -3573,8 +3564,6 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
             "complete",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
             "--channel-id",
             "C1",
             "--thread-ts",
@@ -3595,9 +3584,12 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
     assert payload["evidence_types"] == ["chat_noop"]
 
 
-def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
+def test_member_task_complete_reads_summary_from_stdin(
+    monkeypatch, bind_invocation, tmp_path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _bind_workflow(bind_invocation, task_run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
 
     def fake_resolve_member_context(identifier):
@@ -3626,8 +3618,6 @@ def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
             "complete",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
             "--ticket-url",
             "https://github.com/owner/repo/issues/1",
             "--status",
@@ -3643,9 +3633,12 @@ def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
     assert payload["pr_readiness"] == []
 
 
-def test_member_task_complete_rejects_blocked_pr_readiness(monkeypatch, tmp_path):
+def test_member_task_complete_rejects_blocked_pr_readiness(
+    monkeypatch, bind_invocation, tmp_path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _bind_workflow(bind_invocation, task_run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     calls = {}
 
@@ -3685,8 +3678,6 @@ def test_member_task_complete_rejects_blocked_pr_readiness(monkeypatch, tmp_path
             "complete",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
             "--ticket-url",
             "https://github.com/owner/repo/issues/1",
             "--status",
@@ -3706,9 +3697,12 @@ def test_member_task_complete_rejects_blocked_pr_readiness(monkeypatch, tmp_path
         store.status("run-1")
 
 
-def test_member_task_complete_returns_revalidated_pr_readiness(monkeypatch, tmp_path):
+def test_member_task_complete_returns_revalidated_pr_readiness(
+    monkeypatch, bind_invocation, tmp_path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _bind_workflow(bind_invocation, task_run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     readiness = {
         "pr_url": "https://github.com/owner/repo/pull/7",
@@ -3748,8 +3742,6 @@ def test_member_task_complete_returns_revalidated_pr_readiness(monkeypatch, tmp_
             "complete",
             "--person",
             "aiko",
-            "--run-id",
-            "run-1",
             "--ticket-url",
             "https://github.com/owner/repo/issues/1",
             "--status",
@@ -3839,7 +3831,7 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
     try:
         result = CliRunner().invoke(
             member_module.member,
-            ["chat", "updates", "--person", "aiko", "--run-id", "run-1"],
+            ["chat", "updates", "--person", "aiko"],
         )
     finally:
         lease.release()

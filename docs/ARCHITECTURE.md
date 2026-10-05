@@ -227,7 +227,7 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   after a recorded completion uses that saved membership, not a newly fetched
   thread, so it cannot acknowledge unread messages or repeat completed actions.
 - Before replying, reacting, pushing Git commits, or writing to GitHub, a chat agent
-  calls `guildbotics member chat updates --person <person> --run-id <run_id>`.
+  calls `guildbotics member chat updates --person <person>`.
   The command returns `new_messages`, `up_to_date`, `catching_up`, or `unavailable` from the durable
   queue for the run's original thread, without calling Slack APIs. The agent reads
   new messages and reconsiders the work. Capability write boundaries independently

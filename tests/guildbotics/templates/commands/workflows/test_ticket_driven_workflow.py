@@ -82,7 +82,6 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
         "attempt": 1,
         "max_completion_attempts": 3,
     }
-    assert kwargs["workflow_run_id"] == "trace-7"
     assert kwargs["person_id"] == "aiko"
     assert kwargs["ticket_url"] == ISSUE_URL
     assert kwargs["pull_request_url"] == ""
