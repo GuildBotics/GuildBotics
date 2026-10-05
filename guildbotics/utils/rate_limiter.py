@@ -64,7 +64,9 @@ class RateLimiter:
         else:
             # In-memory implementation
             while True:
-                async with AsyncLock(self._lock):
+                # No await in this short section: acquisition and release stay
+                # together even when the calling coroutine is cancelled.
+                with self._lock:
                     now = time.time()
                     # Remove old timestamps for per-minute limit
                     self._request_timestamps = [
@@ -83,24 +85,6 @@ class RateLimiter:
                 await asyncio.sleep(sleep_time)
 
 
-class AsyncLock:
-    """Async context manager for threading.Lock.
-
-    Args:
-        lock (threading.Lock): Standard threading lock.
-    """
-
-    def __init__(self, lock: threading.Lock):
-        self._lock: threading.Lock = lock
-
-    async def __aenter__(self) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._lock.acquire)
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        self._lock.release()
-
-
 _limiters_lock = threading.Lock()
 _limiters: dict[str, RateLimiter] = {}
 
@@ -116,16 +100,12 @@ async def acquire(name: str, max_requests_per_minute: int) -> None:
         max_requests_per_minute (int): Maximum requests allowed per minute.
     """
 
-    # Ensure only one RateLimiter instance per name
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _limiters_lock.acquire)
-    try:
+    # Keep the no-await lookup atomic across threads and event loops, without
+    # handing lock ownership between a worker and a cancellable coroutine.
+    with _limiters_lock:
         limiter = _limiters.get(name)
         if limiter is None:
             limiter = RateLimiter(name, max_requests_per_minute)
             _limiters[name] = limiter
-    finally:
-        _limiters_lock.release()
-
     # Wait until the limiter allows the next request
     await limiter.acquire()
