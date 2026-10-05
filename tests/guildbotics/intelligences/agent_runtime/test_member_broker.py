@@ -8,6 +8,7 @@ import logging
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,6 +16,7 @@ import httpx2
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from starlette.requests import Request
 
 from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
@@ -198,6 +200,147 @@ async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
     assert "may still complete" in timed_out.stderr
     assert (following.exit_code, following.stdout) == (0, "done")
     assert started == [["hang"], ["help"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["mcp", "host"])
+@pytest.mark.parametrize("timed_out", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("abandon", [False, True])
+async def test_abandon_waits_for_member_writes_even_after_timeout(
+    monkeypatch, tmp_path, transport: str, timed_out: bool, fails: bool, abandon: bool
+) -> None:
+    """Both member entry points retain writes until command cancellation ends."""
+    started = asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+    writes: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    def run_in_process(*_args, **_kwargs):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        writes.append("member write")
+        finished.set()
+        if fails:
+            raise ValueError("worker failed")
+        return 0, "done", ""
+
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    monkeypatch.setattr(
+        member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05 if timed_out else 30
+    )
+    broker = _active_broker(_context(tmp_path))
+
+    async def host(_call, _arguments):
+        return await broker.run(
+            "aiko", ["help"], MemberInvocation(), cwd=tmp_path, stdin=""
+        )
+
+    broker.serve(host, contextvars.Context())
+    if transport == "mcp":
+        call = asyncio.create_task(broker.execute("turn-1", ["help"]))
+    else:
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}"}
+
+        request = Request({"type": "http", "path_params": {"call": "member"}}, receive)
+        call = asyncio.create_task(broker._answer(request))
+
+    async def never():
+        await asyncio.Event().wait()
+
+    waiting = asyncio.create_task(never())
+    broker._calls.add(waiting)
+    waiting.add_done_callback(broker._calls.discard)
+    closing = following = None
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        if transport == "mcp" and not timed_out:
+            following = asyncio.create_task(broker.execute("turn-1", ["help"]))
+            await asyncio.sleep(0)
+        if timed_out:
+            if transport == "mcp":
+                assert (await asyncio.wait_for(call, 5)).exit_code == 124
+            else:
+                # The host call and member command share a deadline: either
+                # the outer host timeout or the inner member timeout can win.
+                try:
+                    result = await asyncio.wait_for(call, 5)
+                except member_broker.HostCallError as exc:
+                    assert "timed out" in str(exc)
+                else:
+                    assert result.exit_code == 124
+        closing = asyncio.create_task(broker.settle(abandon=abandon))
+        await asyncio.sleep(0.05)
+        assert not closing.done()
+        assert writes == []
+        # A second stop request must not cancel the worker being drained.
+        for _ in range(3):
+            closing.cancel()
+            await asyncio.sleep(0)
+            assert not closing.done()
+        assert waiting.cancelled()
+    finally:
+        release.set()
+        waiting.cancel()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await asyncio.gather(call, return_exceptions=True)
+        await asyncio.gather(waiting, return_exceptions=True)
+        if following is not None:
+            result = await asyncio.wait_for(following, 5)
+        # Also clean up a baseline implementation that ends settlement early.
+        assert await asyncio.to_thread(finished.wait, 5)
+
+    assert writes == ["member write"]
+    if following is not None:
+        assert result.exit_code == 2
+    assert broker._calls == set()
+    assert (await broker.execute("turn-1", ["help"])).exit_code == 2
+
+
+@pytest.mark.asyncio
+async def test_abandon_waits_for_a_member_write_queued_in_a_busy_executor(
+    monkeypatch, tmp_path
+) -> None:
+    release = threading.Event()
+    submitted = asyncio.Event()
+    writes: list[str] = []
+    loop = asyncio.get_running_loop()
+    submit = loop.run_in_executor
+
+    def run_in_process(*_args, **_kwargs):
+        writes.append("member write")
+        return 0, "", ""
+
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    broker = _active_broker(_context(tmp_path))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        blocker = executor.submit(release.wait, 10)
+
+        def enqueue(_executor, function, *args):
+            work = submit(executor, function, *args)
+            submitted.set()
+            return work
+
+        monkeypatch.setattr(loop, "run_in_executor", enqueue)
+        call = asyncio.create_task(broker.execute("turn-1", ["help"]))
+        closing = None
+        try:
+            await asyncio.wait_for(submitted.wait(), 5)
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            closing = asyncio.create_task(broker.settle(abandon=True))
+            await asyncio.sleep(0.05)
+            assert not closing.done()
+            assert writes == []
+        finally:
+            release.set()
+            if closing is not None:
+                await asyncio.wait_for(closing, 5)
+            assert blocker.result(timeout=5)
+    assert writes == ["member write"]
 
 
 @pytest.mark.asyncio

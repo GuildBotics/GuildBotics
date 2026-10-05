@@ -48,6 +48,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.runtime.person_lease import PersonExecutionLease
+from guildbotics.utils.async_utils import finish_on_cancel
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -138,6 +139,8 @@ class MemberCapabilityBroker:
         self._host_context = contextvars.Context()
         #: The calls of the command's environment being answered now.
         self._calls: set[asyncio.Task[Any]] = set()
+        #: Member CLI threads, including those whose requests already ended.
+        self._workers: set[asyncio.Future[tuple[int, str, str]]] = set()
         self._server: LoopbackServer | None = None
         self._url = ""
         self._port = 0
@@ -235,7 +238,8 @@ class MemberCapabilityBroker:
         The command runs in this process, on a worker thread of its own that
         starts from an empty context: the broker's server task still carries
         whatever the turn that started it had bound. A command that outlasts
-        the timeout is reported and left to finish on its own.
+        the timeout is reported and left to finish on its own, but command
+        cancellation waits for it before closing what it uses.
 
         A request the broker refuses (expired grant, wrong person, oversized
         input) comes back as an ``exit_code`` 2 result instead of a raised
@@ -294,9 +298,11 @@ class MemberCapabilityBroker:
         work = asyncio.get_running_loop().run_in_executor(
             None, contextvars.Context().run, command
         )
+        self._workers.add(work)
+        work.add_done_callback(self._worker_finished)
         try:
             exit_code, stdout, stderr = await asyncio.wait_for(
-                work, timeout=_COMMAND_TIMEOUT_SECONDS
+                asyncio.shield(work), timeout=_COMMAND_TIMEOUT_SECONDS
             )
         except TimeoutError:
             return MemberCommandResult(
@@ -307,6 +313,12 @@ class MemberCapabilityBroker:
         return MemberCommandResult(
             exit_code=exit_code, stdout=_bounded(stdout), stderr=_bounded(stderr)
         )
+
+    def _worker_finished(self, work: asyncio.Future[tuple[int, str, str]]) -> None:
+        """Forget a finished thread and retrieve failures of expired requests."""
+        self._workers.discard(work)
+        if not work.cancelled():
+            work.exception()
 
     async def call_host(self, request: Request) -> Response:
         """Answer one call of the command's environment.
@@ -371,13 +383,34 @@ class MemberCapabilityBroker:
     async def settle(self, *, abandon: bool = False) -> None:
         """Stop answering the command's calls, and wait for those being
         answered: each runs to its end, before what it uses is closed --
-        or, ``abandon``, is stopped first, for a command no longer there to
-        read what it asked for."""
+        or, ``abandon``, is cancelled first. Started member CLI threads cannot
+        be stopped, so abandonment waits for them, even after their requests
+        timed out. Repeated cancellation does not release them early."""
         self._host = None
+        self._context = None
+        self._turn_grant = ""
         if abandon:
-            for call in self._calls:
-                call.cancel()
-        await asyncio.gather(*self._calls, return_exceptions=True)
+            self._cancel_calls()
+        try:
+            await finish_on_cancel(
+                asyncio.gather(
+                    *self._calls,
+                    *(self._workers if abandon else ()),
+                    return_exceptions=True,
+                ),
+                on_cancel=self._cancel_calls,
+            )
+        except asyncio.CancelledError:
+            # Cancellation can also arrive while settling a successful command.
+            await finish_on_cancel(
+                asyncio.gather(*self._workers, return_exceptions=True)
+            )
+            raise
+
+    def _cancel_calls(self) -> None:
+        """Stop asynchronous requests; their member threads remain tracked."""
+        for call in self._calls:
+            call.cancel()
 
     async def close(self) -> None:
         """Revoke the token, stop answering the command's calls, and stop the
