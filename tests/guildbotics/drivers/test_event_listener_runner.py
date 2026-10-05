@@ -282,7 +282,7 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
         if name != "functions/handle_chat_event":
             return None
         agent_inputs.append(json.loads(kwargs["unprocessed_messages"]))
-        run_id = kwargs["workflow_run_id"]
+        run_id = kwargs["agent_execution_context"]["run_id"]
         store = RunStore()
         store.append_evidence(
             run_id,

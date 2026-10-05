@@ -6,12 +6,15 @@ import importlib
 import os
 import re
 import threading
+import typing
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 
 from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.runtime.member_invocation import (
     MemberInvocation,
     current_member_invocation,
@@ -261,6 +264,131 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in stderr
+
+
+_CHAT_EVENT = ["--channel-id", "C1", "--thread-ts", "100.1", "--event-id", "E1"]
+_SUMMARY = ["--content-stdin"]
+#: The commands that write a run's record, with the invocation field that
+#: names their run.
+_RUN_RECORD_WRITES = [
+    (["chat", "noop", "--person", "aiko", *_CHAT_EVENT, *_SUMMARY], "run_id"),
+    (
+        ["chat", "complete", "--person", "aiko", *_CHAT_EVENT, "--status", "blocked"]
+        + _SUMMARY,
+        "run_id",
+    ),
+    (
+        [
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--ticket-url",
+            "https://github.com/owner/repo/issues/1",
+            "--status",
+            "blocked",
+            *_SUMMARY,
+        ],
+        "task_run_id",
+    ),
+]
+
+
+@pytest.mark.parametrize(("arguments", "run_field"), _RUN_RECORD_WRITES)
+@pytest.mark.parametrize(
+    ("lease_person", "runs"),
+    [(None, False), ("yuki", False), ("aiko", True)],
+)
+def test_a_run_record_is_written_only_under_the_turns_lease(
+    monkeypatch, tmp_path, arguments, run_field, lease_person, runs
+) -> None:
+    """A read-only command's turn holds no lease, so the guard refuses every
+    write of it, these that record the run's outcome among them."""
+    monkeypatch.setattr(
+        member_module,
+        "_resolve",
+        lambda person: (None, SimpleNamespace(person_id=person)),
+    )
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
+    lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
+
+    exit_code, stdout, stderr = _run(
+        arguments,
+        MemberInvocation(**{run_field: "run-1"}, lease=lease),
+        cwd=tmp_path,
+        stdin="Nothing to do.",
+    )
+
+    if runs:
+        assert (exit_code, stderr) == (0, "")
+        assert [record.run_id for record in RunStore().records()] == ["run-1"]
+    else:
+        assert (exit_code, stdout) == (1, "")
+        assert t("cli.member.lease.invalid_delegation") in " ".join(stderr.split())
+        assert list(RunStore().records()) == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "run_field"),
+    [
+        *_RUN_RECORD_WRITES,
+        (["chat", "updates", "--person", "aiko"], "run_id"),
+        (["task", "status", "--person", "aiko"], "task_run_id"),
+    ],
+)
+def test_a_run_command_acts_only_on_its_invocations_run(
+    tmp_path, arguments, run_field
+) -> None:
+    """The run is the invocation's, never one the command names, so a call
+    whose invocation carries no run of the command's kind is refused."""
+    other_field = "task_run_id" if run_field == "run_id" else "run_id"
+
+    for invocation in (MemberInvocation(), MemberInvocation(**{other_field: "run-1"})):
+        exit_code, stdout, stderr = _run(
+            arguments,
+            invocation,
+            cwd=tmp_path,
+            stdin="Nothing to do.",
+        )
+
+        assert (exit_code, stdout) == (1, "")
+        assert t("cli.member.run.required") in " ".join(stderr.split())
+    assert list(RunStore().records()) == []
+
+
+def _leaf_commands(group):
+    for command in group.commands.values():
+        if isinstance(command, click.Group):
+            yield from _leaf_commands(command)
+        else:
+            yield command
+
+
+def test_every_member_command_returns_its_work_to_the_member_guard() -> None:
+    """What a command does is the work its callback returns, which runs only
+    once the guard admits it: a callback acting itself would act unguarded.
+    ``help`` only prints the reference."""
+    unguarded = [
+        command.name
+        for command in _leaf_commands(member_module.member)
+        if command.name != "help"
+        and (
+            not isinstance(command, member_module._MemberCommand)
+            or typing.get_type_hints(command.callback).get("return")
+            != member_module._CommandWork
+        )
+    ]
+
+    assert unguarded == []
+
+
+def test_no_member_command_names_its_run() -> None:
+    """The run is the invocation's, so no command takes one."""
+    assert [
+        command.name
+        for command in _leaf_commands(member_module.member)
+        if any(param.name == "run_id" for param in command.params)
+    ] == []
 
 
 def test_a_command_of_an_environment_has_the_host_read_none_of_its_files(

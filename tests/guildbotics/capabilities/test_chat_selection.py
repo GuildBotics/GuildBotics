@@ -222,7 +222,7 @@ class FakeInvokeContext(types.SimpleNamespace):
         ):
             # This attempt records nothing, so the completion gate fails.
             return {"status": "working", "message": "still working"}
-        run_id = kwargs["workflow_run_id"]
+        run_id = kwargs["agent_execution_context"]["run_id"]
         store = RunStore()
         if self.action == "reply":
             store.append_evidence(
@@ -377,7 +377,7 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["service_name"] == "slack"
     assert kwargs["channel_id"] == "C1"
     execution_context = kwargs["agent_execution_context"]
-    assert execution_context["run_id"] == kwargs["workflow_run_id"]
+    assert execution_context["run_id"] == kwargs["agent_execution_context"]["run_id"]
     assert execution_context["work_kind"] == "chat"
     assert execution_context["work_identity"] == "slack:U_ALICE:C1:100.1"
     assert execution_context["context_cursor"] == "100.1"
@@ -388,10 +388,13 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     # completion for this one.
     assert execution_context["continuation_input"] == t(
         "commands.workflows.common.agent_chat_continuation",
-        run_id=kwargs["workflow_run_id"],
+        run_id=kwargs["agent_execution_context"]["run_id"],
         event_id="E1",
     )
-    assert kwargs["workflow_run_id"] in execution_context["continuation_input"]
+    assert (
+        kwargs["agent_execution_context"]["run_id"]
+        in execution_context["continuation_input"]
+    )
     assert "E1" in execution_context["continuation_input"]
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
@@ -1145,7 +1148,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     ]
     assert len(handle_calls) == 2
     # All attempts share one run id and the same provider-neutral conversation.
-    run_ids = {kwargs["workflow_run_id"] for kwargs in handle_calls}
+    run_ids = {kwargs["agent_execution_context"]["run_id"] for kwargs in handle_calls}
     assert len(run_ids) == 1
     conversation_keys = {
         kwargs["agent_execution_context"]["work_identity"] for kwargs in handle_calls
@@ -1373,7 +1376,10 @@ async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
     # Stops as soon as a turn records a terminal completion: no extra retries.
     assert len(handle_calls) == 2
     # Both attempts reuse the same run id and conversation key.
-    assert handle_calls[0]["workflow_run_id"] == handle_calls[1]["workflow_run_id"]
+    assert (
+        handle_calls[0]["agent_execution_context"]["run_id"]
+        == handle_calls[1]["agent_execution_context"]["run_id"]
+    )
     assert (
         handle_calls[0]["agent_execution_context"]["work_identity"]
         == handle_calls[1]["agent_execution_context"]["work_identity"]
@@ -1875,19 +1881,23 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
     async def invoke(name, **kwargs):
         if name == "functions/handle_chat_event":
             store.upsert_pending_event("slack", "alice", "C1", _batch_event(5))
-            result = check_chat_updates("alice", kwargs["workflow_run_id"])
+            result = check_chat_updates(
+                "alice", kwargs["agent_execution_context"]["run_id"]
+            )
             assert [item["event_id"] for item in result["messages"]] == ["E5"]
             assert not store.is_processed_event("slack", "alice", "C1", "E5")
             if secondary:
                 RunStore().append_evidence(
-                    kwargs["workflow_run_id"], action, {"published": True}
+                    kwargs["agent_execution_context"]["run_id"],
+                    action,
+                    {"published": True},
                 )
             # This later arrival was never delivered and must stay pending.
             store.upsert_pending_event("slack", "alice", "C1", _batch_event(6))
             if action == "blocked":
                 ChatReceiveStatus().save("slack", "alice", "C1", state="unavailable")
                 RunStore().complete_run(
-                    kwargs["workflow_run_id"],
+                    kwargs["agent_execution_context"]["run_id"],
                     "blocked",
                     "Reception stopped",
                     subject_type="chat",

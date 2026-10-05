@@ -14,7 +14,6 @@ Slack thread の文脈を理解し、割り当てられた GuildBotics member �
 <target>
 - GuildBotics execution mode: guildbotics_execution_mode=workflow
 - Person ID: {person_id}
-- Workflow run ID: {workflow_run_id}
 - Service: {service_name}
 - Channel ID: {channel_id}
 - Event ID: {event_id}
@@ -64,7 +63,7 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 </scope>
 
 <before_publication>
-返信・リアクション・Git push・GitHubへの書き込みの直前に、毎回 `guildbotics member chat updates --person {person_id} --run-id {workflow_run_id}` を実行してください。このコマンドはSlack APIを呼ばず、この実行の元スレッドについて受信済みのイベントキューを確認します。
+返信・リアクション・Git push・GitHubへの書き込みの直前に、毎回 `guildbotics member chat updates --person {person_id}` を実行してください。このコマンドはSlack APIを呼ばず、この実行の元スレッドについて受信済みのイベントキューを確認します。
 - `new_messages`: 返された全メッセージを順番に読み、訂正・中止・他メンバーの進捗を踏まえて作業と確定操作の内容を再検討してください。必要なら作業や返信を修正し、確定操作の直前に再び確認してください。
 - `up_to_date`: 検討した操作を実行してください。
 - `catching_up`: Workspace同期中で、受信メッセージの保存待ちです。数秒待って `chat updates` を再試行してください。この状態だけを理由に公開や `blocked` 完了を行わないでください。
@@ -84,9 +83,9 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 9. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-file <file>` を実行し、本文全体を member capabilities の一時ファイル契約に従って渡してください。
 10. channel への通常投稿が必要な場合だけ `guildbotics member chat post` を使ってください。incoming thread への通常応答は原則 reply を使ってください。
 11. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support` を実行してください。
-12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` を実行し、理由を member capabilities の一時ファイル契約に従って渡してください。
+12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` を実行し、理由を member capabilities の一時ファイル契約に従って渡してください。
 13. 追加情報が必要な場合は、まずこの thread への reply として質問を投稿してから、status `asking` で complete してください。
 14. 自律 workflow で policy 変更が必要だと判断した場合は、Slack thread へ reply/post で提案し、直接 update しないでください。
-15. 最後に必ず `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` を実行し、run summary を member capabilities の一時ファイル契約に従って渡してください。
+15. 最後に必ず `guildbotics member chat complete --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` を実行し、run summary を member capabilities の一時ファイル契約に従って渡してください。
 16. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"Slack thread へ返信しました。"}` / `{"status":"done","message":"対応不要として記録しました。"}` / `{"status":"asking","message":"Slack thread へ確認質問を投稿しました。"}`
 </instructions>

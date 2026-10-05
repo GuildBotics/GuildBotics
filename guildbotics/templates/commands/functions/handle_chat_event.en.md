@@ -14,7 +14,6 @@ The member's standing roles are defined by the `roles` field in the member conte
 <target>
 - GuildBotics execution mode: guildbotics_execution_mode=workflow
 - Person ID: {person_id}
-- Workflow run ID: {workflow_run_id}
 - Service: {service_name}
 - Channel ID: {channel_id}
 - Event ID: {event_id}
@@ -64,7 +63,7 @@ GuildBotics prepends a `guildbotics_thread_context` element to this prompt.
 </scope>
 
 <before_publication>
-Before every reply, reaction, Git push, or GitHub write, run `guildbotics member chat updates --person {person_id} --run-id {workflow_run_id}`. This reads the received event queue for this run's source thread without calling Slack APIs.
+Before every reply, reaction, Git push, or GitHub write, run `guildbotics member chat updates --person {person_id}`. This reads the received event queue for this run's source thread without calling Slack APIs.
 - `new_messages`: Read every returned message in order. Reconsider the work and proposed action in light of corrections, cancellations, and other members' progress. Modify the work or reply when needed, then check again immediately before publishing.
 - `up_to_date`: Proceed with the considered action.
 - `catching_up`: The receiver is waiting to save messages during workspace synchronization. Wait a few seconds and retry `chat updates`. Do not publish or complete as `blocked` solely because of this state.
@@ -84,9 +83,9 @@ A publication command rejects unchecked input, newly arrived messages, or unavai
 9. If a text reply is appropriate, run `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-file <file>` and pass the entire body through the temporary-file contract from the member capabilities.
 10. Use `guildbotics member chat post` only when a normal channel post is actually required. Normal incoming thread responses should be replies.
 11. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support`.
-12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
+12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
 13. If more information is needed, post the question as a reply in this thread first, then complete the run with status `asking`.
 14. If autonomous workflow policy should change, propose it in a Slack reply/post; do not update policy directly.
-15. Finish by running `guildbotics member chat complete --person {person_id} --run-id {workflow_run_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
+15. Finish by running `guildbotics member chat complete --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
 16. Return only one AgentResponse JSON object, for example `{"status":"done","message":"Posted a Slack thread reply."}` / `{"status":"done","message":"Recorded that no response was needed."}` / `{"status":"asking","message":"Posted a follow-up question in Slack."}`.
 </instructions>

@@ -976,7 +976,7 @@ effort:
 チャットワークフローでは、返信・リアクション・Git push・GitHubへの書き込みの直前に、元のスレッドの新着を確認します。
 
 ```bash
-guildbotics member chat updates --person alice --run-id <workflow-run-id>
+guildbotics member chat updates --person alice
 ```
 
 このコマンドはSlack APIを呼ばず、永続化されたイベントキューを読みます。`new_messages` は、この実行の入力または前回の確認以降に届いたメッセージを返します。全件を読んで作業や返信内容を再検討し、確定操作の直前に再確認してください。`up_to_date` なら操作を進められます。`catching_up` はWorkspace同期に伴う受信メッセージの保存待ちです。数秒待って再確認し、この状態だけを理由に公開や `blocked` 完了を行わないでください。`unavailable` は受信状態を確認できないことを意味します。公開操作を見送り、そのturn内に復旧しなければ `blocked` で完了します。

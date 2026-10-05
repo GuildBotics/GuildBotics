@@ -5,8 +5,8 @@ ja:
   rate_limited_retry_at: "この時刻以降に自動再試行します。"
   rate_limited_retry_ticket: "新しいコメントが付くまで、このチケットは再開しません。rate limit が解除されたらコメントを追加してください。"
   rate_limited_retry_chat: "再試行回数が残っていれば、自動再試行します。"
-  agent_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}` で、この run の完了記録はまだ存在しません。別の run の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、この run ID に対する必須の完了コマンドを実行してください。"
-  agent_chat_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}`、chat event ID `%{event_id}` で、この run の完了記録はまだ存在しません。別の run や別の event の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、この run ID に対する必須の完了コマンドを実行してください。"
+  agent_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}` で、この run の完了記録はまだ存在しません。別の run の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、必須の完了コマンドを実行してください。"
+  agent_chat_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}`、chat event ID `%{event_id}` で、この run の完了記録はまだ存在しません。別の run や別の event の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、必須の完了コマンドを実行してください。"
   workflow_contract: |-
     この実行は非対話の workflow 実行です(guildbotics_execution_mode=workflow)。この prompt が primary contract であり、skill から手順を置き換えたり推測したりしないでください。
     - 最初に `guildbotics member context --person %{person_id}` を実行し、出力の capabilities セクション(同内容は `guildbotics member help` でも参照可)を、コマンド構文・安全ルール・communication style・GitHub/git/Slack 書き込み・memory handling・標準作業手順の source of truth としてください。

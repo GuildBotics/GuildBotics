@@ -72,7 +72,6 @@ async def main(context: Context) -> Any:
         trigger_reason=trigger_reason,
         language=context.language_name,
         member_workspace=str(member_workspace),
-        workflow_run_id=turn["run_id"],
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
             "run_id": turn["run_id"],
