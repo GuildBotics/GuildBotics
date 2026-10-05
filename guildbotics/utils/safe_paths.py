@@ -511,3 +511,28 @@ def visit_host_tree(
     if absent:
         raise UnsafePathError(t("safe_paths.missing", path=root))
     return bool(acted)
+
+
+def host_directory_case_sensitive(path: Path) -> bool:
+    """Whether the file system holding the directory tells names apart by
+    case. Darwin is asked of the directory itself, as it answers per volume;
+    Windows never does; elsewhere there is no portable question, and the
+    volume is taken to (a case-insensitive one mounted on Linux is not told).
+
+    Raises:
+        OSError: When Darwin's volume does not answer.
+    """
+    if os.name == "nt":
+        return False
+    if sys.platform != "darwin":
+        return True
+    answers: list[int] = []
+    visit_host_tree(
+        path,
+        PurePosixPath(),
+        lambda fd: answers.append(_POSIX.fpathconf(fd, 11)),
+        create=False,
+    )
+    if answers[0] < 0:
+        raise OSError(f"'{path}' supplies no case-sensitivity information")
+    return answers[0] > 0

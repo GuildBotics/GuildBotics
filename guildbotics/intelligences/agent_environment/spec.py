@@ -118,12 +118,16 @@ class WorktreeCopy:
     No grant lets the command write there, so the host directory is mounted
     read-only at :data:`WORKTREE_SOURCE` and copied onto the microVM's own
     disk at the working directory's own path; what changed in the copy is
-    written back by the host when the command ends. ``excluded`` are the
-    directories under it, relative to it, that are mounts of their own (grants
-    nested in it): neither copied nor written back.
+    written back by the host when the command ends. ``identity`` is the
+    directory's own (device, inode) when it was copied, so what is written
+    back never lands in another directory put at its path meanwhile.
+    ``excluded`` are the directories under it, relative to it, that are
+    mounts of their own (grants nested in it): neither copied nor written
+    back.
     """
 
     host: Path
+    identity: tuple[int, int]
     excluded: tuple[str, ...] = ()
 
 
@@ -394,7 +398,7 @@ def _mounts(
         for m in mounts
         if PurePosixPath(m.guest).is_relative_to(cwd_guest)
     )
-    return tuple(mounts), WorktreeCopy(cwd, excluded)
+    return tuple(mounts), WorktreeCopy(cwd, target.identities[-1], excluded)
 
 
 def _network(

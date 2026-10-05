@@ -49,8 +49,10 @@ class CopiedFile(TypedDict):
 
 
 class ChangedFile(TypedDict):
-    """A regular file the command changed: its new content (base64) and
-    whether it is executable, or that it was deleted."""
+    """A regular file the command changed: its new content (base64), and
+    whether it is executable when the command made it or changed that; or
+    that it was deleted. A file whose bit the command left keeps the host's
+    mode, whatever happened to it there meanwhile."""
 
     path: str
     executable: NotRequired[bool]
@@ -105,8 +107,13 @@ def changed_files(
             and before["executable"] == executable
         ):
             continue
-        content = base64.b64encode((destination / path).read_bytes()).decode()
-        yield ChangedFile(path=path, executable=executable, content=content)
+        changed = ChangedFile(
+            path=path,
+            content=base64.b64encode((destination / path).read_bytes()).decode(),
+        )
+        if before is None or before["executable"] != executable:
+            changed["executable"] = executable
+        yield changed
     for path in sorted(copied.keys() - present):
         if os.path.lexists(destination / path):
             raise WorktreeCopyError(f"'{path}' is no longer a regular file.")

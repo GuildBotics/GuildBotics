@@ -63,13 +63,22 @@ def repository(tmp_path: Path) -> Path:
     return root
 
 
+def _identity(path: Path) -> tuple[int, int]:
+    """The directory's own (device, inode), as the environment records it."""
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    return inspect_host_path(path, missing=True).identities[-1]
+
+
 async def _copy(
     monkeypatch, repository: Path, copy_root: Path, changes=None, excluded=()
 ):
     guest = _Guest(repository, changes)
     monkeypatch.setattr(worktree, "_guest", lambda _: guest)
     return await worktree.copy_worktree(
-        object(), WorktreeCopy(repository, tuple(excluded)), str(copy_root)
+        object(),
+        WorktreeCopy(repository, _identity(repository), tuple(excluded)),
+        str(copy_root),
     )
 
 
@@ -392,10 +401,218 @@ async def test_a_copy_too_large_to_list_fails_the_command(
 
     with pytest.raises(CommandError) as failed:
         await worktree.copy_worktree(
-            object(), WorktreeCopy(repository), str(tmp_path / "copy")
+            object(),
+            WorktreeCopy(repository, _identity(repository)),
+            str(tmp_path / "copy"),
         )
 
     assert str(failed.value) == t(
         "intelligences.agent_environment.runtime.worktree_copy_failed",
         error="The command wrote more than 1 bytes of output.",
     )
+
+
+@pytest.mark.asyncio
+async def test_a_bit_the_host_changed_meanwhile_is_kept_or_refuses_a_change_to_it(
+    tmp_path: Path, monkeypatch, repository: Path, posix_permissions: None
+) -> None:
+    """A command that only edited the file leaves the host's bit as it is
+    now; one that changed the bit too finds the host changed it first."""
+    os.chmod(repository / "a.txt", 0o644)
+    copy_root = tmp_path / "copy"
+    copied = await _copy(monkeypatch, repository, copy_root)
+    os.chmod(repository / "a.txt", 0o755)
+    (copy_root / "a.txt").write_text("edited", encoding="utf-8")
+
+    await worktree.write_back(object(), copied)
+
+    assert (repository / "a.txt").read_text(encoding="utf-8") == "edited"
+    assert (repository / "a.txt").stat().st_mode & 0o777 == 0o755
+
+    os.chmod(repository / "a.txt", 0o644)
+    copied = await _copy(monkeypatch, repository, copy_root)
+    os.chmod(repository / "a.txt", 0o755)
+    # The command makes it executable too, as the host already did.
+    os.chmod(copy_root / "a.txt", 0o700)
+    (copy_root / "a.txt").write_text("again", encoding="utf-8")
+
+    with pytest.raises(CommandError) as refused:
+        await worktree.write_back(object(), copied)
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.worktree_conflict",
+        path=repository,
+        paths="a.txt",
+    )
+    assert (repository / "a.txt").read_text(encoding="utf-8") == "edited"
+    assert (repository / "a.txt").stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["same", "nested"])
+async def test_a_later_write_back_waits_and_finds_the_earlier(
+    tmp_path: Path, monkeypatch, repository: Path, nested: bool
+) -> None:
+    """Two commands copied the same file, through the same working directory
+    or one holding the other's: the one that ends second checks only after
+    the first has put its files in place, and refuses."""
+    import threading
+
+    inner = repository / "src" if nested else repository
+    first = await _copy(monkeypatch, repository, tmp_path / "first")
+    second = await _copy(monkeypatch, inner, tmp_path / "second")
+    changes = {}
+    for name, path, content in (
+        ("first", "src/b.py", b"first"),
+        ("second", "b.py" if nested else "src/b.py", b"second"),
+    ):
+        changes[name] = tmp_path / f"{name}.jsonl"
+        changes[name].write_text(json.dumps(_write(path, content)) + "\n")
+    staging = threading.Event()
+    release = threading.Event()
+    checked: list[str] = []
+    stage, unchanged = worktree._stage, worktree._unchanged
+
+    def stage_slowly(root, path, change):
+        if threading.current_thread().name == "first":
+            staging.set()
+            assert release.wait(10)
+        return stage(root, path, change)
+
+    def checking(root, change, copied):
+        checked.append(threading.current_thread().name)
+        return unchanged(root, change, copied)
+
+    monkeypatch.setattr(worktree, "_stage", stage_slowly)
+    monkeypatch.setattr(worktree, "_unchanged", checking)
+    errors: dict[str, BaseException] = {}
+
+    def run(name, copied):
+        try:
+            worktree._write(copied, changes[name])
+        except BaseException as exc:
+            errors[name] = exc
+
+    threads = [
+        threading.Thread(target=run, args=("first", first), name="first"),
+        threading.Thread(target=run, args=("second", second), name="second"),
+    ]
+    threads[0].start()
+    assert staging.wait(10)
+    threads[1].start()
+    threads[1].join(0.5)
+    assert checked == ["first"]
+    release.set()
+    for thread in threads:
+        thread.join(10)
+
+    assert "first" not in errors
+    assert str(errors["second"]) == t(
+        "intelligences.agent_environment.runtime.worktree_conflict",
+        path=inner,
+        paths="b.py" if nested else "src/b.py",
+    )
+    assert (repository / "src" / "b.py").read_text(encoding="utf-8") == "first"
+
+
+@pytest.mark.asyncio
+async def test_a_directory_put_in_place_of_the_working_directory_is_never_written(
+    tmp_path: Path, monkeypatch, repository: Path
+) -> None:
+    """What the command changed belongs to the directory it copied, not to
+    one that took its place while it ran."""
+    copied = await _copy(
+        monkeypatch, repository, tmp_path / "copy", changes=[_write("n.txt", b"x")]
+    )
+    repository.rename(tmp_path / "moved")
+    repository.mkdir()
+
+    with pytest.raises(CommandError, match="replaced"):
+        await worktree.write_back(object(), copied)
+
+    assert list(repository.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_two_names_of_one_file_on_the_host_are_refused(
+    tmp_path: Path, monkeypatch, repository: Path
+) -> None:
+    """Where the host's file system takes ``New.txt`` and ``new.txt`` for one
+    file, writing both would silently lose one of them."""
+    from guildbotics.utils.safe_paths import host_directory_case_sensitive
+
+    copied = await _copy(
+        monkeypatch,
+        repository,
+        tmp_path / "copy",
+        changes=[_write("New.txt", b"1"), _write("new.txt", b"2")],
+    )
+
+    if host_directory_case_sensitive(repository):
+        await worktree.write_back(object(), copied)
+        assert (repository / "New.txt").read_bytes() == b"1"
+        assert (repository / "new.txt").read_bytes() == b"2"
+    else:
+        with pytest.raises(CommandError, match="changed twice"):
+            await worktree.write_back(object(), copied)
+        assert not (repository / "new.txt").exists()
+
+
+@pytest.mark.parametrize("case_sensitive", [True, False])
+def test_names_one_file_on_the_host_are_told_apart_only_where_they_are_two(
+    tmp_path: Path, case_sensitive: bool
+) -> None:
+    import unicodedata
+
+    changes = tmp_path / "changes.jsonl"
+    names = ["New.txt", "new.txt", unicodedata.normalize("NFD", "é.txt"), "é.txt"]
+    changes.write_text("".join(json.dumps(_write(n, b"x")) + "\n" for n in names))
+
+    told = worktree._changes(changes, (), case_sensitive)
+
+    if case_sensitive:
+        assert [change["path"] for change in told] == names
+    else:
+        with pytest.raises(ValueError, match="changed twice"):
+            list(told)
+
+
+@pytest.mark.asyncio
+async def test_writing_back_leaves_the_command_loop_free(
+    tmp_path: Path, monkeypatch, repository: Path
+) -> None:
+    """Waiting for another write-back blocks a thread of its own, never the
+    loop that answers the command's microVM."""
+    import asyncio
+    import threading
+
+    copied = await _copy(monkeypatch, repository, tmp_path / "copy")
+    release = threading.Event()
+    monkeypatch.setattr(worktree, "_write", lambda *_: release.wait(10))
+
+    writing = asyncio.create_task(worktree.write_back(object(), copied))
+    await asyncio.sleep(0.05)
+    assert not writing.done()
+    release.set()
+    await asyncio.wait_for(writing, 10)
+
+
+@pytest.mark.parametrize("case_sensitive", [True, False])
+@pytest.mark.parametrize(
+    "name", ["Docs/shared/x.md", "docs/SHARED/x.md", "DOCS/Shared/x.md"]
+)
+def test_a_mount_nested_in_the_directory_is_closed_under_every_spelling_of_it(
+    tmp_path: Path, case_sensitive: bool, name: str
+) -> None:
+    """Where the host takes ``Docs/shared`` for the excluded ``docs/shared``,
+    a change spelled so would land in that grant -- read-only, perhaps."""
+    changes = tmp_path / "changes.jsonl"
+    changes.write_text(json.dumps(_write(name, b"x")) + "\n")
+
+    told = worktree._changes(changes, ("docs/shared",), case_sensitive)
+
+    if case_sensitive:
+        assert [change["path"] for change in told] == [name]
+    else:
+        with pytest.raises(ValueError, match="mounted on its own"):
+            list(told)

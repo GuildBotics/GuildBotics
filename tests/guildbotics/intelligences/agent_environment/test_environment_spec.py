@@ -37,6 +37,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec as _build_environment_spec,
 )
 from guildbotics.utils import os_language
+from guildbotics.utils.safe_paths import inspect_host_path
 
 _NAMESERVERS = ("10.0.0.53",)
 
@@ -85,7 +86,7 @@ def test_a_working_directory_no_grant_opens_is_worked_on_as_a_copy(
     assert spec.mounts == (
         EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
     )
-    assert spec.worktree == WorktreeCopy(cwd)
+    assert spec.worktree == WorktreeCopy(cwd, inspect_host_path(cwd).identities[-1])
     assert spec.env == host_facts
 
 
@@ -145,7 +146,9 @@ def test_a_grant_nested_in_a_copied_working_directory_is_left_out_of_the_copy(
 
     spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
 
-    assert spec.worktree == WorktreeCopy(cwd, ("docs/shared",))
+    assert spec.worktree == WorktreeCopy(
+        cwd, inspect_host_path(cwd).identities[-1], ("docs/shared",)
+    )
     assert EnvironmentMount(guest_path(docs), docs, False, user=True) in spec.mounts
 
 

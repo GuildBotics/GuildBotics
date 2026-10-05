@@ -77,11 +77,8 @@ def test_changes_are_what_differs_from_the_copy(tmp_path: Path) -> None:
     changes = list(changed_files(destination, copied, frozenset()))
 
     assert changes == [
-        {
-            "path": "edit.txt",
-            "executable": False,
-            "content": base64.b64encode(b"edited").decode(),
-        },
+        # The bit is the host's to keep unless the command changed it.
+        {"path": "edit.txt", "content": base64.b64encode(b"edited").decode()},
         {
             "path": "new/n.bin",
             "executable": False,

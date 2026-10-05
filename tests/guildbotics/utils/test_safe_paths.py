@@ -439,3 +439,24 @@ def test_a_link_inside_a_tree_is_never_followed(tmp_path: Path, symlinks: None) 
                 create=create,
             )
     assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize(("answer", "sensitive"), [(1, True), (0, False), (-1, None)])
+def test_darwin_tells_the_case_rule_of_the_directory_itself(
+    tmp_path: Path,
+    monkeypatch,
+    fake_platform,
+    posix_permissions: None,
+    answer: int,
+    sensitive: bool | None,
+) -> None:
+    """A volume that does not answer is refused: taking it for
+    case-sensitive would let two spellings of one file through as two."""
+    fake_platform(safe_paths, "darwin")
+    monkeypatch.setattr(safe_paths._POSIX, "fpathconf", lambda fd, name: answer)
+
+    if sensitive is None:
+        with pytest.raises(OSError, match="no case-sensitivity"):
+            safe_paths.host_directory_case_sensitive(tmp_path)
+    else:
+        assert safe_paths.host_directory_case_sensitive(tmp_path) is sensitive

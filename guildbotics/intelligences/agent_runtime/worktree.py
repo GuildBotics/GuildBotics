@@ -20,8 +20,9 @@ import json
 import os
 import stat
 import sys
+import unicodedata
 from collections.abc import Iterator
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -42,11 +43,19 @@ from guildbotics.runtime.worktree_copy import (
     ChangedFile,
     CopiedFile,
 )
-from guildbotics.utils.fileio import host_temporary_directory
+from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.fileio import get_machine_state_path, host_temporary_directory
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.safe_paths import UnsafePathError, visit_host_tree
+from guildbotics.utils.safe_paths import (
+    UnsafePathError,
+    host_directory_case_sensitive,
+    inspect_host_path,
+    visit_host_tree,
+)
 
 _MODULE = "guildbotics.runtime.worktree_copy"
+#: How long a write-back waits for another one on this device.
+_WRITE_BACK_WAIT_SECONDS = 600.0
 _CHUNK_BYTES = 1 << 20
 #: Never a link, and on Windows never text: what is written is the bytes.
 _OPEN = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
@@ -114,12 +123,19 @@ async def write_back(environment: AgentEnvironment, worktree: Worktree) -> None:
             raise _collect_failed(str(exc)) from exc
         if result.returncode != 0:
             raise _collect_failed(result.stderr.decode(errors="replace").strip())
-        _write(worktree, changes)
+        # Waiting for another write-back and hashing the files take as long
+        # as they take; the command's loop answers its microVM meanwhile.
+        await asyncio.to_thread(_write, worktree, changes)
 
 
 def _write(worktree: Worktree, changes: Path) -> None:
     """Check every change and stage every file beside its place, then put
     them in place: a write that cannot be made leaves nothing written.
+
+    One write-back at a time on this device, from checking to putting in
+    place, across processes -- the working directories of two commands may
+    hold one another: one that comes later checks against what the earlier
+    wrote, and so refuses it as a change made meanwhile.
 
     Raises:
         CommandError: For a change the host may not write, a file that
@@ -129,48 +145,58 @@ def _write(worktree: Worktree, changes: Path) -> None:
     """
     root, excluded = worktree.copy.host, worktree.copy.excluded
     staged: list[tuple[PurePosixPath, str | None]] = []
-    try:
-        conflicts = [
-            change["path"]
-            for change in _changes(changes, excluded)
-            if not _unchanged(root, change["path"], worktree.copied)
-        ]
-        if not conflicts:
-            for change in _changes(changes, excluded):
-                path = PurePosixPath(change["path"])
-                staged.append((path, _stage(root, path, change)))
-    except (OSError, ValueError) as exc:
-        _discard(root, staged)
-        raise CommandError(
-            t(
-                "intelligences.agent_environment.runtime.worktree_refused",
-                path=root,
-                reason=exc,
+    with ExitStack() as held:
+        try:
+            held.enter_context(
+                held_lock(
+                    get_machine_state_path("run", "worktree-write-back.lock"),
+                    timeout=_WRITE_BACK_WAIT_SECONDS,
+                )
             )
-        ) from exc
-    if conflicts:
-        raise CommandError(
-            t(
-                "intelligences.agent_environment.runtime.worktree_conflict",
-                path=root,
-                paths=", ".join(conflicts),
+            if inspect_host_path(root).identities[-1] != worktree.copy.identity:
+                raise UnsafePathError(f"'{root}' was replaced while the command ran.")
+            case_sensitive = host_directory_case_sensitive(root)
+            conflicts = [
+                change["path"]
+                for change in _changes(changes, excluded, case_sensitive)
+                if not _unchanged(root, change, worktree.copied)
+            ]
+            if not conflicts:
+                for change in _changes(changes, excluded, case_sensitive):
+                    path = PurePosixPath(change["path"])
+                    staged.append((path, _stage(root, path, change)))
+        except (OSError, ValueError) as exc:
+            _discard(root, staged)
+            raise CommandError(
+                t(
+                    "intelligences.agent_environment.runtime.worktree_refused",
+                    path=root,
+                    reason=exc,
+                )
+            ) from exc
+        if conflicts:
+            raise CommandError(
+                t(
+                    "intelligences.agent_environment.runtime.worktree_conflict",
+                    path=root,
+                    paths=", ".join(conflicts),
+                )
             )
-        )
-    written: list[str] = []
-    try:
-        for path, temporary in staged:
-            _put(root, path, temporary)
-            written.append(path.as_posix())
-    except (OSError, ValueError) as exc:
-        _discard(root, staged[len(written) :])
-        raise CommandError(
-            t(
-                "intelligences.agent_environment.runtime.worktree_partial",
-                path=root,
-                paths=", ".join(written),
-                reason=exc,
-            )
-        ) from exc
+        written: list[str] = []
+        try:
+            for path, temporary in staged:
+                _put(root, path, temporary)
+                written.append(path.as_posix())
+        except (OSError, ValueError) as exc:
+            _discard(root, staged[len(written) :])
+            raise CommandError(
+                t(
+                    "intelligences.agent_environment.runtime.worktree_partial",
+                    path=root,
+                    paths=", ".join(written),
+                    reason=exc,
+                )
+            ) from exc
 
 
 def _guest(environment: AgentEnvironment) -> EnvironmentGuest:
@@ -192,9 +218,13 @@ def _collect_failed(error: str) -> CommandError:
     )
 
 
-def _changes(path: Path, excluded: tuple[str, ...]) -> Iterator[ChangedFile]:
+def _changes(
+    path: Path, excluded: tuple[str, ...], case_sensitive: bool
+) -> Iterator[ChangedFile]:
     """The changes the microVM told, each a regular file inside the
-    directory and outside its ``.git`` and the mounts nested in it.
+    directory and outside its ``.git`` and the mounts nested in it, and each
+    of a file of its own on the host -- where names differing in case or
+    Unicode form are one file, never two such names.
 
     Raises:
         ValueError: For a change that is not.
@@ -207,16 +237,23 @@ def _changes(path: Path, excluded: tuple[str, ...]) -> Iterator[ChangedFile]:
             except ValidationError as exc:
                 raise ValueError(f"Unreadable change: {exc}") from exc
             name = change["path"]
-            _check_name(name, excluded)
-            if name in seen:
+            _check_name(name, excluded, case_sensitive)
+            key = _host_name(name, case_sensitive)
+            if key in seen:
                 raise ValueError(f"'{name}' is changed twice.")
-            seen.add(name)
+            seen.add(key)
             if change.get("deleted") == ("content" in change):
                 raise ValueError(f"'{name}' is neither written nor deleted.")
             yield change
 
 
-def _check_name(name: str, excluded: tuple[str, ...]) -> None:
+def _host_name(name: str, case_sensitive: bool) -> str:
+    """The name as the host's file system tells files apart: where it does
+    not by case or Unicode form, every spelling of one file is one name."""
+    return name if case_sensitive else unicodedata.normalize("NFD", name).casefold()
+
+
+def _check_name(name: str, excluded: tuple[str, ...], case_sensitive: bool) -> None:
     path = PurePosixPath(name)
     parts = path.parts
     if (
@@ -233,7 +270,8 @@ def _check_name(name: str, excluded: tuple[str, ...]) -> None:
         or (os.name == "nt" and not all(map(_windows_name, parts)))
     ):
         raise ValueError(f"'{name}' is not a file inside the working directory.")
-    if any(path.is_relative_to(each) for each in excluded):
+    host = PurePosixPath(_host_name(name, case_sensitive))
+    if any(host.is_relative_to(_host_name(each, case_sensitive)) for each in excluded):
         raise ValueError(f"'{name}' is inside a directory mounted on its own.")
 
 
@@ -254,34 +292,44 @@ def _windows_name(part: str) -> bool:
     )
 
 
-def _unchanged(root: Path, name: str, copied: dict[str, CopiedFile]) -> bool:
-    """Whether the host file is still what was copied: the same content, or
-    still absent when it was not copied."""
-    path = PurePosixPath(name)
-    before = copied.get(name)
-    found: list[str | None] = []
+def _unchanged(root: Path, change: ChangedFile, copied: dict[str, CopiedFile]) -> bool:
+    """Whether the host file is still what was copied, as far as the change
+    writes it: the same content -- or still absent when it was not copied --
+    and, when the change sets the executable bit, the same bit."""
+    path = PurePosixPath(change["path"])
+    before = copied.get(change["path"])
+    found: list[tuple[str, bool] | None] = []
 
     def read(fd: int | None) -> None:
-        found.append(_digest(fd, root.joinpath(*path.parts), path.name))
+        found.append(_state(fd, root.joinpath(*path.parts), path.name))
 
     visit_host_tree(root, path.parent, read, create=False)
-    return (found[0] if found else None) == (before["sha256"] if before else None)
+    now = found[0] if found else None
+    if before is None or now is None:
+        return before is None and now is None
+    return now[0] == before["sha256"] and (
+        "executable" not in change
+        or sys.platform == "win32"
+        or now[1] == before["executable"]
+    )
 
 
-def _digest(fd: int | None, full: Path, name: str) -> str | None:
-    """The leaf's content digest, or None when there is none.
+def _state(fd: int | None, full: Path, name: str) -> tuple[str, bool] | None:
+    """The leaf's content digest and executable bit, or None when there is
+    none.
 
     Raises:
         UnsafePathError: For a leaf that is not a regular file.
     """
-    if _regular(fd, full, name) is None:
+    info = _regular(fd, full, name)
+    if info is None:
         return None
     handle = os.open(full if fd is None else name, os.O_RDONLY | _OPEN, dir_fd=fd)
     digest = hashlib.sha256()
     with os.fdopen(handle, "rb") as file:
         while chunk := file.read(_CHUNK_BYTES):
             digest.update(chunk)
-    return digest.hexdigest()
+    return digest.hexdigest(), bool(info.st_mode & 0o111)
 
 
 def _stage(root: Path, path: PurePosixPath, change: ChangedFile) -> str | None:
@@ -298,7 +346,7 @@ def _stage(root: Path, path: PurePosixPath, change: ChangedFile) -> str | None:
 
     def stage(fd: int | None) -> None:
         info = _regular(fd, root.joinpath(*path.parts), path.name)
-        executable = bool(change.get("executable"))
+        executable = change.get("executable")
         name = f".{path.name}.guildbotics-{uuid4().hex}"
         at = root.joinpath(*path.parent.parts, name) if fd is None else name
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _OPEN
@@ -308,10 +356,9 @@ def _stage(root: Path, path: PurePosixPath, change: ChangedFile) -> str | None:
             file.write(base64.b64decode(change.get("content", "")))
             if info is not None and sys.platform != "win32":
                 mode = stat.S_IMODE(info.st_mode)
-                os.fchmod(
-                    file.fileno(),
-                    mode | (mode & 0o444) >> 2 if executable else mode & ~0o111,
-                )
+                if executable is not None:
+                    mode = mode | (mode & 0o444) >> 2 if executable else mode & ~0o111
+                os.fchmod(file.fileno(), mode)
 
     try:
         visit_host_tree(root, path.parent, stage, create=True)

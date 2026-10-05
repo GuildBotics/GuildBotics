@@ -217,9 +217,15 @@ admission; turns cannot create such links because protected files are not mounte
   following a link; links, anything inside `.git`, and anything outside the
   working directory are never written back. If a file changed on the host
   while the command ran, nothing is written back and the command fails naming
-  those files; a command that failed has nothing written back. Two commands
-  run in the same working directory at once therefore write back only the
-  first that ends. Every file is written beside its place before any is put
+  those files; a command that failed has nothing written back. A written file
+  keeps its host mode, and its executable bit is written back only when the
+  command changed it, refused like a content change when the host changed it
+  meanwhile. Write-backs on a device take turns, so of two commands that
+  copied the same files -- through one working directory, or one inside the
+  other's -- only the first that ends writes back. A working directory
+  replaced while the command ran, and two changed names the host takes for
+  one file (differing only in case or Unicode form), refuse the write-back
+  too. Every file is written beside its place before any is put
   in place; a failure while putting them in place names the files already
   written back. A directory the command removed stays on the host, and a
   link (one in a `.venv` or `node_modules`, for example) is missing from the
