@@ -464,7 +464,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "What the inspect commands read maps to writes like this: `issue update` writes body, "
     "title, labels, and state, and `pr update` writes body and title. Assignees are "
     "read-only on purpose, because who takes an issue is assigned by a human on the "
-    "project board; PR state, draft, and base are read-only for the same reason.",
+    "project board; PR state, draft, and base are read-only for the same reason (the "
+    "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
+    "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "
     "`--content-file <file>`. Create the UTF-8 file in the OS temporary directory, outside "
     "the repository and worktree, and use a unique file name. Write the exact content with a "
