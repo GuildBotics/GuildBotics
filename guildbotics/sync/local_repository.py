@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import uuid
@@ -324,7 +325,7 @@ class LocalSyncRepository:
 
     def _discard(self) -> None:
         """Undo :meth:`initialize`, leaving the folder as the copy found it."""
-        shutil.rmtree(self.path / ".git", ignore_errors=True)
+        shutil.rmtree(self.path / ".git", onexc=_remove_read_only)
         (self.path / ".gitignore").unlink(missing_ok=True)
 
     def stage_changes(self) -> list[str]:
@@ -691,6 +692,19 @@ class LocalSyncRepository:
             )
         _configure_git(repository)
         return repository
+
+
+def _remove_read_only(
+    function: Callable[[str], object], path: str, _: BaseException
+) -> None:
+    """Retry a removal after making the entry writable, giving up quietly.
+
+    Git writes its objects read-only, and Windows refuses to delete a read-only
+    file, so a fetched copy would otherwise survive being discarded.
+    """
+    with suppress(OSError):
+        os.chmod(path, stat.S_IWRITE)
+        function(path)
 
 
 def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
