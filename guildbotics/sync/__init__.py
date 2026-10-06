@@ -40,7 +40,6 @@ from guildbotics.sync.local_repository import (
     LocalSyncRepository,
     RejectedChange,
     SyncRepositoryError,
-    WorkingTreeChange,
 )
 from guildbotics.sync.manager import (
     GitSyncManager,
@@ -66,7 +65,6 @@ __all__ = [
     "SyncState",
     "SyncStillStoppingError",
     "UnsendableChange",
-    "WorkingTreeChange",
     "activate_workspace_sync",
     "build_git_sync_manager",
     "clone_workspace",

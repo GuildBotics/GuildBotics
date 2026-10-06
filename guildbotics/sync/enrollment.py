@@ -40,9 +40,14 @@ from guildbotics.sync.commits import (
     CommitOutcome,
     UnsendableChange,
     commit_shared_changes,
+    held_covers,
     validate_received,
 )
-from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
+from guildbotics.sync.local_repository import (
+    EMPTY_TREE,
+    LocalSyncRepository,
+    SyncRepositoryError,
+)
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -318,7 +323,12 @@ def clone_workspace(
     workspace_root = register_workspace(workspace_root)
     repository = LocalSyncRepository(workspace_root)
     with _as_enrollment_error("The workspace could not be taken from the hub"):
-        repository.clone(remote_url)
+        repository.clone(
+            remote_url,
+            lambda remote: _validate_received(
+                repository, remote, list(repository.changed_paths(EMPTY_TREE, remote))
+            ),
+        )
     identity = _local_identity(repository)
     publish_device_record(
         repository.workspace_root,
@@ -392,12 +402,18 @@ def _join(
                 workspace_id=workspace_id,
                 workspace_root=repository.workspace_root,
             )
-        held = {change.path for change in unsendable}
-        adopted = tuple(sorted((set(hub_only) | set(differing)) - held))
+        adopted = tuple(
+            sorted(
+                path
+                for path in {*hub_only, *differing}
+                if not held_covers(unsendable, path)
+            )
+        )
         repository.move_to(remote)
         # A change held back by validation was never shareable, so the hub has
         # no version of it that supersedes anything -- and overwriting it would
-        # throw away the edit the user was told to go and repair.
+        # throw away the edit the user was told to go and repair. Beneath it is
+        # off limits too: a held link would carry the write to its target.
         repository.restore_from_index(list(adopted))
         # What only this machine had is still on disk and no longer tracked, so
         # the commit boundary picks it up again and it travels to the hub next.
@@ -482,13 +498,15 @@ def _as_enrollment_error(action: str) -> Iterator[None]:
 
 
 def _hub_identity(repository: LocalSyncRepository, remote: str) -> WorkspaceIdentity:
-    data = repository.read_blob(remote, _WORKSPACE_IDENTITY_PATH)
-    if data is None:
+    entry = repository.read_entries(remote, [_WORKSPACE_IDENTITY_PATH]).get(
+        _WORKSPACE_IDENTITY_PATH
+    )
+    if entry is None:
         raise EnrollmentError(
             "The hub repository has commits but no workspace identity, so it is "
             "not a GuildBotics workspace."
         )
-    return _parse_identity(data)
+    return _parse_identity(entry.data)
 
 
 def _local_identity(repository: LocalSyncRepository) -> WorkspaceIdentity:

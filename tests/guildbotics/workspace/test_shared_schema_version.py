@@ -45,6 +45,7 @@ from guildbotics.workspace.identity import (
     publish_device_record,
 )
 from guildbotics.workspace.validation import (
+    REGULAR_FILE_MODE,
     SharedSchemaAheadError,
     validate_shared_file,
 )
@@ -244,9 +245,11 @@ def test_the_boundary_would_have_refused_the_supplied_generation(
 
     for name, path in planted.items():
         relative = path.relative_to(root).as_posix()
-        validate_shared_file(relative, path.read_bytes())
+        validate_shared_file(relative, REGULAR_FILE_MODE, path.read_bytes())
         with pytest.raises(SharedSchemaAheadError):
-            validate_shared_file(relative, _with_generation(path, AHEAD))
+            validate_shared_file(
+                relative, REGULAR_FILE_MODE, _with_generation(path, AHEAD)
+            )
         assert name
 
 
@@ -312,7 +315,7 @@ def test_the_boundary_stops_a_record_from_a_newer_build(workspace: Path) -> None
             continue
         ahead = _with_generation(path, SHARED_RECORD_SCHEMA_VERSION + 1)
         with pytest.raises(SharedSchemaAheadError):
-            validate_shared_file(relative, ahead)
+            validate_shared_file(relative, REGULAR_FILE_MODE, ahead)
         checked += 1
     assert checked
 

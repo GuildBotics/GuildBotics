@@ -11,7 +11,7 @@ from guildbotics.observability.activity_event_store import is_domain_activity_ev
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import workspace_sync_port
-from guildbotics.workspace.validation import validate_shared_file
+from guildbotics.workspace.validation import REGULAR_FILE_MODE, validate_shared_file
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
@@ -59,6 +59,7 @@ def test_a_rejection_is_shared_activity_and_validates_as_one(recorded: dict) -> 
     assert is_domain_activity_event(SYNC_UPDATE_REJECTED)
     validate_shared_file(
         f"state/events/2026/08/{recorded['event_id']}.json",
+        REGULAR_FILE_MODE,
         json.dumps(recorded).encode("utf-8"),
     )
 

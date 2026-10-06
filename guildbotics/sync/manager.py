@@ -34,9 +34,11 @@ from git import GitCommandError
 from guildbotics.sync.commits import (
     UnsendableChange,
     commit_shared_changes,
+    held_covers,
     validate_received,
 )
 from guildbotics.sync.local_repository import (
+    EMPTY_TREE,
     HubCommandError,
     LocalSyncRepository,
     SyncRepositoryError,
@@ -58,6 +60,7 @@ from guildbotics.workspace.identity import (
     read_workspace_identity,
 )
 from guildbotics.workspace.validation import (
+    REGULAR_FILE_MODE,
     SharedFileInvalidError,
     SharedSchemaAheadError,
     validate_shared_file,
@@ -491,7 +494,7 @@ class GitSyncManager:
                 if base == remote:
                     return local
             self._state = "reconciling"
-            base_or_empty = base if base is not None else _EMPTY_TREE
+            base_or_empty = base if base is not None else EMPTY_TREE
             local_changes = (
                 self._repository.changed_paths(base_or_empty, local)
                 if local is not None
@@ -506,9 +509,15 @@ class GitSyncManager:
             # A change held back by validation was never shareable, so it is
             # not a rejection -- but it is still the user's work, and adopting
             # the hub's version over it would discard an edit they were told to
-            # go and fix.
-            held = {item.path for item in self._invalid_paths}
-            self._repository.restore_from_index(sorted(set(remote_changes) - held))
+            # go and fix. Beneath it is off limits too: a held link would carry
+            # the write or the deletion to wherever it points.
+            self._repository.restore_from_index(
+                sorted(
+                    path
+                    for path in remote_changes
+                    if not held_covers(self._invalid_paths, path)
+                )
+            )
             self._commit_held()
             return self._repository.head()
 
@@ -597,12 +606,15 @@ class GitSyncManager:
             / ".guildbotics"
             / (_WORKSPACE_IDENTITY_PATH)
         )
-        if not path.is_file():
+        # A link in its place is not the identity, whatever it points at.
+        if path.is_symlink() or not path.is_file():
             raise SharedDataAnomaly(
                 "missing_workspace_identity",
                 f"{_WORKSPACE_IDENTITY_PATH} is gone from this workspace",
             )
-        identity = self._read_identity(_WORKSPACE_IDENTITY_PATH, path.read_bytes())
+        identity = self._read_identity(
+            _WORKSPACE_IDENTITY_PATH, REGULAR_FILE_MODE, path.read_bytes()
+        )
         if identity.workspace_id != self._workspace_id:
             raise SharedDataAnomaly(
                 "workspace_identity_mismatch",
@@ -610,7 +622,7 @@ class GitSyncManager:
                 f"not {self._workspace_id}",
             )
 
-    def _read_identity(self, path: str, data: bytes) -> WorkspaceIdentity:
+    def _read_identity(self, path: str, mode: str, data: bytes) -> WorkspaceIdentity:
         """Parse a workspace identity, reporting damage as damage.
 
         Both sides parse through here so an identity this build cannot read
@@ -619,7 +631,7 @@ class GitSyncManager:
         looks idle while it is no longer synchronizing at all.
         """
         try:
-            validate_shared_file(path, data)
+            validate_shared_file(path, mode, data)
             return WorkspaceIdentity.model_validate_json(data)
         except SharedFileInvalidError as exc:
             raise self._anomaly_for(exc) from exc
@@ -630,13 +642,15 @@ class GitSyncManager:
         """Refuse to synchronize with a hub holding a different workspace."""
         if remote is None:
             return
-        data = self._repository.read_blob(remote, _WORKSPACE_IDENTITY_PATH)
-        if data is None:
+        entry = self._repository.read_entries(remote, [_WORKSPACE_IDENTITY_PATH]).get(
+            _WORKSPACE_IDENTITY_PATH
+        )
+        if entry is None:
             raise SharedDataAnomaly(
                 "missing_workspace_identity",
                 f"the hub has commits but no {_WORKSPACE_IDENTITY_PATH}",
             )
-        identity = self._read_identity(_WORKSPACE_IDENTITY_PATH, data)
+        identity = self._read_identity(_WORKSPACE_IDENTITY_PATH, entry.mode, entry.data)
         if identity.workspace_id != self._workspace_id:
             raise SharedDataAnomaly(
                 "workspace_identity_mismatch",
@@ -666,8 +680,12 @@ class GitSyncManager:
     # -- Pending changes ----------------------------------------------------
 
     def _resolve_shared(self) -> None:
-        held = {item.path for item in self._invalid_paths}
-        self._settle(lambda change: not held.intersection(change.paths), shared=True)
+        self._settle(
+            lambda change: (
+                not any(held_covers(self._invalid_paths, path) for path in change.paths)
+            ),
+            shared=True,
+        )
 
     def _reject_pending(self, conflicts: Sequence[str]) -> None:
         rejected = set(conflicts)
@@ -753,7 +771,3 @@ def build_git_sync_manager(workspace_root: Path | None = None) -> GitSyncManager
         workspace_id=workspace_identity.workspace_id,
         device_id=device_identity.device_id,
     )
-
-
-#: Git's empty tree, used as the base when this workspace has no commits yet.
-_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"

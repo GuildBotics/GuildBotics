@@ -8,15 +8,17 @@ whose save notification was lost are picked up the same way.
 
 A file that does not validate is not an error to report and forget: it is the
 user's work, held back until it can be shared, and never overwritten by the
-hub's version in the meantime.
+hub's version in the meantime. That covers everything beneath it as well: a
+held link or embedded repository is a directory on this device, and a path
+under it reaches whatever it points at.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from guildbotics.sync.local_repository import LocalSyncRepository, WorkingTreeChange
+from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
@@ -64,35 +66,41 @@ def commit_shared_changes(
     file for every other device to stop its queue on content nothing checked --
     and the device that sent it stays green, because its own working tree
     matches the commit it made. Staging first makes "what was validated" and
-    "what is committed" the same bytes by construction. It also settles a
-    deletion that is recreated before the commit: the recreated file is staged
-    as content, so it is checked as content.
+    "what is committed" the same entry, mode and bytes, by construction. It
+    also settles a deletion that is recreated before the commit: the recreated
+    file is staged as content, so it is checked as content.
     """
-    changes = repository.working_tree_changes()
+    changes = repository.stage_changes()
     if not changes:
         return CommitOutcome(head=repository.head(), unsendable=())
-    repository.stage([change.path for change in changes])
 
+    # A path staged as a deletion is absent here. There is no content to
+    # check, and removing a file cannot make the shared set unreadable.
+    staged = repository.read_staged(changes)
     held: list[UnsendableChange] = []
-    sendable: list[WorkingTreeChange] = []
-    for change in changes:
-        staged = repository.read_staged(change.path)
-        if staged is None:
-            # Staged as a deletion. There is no content to check, and removing
-            # a file cannot make the shared set unreadable.
-            sendable.append(change)
-            continue
+    for path, entry in staged.items():
         try:
-            validate_shared_file(change.path, staged)
+            validate_shared_file(path, entry.mode, entry.data)
         except SharedFileInvalidError as exc:
-            held.append(UnsendableChange(path=change.path, reason=exc.reason))
-        else:
-            sendable.append(change)
+            held.append(UnsendableChange(path=path, reason=exc.reason))
     if held:
+        # Unstaging a path puts back everything the commit holds beneath it,
+        # so the deletions a link left where a directory was wait with it.
         repository.unstage([item.path for item in held])
+    sendable = [path for path in changes if not held_covers(held, path)]
     if sendable:
-        repository.commit(_commit_message(sendable, device_id))
+        deleted = sum(1 for path in sendable if path not in staged)
+        repository.commit(_commit_message(len(sendable), deleted, device_id))
     return CommitOutcome(head=repository.head(), unsendable=tuple(held))
+
+
+def held_covers(held: Iterable[UnsendableChange], path: str) -> bool:
+    """True when ``path`` is a held change or lies beneath one.
+
+    Compared by path element, so holding ``config/foo`` covers
+    ``config/foo/bar.md`` but not ``config/foobar.md``.
+    """
+    return any(path == item.path or path.startswith(f"{item.path}/") for item in held)
 
 
 def validate_received(
@@ -108,16 +116,12 @@ def validate_received(
     Raises:
         SharedFileInvalidError: When an arriving file fails the boundary.
     """
-    for path in paths:
-        data = repository.read_blob(revision, path)
-        if data is None:
-            continue
-        validate_shared_file(path, data)
+    for path, entry in repository.read_entries(revision, list(paths)).items():
+        validate_shared_file(path, entry.mode, entry.data)
 
 
-def _commit_message(changes: Sequence[WorkingTreeChange], device_id: str) -> str:
-    deleted = sum(1 for change in changes if change.deleted)
+def _commit_message(changed: int, deleted: int, device_id: str) -> str:
     return (
-        f"Sync shared state: {len(changes) - deleted} written, {deleted} deleted"
+        f"Sync shared state: {changed - deleted} written, {deleted} deleted"
         f"\n\nDevice: {device_id}\nRecorded-At: {utc_now_iso()}\n"
     )

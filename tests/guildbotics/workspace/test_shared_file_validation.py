@@ -9,6 +9,7 @@ from guildbotics.workspace.validation import (
     MAX_SHARED_AVATAR_BYTES,
     MAX_SHARED_FILE_BYTES,
     MAX_SHARED_JOURNAL_BYTES,
+    REGULAR_FILE_MODE,
     SharedFileInvalidError,
     SharedSchemaAheadError,
     validate_shared_file,
@@ -68,14 +69,56 @@ SECRETS_INDEX = yaml.safe_dump(
     ],
 )
 def test_valid_shared_files_pass(relative_path: str, data: bytes) -> None:
-    validate_shared_file(relative_path, data)
+    validate_shared_file(relative_path, REGULAR_FILE_MODE, data)
 
 
 def test_a_path_outside_the_shared_roots_is_rejected() -> None:
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file("local/run/service.lock", b"")
+        validate_shared_file("local/run/service.lock", REGULAR_FILE_MODE, b"")
 
     assert "outside the shared" in error.value.reason
+
+
+def test_an_executable_regular_file_is_shared() -> None:
+    validate_shared_file("config/commands/build.sh", "100755", b"echo ok\n")
+
+
+@pytest.mark.parametrize(
+    ("mode", "data"),
+    [
+        # A link's content is the path it points at, which reads as valid text.
+        ("120000", b"/Users/someone/dotfiles/commands"),
+        ("160000", b""),
+        ("040000", b""),
+    ],
+)
+def test_anything_but_a_regular_file_is_rejected(mode: str, data: bytes) -> None:
+    with pytest.raises(SharedFileInvalidError) as error:
+        validate_shared_file("config/commands/build.md", mode, data)
+
+    assert error.value.reason == f"is not a regular file (Git mode {mode})"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "config/.gitattributes",
+        "config/.gitignore",
+        "state/documents/.cache/body.md",
+        "config/team/members/yuki/.avatar.png",
+    ],
+)
+def test_a_hidden_path_is_rejected_at_any_depth(relative_path: str) -> None:
+    """Git reads some hidden files itself -- ``.gitattributes`` rewrites what a
+    checkout writes -- so the content checked would not be the content landed."""
+    with pytest.raises(SharedFileInvalidError) as error:
+        validate_shared_file(relative_path, REGULAR_FILE_MODE, b"* text eol=crlf\n")
+
+    assert error.value.reason == "is a hidden path"
+
+
+def test_a_name_that_only_contains_a_dot_is_not_hidden() -> None:
+    validate_shared_file("config/commands/v1.2/build.md", REGULAR_FILE_MODE, b"x")
 
 
 @pytest.mark.parametrize(
@@ -98,7 +141,7 @@ def test_files_a_person_authors_travel_as_written(
     edit fails loudly through the product's own paths on every device, and
     refusing to carry it would only stop the user continuing on another
     machine."""
-    validate_shared_file(relative_path, data)
+    validate_shared_file(relative_path, REGULAR_FILE_MODE, data)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +157,7 @@ def test_invalid_shared_files_are_rejected(
     relative_path: str, data: bytes, fragment: str
 ) -> None:
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file(relative_path, data)
+        validate_shared_file(relative_path, REGULAR_FILE_MODE, data)
 
     assert fragment in error.value.reason
     assert error.value.relative_path == relative_path
@@ -136,7 +179,7 @@ def test_a_record_from_a_newer_build_stops_the_boundary(relative_path: str) -> N
         payload = yaml.safe_dump({"schema_version": 2}).encode()
 
     with pytest.raises(SharedSchemaAheadError) as error:
-        validate_shared_file(relative_path, payload)
+        validate_shared_file(relative_path, REGULAR_FILE_MODE, payload)
 
     assert error.value.version == 2
 
@@ -145,16 +188,19 @@ def test_a_newer_task_run_record_stops_the_boundary() -> None:
     with pytest.raises(SharedSchemaAheadError):
         validate_shared_file(
             "state/task-runs/run-1/result.json",
+            REGULAR_FILE_MODE,
             b'{"schema_version": 2}\n',
         )
 
 
 def test_the_current_schema_version_is_carried_normally() -> None:
-    validate_shared_file("state/events/2026/08/e1.json", ACTIVITY_EVENT_JSON)
+    validate_shared_file(
+        "state/events/2026/08/e1.json", REGULAR_FILE_MODE, ACTIVITY_EVENT_JSON
+    )
 
 
 def test_the_secret_index_may_name_keys_but_hold_no_value() -> None:
-    validate_shared_file("config/secrets.yml", SECRETS_INDEX)
+    validate_shared_file("config/secrets.yml", REGULAR_FILE_MODE, SECRETS_INDEX)
 
 
 @pytest.mark.parametrize(
@@ -178,7 +224,9 @@ def test_the_secret_index_refuses_anywhere_a_value_could_sit(
     """Secrets stay out of the shared history because the index has nowhere to
     put one, not because values are recognized and stripped."""
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file("config/secrets.yml", yaml.safe_dump(payload).encode())
+        validate_shared_file(
+            "config/secrets.yml", REGULAR_FILE_MODE, yaml.safe_dump(payload).encode()
+        )
 
     assert fragment in error.value.reason
 
@@ -187,7 +235,9 @@ def test_an_oversized_record_is_rejected() -> None:
     data = b'{"note": "' + b"x" * MAX_SHARED_FILE_BYTES + b'"}'
 
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file("state/chat_state/pending/e1.json", data)
+        validate_shared_file(
+            "state/chat_state/pending/e1.json", REGULAR_FILE_MODE, data
+        )
 
     assert "above the" in error.value.reason
 
@@ -197,27 +247,32 @@ def test_a_journal_may_exceed_the_record_limit_but_not_its_own() -> None:
     within = line * (MAX_SHARED_FILE_BYTES // len(line) + 1)
     assert len(within) > MAX_SHARED_FILE_BYTES
 
-    validate_shared_file(MEMORY_JOURNAL, within)
+    validate_shared_file(MEMORY_JOURNAL, REGULAR_FILE_MODE, within)
 
     beyond = line * (MAX_SHARED_JOURNAL_BYTES // len(line) + 1)
     with pytest.raises(SharedFileInvalidError):
-        validate_shared_file(MEMORY_JOURNAL, beyond)
+        validate_shared_file(MEMORY_JOURNAL, REGULAR_FILE_MODE, beyond)
 
 
 def test_an_avatar_must_be_a_supported_image_kind() -> None:
     with pytest.raises(SharedFileInvalidError) as error:
-        validate_shared_file("config/team/members/yuki/avatar.svg", b"<svg/>")
+        validate_shared_file(
+            "config/team/members/yuki/avatar.svg", REGULAR_FILE_MODE, b"<svg/>"
+        )
 
     assert "supported avatar image" in error.value.reason
 
 
 def test_an_avatar_may_be_binary_up_to_its_own_limit() -> None:
     validate_shared_file(
-        "config/team/members/yuki/avatar.png", b"\xff" * MAX_SHARED_AVATAR_BYTES
+        "config/team/members/yuki/avatar.png",
+        REGULAR_FILE_MODE,
+        b"\xff" * MAX_SHARED_AVATAR_BYTES,
     )
 
     with pytest.raises(SharedFileInvalidError):
         validate_shared_file(
             "config/team/members/yuki/avatar.png",
+            REGULAR_FILE_MODE,
             b"\xff" * (MAX_SHARED_AVATAR_BYTES + 1),
         )

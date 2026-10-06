@@ -20,10 +20,11 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,13 +32,18 @@ from pathlib import Path
 from git import Git, GitCommandError, Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-from guildbotics.utils.fileio import ATOMIC_WRITE_SUFFIX, get_workspace_root
+from guildbotics.utils.fileio import (
+    ATOMIC_WRITE_SUFFIX,
+    atomic_write_text,
+    get_workspace_root,
+)
 from guildbotics.utils.openssh import (
     REMOTE_COMMAND_TIMEOUT_SECONDS,
     OpenSshNotFoundError,
     git_ssh_command,
 )
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
+from guildbotics.workspace.validation import REGULAR_FILE_MODES
 
 #: The only branch normal operation shares. Users are given no branch controls.
 SYNC_BRANCH = "main"
@@ -56,6 +62,10 @@ PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: ``git add`` when the rename beats it -- reported as a hub it could not
 #: reach. It is never a file the user meant to share.
 GITIGNORE_CONTENT = f"local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
+#: Attributes that switch off every conversion between the index and disk.
+GIT_ATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n"
+#: Git's empty tree: the base of a comparison with a side that has no commits.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 #: Command lines stay bounded when a rescan finds thousands of changed files.
 _PATH_BATCH = 200
 #: ``git status --porcelain`` prefixes every entry with ``XY `` before the path.
@@ -144,16 +154,19 @@ def _run_remote_git(
 
 
 @dataclass(frozen=True)
-class WorkingTreeChange:
-    """One shared file that differs from the commit the repository is on.
+class SharedEntry:
+    """One file as Git records it in a commit or in the index.
 
     Attributes:
-        path (str): The path relative to ``.guildbotics/``.
-        deleted (bool): True when the file is gone from the working tree.
+        mode (str): The Git mode, for example ``100644`` or ``120000``.
+        data (bytes): The content of a regular file, exactly as stored. Empty
+            for anything else: a link's content is a path and a gitlink's is a
+            commit this repository does not hold, and validation refuses both
+            on their mode before content would matter.
     """
 
-    path: str
-    deleted: bool
+    mode: str
+    data: bytes
 
 
 @dataclass(frozen=True)
@@ -245,14 +258,23 @@ class LocalSyncRepository:
         if not self.initialized:
             Repo.init(self.path, initial_branch=SYNC_BRANCH)
         repository = self._repo()
-        (self.path / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        # Replaced rather than written through, so a link put in its place
+        # never carries this write to wherever it points.
+        atomic_write_text(self.path / ".gitignore", GITIGNORE_CONTENT)
+        # Every file is carried as the bytes validated: no line-ending, filter,
+        # or encoding conversion on add or checkout, whatever a global
+        # ``core.autocrlf`` or an untracked ``.gitattributes`` asks for. This
+        # file outranks every other source of attributes.
+        atomic_write_text(
+            Path(repository.git_dir) / "info" / "attributes", GIT_ATTRIBUTES
+        )
         # Commits are machine-generated bookkeeping, so they carry a fixed
         # identity instead of the member identity used for the user's own work.
         repository.git.config("user.name", "GuildBotics")
         repository.git.config("user.email", "sync@guildbotics.invalid")
         repository.git.config("commit.gpgsign", "false")
 
-    def clone(self, url: str) -> None:
+    def clone(self, url: str, accept: Callable[[str], None]) -> None:
         """Fill this repository with a copy of a hub's shared content.
 
         This is how a machine takes a workspace it has never held before. A
@@ -265,6 +287,14 @@ class LocalSyncRepository:
         under ``local/`` before the copy is asked for. ``git clone`` refuses a
         directory that is not empty, which made the intended way of reaching
         this the one way that could not work.
+
+        Args:
+            url (str): The hub repository to copy.
+            accept (Callable[[str], None]): Checks the fetched revision before
+                anything of it is written to the working tree, raising to
+                refuse it. A checkout writes links and anything else the hub
+                holds exactly as recorded, so this is the one point where
+                refusing still leaves nothing behind.
 
         Raises:
             SyncRepositoryError: When this workspace already holds content of
@@ -281,6 +311,7 @@ class LocalSyncRepository:
             repository = self._repo()
             repository.create_remote(SYNC_REMOTE, url)
             _run_remote_git(repository, "fetch", SYNC_REMOTE, SYNC_BRANCH)
+            accept(f"{SYNC_REMOTE}/{SYNC_BRANCH}")
             repository.git.checkout("-B", SYNC_BRANCH, f"{SYNC_REMOTE}/{SYNC_BRANCH}")
         except Exception:
             # A copy that could not be taken leaves nothing behind. What it
@@ -294,16 +325,24 @@ class LocalSyncRepository:
 
     def _discard(self) -> None:
         """Undo :meth:`initialize`, leaving the folder as the copy found it."""
-        shutil.rmtree(self.path / ".git", ignore_errors=True)
+        shutil.rmtree(self.path / ".git", onexc=_remove_read_only)
         (self.path / ".gitignore").unlink(missing_ok=True)
 
-    def working_tree_changes(self) -> list[WorkingTreeChange]:
-        """Return every shared file that differs from the current commit.
+    def stage_changes(self) -> list[str]:
+        """Stage every shared change and return the paths it staged.
 
         This is what recovers a change whose save notification was lost, and
         what picks up an edit made directly with an external editor.
+
+        Whole shared roots are staged rather than the paths a status lists.
+        Git refuses to stage a path beneath a link by name, and replacing a
+        tracked directory with a link leaves exactly such paths behind as
+        deletions; staging the root records the link and those deletions
+        together. The answer is read back from the index, so it names what is
+        staged rather than what a status saw a moment earlier.
         """
-        output = self._repo().git.status(
+        repository = self._repo()
+        status = repository.git.status(
             "--porcelain",
             "-z",
             "--untracked-files=all",
@@ -311,38 +350,72 @@ class LocalSyncRepository:
             "--",
             *SHARED_ROOTS,
         )
-        changes: list[WorkingTreeChange] = []
-        for entry in output.split("\0"):
-            # ``-z`` leaves the path itself verbatim after the status prefix.
-            if len(entry) <= _STATUS_PREFIX:
-                continue
-            path = entry[_STATUS_PREFIX:]
-            changes.append(
-                WorkingTreeChange(path=path, deleted=not (self.path / path).exists())
-            )
-        return changes
+        # A root nothing lists may not exist, and Git refuses to add it then.
+        roots = sorted(
+            {entry[_STATUS_PREFIX:].split("/", 1)[0] for entry in status.split("\0")}
+            & set(SHARED_ROOTS)
+        )
+        if not roots:
+            return []
+        repository.git.add("--all", "--", *roots)
+        staged = repository.git.diff(
+            "--cached", "--name-only", "-z", "--no-renames", "--", *SHARED_ROOTS
+        )
+        return [path for path in staged.split("\0") if path]
 
-    def read_blob(self, revision: str, path: str) -> bytes | None:
-        """Return a file's bytes at ``revision``, or None when it is absent there.
+    def read_entries(
+        self, revision: str, paths: Sequence[str]
+    ) -> dict[str, SharedEntry]:
+        """Return the files ``revision`` records under ``paths``; absent ones are left out.
 
         Member avatars travel through here, so the bytes are returned exactly
         as stored rather than decoded or trimmed.
         """
-        try:
-            content = self._repo().git.cat_file(
-                "blob",
-                f"{revision}:{path}",
-                stdout_as_string=False,
-                strip_newline_in_stdout=False,
-            )
-        except GitCommandError:
-            return None
-        return bytes(content)
+        # ``<mode> SP <type> SP <object> TAB <path>``. Recursive, so a path that
+        # names a directory there lists what it holds rather than the tree.
+        listed = self._listed(
+            paths,
+            lambda batch: self._repo().git.ls_tree("-r", "-z", revision, "--", *batch),
+        )
+        return {
+            path: self._entry(fields[0], fields[2]) for path, fields in listed.items()
+        }
 
-    def stage(self, paths: Sequence[str]) -> None:
-        """Stage the given paths, recording deletions as deletions."""
+    def read_staged(self, paths: Sequence[str]) -> dict[str, SharedEntry]:
+        """Return what is staged for ``paths``; one staged as gone is left out."""
+        # ``<mode> SP <object> SP <stage> TAB <path>``
+        listed = self._listed(
+            paths, lambda batch: self._repo().git.ls_files("-s", "-z", "--", *batch)
+        )
+        return {
+            path: self._entry(fields[0], fields[1]) for path, fields in listed.items()
+        }
+
+    def _listed(
+        self, paths: Sequence[str], listing: Callable[[Sequence[str]], str]
+    ) -> dict[str, list[str]]:
+        """Map each of ``paths`` Git listed to the fields listed for it.
+
+        A path naming a directory lists what is under it, so only an entry
+        whose own path was asked for answers for it.
+        """
+        wanted = set(paths)
+        found: dict[str, list[str]] = {}
         for batch in _batched(paths):
-            self._repo().git.add("--", *batch)
+            for record in listing(batch).split("\0"):
+                fields, _, path = record.partition("\t")
+                if path in wanted:
+                    found[path] = fields.split(" ")
+        return found
+
+    def _entry(self, mode: str, oid: str) -> SharedEntry:
+        """Read the listed object, so the bytes are the entry's by construction."""
+        if mode not in REGULAR_FILE_MODES:
+            return SharedEntry(mode=mode, data=b"")
+        content = self._repo().git.cat_file(
+            "blob", oid, stdout_as_string=False, strip_newline_in_stdout=False
+        )
+        return SharedEntry(mode=mode, data=bytes(content))
 
     def unstage(self, paths: Sequence[str]) -> None:
         """Take ``paths`` back out of the index, leaving the working tree alone.
@@ -357,19 +430,6 @@ class LocalSyncRepository:
                 self._repo().git.rm("--cached", "--force", "--", *batch)
             else:
                 self._repo().git.reset("--quiet", head, "--", *batch)
-
-    def read_staged(self, path: str) -> bytes | None:
-        """Return the bytes staged for ``path``, or None when it is staged as gone."""
-        try:
-            content = self._repo().git.cat_file(
-                "blob",
-                f":0:{path}",
-                stdout_as_string=False,
-                strip_newline_in_stdout=False,
-            )
-        except GitCommandError:
-            return None
-        return bytes(content)
 
     def commit(self, message: str) -> str | None:
         """Commit whatever is staged, returning the new commit, or None if empty."""
@@ -413,14 +473,16 @@ class LocalSyncRepository:
 
         ``A`` for added, ``M`` for modified, ``D`` for deleted. Renames are not
         detected, so a move reads as one deletion and one addition, which is
-        what concurrent-update comparison needs.
+        what concurrent-update comparison needs. A change of type -- a file
+        that became a link -- is a modification like any other, so it is
+        validated and compared rather than falling between the three.
         """
         output = self._repo().git.diff(
             "--name-status", "-z", "--no-renames", base, head
         )
         fields = [field for field in output.split("\0") if field]
         return {
-            path: status[:1]
+            path: "M" if status[:1] == "T" else status[:1]
             for status, path in zip(fields[::2], fields[1::2], strict=True)
         }
 
@@ -628,8 +690,21 @@ class LocalSyncRepository:
                 f"{self.path} belongs to the repository at "
                 f"{repository.working_tree_dir}."
             )
-        _apply_ssh_client(repository)
+        _configure_git(repository)
         return repository
+
+
+def _remove_read_only(
+    function: Callable[[str], object], path: str, _: BaseException
+) -> None:
+    """Retry a removal after making the entry writable, giving up quietly.
+
+    Git writes its objects read-only, and Windows refuses to delete a read-only
+    file, so a fetched copy would otherwise survive being discarded.
+    """
+    with suppress(OSError):
+        os.chmod(path, stat.S_IWRITE)
+        function(path)
 
 
 def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
@@ -637,14 +712,19 @@ def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
         yield paths[start : start + _PATH_BATCH]
 
 
-def _apply_ssh_client(repository: Repo) -> None:
-    """Pin Git to the same OpenSSH client the hub commands use.
+def _configure_git(repository: Repo) -> None:
+    """Make every path a literal name and pin the hub commands' OpenSSH client.
+
+    Paths here are names of files, never patterns: as a pattern, a held
+    ``config/a[b].md`` also matches ``config/ab.md``, and unstaging or
+    restoring the one would act on the other.
 
     On Windows, Git ships an ``ssh.exe`` of its own with its own
     ``known_hosts``, so a hub the user confirmed once would be an unknown host
     to ``git fetch``. A machine with no client at all is left alone: a hub
     reached through a filesystem path needs none.
     """
+    repository.git.update_environment(GIT_LITERAL_PATHSPECS="1")
     with suppress(OpenSshNotFoundError):
         repository.git.update_environment(
             GIT_SSH_COMMAND=git_ssh_command(), GIT_TERMINAL_PROMPT="0"

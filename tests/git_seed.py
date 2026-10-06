@@ -8,7 +8,7 @@ from shutil import copytree
 
 from git import Repo
 
-from guildbotics.sync.local_repository import GITIGNORE_CONTENT
+from guildbotics.sync.local_repository import GIT_ATTRIBUTES, GITIGNORE_CONTENT
 from guildbotics.utils.workspace_sync_port import dump_shared_json
 from guildbotics.workspace.identity import WorkspaceIdentity
 
@@ -54,12 +54,20 @@ class WorkerGitSeed:
         with Repo.clone_from(sync_source, sync_hub, bare=True) as repository:
             repository.git.config("receive.denyNonFastForwards", "true")
         sync_device = root / "sync-device"
-        with Repo.clone_from(sync_hub, sync_device, branch="main") as repository:
+        # Production writes the ignore file -- ``.*`` keeps it out of the
+        # commit -- and the attributes that switch off conversions at
+        # initialization, before anything is checked out; keep the seed in that
+        # same state. Checked out first, a global ``core.autocrlf`` would leave
+        # files the attributes then report as changed.
+        with Repo.clone_from(
+            sync_hub, sync_device, branch="main", no_checkout=True
+        ) as repository:
             _configure_identity(repository, "GuildBotics", "sync@guildbotics.invalid")
-        # ``.*`` deliberately ignores the ignore file itself, so it is not in
-        # the commit cloned above. Production writes it beside the repository
-        # after initialization; keep the seed in that same state.
-        (sync_device / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+            (sync_device / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+            (sync_device / ".git" / "info" / "attributes").write_text(
+                GIT_ATTRIBUTES, encoding="utf-8"
+            )
+            repository.git.checkout("main")
 
         member_source = root / "member-source"
         with Repo.init(member_source, initial_branch="main") as repository:
