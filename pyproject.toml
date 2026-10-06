@@ -54,6 +54,7 @@ dependencies = [
   "weasyprint>=70.0",
   "websockets>=15.0.1",
   "microsandbox==0.6.17",
+  "wakepy>=1.0,<2.0",
 ]
 
 [project.urls]

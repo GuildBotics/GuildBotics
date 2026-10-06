@@ -316,6 +316,11 @@ Once work starts, you interact with the member like this:
 
 To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
 
+While a command runs, the machine never goes to sleep from being left idle (idle sleep). To keep it awake while the service waits for work as well, turn on **Keep this machine awake** on the **Service** screen (off by default). Switching it while the service runs takes effect within about a second, and it also applies to a service started with `guildbotics start`. The setting belongs to this machine only and is saved in the workspace's `.guildbotics/local/service.yml`.
+
+- Closing the lid and putting the machine to sleep by hand still put it to sleep
+- On Linux, sleep is held off through the desktop session (GNOME, KDE, and so on), so it cannot be held off where there is no desktop session. Commands and the service still run, and one warning is logged
+
 To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
 
 ### Pull Request Patrol
@@ -530,6 +535,8 @@ By default `guildbotics start` starts both the member workers (patrol / schedule
 
 - `--only scheduler`: runs only patrol and scheduled commands; the event listener does not start (no Slack events are received)
 - `--only events`: only receives events and runs queued events; patrol and scheduled commands do not run
+
+Whether the machine stays awake while the service waits is the same setting as in the desktop app. Without the desktop app, write `keep_awake: true` in the workspace's `.guildbotics/local/service.yml`; a change made while the service runs takes effect as well (see [Start the Service and Ask for Work](#start-the-service-and-ask-for-work)).
 
 **Running commands** (equivalent to running from the **Edit Command** screen in the desktop app):
 

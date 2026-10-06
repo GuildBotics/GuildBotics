@@ -65,6 +65,7 @@ import {
   getMemoryEvents,
   getRuntimeDebug,
   getSchedulerStatus,
+  getServiceKeepAwake,
   getSystemAlerts,
   getTeam,
   getTraceDetail,
@@ -79,6 +80,7 @@ import {
   startScheduler,
   stopScheduler,
   updateRuntimeDebug,
+  updateServiceKeepAwake,
   updateTranscriptSettings,
   verify as verifyConfiguration,
   type ChatReceiveResetResponse,
@@ -1053,6 +1055,7 @@ function ServicePage() {
               />
             </ServiceRuntimeSection>
           </div>
+          <ServiceKeepAwakeSettings />
           {startMutation.error ? (
             <Alert color="danger" title={t("overview.startError")}>
               {startMutation.error.message}
@@ -2947,6 +2950,42 @@ function ServiceRuntimeSection({
       ) : unit?.error ? (
         <Alert color="danger" title={t("overview.runtimeError")}>
           {unit.error}
+        </Alert>
+      ) : null}
+    </div>
+  );
+}
+
+function ServiceKeepAwakeSettings() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const keepAwake = useQuery({
+    queryKey: ["service-keep-awake"],
+    queryFn: getServiceKeepAwake,
+  });
+  const keepAwakeMutation = useMutation({
+    mutationFn: (enabled: boolean) => updateServiceKeepAwake({ enabled }),
+    onSuccess: (data) => queryClient.setQueryData(["service-keep-awake"], data),
+  });
+  return (
+    <div className="service-unit-panel">
+      <Group justify="space-between" align="center" wrap="nowrap">
+        <div>
+          <Text fw={700}>{t("service.keepAwake.title")}</Text>
+          <Text c="dimmed" size="sm">
+            {t("service.keepAwake.description")}
+          </Text>
+        </div>
+        <Switch
+          aria-label={t("service.keepAwake.title")}
+          checked={Boolean(keepAwake.data?.enabled)}
+          disabled={!keepAwake.data || keepAwakeMutation.isPending}
+          onChange={(event) => keepAwakeMutation.mutate(event.currentTarget.checked)}
+        />
+      </Group>
+      {keepAwakeMutation.error ? (
+        <Alert color="danger" title={t("service.keepAwake.saveError")}>
+          {keepAwakeMutation.error.message}
         </Alert>
       ) : null}
     </div>

@@ -79,6 +79,7 @@ from guildbotics.app_api.models import (
     RuntimeStatus,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
+    ServiceKeepAwake,
     SystemAlertsResponse,
     TeamSummary,
     TraceDetailResponse,
@@ -199,7 +200,11 @@ from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.member_context import resolve_person
-from guildbotics.runtime.service_lock import ServiceLockUnavailableError
+from guildbotics.runtime.service_lock import (
+    ServiceLockUnavailableError,
+    service_keeps_awake,
+    set_service_keeps_awake,
+)
 from guildbotics.runtime.trace_presentations import normalize_trace_presentation
 from guildbotics.utils.env_loader import (
     HOME_ENV_PROTECTED_KEYS,
@@ -1124,6 +1129,14 @@ class AppRuntime:
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
+
+    def get_service_keep_awake(self) -> ServiceKeepAwake:
+        return ServiceKeepAwake(enabled=service_keeps_awake())
+
+    def update_service_keep_awake(self, request: ServiceKeepAwake) -> ServiceKeepAwake:
+        # The process holding the service, this one or a CLI, follows the file.
+        set_service_keeps_awake(request.enabled)
+        return self.get_service_keep_awake()
 
     def get_system_alerts(self) -> SystemAlertsResponse:
         return self._system_alerts.list_alerts(

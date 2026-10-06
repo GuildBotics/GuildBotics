@@ -162,6 +162,10 @@ export type RuntimeDebugStatus = {
   agno_debug: boolean;
 };
 
+export type ServiceKeepAwake = {
+  enabled: boolean;
+};
+
 export type RuntimeDebugUpdateRequest = {
   enabled: boolean;
 };
@@ -1587,6 +1591,14 @@ export async function updateRuntimeDebug(
   body: RuntimeDebugUpdateRequest,
 ): Promise<RuntimeDebugStatus> {
   return request("/runtime/debug", { method: "PUT", body });
+}
+
+export async function getServiceKeepAwake(): Promise<ServiceKeepAwake> {
+  return request("/service/keep-awake");
+}
+
+export async function updateServiceKeepAwake(body: ServiceKeepAwake): Promise<ServiceKeepAwake> {
+  return request("/service/keep-awake", { method: "PUT", body });
 }
 
 export async function verify(): Promise<VerifyResponse> {

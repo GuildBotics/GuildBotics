@@ -526,6 +526,12 @@ const resources = {
           "Select patrol commands, scheduled commands, or event triggers before starting.",
         ownerElsewhere:
           "The service owner is another machine ({{name}}). To run the service on this machine, take over ownership in Setup → Sync.",
+        keepAwake: {
+          title: "Keep this machine awake",
+          description:
+            "While the service runs, this machine does not go to sleep when left idle. It always stays awake while a command runs. Closing the lid or choosing Sleep still puts it to sleep. This setting applies to this machine only.",
+          saveError: "Failed to save the sleep setting",
+        },
       },
       diagnostics: {
         title: "Diagnostics",
@@ -3316,6 +3322,12 @@ const resources = {
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
         ownerElsewhere:
           "サービスオーナーは別のマシン（{{name}}）です。このマシンでサービスを実行するには、設定 → 同期 から引き継いでください。",
+        keepAwake: {
+          title: "このマシンをスリープさせない",
+          description:
+            "サービスの実行中、操作がなくてもこのマシンがスリープしないようにします。コマンドの実行中は、この設定に関係なくスリープしません。蓋を閉じたときや手動でスリープしたときは対象外です。この設定はこのマシンだけに保存されます。",
+          saveError: "スリープの設定を保存できませんでした",
+        },
       },
       diagnostics: {
         title: "診断",

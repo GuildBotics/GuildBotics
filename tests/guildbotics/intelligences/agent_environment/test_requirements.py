@@ -2,10 +2,10 @@
 
 ``agent_environment/requirements.txt`` is what the snapshot installs for
 GuildBotics' own code inside the microVM. It is exported from ``uv.lock``
-without what only the host uses -- ``microsandbox``, which drives the microVMs
--- and this test exports it again and fails when a lock change was not
-exported. Lines are compared as a set, so the exporter's ordering is not part
-of the contract.
+without what only the host uses -- ``microsandbox``, which drives the microVMs,
+and ``wakepy``, which keeps the host awake -- and this test exports it again
+and fails when a lock change was not exported. Lines are compared as a set, so
+the exporter's ordering is not part of the contract.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ EXPORT = [
     "--no-hashes",
     "--prune",
     "microsandbox",
+    "--prune",
+    "wakepy",
 ]
 
 
@@ -51,4 +53,6 @@ def test_the_microvm_dependencies_match_the_lock() -> None:
         f"{REQUIREMENTS} is out of date for uv.lock. Regenerate it with: "
         f"{' '.join(EXPORT)} -o {REQUIREMENTS.relative_to(REPO_ROOT).as_posix()}"
     )
-    assert not any(line.startswith("microsandbox==") for line in committed)
+    assert not any(
+        line.startswith(("microsandbox==", "wakepy==")) for line in committed
+    )

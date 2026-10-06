@@ -2,10 +2,12 @@ import asyncio
 import inspect
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+import wakepy
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from yaml import safe_load
@@ -19,6 +21,7 @@ from guildbotics.app_api.api import (
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api import lifecycle as lifecycle_module
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     AgentFieldOption,
@@ -66,6 +69,8 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime.relay_runtime import RelayRuntime
+from guildbotics.runtime import service_lock as service_lock_module
+from guildbotics.runtime.service_lock import ServiceLock
 from guildbotics.sync.manager import GitSyncManager
 
 HTTP_OK = 200
@@ -2537,6 +2542,8 @@ PROTECTED_ENDPOINTS = [
     ("PUT", "/transcripts/settings"),
     ("GET", "/runtime/debug"),
     ("PUT", "/runtime/debug"),
+    ("GET", "/service/keep-awake"),
+    ("PUT", "/service/keep-awake"),
     ("POST", "/verify"),
     ("GET", "/system-alerts"),
     ("POST", "/system-alerts/dismiss"),
@@ -3242,6 +3249,53 @@ def test_runtime_debug_update_endpoint(tmp_path: Path) -> None:
     assert body["enabled"] is True
     assert body["log_level"] == "DEBUG"
     assert body["agno_debug"] is True
+
+
+@pytest.mark.parametrize("holder_owner", ["cli", "desktop"])
+def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder_owner: str
+) -> None:
+    """The switch is this device's, and a service already running follows it
+    without a restart, including one a ``guildbotics start`` holds: the
+    holder is another ``ServiceLock`` than the one the API's lifecycle has."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setattr(service_lock_module, "SETTING_POLL_SECONDS", 0.01)
+    lock_path = tmp_path / "service.lock"
+    lifecycle_lock = ServiceLock(lock_path)
+    holder = lifecycle_lock if holder_owner == "desktop" else ServiceLock(lock_path)
+    monkeypatch.setattr(lifecycle_module, "ServiceLock", lambda: lifecycle_lock)
+    client = _client(AppRuntime(EventBus()))
+    holder.acquire(owner=holder_owner, workspace=workspace)
+    try:
+        before = client.get("/service/keep-awake", headers=AUTH_HEADERS)
+        turned_on = client.put(
+            "/service/keep-awake", headers=AUTH_HEADERS, json={"enabled": True}
+        )
+        awake_on = _wait_until(lambda: wakepy.modecount() == 1)
+        turned_off = client.put(
+            "/service/keep-awake", headers=AUTH_HEADERS, json={"enabled": False}
+        )
+        awake_off = _wait_until(lambda: wakepy.modecount() == 0)
+    finally:
+        holder.release()
+
+    assert before.json() == {"enabled": False}
+    assert turned_on.json() == {"enabled": True}
+    assert turned_off.json() == {"enabled": False}
+    assert (awake_on, awake_off) == (True, True)
+    assert (workspace / ".guildbotics" / "local" / "service.yml").is_file()
+
+
+def _wait_until(predicate: Any, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 # --- commands ------------------------------------------------------------

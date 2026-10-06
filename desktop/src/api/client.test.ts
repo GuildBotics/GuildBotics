@@ -30,6 +30,7 @@ import {
   getMemoryEvents,
   getMemberConfig,
   getRuntimeDebug,
+  getServiceKeepAwake,
   getSystemAlerts,
   getTranscriptSettings,
   memberAvatarUrl,
@@ -40,6 +41,7 @@ import {
   verifySlackTokens,
   subscribeEvents,
   updateRuntimeDebug,
+  updateServiceKeepAwake,
   updateTranscriptSettings,
   uploadCommandInputFile,
   uploadMemberAvatar,
@@ -326,6 +328,17 @@ describe("GET query parameter encoding", () => {
     expect(calls[0].url).toBe("http://127.0.0.1:8765/runtime/debug");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.body).toBe(JSON.stringify({ enabled: true }));
+  });
+
+  it("gets and updates whether the service keeps this machine awake", async () => {
+    const { calls } = captureFetch(jsonResponse({ enabled: true }));
+    await getServiceKeepAwake();
+    await updateServiceKeepAwake({ enabled: true });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/service/keep-awake");
+    expect(calls[1].url).toBe("http://127.0.0.1:8765/service/keep-awake");
+    expect(calls[1].init.method).toBe("PUT");
+    expect(calls[1].init.body).toBe(JSON.stringify({ enabled: true }));
   });
 
   it("encodes person_id for runScenarioDiagnostics", async () => {
