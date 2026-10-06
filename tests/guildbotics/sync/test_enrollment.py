@@ -17,7 +17,7 @@ from guildbotics.workspace.identity import (
     ensure_workspace_identity,
     read_workspace_identity,
 )
-from tests.guildbotics.sync.conftest import Device, make_device
+from tests.guildbotics.sync.conftest import Device, make_device, push_entries
 
 CONFIG = "config/team/project.yml"
 ROLES = "config/roles/reviewer.yml"
@@ -514,6 +514,65 @@ def test_a_file_that_cannot_be_shared_yet_survives_the_join(
     assert (joining / ".guildbotics" / broken).read_text() == "{not json"
     assert broken not in result.adopted
     assert [change.path for change in result.unsendable] == [broken]
+
+
+@pytest.mark.usefixtures("symlinks")
+def test_joining_never_reaches_through_a_link_held_on_this_machine(
+    tmp_path: Path, hub: Path, recorder: enrollment.RejectionRecorder
+) -> None:
+    """The hub's files beneath a held link would be written wherever it points,
+    and Git would replace the link itself with a directory to do it."""
+    enrollment.enroll(
+        str(hub),
+        _workspace(
+            tmp_path / "mac",
+            **{"config/commands/build.md": "from hub\n", CONFIG: "name: hub\n"},
+        ),
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+    (joining / ".guildbotics" / "config" / "commands").symlink_to(outside)
+
+    result = enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    assert [change.path for change in result.unsendable] == ["config/commands"]
+    assert "config/commands/build.md" not in result.adopted
+    assert (joining / ".guildbotics" / "config" / "commands").is_symlink()
+    assert list(outside.iterdir()) == []
+    assert (joining / ".guildbotics" / CONFIG).read_text() == "name: hub\n"
+
+
+def test_joining_a_hub_whose_file_is_a_link_is_refused(
+    tmp_path: Path, hub: Path, recorder: enrollment.RejectionRecorder
+) -> None:
+    """With no shared history, a file here that is a link on the hub differs
+    only in type -- which is still a difference to check."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: d\n"}))
+    push_entries(hub, tmp_path / "elsewhere", {CONFIG: ("120000", b"/etc/hosts")})
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+
+    with pytest.raises(enrollment.EnrollmentError, match="is not a regular file"):
+        enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    assert (joining / ".guildbotics" / CONFIG).read_text() == "name: mine\n"
+
+
+def test_a_copy_of_a_hub_holding_a_link_is_refused_and_leaves_nothing_behind(
+    tmp_path: Path, hub: Path
+) -> None:
+    """A copy is checked out in one step, writing every entry as recorded, so
+    it is checked before anything of it reaches the disk."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: d\n"}))
+    push_entries(hub, tmp_path / "elsewhere", {"config/commands": ("120000", b"/etc")})
+    destination = tmp_path / "windows"
+
+    with pytest.raises(enrollment.EnrollmentError, match="is not a regular file"):
+        enrollment.clone_workspace(str(hub), destination)
+
+    assert not (destination / ".guildbotics" / ".git").exists()
+    assert not os.path.lexists(destination / ".guildbotics" / "config" / "commands")
+    assert not (destination / ".guildbotics" / CONFIG).exists()
 
 
 # -- Reconnecting to a hub this workspace shares history with -----------------

@@ -8,13 +8,16 @@ as a real one does, because that refusal is what serializes shared state.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from shutil import copytree
 from typing import Any
 
 import pytest
+from git import Repo
+from gitdb import IStream
 
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager
@@ -83,6 +86,39 @@ class Device:
 
     def exists(self, relative: str) -> bool:
         return (self.shared / relative).exists()
+
+
+def push_entries(
+    hub: Path, scratch: Path, entries: Mapping[str, tuple[str, bytes]]
+) -> str:
+    """Commit raw ``{path: (mode, content)}`` entries onto the hub's ``main``.
+
+    This is what a device that skipped validation -- or anything else with
+    write access to the hub -- can put there. The entries go straight into the
+    index, so a link or a gitlink needs no support for either on this machine.
+
+    Returns:
+        str: The commit now at the hub's head.
+    """
+    repository = Repo.clone_from(hub, scratch, no_checkout=True)
+    repository.git.read_tree("HEAD")
+    for path, (mode, data) in entries.items():
+        oid = repository.odb.store(
+            IStream("blob", len(data), BytesIO(data))
+        ).hexsha.decode()
+        repository.git.update_index("--add", "--cacheinfo", f"{mode},{oid},{path}")
+    repository.git.commit(
+        "--no-verify",
+        "-m",
+        "Unvalidated entries",
+        author="Elsewhere <elsewhere@guildbotics.invalid>",
+        env={
+            "GIT_COMMITTER_NAME": "Elsewhere",
+            "GIT_COMMITTER_EMAIL": "elsewhere@guildbotics.invalid",
+        },
+    )
+    repository.git.push("origin", "HEAD:main")
+    return repository.head.commit.hexsha
 
 
 @pytest.fixture

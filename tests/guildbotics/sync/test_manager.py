@@ -34,7 +34,12 @@ from guildbotics.utils.workspace_sync_port import (
     write_shared_text,
 )
 from guildbotics.workspace.identity import WorkspaceIdentity
-from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device, make_device
+from tests.guildbotics.sync.conftest import (
+    WORKSPACE_ID,
+    Device,
+    make_device,
+    push_entries,
+)
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
@@ -230,8 +235,10 @@ def test_the_losing_change_stays_readable_on_the_device_that_made_it(
 
     rejection_id = second.rejections[0]["rejection_id"]
     ref = f"{REJECTED_REF_PREFIX}/{rejection_id}"
-    assert second.repository.read_blob(ref, CONFIG) == b"language: en\n"
-    assert first.repository.read_blob(ref, CONFIG) is None
+    assert (
+        second.repository.read_entries(ref, [CONFIG])[CONFIG].data == b"language: en\n"
+    )
+    assert first.repository.list_rejected() == ()
 
 
 def test_only_the_overlapping_part_of_a_losing_commit_is_dropped(
@@ -384,6 +391,123 @@ def test_a_repaired_file_is_sent_by_the_next_scan(first: Device, hub: Path) -> N
 
     assert status.invalid_paths == ()
     assert _hub_file(hub, BROKEN) is not None
+
+
+# -- Only regular files travel ------------------------------------------------
+
+
+def _outside(tmp_path: Path, **files: str) -> Path:
+    """A directory beyond the workspace that a link can point at."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for name, text in files.items():
+        (outside / name).write_text(text)
+    return outside
+
+
+@pytest.mark.parametrize(
+    ("path", "mode", "data"),
+    [
+        ("config/commands", "120000", b"/Users/someone/.ssh"),
+        ("config/nested", "160000", b"a commit elsewhere"),
+        ("config/.gitattributes", "100644", b"* text eol=crlf\n"),
+    ],
+)
+def test_an_arriving_entry_that_is_not_a_plain_shared_file_never_lands(
+    first: Device,
+    second: Device,
+    hub: Path,
+    tmp_path: Path,
+    path: str,
+    mode: str,
+    data: bytes,
+) -> None:
+    """Only a device that skipped validation, or something else with write
+    access to the hub, can put these there -- so receiving one is damage."""
+    push_entries(hub, tmp_path / "elsewhere", {path: (mode, data)})
+
+    status = second.manager.synchronize()
+
+    assert status.state == "invalid_shared_state"
+    assert status.last_error_code == "invalid_shared_file"
+    target = second.shared / path
+    assert not target.is_symlink() and not target.exists()
+
+
+def test_a_file_that_arrives_turned_into_a_link_never_lands(
+    first: Device, second: Device, hub: Path, tmp_path: Path
+) -> None:
+    """Git reports a file that became a link as a change of type, not as an
+    addition or a modification. It is still an arriving entry to check."""
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+    second.manager.synchronize()
+    push_entries(hub, tmp_path / "elsewhere", {CONFIG: ("120000", b"/etc/hosts")})
+
+    status = second.manager.synchronize()
+
+    assert status.last_error_code == "invalid_shared_file"
+    assert not (second.shared / CONFIG).is_symlink()
+    assert second.read(CONFIG) == "language: ja\n"
+
+
+@pytest.mark.usefixtures("symlinks")
+def test_the_hub_never_reaches_through_a_held_link(
+    first: Device, second: Device, hub: Path, tmp_path: Path
+) -> None:
+    """A held link is a directory on this device. Applying the hub's changes
+    beneath it would delete and write wherever it points, outside the
+    workspace; the rest of the hub's changes still arrive."""
+    first.write("config/commands/build.md", "build\n")
+    first.manager.synchronize()
+    second.manager.synchronize()
+    outside = _outside(tmp_path, **{"build.md": "kept outside\n"})
+    (second.shared / "config/commands/build.md").unlink()
+    (second.shared / "config/commands").rmdir()
+    (second.shared / "config/commands").symlink_to(outside)
+    second.manager.synchronize()
+    first.delete("config/commands/build.md")
+    first.write("config/commands/deploy.md", "deploy\n")
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+
+    status = second.manager.synchronize()
+
+    assert [held.path for held in status.invalid_paths] == ["config/commands"]
+    assert (second.shared / "config/commands").is_symlink()
+    assert sorted(path.name for path in outside.iterdir()) == ["build.md"]
+    assert (outside / "build.md").read_text() == "kept outside\n"
+    assert second.read(CONFIG) == "language: ja\n"
+    assert _hub_file(hub, "config/commands/deploy.md") == "deploy\n"
+
+
+@pytest.mark.usefixtures("symlinks")
+def test_a_save_beneath_a_held_link_is_not_confirmed_as_shared(
+    first: Device, tmp_path: Path
+) -> None:
+    (first.shared / "config/commands").symlink_to(_outside(tmp_path))
+    change = first.write("config/commands/build.md", "build\n")
+
+    first.manager.synchronize()
+
+    assert first.manager.await_pushed(change.change_id) is False
+
+
+def test_what_lands_is_the_bytes_that_were_validated(
+    first: Device, second: Device
+) -> None:
+    """Git for Windows turns ``core.autocrlf`` on by default, and an untracked
+    ``.gitattributes`` applies although ``.*`` keeps it out of the history.
+    Either would convert what a checkout writes, so the file on disk would no
+    longer be the one validated."""
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+    Repo(second.shared).git.config("core.autocrlf", "true")
+    (second.shared / ".gitattributes").write_text("* text eol=crlf\n")
+
+    second.manager.synchronize()
+
+    assert (second.shared / CONFIG).read_bytes() == b"language: ja\n"
 
 
 # -- Damaged shared data ------------------------------------------------------

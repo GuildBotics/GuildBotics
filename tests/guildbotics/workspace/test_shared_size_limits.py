@@ -50,6 +50,7 @@ from guildbotics.workspace.validation import (
     MAX_SHARED_AVATAR_BYTES,
     MAX_SHARED_FILE_BYTES,
     MAX_SHARED_JOURNAL_BYTES,
+    REGULAR_FILE_MODE,
     validate_shared_file,
 )
 
@@ -271,6 +272,6 @@ def test_what_the_writer_accepts_the_boundary_carries(workspace: Path) -> None:
     for path in sorted((root / "state/documents/personal/p1").rglob("*")):
         if path.is_file():
             relative = path.relative_to(root).as_posix()
-            validate_shared_file(relative, path.read_bytes())
+            validate_shared_file(relative, REGULAR_FILE_MODE, path.read_bytes())
 
     assert created["doc_id"]

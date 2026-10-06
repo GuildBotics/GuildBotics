@@ -40,9 +40,7 @@ def test_initialize_ignores_device_local_data_and_hidden_paths(tmp_path: Path) -
     (hidden_directory / "session").write_text("local state")
     (tmp_path / ".guildbotics" / "state" / "kept.json").write_text("{}")
 
-    assert [change.path for change in repository.working_tree_changes()] == [
-        "state/kept.json"
-    ]
+    assert repository.stage_changes() == ["state/kept.json"]
     assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == GITIGNORE_CONTENT
 
 
@@ -57,6 +55,22 @@ def test_initialize_is_repeatable(tmp_path: Path) -> None:
     assert repository.initialized
     assert repository.head() == head_before
     assert ignore.read_text() == GITIGNORE_CONTENT
+
+
+def test_initialize_replaces_a_linked_ignore_file_instead_of_writing_through_it(
+    tmp_path: Path, symlinks: None
+) -> None:
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("someone else's file\n")
+    (tmp_path / ".guildbotics").mkdir()
+    (tmp_path / ".guildbotics" / ".gitignore").symlink_to(target)
+
+    _workspace(tmp_path)
+
+    ignore = tmp_path / ".guildbotics" / ".gitignore"
+    assert not ignore.is_symlink()
+    assert ignore.read_text() == GITIGNORE_CONTENT
+    assert target.read_text() == "someone else's file\n"
 
 
 def test_boundary_refuses_a_repository_inside_a_member_working_clone(
@@ -94,17 +108,17 @@ def test_boundary_refuses_a_directory_owned_by_another_repository(
     repository = LocalSyncRepository(tmp_path)
 
     with pytest.raises(SyncRepositoryError, match="not a synchronization repository"):
-        repository.working_tree_changes()
+        repository.stage_changes()
 
 
 def test_commit_records_writes_and_deletions(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     (tmp_path / ".guildbotics" / "state" / "a.json").write_text("{}")
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     first = repository.commit("first")
 
     (tmp_path / ".guildbotics" / "state" / "a.json").unlink()
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     second = repository.commit("second")
 
     assert first is not None and second is not None
@@ -114,7 +128,7 @@ def test_commit_records_writes_and_deletions(tmp_path: Path) -> None:
 def test_commit_without_staged_changes_creates_nothing(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     (tmp_path / ".guildbotics" / "state" / "a.json").write_text("{}")
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     head = repository.commit("first")
 
     assert repository.commit("second") is None
@@ -128,31 +142,49 @@ def test_paths_with_spaces_survive_scanning_and_diffing(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text("{}")
 
-    assert [change.path for change in repository.working_tree_changes()] == [name]
-    repository.stage([name])
+    assert repository.stage_changes() == [name]
+    repository.stage_changes()
     head = repository.commit("first")
     assert head is not None
-    assert repository.read_blob(head, name) == b"{}"
+    assert repository.read_entries(head, [name])[name].data == b"{}"
+
+
+def test_a_path_that_is_a_directory_at_a_revision_has_no_entry(
+    tmp_path: Path,
+) -> None:
+    """A file the hub turned into a directory is a deletion of that file, not
+    a tree to validate as if it were one."""
+    repository = _workspace(tmp_path)
+    (tmp_path / ".guildbotics" / "state" / "foo").mkdir()
+    (tmp_path / ".guildbotics" / "state" / "foo" / "x.json").write_text("{}")
+    repository.stage_changes()
+    head = repository.commit("first")
+    assert head is not None
+
+    assert repository.read_entries(head, ["state/foo"]) == {}
 
 
 def test_rejected_ref_keeps_the_stashed_commit_findable(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     (tmp_path / ".guildbotics" / "state" / "a.json").write_text('{"v": 1}')
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     commit = repository.commit("first")
     assert commit is not None
 
     ref = repository.save_rejected("rejection-1", commit)
 
     assert ref == f"{REJECTED_REF_PREFIX}/rejection-1"
-    assert repository.read_blob(ref, "state/a.json") == b'{"v": 1}'
+    assert (
+        repository.read_entries(ref, ["state/a.json"])["state/a.json"].data
+        == b'{"v": 1}'
+    )
     assert repository.rejected_id_for(commit) == "rejection-1"
 
 
 def test_rejected_id_is_absent_for_an_unstashed_commit(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     (tmp_path / ".guildbotics" / "state" / "a.json").write_text("{}")
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     commit = repository.commit("first")
     assert commit is not None
 
@@ -163,7 +195,7 @@ def test_restore_from_index_reinstates_and_removes(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     kept = tmp_path / ".guildbotics" / "state" / "kept.json"
     kept.write_text('{"v": 1}')
-    repository.stage(["state/kept.json"])
+    repository.stage_changes()
     repository.commit("first")
 
     kept.write_text('{"v": 2}')
@@ -180,10 +212,10 @@ def test_ahead_behind_counts_each_side(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     state = tmp_path / ".guildbotics" / "state"
     (state / "a.json").write_text("{}")
-    repository.stage(["state/a.json"])
+    repository.stage_changes()
     first = repository.commit("first")
     (state / "b.json").write_text("{}")
-    repository.stage(["state/b.json"])
+    repository.stage_changes()
     second = repository.commit("second")
     assert first is not None and second is not None
 

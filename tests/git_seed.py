@@ -8,7 +8,7 @@ from shutil import copytree
 
 from git import Repo
 
-from guildbotics.sync.local_repository import GITIGNORE_CONTENT
+from guildbotics.sync.local_repository import GIT_ATTRIBUTES, GITIGNORE_CONTENT
 from guildbotics.utils.workspace_sync_port import dump_shared_json
 from guildbotics.workspace.identity import WorkspaceIdentity
 
@@ -57,9 +57,13 @@ class WorkerGitSeed:
         with Repo.clone_from(sync_hub, sync_device, branch="main") as repository:
             _configure_identity(repository, "GuildBotics", "sync@guildbotics.invalid")
         # ``.*`` deliberately ignores the ignore file itself, so it is not in
-        # the commit cloned above. Production writes it beside the repository
-        # after initialization; keep the seed in that same state.
+        # the commit cloned above. Production writes it, and the attributes
+        # that switch off conversions, at initialization; keep the seed in that
+        # same state.
         (sync_device / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        (sync_device / ".git" / "info" / "attributes").write_text(
+            GIT_ATTRIBUTES, encoding="utf-8"
+        )
 
         member_source = root / "member-source"
         with Repo.init(member_source, initial_branch="main") as repository:

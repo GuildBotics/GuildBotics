@@ -785,6 +785,18 @@ working tree matches the commit it made. Staging first also settles a deletion r
 before the commit: the recreated file is staged as content, so it is checked as content. A
 file that fails is unstaged and held back, left on disk for the user to fix.
 
+**Only regular files travel, as the bytes validated.** The check takes each entry's Git
+mode with its content, from the index when sending and from the arriving commit when
+receiving (and before a copy taken from the hub is checked out): `100644` and `100755`
+pass, a link or a gitlink does not — its content is a path or a commit, which would read as
+valid text — and neither does any path with an element starting with `.`, since Git reads
+some of those itself. A held change covers everything beneath it by path element: a held
+link is a directory on this device, so the hub's writes and deletions there are skipped
+rather than carried to its target, while the rest still converges. The repository's own
+`info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
+a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
+differ from the blob that was checked.
+
 **The interval no writer can protect.** Fetching waits on the hub without the lock, and a
 save made in that interval holds the lock correctly and is still only in the working tree, so
 the checkout would take it with nothing recording the loss. The queue's convergence therefore

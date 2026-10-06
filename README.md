@@ -825,6 +825,11 @@ Files and directories whose names start with `.` are not shared from `config/` o
 Bookkeeping files created by Finder or an editor at any depth therefore do not appear as
 changes that cannot be sent.
 
+Only regular files are shared. A symbolic link, or another Git repository placed inside,
+becomes a change that cannot be sent until it is a regular file again. Meanwhile, changes
+from the hub are not applied to that path or anything beneath it, so synchronization never
+rewrites or deletes the files a link points at. Every other file keeps synchronizing.
+
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set

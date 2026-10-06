@@ -15,9 +15,13 @@ stop them continuing on another machine.
 
 Three things survive that argument, and they are all this module does:
 
-1. **The shared boundary itself** -- inside ``config/`` or ``state/``, within
-   its size bound, decodable, and syntactically well-formed. Size is one of the
-   two guarantees synchronization owes: the history must not grow without bound.
+1. **The shared boundary itself** -- a regular file inside ``config/`` or
+   ``state/``, within its size bound, decodable, and syntactically well-formed.
+   Size is one of the two guarantees synchronization owes: the history must not
+   grow without bound. A link or an embedded repository is refused on its Git
+   mode because its content is somewhere this check never looks, and a hidden
+   path because Git itself reads some of them (``.gitattributes`` rewrites what
+   a checkout writes), so the content validated would not be the content landed.
 2. **A record written by a newer build.** A device running an older build
    cannot read a ``schema_version`` it does not implement, and no writer or
    local test can catch that -- only the device receiving it can.
@@ -51,6 +55,8 @@ __all__ = [
     "MAX_SHARED_AVATAR_BYTES",
     "MAX_SHARED_FILE_BYTES",
     "MAX_SHARED_JOURNAL_BYTES",
+    "REGULAR_FILE_MODE",
+    "REGULAR_FILE_MODES",
     "SharedFileInvalidError",
     "SharedSchemaAheadError",
     "validate_shared_file",
@@ -62,6 +68,12 @@ MAX_SHARED_FILE_BYTES = 1_048_576
 MAX_SHARED_JOURNAL_BYTES = 8 * 1024 * 1024
 #: Member avatars are the only binary the normal shared set carries.
 MAX_SHARED_AVATAR_BYTES = 4_194_304
+
+#: The Git mode of a regular file that is not executable.
+REGULAR_FILE_MODE = "100644"
+#: Git modes of a regular file. A link (``120000``) and a gitlink (``160000``)
+#: are refused: what they carry is a path or a commit, not the file's content.
+REGULAR_FILE_MODES = frozenset({REGULAR_FILE_MODE, "100755"})
 
 #: Everything the secret key index may say about a key. A value has no slot
 #: here, which keeps secrets out of the shared history structurally rather than
@@ -101,24 +113,32 @@ class SharedSchemaAheadError(SharedFileInvalidError):
         self.version = version
 
 
-def validate_shared_file(relative_path: str, data: bytes) -> None:
-    """Validate one shared file's bytes.
+def validate_shared_file(relative_path: str, mode: str, data: bytes) -> None:
+    """Validate one shared file as Git records it.
 
     Args:
         relative_path (str): The path relative to ``.guildbotics/``, for example
             ``state/devices/<device_id>.json``.
+        mode (str): The Git mode of the entry, for example ``100644``.
         data (bytes): The complete file content.
 
     Raises:
         SharedSchemaAheadError: When a record declares a newer schema version.
-        SharedFileInvalidError: When the path is not shared, the file is too
-            large, it is not decodable or well-formed, or the secret key index
-            carries something other than key names and generations.
+        SharedFileInvalidError: When the path is not shared or hidden, the entry
+            is not a regular file, the file is too large, it is not decodable or
+            well-formed, or the secret key index carries something other than
+            key names and generations.
     """
     path = PurePosixPath(relative_path)
     if not path.parts or path.parts[0] not in SHARED_ROOTS:
         raise SharedFileInvalidError(
             relative_path, "is outside the shared config/ and state/ directories"
+        )
+    if any(part.startswith(".") for part in path.parts):
+        raise SharedFileInvalidError(relative_path, "is a hidden path")
+    if mode not in REGULAR_FILE_MODES:
+        raise SharedFileInvalidError(
+            relative_path, f"is not a regular file (Git mode {mode})"
         )
     if _is_member_avatar(path):
         _validate_member_avatar(relative_path, path, data)
