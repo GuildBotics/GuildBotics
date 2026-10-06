@@ -114,6 +114,7 @@ from guildbotics.app_api.models import (
     SchedulerStopRequest,
     SecretTransferRequest,
     SecretTransferResponse,
+    ServiceKeepAwake,
     ShutdownResponse,
     SlackAppRegistrationStartRequest,
     SlackTokenVerifyRequest,
@@ -969,6 +970,25 @@ def create_app(
         _: None = Depends(require_token),
     ) -> RuntimeStatus:
         return app_runtime.stop_scheduler(force=request.force if request else False)
+
+    @app.get(
+        "/service/keep-awake",
+        response_model=ServiceKeepAwake,
+        responses=error_responses,
+    )
+    def service_keep_awake(_: None = Depends(require_token)) -> ServiceKeepAwake:
+        return app_runtime.get_service_keep_awake()
+
+    @app.put(
+        "/service/keep-awake",
+        response_model=ServiceKeepAwake,
+        responses=error_responses,
+    )
+    def service_keep_awake_update(
+        request: ServiceKeepAwake,
+        _: None = Depends(require_token),
+    ) -> ServiceKeepAwake:
+        return app_runtime.update_service_keep_awake(request)
 
     @app.post(
         "/chat/receive-state/reset",

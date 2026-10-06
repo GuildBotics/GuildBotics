@@ -3,10 +3,12 @@ from __future__ import annotations
 import signal
 from pathlib import Path
 
+import pytest
+import wakepy
 from click.testing import CliRunner
 
 from guildbotics.cli import main as cli_main
-from guildbotics.runtime.service_lock import ServiceLock
+from guildbotics.runtime.service_lock import ServiceLock, set_service_keeps_awake
 from guildbotics.utils.i18n_tool import t
 
 
@@ -185,6 +187,31 @@ def test_start_only_scheduler(monkeypatch, tmp_path):
     assert created["scheduler"].scheduled_source_enabled is True
     assert created["scheduler"].routine_source_enabled is True
     assert created["scheduler"].event_queue_source_enabled is False
+
+
+@pytest.mark.parametrize("keep_awake", [True, False])
+def test_start_keeps_the_machine_awake_while_running_when_set(
+    monkeypatch, tmp_path, keep_awake
+):
+    """The setting the Desktop switches is the one the CLI service reads."""
+    _patch_start_dependencies(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(workspace))
+    set_service_keeps_awake(keep_awake)
+    awake_while_running = []
+    monkeypatch.setattr(
+        _FakeScheduler,
+        "start",
+        lambda self: awake_while_running.append(wakepy.modecount()),
+    )
+
+    result = CliRunner().invoke(cli_main, ["start", "--only", "scheduler"])
+
+    assert result.exit_code == 0, result.output
+    assert awake_while_running == [1 if keep_awake else 0]
+    assert wakepy.modecount() == 0
 
 
 def test_start_registers_sigterm_for_graceful_shutdown(monkeypatch, tmp_path):

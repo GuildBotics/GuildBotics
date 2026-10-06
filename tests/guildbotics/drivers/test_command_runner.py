@@ -1,8 +1,10 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import wakepy
 
 from guildbotics.commands.errors import CommandError, CommandFailedError
 from guildbotics.commands.metadata import CommandAccess
@@ -102,9 +104,10 @@ def _prepared(context=None, *, path=_MAIN, **kwargs):
 
 def _environment(monkeypatch, *replies):
     """The environment every command the host runs is booted in: what it was
-    booted for, what it was asked to run, and whether it was discarded. It
-    answers with ``replies``, in turn; one that is an exception is raised."""
-    booted = SimpleNamespace(opened=[], requests=[], closed=0)
+    booted for, what it was asked to run, how many holds kept the machine
+    awake while it ran, and whether it was discarded. It answers with
+    ``replies``, in turn; one that is an exception is raised."""
+    booted = SimpleNamespace(opened=[], requests=[], awake=[], closed=0)
     answers = list(replies) or [CommandReply(text_output="ok")]
 
     @asynccontextmanager
@@ -114,6 +117,7 @@ def _environment(monkeypatch, *replies):
         class Running:
             async def execute(self, request):
                 booted.requests.append(request)
+                booted.awake.append(wakepy.modecount())
                 answer = answers.pop(0)
                 if isinstance(answer, BaseException):
                     raise answer
@@ -596,6 +600,66 @@ async def test_the_grant_ends_with_its_command_however_it_ended(monkeypatch):
 
     assert closed == [opened["host"] for opened in booted.opened]
     assert len(closed) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_machine_stays_awake_while_the_command_runs_however_it_ends(
+    monkeypatch,
+):
+    """Sleep would stop the command's microVM, so the machine is held awake
+    while it runs, and let go when it succeeded, failed or was cancelled."""
+    booted = _environment(
+        monkeypatch,
+        CommandReply(text_output="ok"),
+        CommandError("broken"),
+        asyncio.CancelledError(),
+    )
+
+    await command_runner.run_in_environment(_prepared())
+    with pytest.raises(CommandError, match="broken"):
+        await command_runner.run_in_environment(_prepared())
+    with pytest.raises(asyncio.CancelledError):
+        await command_runner.run_in_environment(_prepared())
+
+    assert booted.awake == [1, 1, 1]
+    assert wakepy.modecount() == 0
+
+
+@pytest.mark.asyncio
+async def test_commands_running_together_each_keep_the_machine_awake(monkeypatch):
+    """One command ending lets go of its own hold only: the machine stays
+    awake until the last one running ends."""
+    running = [asyncio.Event(), asyncio.Event()]
+    finish = [asyncio.Event(), asyncio.Event()]
+    started = 0
+
+    @asynccontextmanager
+    async def command_environment(access, tools, **where):
+        class Running:
+            async def execute(self, request):
+                nonlocal started
+                order, started = started, started + 1
+                running[order].set()
+                await finish[order].wait()
+                return CommandReply(text_output="ok")
+
+        yield Running()
+
+    monkeypatch.setattr(command_runner, "command_environment", command_environment)
+
+    first = asyncio.create_task(command_runner.run_in_environment(_prepared()))
+    await running[0].wait()
+    second = asyncio.create_task(command_runner.run_in_environment(_prepared()))
+    await running[1].wait()
+    together = wakepy.modecount()
+    finish[0].set()
+    await first
+    after_first = wakepy.modecount()
+    finish[1].set()
+    await second
+
+    assert (together, after_first) == (2, 1)
+    assert wakepy.modecount() == 0
 
 
 @pytest.mark.asyncio

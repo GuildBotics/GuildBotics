@@ -603,6 +603,7 @@ dependencies = [
     { name = "tzdata" },
     { name = "tzlocal" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "wakepy" },
     { name = "weasyprint" },
     { name = "websockets" },
 ]
@@ -666,6 +667,7 @@ requires-dist = [
     { name = "tzdata", specifier = ">=2025.2" },
     { name = "tzlocal", specifier = ">=5.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1.0" },
+    { name = "wakepy", specifier = ">=1.0,<2.0" },
     { name = "weasyprint", specifier = ">=70.0" },
     { name = "websockets", specifier = ">=15.0.1" },
 ]
@@ -2054,6 +2056,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/15/c0/0be24758891ef825f2065cd5db8741aaddabe3e248ee6acc5e8a80f04005/uvloop-0.22.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e", size = 4366890, upload-time = "2025-10-16T22:16:40.547Z" },
     { url = "https://files.pythonhosted.org/packages/d2/53/8369e5219a5855869bcee5f4d317f6da0e2c669aecf0ef7d371e3d084449/uvloop-0.22.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:bc5ef13bbc10b5335792360623cc378d52d7e62c2de64660616478c32cd0598e", size = 4119472, upload-time = "2025-10-16T22:16:41.694Z" },
     { url = "https://files.pythonhosted.org/packages/f8/ba/d69adbe699b768f6b29a5eec7b47dd610bd17a69de51b251126a801369ea/uvloop-0.22.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:1f38ec5e3f18c8a10ded09742f7fb8de0108796eb673f30ce7762ce1b8550cad", size = 4239051, upload-time = "2025-10-16T22:16:43.224Z" },
+]
+
+[[package]]
+name = "wakepy"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jeepney", marker = "platform_system == 'DragonFly' or platform_system == 'FreeBSD' or platform_system == 'Minix' or platform_system == 'NetBSD' or platform_system == 'OpenBSD' or platform_system == 'SunOS' or sys_platform == 'aix' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/13/78e45a3d2cd754f95d2fca5aece046676da559b8e34e294e69bb441f18fd/wakepy-1.0.0.tar.gz", hash = "sha256:a9425e8e77e89bccfe24a70f33ecd8596b474c75ddac79310cd54f2bc92210e3", size = 323693, upload-time = "2026-02-07T21:20:32.244Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/33/e692c64d00b7a0d203191b1a20c81c32dca93da38345f6f1ad91426e36fc/wakepy-1.0.0-py3-none-any.whl", hash = "sha256:d5497640791517982cf66d894c502e9fa5133dc75c4a45d3b18a3495d1cf8afb", size = 70336, upload-time = "2026-02-07T21:20:31.027Z" },
 ]
 
 [[package]]

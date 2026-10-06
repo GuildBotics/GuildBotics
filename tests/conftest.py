@@ -624,6 +624,13 @@ def fake_keyring():
     keyring.set_keyring(original)
 
 
+@pytest.fixture(autouse=True)
+def fake_wakepy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests from holding the developer's machine awake for real: every
+    wakepy mode succeeds without touching the operating system."""
+    monkeypatch.setenv("WAKEPY_FAKE_SUCCESS", "1")
+
+
 class _PlatformView:
     """``sys`` as one module sees it when told it runs on another platform.
 

@@ -12,10 +12,12 @@ import { App } from "./App";
 import {
   getConfigStatus,
   getSchedulerStatus,
+  getServiceKeepAwake,
   getTeam,
   resetChatReceiveState,
   startScheduler,
   stopScheduler,
+  updateServiceKeepAwake,
   type ConfigStatus,
   type RuntimeStatus,
   type RuntimeUnitStatus,
@@ -44,6 +46,8 @@ vi.mock("./api/client", async (importOriginal) => {
     getConfigStatus: vi.fn(),
     getTeam: vi.fn(),
     getSchedulerStatus: vi.fn(),
+    getServiceKeepAwake: vi.fn(),
+    updateServiceKeepAwake: vi.fn(),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getHotkeys: vi.fn(async () => ({ quick_run: "", commands: {} })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
@@ -60,6 +64,8 @@ const getSchedulerStatusMock = vi.mocked(getSchedulerStatus);
 const startSchedulerMock = vi.mocked(startScheduler);
 const stopSchedulerMock = vi.mocked(stopScheduler);
 const resetChatReceiveStateMock = vi.mocked(resetChatReceiveState);
+const getServiceKeepAwakeMock = vi.mocked(getServiceKeepAwake);
+const updateServiceKeepAwakeMock = vi.mocked(updateServiceKeepAwake);
 
 beforeEach(() => {
   // The Service screen now persists run-target preferences, so clear storage
@@ -75,6 +81,10 @@ beforeEach(() => {
   startSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   stopSchedulerMock.mockReset().mockResolvedValue(runtimeStatus());
   resetChatReceiveStateMock.mockReset().mockResolvedValue({ members_reset: 1, channels_reset: 3 });
+  getServiceKeepAwakeMock.mockReset().mockResolvedValue({ enabled: false });
+  updateServiceKeepAwakeMock
+    .mockReset()
+    .mockImplementation(async (body) => ({ enabled: body.enabled }));
 });
 
 describe("Service Runtime screen", () => {
@@ -165,6 +175,37 @@ describe("Service Runtime screen", () => {
 
     await waitFor(() => expect(startSchedulerMock).toHaveBeenCalledTimes(1));
     expect(startSchedulerMock.mock.calls[0][0]).not.toHaveProperty("routine_commands");
+  });
+
+  it("keeps this machine awake during the service once switched on, even while running", async () => {
+    getSchedulerStatusMock.mockResolvedValue(
+      runtimeStatus({ scheduler: runtimeUnit("scheduler", { state: "running", running: true }) }),
+    );
+    const user = userEvent.setup();
+    renderApp("/service");
+    const keepAwake = await screen.findByRole("switch", { name: t("service.keepAwake.title") });
+    await waitFor(() => expect(keepAwake).toBeEnabled());
+    expect(keepAwake).not.toBeChecked();
+
+    await user.click(keepAwake);
+
+    await waitFor(() => expect(keepAwake).toBeChecked());
+    expect(updateServiceKeepAwakeMock).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it("shows the saved keep-awake setting and why saving it failed", async () => {
+    getServiceKeepAwakeMock.mockResolvedValue({ enabled: true });
+    updateServiceKeepAwakeMock.mockRejectedValue(new Error("disk full"));
+    const user = userEvent.setup();
+    renderApp("/service");
+    const keepAwake = await screen.findByRole("switch", { name: t("service.keepAwake.title") });
+    await waitFor(() => expect(keepAwake).toBeChecked());
+
+    await user.click(keepAwake);
+
+    expect(await screen.findByText(t("service.keepAwake.saveError"))).toBeInTheDocument();
+    expect(screen.getByText("disk full")).toBeInTheDocument();
+    expect(keepAwake).toBeChecked();
   });
 
   it("keeps diagnostics settings off the service screen", async () => {

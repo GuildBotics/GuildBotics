@@ -1010,6 +1010,12 @@ class RuntimeDebugStatus(BaseModel):
     agno_debug: bool
 
 
+class ServiceKeepAwake(BaseModel):
+    """Whether the service keeps this machine out of idle sleep while it runs."""
+
+    enabled: bool
+
+
 class TranscriptSettingsUpdateRequest(BaseModel):
     detail: Literal["standard", "full"]
     retention_days: int = Field(ge=1, le=3650)

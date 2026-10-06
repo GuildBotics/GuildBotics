@@ -18,10 +18,20 @@ from guildbotics.utils.advisory_lock import open_lock_file as _open_lock_file
 from guildbotics.utils.advisory_lock import read_lock_data as _read_lock_data
 from guildbotics.utils.advisory_lock import unlock_file as _unlock_file
 from guildbotics.utils.advisory_lock import write_lock_data as _write_lock_data
-from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.fileio import (
+    get_machine_state_path,
+    get_workspace_local_path,
+    load_yaml_file,
+    save_yaml_file,
+)
+from guildbotics.utils.keep_awake import KeepAwake
 
 ServiceOwner = Literal["cli", "desktop"]
 LOCK_RETRY_SECONDS = 0.01
+#: The service's settings for this device, under the workspace's ``local/``:
+#: whether the machine sleeps while the service waits is a property of the
+#: machine, not of the workspace shared between machines.
+SETTINGS_FILE = "service.yml"
 
 
 @dataclass(frozen=True)
@@ -67,14 +77,38 @@ class ServiceLockUnavailableError(RuntimeError):
         self.metadata = metadata
 
 
+def service_keeps_awake(workspace: Path | None = None) -> bool:
+    """Whether the service keeps this machine out of idle sleep while it runs.
+
+    Off unless this device turned it on.
+    """
+    path = get_workspace_local_path(SETTINGS_FILE, workspace_root=workspace)
+    if not path.is_file():
+        return False
+    data = load_yaml_file(path)
+    return isinstance(data, dict) and data.get("keep_awake") is True
+
+
+def set_service_keeps_awake(enabled: bool) -> None:
+    """Record for this device whether the service keeps the machine awake."""
+    path = get_workspace_local_path(SETTINGS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_yaml_file(path, {"keep_awake": enabled})
+
+
 class ServiceLock:
-    """Own the machine-wide background service lock for one process."""
+    """Own the machine-wide background service lock for one process.
+
+    The span the lock is held is the span the service runs, so it is also the
+    span the service keeps the machine awake when its workspace says so.
+    """
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or get_machine_state_path("run", "service.lock")
         self._guard = threading.Lock()
         self._file: IO[str] | None = None
         self._metadata: ServiceLockMetadata | None = None
+        self._awake = KeepAwake()
 
     @property
     def locked(self) -> bool:
@@ -139,6 +173,7 @@ class ServiceLock:
         try:
             payload = json.dumps(asdict(metadata), ensure_ascii=False, sort_keys=True)
             _write_lock_data(lock_file, f"{payload}\n")
+            self._follow_keep_awake(metadata)
         except Exception:
             _unlock_file(lock_file)
             lock_file.close()
@@ -148,6 +183,18 @@ class ServiceLock:
         self._metadata = metadata
         return metadata
 
+    def follow_keep_awake(self) -> None:
+        """Keep the machine awake or not as the setting now says, while held."""
+        with self._guard:
+            if self._metadata is not None:
+                self._follow_keep_awake(self._metadata)
+
+    def _follow_keep_awake(self, metadata: ServiceLockMetadata) -> None:
+        if service_keeps_awake(Path(metadata.workspace)):
+            self._awake.start()
+        else:
+            self._awake.stop()
+
     def release(self) -> None:
         with self._guard:
             lock_file = self._file
@@ -155,6 +202,7 @@ class ServiceLock:
             self._metadata = None
             if lock_file is None:
                 return
+            self._awake.stop()
             try:
                 _unlock_file(lock_file)
             finally:

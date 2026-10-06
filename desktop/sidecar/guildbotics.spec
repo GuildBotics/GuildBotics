@@ -72,6 +72,9 @@ for pkg in (
     # `microsandbox/_bundled`, which GuildBotics copies to a fixed path on
     # first use (`agent_environment/runtime.py`).
     "microsandbox",
+    # Keeps the machine awake (`utils/keep_awake.py`); it loads its Linux
+    # D-Bus adapter lazily, through the package's module `__getattr__`.
+    "wakepy",
 ):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
     datas += pkg_datas

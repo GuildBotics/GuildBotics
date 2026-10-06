@@ -62,6 +62,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowSource,
 )
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
+from guildbotics.utils.keep_awake import keep_awake
 from guildbotics.utils.safe_paths import normalize_host_path
 
 __all__ = [
@@ -292,9 +293,11 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     """Run a command in the isolated environment booted for it.
 
     It is shaped for every AI CLI tool the member is configured with, and
-    discarded when the run ends, however it ends. What its microVM asks of
-    the host is answered under the run's grant: the member it runs as, and
-    the run it records to -- its workflow run's, or else one of its own.
+    discarded when the run ends, however it ends. The machine is kept out of
+    idle sleep for as long as it runs, since sleep would stop its microVM.
+    What its microVM asks of the host is answered under the run's grant: the
+    member it runs as, and the run it records to -- its workflow run's, or
+    else one of its own.
     What it returns is read as the host reads anything from it: its result
     only as the type the caller asked for.
 
@@ -350,16 +353,17 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
         wants_result=command.result_type is not None,
     )
     try:
-        async with command_environment(
-            command.access,
-            tools,
-            cwd=command.cwd,
-            workspace_root=workspace_root,
-            clone=get_member_clone_path(person_id, workspace_root),
-            inputs=command.inputs,
-            host=window,
-        ) as environment:
-            reply = await environment.execute(request)
+        with keep_awake():
+            async with command_environment(
+                command.access,
+                tools,
+                cwd=command.cwd,
+                workspace_root=workspace_root,
+                clone=get_member_clone_path(person_id, workspace_root),
+                inputs=command.inputs,
+                host=window,
+            ) as environment:
+                reply = await environment.execute(request)
     finally:
         await window.close()
     return _outcome(command, reply)

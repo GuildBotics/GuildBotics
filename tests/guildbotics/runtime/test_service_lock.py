@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import errno
 import json
+from pathlib import Path
 
 import pytest
+import wakepy
+import yaml
 
 from guildbotics.utils import advisory_lock as advisory_lock_module
 from guildbotics.runtime import service_lock as service_lock_module
@@ -11,6 +14,8 @@ from guildbotics.runtime.service_lock import (
     ServiceLock,
     ServiceLockUnavailableError,
     inspect_service_lock,
+    service_keeps_awake,
+    set_service_keeps_awake,
 )
 
 
@@ -148,3 +153,85 @@ def test_windows_lock_conflict_becomes_blocking_error(monkeypatch, tmp_path) -> 
     with (tmp_path / "service.lock").open("a+", encoding="utf-8") as lock_file:
         with pytest.raises(BlockingIOError):
             service_lock_module._lock_file_nonblocking(lock_file)
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch) -> Path:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(workspace))
+    return workspace
+
+
+def test_the_service_lets_the_machine_sleep_unless_set_otherwise(
+    tmp_path, workspace
+) -> None:
+    service_lock = ServiceLock(tmp_path / "service.lock")
+
+    service_lock.acquire(owner="cli", workspace=workspace)
+    held = wakepy.modecount()
+    service_lock.release()
+
+    assert service_keeps_awake() is False
+    assert held == 0
+
+
+def test_the_service_keeps_the_machine_awake_while_held_when_set(
+    tmp_path, workspace
+) -> None:
+    set_service_keeps_awake(True)
+    service_lock = ServiceLock(tmp_path / "service.lock")
+
+    service_lock.acquire(owner="cli", workspace=workspace)
+    held = wakepy.modecount()
+    service_lock.release()
+
+    assert (workspace / ".guildbotics" / "local" / "service.yml").read_text(
+        encoding="utf-8"
+    ) == "keep_awake: true\n"
+    assert held == 1
+    assert wakepy.modecount() == 0
+
+
+def test_a_changed_setting_applies_to_a_held_service_at_once(
+    tmp_path, workspace
+) -> None:
+    service_lock = ServiceLock(tmp_path / "service.lock")
+    service_lock.acquire(owner="desktop", workspace=workspace)
+    try:
+        set_service_keeps_awake(True)
+        service_lock.follow_keep_awake()
+        turned_on = wakepy.modecount()
+        set_service_keeps_awake(False)
+        service_lock.follow_keep_awake()
+        turned_off = wakepy.modecount()
+    finally:
+        service_lock.release()
+
+    assert (turned_on, turned_off) == (1, 0)
+
+
+def test_the_setting_does_not_hold_a_service_that_is_not_running(
+    tmp_path, workspace
+) -> None:
+    service_lock = ServiceLock(tmp_path / "service.lock")
+    set_service_keeps_awake(True)
+
+    service_lock.follow_keep_awake()
+
+    assert wakepy.modecount() == 0
+
+
+def test_an_unreadable_setting_fails_the_start_without_holding_the_lock(
+    tmp_path, workspace
+) -> None:
+    path = tmp_path / "service.lock"
+    settings = workspace / ".guildbotics" / "local" / "service.yml"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("keep_awake: [", encoding="utf-8")
+
+    with pytest.raises(yaml.YAMLError):
+        ServiceLock(path).acquire(owner="cli", workspace=workspace)
+
+    assert inspect_service_lock(path).locked is False
+    assert wakepy.modecount() == 0

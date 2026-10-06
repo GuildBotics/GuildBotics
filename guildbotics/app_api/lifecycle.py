@@ -126,6 +126,10 @@ class RuntimeLifecycleService:
         )
         return self.get_status()
 
+    def follow_keep_awake(self) -> None:
+        """Apply a changed keep-awake setting to the service while it runs."""
+        self._service_lock.follow_keep_awake()
+
     def _runtime_state_changed(self, target: RuntimeTarget, running: bool) -> None:
         with self._state_lock:
             if running:

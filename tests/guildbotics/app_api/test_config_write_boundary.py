@@ -117,6 +117,7 @@ ELSEWHERE = {
     ("POST", "/workspace/service-owner/transfer"): "Hub service-owner relay state",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
+    ("PUT", "/service/keep-awake"): "local/service.yml is device-specific by design",
 }
 
 
