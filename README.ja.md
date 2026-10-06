@@ -449,7 +449,7 @@ commands:
 
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
-- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、デバイス固有世代の `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
+- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間とデバイス固有世代を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
 - **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
 - **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
 - **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。登録時に生成したファイルは OS の一時ディレクトリへ書き、吸収後に削除します。鍵の中身は環境変数には出しません。
@@ -469,12 +469,30 @@ guildbotics secrets import secrets.env            # 移行先マシンで読み�
 ときだけ Hub マシンの OS 秘密ストア経由で移動します。手順は
 [認証情報を各マシンへ配る](#認証情報を各マシンへ配る)を参照してください。
 
-シークレットはワークスペースごとに保存されます（キーチェーンのエントリは `secrets.yml` の `store_id` で名前空間が分かれます）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
+シークレットはワークスペースごとに保存されます（キーチェーンのエントリは、各マシンの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。名前空間はマシンごとのもので、Hub への参加や同期では変わりません。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
 guildbotics secrets --workspace /path/to/workspace list
 ```
+
+**`secrets.yml` に `store_id` を持っていた版からの切り替え:** キーチェーンの名前空間は各マシンの
+`local/secrets.json` へ移りました。旧名前空間の値は引き継がれないため、次の順で切り替えます。
+
+1. 切り替え前に、各マシンで `guildbotics secrets status` を確認し、未送信の key と「2 台で同じ値を
+   変更しました」の key を `guildbotics secrets push` などで解消します。Hub へ送った値は切り替え後に
+   取り直せます。Hub に接続していないワークスペースでは `guildbotics secrets export --file ...` で
+   値を書き出しておきます
+2. ワークスペースを共有するすべてのマシンを同時に新しい版へ切り替えます。新旧の版が混在すると、
+   新しい版のマシンでは同期が止まり、古い版のマシンでは値を読めなくなります
+3. Hub に接続しているワークスペースでは、どれか 1 台で `.guildbotics/config/secrets.yml` から
+   `store_id:` の行を削除します。同期がこの変更を Hub へ送ります。この行が Hub に残っていると、
+   新しい版のマシンは Hub へ参加できません
+4. 各マシンで `guildbotics secrets pull`（またはデスクトップアプリの「まとめて取得」）を実行します。
+   Hub に接続していないワークスペースでは、書き出したファイルを `guildbotics secrets import` で読み込み、
+   ファイルを削除します
+5. 旧名前空間のキーチェーンエントリ（`GuildBotics/<旧 store_id>`）は自動では削除されません。不要なら
+   OS のキーチェーン管理画面から削除します
 
 ### サーバーで運用する
 

@@ -30,11 +30,11 @@ Three things survive that argument, and they are all this module does:
    never enter the durable shared history.
 
 ``config/secrets.yml`` is the one shared record that cannot carry a
-``schema_version``: rule 3 admits only ``store_id`` and ``keys`` at the top
-level, so stamping it would make this boundary reject the file. That is the
-right trade -- a field that has nowhere to go is how secret values are kept out
-structurally -- but it means the generation check does not cover this one file,
-and a change to its shape has to be made compatible on its own terms.
+``schema_version``: rule 3 admits only ``keys`` at the top level, so stamping
+it would make this boundary reject the file. That is the right trade -- a
+field that has nowhere to go is how secret values are kept out structurally --
+but it means the generation check does not cover this one file: an index in
+another shape is refused as invalid shared data, not as a newer build's.
 """
 
 from __future__ import annotations
@@ -181,7 +181,7 @@ def _validate_secret_index(relative_path: str, payload: object) -> None:
         return
     if not isinstance(payload, dict):
         raise SharedFileInvalidError(relative_path, "is not a secret key index")
-    unknown = sorted(set(map(str, payload)) - {"store_id", "keys"})
+    unknown = sorted(set(map(str, payload)) - {"keys"})
     if unknown:
         raise SharedFileInvalidError(relative_path, f"carries {', '.join(unknown)}")
     keys = payload.get("keys") or {}
