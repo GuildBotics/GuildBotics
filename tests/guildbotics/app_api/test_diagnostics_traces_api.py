@@ -328,6 +328,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         ],
     )
     monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    # These tests read recorded history; GitHub refresh has its own tests, and
+    # its thread would outlive the test.
+    monkeypatch.setattr(runtime, "_refresh_activity_events", lambda *_a, **_k: None)
     activity = ActivityEventStore()
 
     def record_github(
@@ -577,6 +580,9 @@ def test_activity_history_reads_sessions_from_their_lifecycle_records(
         ],
     )
     monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    # These tests read recorded history; GitHub refresh has its own tests, and
+    # its thread would outlive the test.
+    monkeypatch.setattr(runtime, "_refresh_activity_events", lambda *_a, **_k: None)
     InteractiveSessionStore().record(
         InteractiveTraceSession(
             trace_id="mixed-trace",
