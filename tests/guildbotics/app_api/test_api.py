@@ -2173,20 +2173,27 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
     )
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
-
-    first = runtime.start_scheduler(
-        SchedulerStartRequest(
-            sources={"scheduled": True, "routine": True, "event_queue": False}
+    thread = None
+    try:
+        first = runtime.start_scheduler(
+            SchedulerStartRequest(
+                sources={"scheduled": True, "routine": True, "event_queue": False}
+            )
         )
-    )
-    assert first.scheduler.state == "running"
-    assert started.wait(THREAD_WAIT_SECONDS)
+        thread = runtime._lifecycle._scheduler._thread
+        assert thread is not None
+        assert first.scheduler.state == "running"
+        assert started.wait(THREAD_WAIT_SECONDS)
 
-    stopped = runtime.stop_scheduler(force=True)
-    assert stopped.scheduler.state == "failed"
-    assert stopped.scheduler.running is True
-    assert stopped.scheduler.error == "Scheduler did not stop before timeout."
-    release.set()
+        stopped = runtime.stop_scheduler(force=True)
+        assert stopped.scheduler.state == "failed"
+        assert stopped.scheduler.running is True
+        assert stopped.scheduler.error == "Scheduler did not stop before timeout."
+    finally:
+        release.set()
+        if thread is not None:
+            thread.join(timeout=THREAD_WAIT_SECONDS)
+            assert not thread.is_alive()
 
 
 def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
@@ -2493,6 +2500,8 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
     traces = runtime.list_traces()
+    # This test reads local command records; GitHub refresh has its own tests.
+    monkeypatch.setattr(runtime, "_refresh_activity_events", lambda *_a, **_k: None)
     history = runtime.get_activity_history(
         start="2000-01-01T00:00:00Z",
         end="2999-01-01T00:00:00Z",

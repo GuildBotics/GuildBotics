@@ -131,7 +131,7 @@ class ServiceControlWatcher:
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
-            name="service-control-watcher",
+            name="guildbotics-service-control-watcher",
             daemon=True,
         )
 

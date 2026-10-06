@@ -63,7 +63,7 @@ def _start_parent_watchdog(on_exit: Callable[[], None]) -> None:
     thread = threading.Thread(
         target=_watch_parent,
         args=(parent_pid, on_exit),
-        name="parent-watchdog",
+        name="guildbotics-parent-watchdog",
         daemon=True,
     )
     thread.start()

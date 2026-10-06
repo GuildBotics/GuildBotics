@@ -375,7 +375,7 @@ class SnapshotUpkeep(threading.Thread):
         *,
         interval: float = UPKEEP_INTERVAL_SECONDS,
     ) -> None:
-        super().__init__(name="agent-environment-upkeep", daemon=True)
+        super().__init__(name="guildbotics-agent-environment-upkeep", daemon=True)
         self._stop = stop
         self._log = log
         self._interval = interval

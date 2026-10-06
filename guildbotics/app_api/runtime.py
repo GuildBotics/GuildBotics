@@ -1201,7 +1201,7 @@ class AppRuntime:
                 self._environment_build = threading.Thread(
                     target=self._run_environment_build,
                     args=(declaration,),
-                    name="agent-environment-build",
+                    name="guildbotics-agent-environment-build",
                     daemon=True,
                 )
                 self._environment_build.start()
@@ -1629,6 +1629,7 @@ class AppRuntime:
             threading.Thread(
                 target=self._sync_activity_events,
                 args=(team, start, end, period),
+                name="guildbotics-activity-sync",
                 daemon=True,
             ).start()
 

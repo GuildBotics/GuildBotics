@@ -426,6 +426,22 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
         else:
             report.outcome = "failed"
             report.longrepr = message
+    # Product threads must end after each test, before HOME/workspace changes.
+    # Module/session fixtures cannot keep them alive between tests.
+    threads = sorted(
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name.startswith("guildbotics-")
+    )
+    if threads:
+        message = (
+            f"{item.nodeid} left GuildBotics threads running: {', '.join(threads)}"
+        )
+        if report.failed:
+            report.sections.append(("remaining GuildBotics threads", message))
+        else:
+            report.outcome = "failed"
+            report.longrepr = message
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:

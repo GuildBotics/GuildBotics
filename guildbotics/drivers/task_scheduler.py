@@ -106,7 +106,7 @@ class TaskScheduler:
             thread = threading.Thread(
                 target=self._process_tasks_list,
                 args=(p, scheduled_tasks),
-                name=p.person_id,
+                name=f"guildbotics-scheduler-{p.person_id}",
             )
             thread.start()
             threads.append(thread)

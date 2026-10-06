@@ -84,7 +84,7 @@ class SlackSocketEventListener(EventListener):
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._reader_thread_main,
-                name="gb-slack-socket-listener",
+                name="guildbotics-slack-socket-listener",
                 daemon=True,
             )
             self._thread.start()
