@@ -426,6 +426,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
         else:
             report.outcome = "failed"
             report.longrepr = message
+    # Product threads must end after each test, before HOME/workspace changes.
+    # Module/session fixtures cannot keep them alive between tests.
     threads = sorted(
         thread.name
         for thread in threading.enumerate()

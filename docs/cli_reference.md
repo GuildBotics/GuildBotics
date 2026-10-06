@@ -102,7 +102,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -741,7 +741,6 @@ guildbotics member chat complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--run-id TEXT` | Workflow run id. [required] |
 | `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the triggering event. [required] |
 | `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
@@ -835,7 +834,6 @@ guildbotics member chat noop [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--run-id TEXT` | Workflow run id. [required] |
 | `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the triggering event. [required] |
 | `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
@@ -948,7 +946,6 @@ guildbotics member chat updates [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--run-id TEXT` | Chat workflow run whose source thread should be checked. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1612,7 +1609,7 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 
 ## `guildbotics member task complete`
 
@@ -1625,7 +1622,6 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--run-id TEXT` | Workflow run id. [required] |
 | `--ticket-url TEXT` | Ticket URL the completed run worked on. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
@@ -1635,7 +1631,7 @@ guildbotics member task complete [OPTIONS]
 
 ## `guildbotics member task status`
 
-Inspect recorded run evidence.
+Inspect the ticket run's recorded evidence.
 
 ```text
 guildbotics member task status [OPTIONS]
@@ -1643,7 +1639,6 @@ guildbotics member task status [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--run-id TEXT` | Workflow run id. [required] |
 | `--person TEXT` | Accepted for consistency with other member commands; not required. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

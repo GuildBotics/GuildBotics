@@ -640,14 +640,14 @@ class RunStore:
         return True
 
 
-def current_task_run_id(explicit: str | None = None) -> str | None:
+def current_task_run_id() -> str | None:
     invocation = current_member_invocation()
-    return explicit or invocation.task_run_id or invocation.run_id or None
+    return invocation.task_run_id or invocation.run_id or None
 
 
-def current_run_id(explicit: str | None = None) -> str | None:
+def current_run_id() -> str | None:
     invocation = current_member_invocation()
-    return explicit or invocation.run_id or invocation.task_run_id or None
+    return invocation.run_id or invocation.task_run_id or None
 
 
 def _new_record(

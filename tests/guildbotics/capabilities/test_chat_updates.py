@@ -112,11 +112,9 @@ def test_unavailable_is_never_no_new_messages(chat_run, monkeypatch, state):
         ensure_chat_current("aiko")
 
 
-def test_member_and_active_run_must_match(chat_run):
+def test_member_must_match_the_runs_input(chat_run):
     with pytest.raises(ChatUpdatesRequired):
         check_chat_updates("other", "chat-run")
-    with pytest.raises(ChatUpdatesRequired):
-        check_chat_updates("aiko", "other-run")
 
 
 def test_new_batch_resets_checked_membership(chat_run):

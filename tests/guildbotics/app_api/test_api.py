@@ -2500,6 +2500,8 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
     traces = runtime.list_traces()
+    # This test reads local command records; GitHub refresh has its own tests.
+    monkeypatch.setattr(runtime, "_refresh_activity_events", lambda *_a, **_k: None)
     history = runtime.get_activity_history(
         start="2000-01-01T00:00:00Z",
         end="2999-01-01T00:00:00Z",

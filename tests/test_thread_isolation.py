@@ -106,3 +106,42 @@ def test_cleaned_thread(resource):
     result = _run(test_file, workers)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+def test_guard_rejects_threads_kept_between_tests(tmp_path: Path, scope: str) -> None:
+    test_file = tmp_path / "test_scope.py"
+    test_file.write_text(
+        f"""
+import threading
+import pytest
+
+
+@pytest.fixture(scope={scope!r})
+def resource():
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=stop.wait, name="guildbotics-long-scope", daemon=True
+    )
+    thread.start()
+    yield
+    stop.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_first(resource):
+    pass
+
+
+def test_last(resource):
+    pass
+""",
+        encoding="utf-8",
+    )
+    result = _run(test_file, 0)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "test_scope.py::test_first left GuildBotics threads running" in output
+    assert "test_scope.py::test_last left GuildBotics threads running" not in output
+    assert "2 passed, 1 error" in output

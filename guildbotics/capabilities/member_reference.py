@@ -208,7 +208,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Chat (Slack)",
         [
             (
-                "guildbotics member chat updates --person <person> --run-id <run_id>",
+                "guildbotics member chat updates --person <person>",
                 "Check the source thread's durable queue before replying or publishing in a chat workflow; "
                 "reconsider new messages, and stop external writes when reception is unavailable.",
             ),
@@ -301,24 +301,24 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Run completion — workflow runs only",
         [
             (
-                "guildbotics member chat noop --person <person> --run-id <id> --service slack "
+                "guildbotics member chat noop --person <person> --service slack "
                 "--channel-id <id> --thread-ts <ts> --event-id <id> --content-file <file>",
                 "Record a deliberate no-op for a chat event.",
             ),
             (
-                "guildbotics member chat complete --person <person> --run-id <id> --service slack "
+                "guildbotics member chat complete --person <person> --service slack "
                 "--channel-id <id> --thread-ts <ts> --event-id <id> --status done|asking|blocked --content-file <file>",
                 "Finish a chat workflow run with evidence.",
             ),
             (
-                "guildbotics member task complete --person <person> --run-id <id> --ticket-url <url> "
+                "guildbotics member task complete --person <person> --ticket-url <url> "
                 "--status done|asking|blocked --content-file <file>",
                 "Finish a ticket workflow run with evidence, revalidating affected "
                 "PR readiness before accepting done.",
             ),
             (
-                "guildbotics member task status --person <person> --run-id <id>",
-                "Inspect recorded run evidence.",
+                "guildbotics member task status --person <person>",
+                "Inspect the ticket run's recorded evidence.",
             ),
         ],
     ),

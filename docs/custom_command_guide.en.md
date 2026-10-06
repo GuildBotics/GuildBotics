@@ -967,7 +967,7 @@ In a chat workflow, check the source thread immediately before replying, reactin
 pushing commits, or writing to GitHub:
 
 ```bash
-guildbotics member chat updates --person alice --run-id <workflow-run-id>
+guildbotics member chat updates --person alice
 ```
 
 The command reads the durable event queue without a Slack API request. `new_messages`
