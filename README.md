@@ -449,7 +449,7 @@ For all front matter options, context injection, and command composition, see th
 
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
-- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. Device-local generations are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
+- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. This machine's keychain namespace and the generations it holds are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
 - **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
 - **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
 - **GitHub App private key:** member save absorbs the PEM into the keychain. Generated registration files are written under the OS temporary directory and deleted after absorb. The key material is never exposed in environment variables.
@@ -469,12 +469,32 @@ When a workspace is shared between machines, values never enter the shared histo
 move through the hub machine's OS secret store, and only when you send or fetch them. See
 [Share credentials with each machine](#share-credentials-with-each-machine).
 
-Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in `secrets.yml`). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
+Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in each machine's `.guildbotics/local/secrets.json`. The namespace belongs to the machine and does not change when it joins a hub or synchronizes. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
 guildbotics secrets --workspace /path/to/workspace list
 ```
+
+**Upgrading from a version that kept `store_id` in `secrets.yml`:** the keychain namespace now
+lives in each machine's `local/secrets.json`. Values in the old namespace are not carried over,
+so switch in this order:
+
+1. Before upgrading, run `guildbotics secrets status` on each machine and settle every unsent
+   key and every key showing *Changed on two machines*, for example with
+   `guildbotics secrets push`. Values the hub holds can be fetched again after the upgrade. In a
+   workspace that is not connected to a hub, write the values out with
+   `guildbotics secrets export --file ...`
+2. Upgrade every machine that shares the workspace at the same time. With old and new versions
+   mixed, synchronization stops on the new ones and the old ones can no longer read their values
+3. In a workspace connected to a hub, delete the `store_id:` line from
+   `.guildbotics/config/secrets.yml` on one machine. Synchronization sends the change to the
+   hub. While the hub still holds that line, machines running the new version cannot join it
+4. On each machine, run `guildbotics secrets pull` (or **Fetch all credentials** in the desktop
+   app). In a workspace that is not connected to a hub, read the exported file back with
+   `guildbotics secrets import` and delete the file
+5. Keychain entries in the old namespace (`GuildBotics/<old store_id>`) are not deleted
+   automatically. Remove them from the OS keychain manager if you no longer need them
 
 ### Run on a Server
 

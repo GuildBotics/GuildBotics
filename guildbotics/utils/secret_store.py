@@ -4,9 +4,9 @@ Secrets (LLM API keys, GitHub/Slack tokens) live in the operating system
 keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service).
 The workspace keeps only a non-secret index file
 (``.guildbotics/config/secrets.yml``) naming the stored keys and their
-shared generation. Each device records the generations it actually holds in
-``.guildbotics/local/secrets.json``. Secret values themselves are never
-written to workspace files.
+shared generation. Each device records its own keychain namespace and the
+generations it actually holds there in ``.guildbotics/local/secrets.json``.
+Secret values themselves are never written to workspace files.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from typing import Any
 from dotenv import dotenv_values
 
 from guildbotics.utils.fileio import (
+    atomic_write_text,
     get_workspace_config_dir,
     load_yaml_dict,
     save_yaml_file,
@@ -301,15 +302,16 @@ class KeyringSecretStore(SecretStore):
         self._keychain = keychain or system_keychain()
 
     def get(self, key: str) -> str | None:
-        state = self.key_state(key)
-        if state is None or state.status in _WITHHELD_STATUSES:
+        local = self._read_local()
+        state = _key_state(key, self._read_index().get(key), local["keys"].get(key))
+        if state.status in _WITHHELD_STATUSES:
             # Either this device holds nothing, or another device published a
             # newer generation and what this keychain holds is outdated. Never
             # serve the second -- the key needs a fetch, or a `secrets set`
             # here (`secrets status` lists it).
             return None
         try:
-            return self._keychain.get_password(self._service(self._read_index()), key)
+            return self._keychain.get_password(self._service(local), key)
         except SecretStoreError:
             raise
         except Exception as exc:
@@ -336,15 +338,14 @@ class KeyringSecretStore(SecretStore):
         index = self._read_index()
         local = self._read_local()["keys"]
         return [
-            _key_state(key, index["keys"].get(key), local.get(key))
-            for key in sorted(set(index["keys"]) | set(local))
+            _key_state(key, index.get(key), local.get(key))
+            for key in sorted(set(index) | set(local))
         ]
 
     def key_state(self, key: str) -> SecretKeyState | None:
         """Return one key's state, or None when neither record names it."""
-        index = self._read_index()
         local = self._read_local()["keys"].get(key)
-        meta = index["keys"].get(key)
+        meta = self._read_index().get(key)
         if meta is None and local is None:
             return None
         return _key_state(key, meta, local)
@@ -355,7 +356,8 @@ class KeyringSecretStore(SecretStore):
     @shared_write_operation
     def set_many(self, values: dict[str, str]) -> None:
         index = self._read_index()
-        service = self._service(index)
+        local = self._read_local()
+        service = self._service(local)
         written_keys: list[str] = []
         try:
             for key, value in values.items():
@@ -366,11 +368,11 @@ class KeyringSecretStore(SecretStore):
                 written_keys.append(key)
         except Exception as exc:
             if written_keys:
-                self._record_keys(index, written_keys)
+                self._record_keys(index, local, written_keys)
             if isinstance(exc, SecretStoreError):
                 raise
             raise SecretStoreError(str(exc)) from exc
-        self._record_keys(index, written_keys)
+        self._record_keys(index, local, written_keys)
 
     @shared_write_operation
     def confirm_shared(
@@ -399,16 +401,16 @@ class KeyringSecretStore(SecretStore):
         if not generations:
             return
         index = self._read_index()
-        service = self._service(index)
-        now = utc_now_iso()
         local = self._read_local()
+        service = self._service(local)
+        now = utc_now_iso()
         for key, generation in generations.items():
             if key not in sent:
                 # A generation for a key this device never offered can only be
                 # a corrupted answer; publishing it would name a value nobody
                 # here vouched for.
                 continue
-            current = _as_generation((index["keys"].get(key) or {}).get("generation"))
+            current = _as_generation((index.get(key) or {}).get("generation"))
             # A shared generation only ever moves forward. Two devices can each
             # reach the hub and publish, and the one whose answer comes back
             # later would otherwise write the earlier number over the later
@@ -416,7 +418,7 @@ class KeyringSecretStore(SecretStore):
             # that says it never finished.
             if current is not None and current >= generation:
                 continue
-            index["keys"][key] = {"generation": generation, "updated_at": now}
+            index[key] = {"generation": generation, "updated_at": now}
             if self._holds_value(service, key, sent[key]):
                 local["keys"][key] = {"generation": generation, "pending_send": False}
         self._write_index(index)
@@ -443,32 +445,32 @@ class KeyringSecretStore(SecretStore):
         writing it again here would make every fetch look like a change to the
         other devices.
         """
-        index = self._read_index()
+        local = self._read_local()
         try:
             require_secret_key(key)
             self._keychain.validate_password(key, value)
-            self._keychain.set_password(self._service(index), key, value)
+            self._keychain.set_password(self._service(local), key, value)
         except SecretStoreError:
             raise
         except Exception as exc:
             raise SecretStoreError(str(exc)) from exc
-        local = self._read_local()
         local["keys"][key] = {"generation": generation, "pending_send": False}
         self._write_local(local)
 
     @shared_write_operation
     def delete(self, key: str) -> None:
         index = self._read_index()
+        local = self._read_local()
         try:
-            self._keychain.delete_password(self._service(index), key)
+            self._keychain.delete_password(self._service(local), key)
         except SecretStoreError:
             raise
         except Exception as exc:
             raise SecretStoreError(str(exc)) from exc
-        if key in index["keys"]:
-            del index["keys"][key]
+        if index.pop(key, None) is not None:
             self._write_index(index)
-            self._drop_local_generation(key)
+        if local["keys"].pop(key, None) is not None:
+            self._write_local(local)
 
     @shared_write_operation
     def rename(self, old_key: str, new_key: str) -> None:
@@ -477,16 +479,20 @@ class KeyringSecretStore(SecretStore):
         The index entry moves regardless of whether this device holds the
         key's current generation, so shared metadata never keeps a stale
         entry under the old name; a stale value stays stale under the new
-        name. No-op when ``old_key`` is not indexed (e.g. a retried rename).
+        name. A key only one of the two records names moves as well, like
+        every other key (see :meth:`key_states`). No-op when neither record
+        names ``old_key`` (e.g. a retried rename).
         """
         if old_key == new_key:
             return
         require_secret_key(new_key)
         index = self._read_index()
-        meta = index["keys"].pop(old_key, None)
-        if meta is None:
+        local = self._read_local()
+        meta = index.pop(old_key, None)
+        local_meta = local["keys"].pop(old_key, None)
+        if meta is None and local_meta is None:
             return
-        service = self._service(index)
+        service = self._service(local)
         try:
             value = self._keychain.get_password(service, old_key)
             if value is not None:
@@ -496,10 +502,9 @@ class KeyringSecretStore(SecretStore):
             raise
         except Exception as exc:
             raise SecretStoreError(str(exc)) from exc
-        index["keys"][new_key] = meta
-        self._write_index(index)
-        local = self._read_local()
-        local_meta = local["keys"].pop(old_key, None)
+        if meta is not None:
+            index[new_key] = meta
+            self._write_index(index)
         if local_meta is not None:
             local["keys"][new_key] = local_meta
             self._write_local(local)
@@ -509,28 +514,31 @@ class KeyringSecretStore(SecretStore):
 
     @shared_write_operation
     def ensure_initialized(self) -> None:
-        """Persist the index file, pinning this workspace to the OS keychain.
+        """Persist the shared index and this device's keychain namespace.
 
         The span starts at the read: what is written is the index that was
         read, so a queue checkout in between would be written back over.
         """
         self._write_index(self._read_index())
+        self._write_local(self._read_local())
 
     def shared_generation(self, key: str) -> int | None:
         """Return the shared generation recorded for ``key``, if any."""
-        meta = self._read_index()["keys"].get(key)
+        meta = self._read_index().get(key)
         if not isinstance(meta, dict):
             return None
         return _as_generation(meta.get("generation"))
 
     def local_generation(self, key: str) -> int | None:
         """Return the generation this device holds for ``key``, if any."""
-        return self._read_local().get("keys", {}).get(key, {}).get("generation")
+        return self._read_local()["keys"].get(key, {}).get("generation")
 
-    def _service(self, index: dict[str, Any]) -> str:
-        return f"{_KEYRING_SERVICE_PREFIX}/{index['store_id']}"
+    def _service(self, local: dict[str, Any]) -> str:
+        return f"{_KEYRING_SERVICE_PREFIX}/{local['store_id']}"
 
-    def _record_keys(self, index: dict[str, Any], keys: list[str]) -> None:
+    def _record_keys(
+        self, index: dict[str, Any], local: dict[str, Any], keys: list[str]
+    ) -> None:
         """Record locally entered values as this device's own, unsent update.
 
         Entering a value does not advance the shared generation. That number
@@ -543,15 +551,14 @@ class KeyringSecretStore(SecretStore):
         """
         now = utc_now_iso()
         changed = False
-        local = self._read_local()
         for key in keys:
-            if key not in index["keys"]:
-                index["keys"][key] = {
+            if key not in index:
+                index[key] = {
                     "generation": UNSHARED_GENERATION,
                     "updated_at": now,
                 }
                 changed = True
-            shared = _as_generation(index["keys"][key].get("generation"))
+            shared = _as_generation(index[key].get("generation"))
             local["keys"][key] = {
                 "generation": UNSHARED_GENERATION if shared is None else shared,
                 "pending_send": True,
@@ -561,30 +568,40 @@ class KeyringSecretStore(SecretStore):
         self._write_local(local)
 
     def _read_index(self) -> dict[str, Any]:
-        data = load_yaml_dict(self.location)
-        store_id = str(data.get("store_id", "")) or uuid.uuid4().hex
-        return {
-            "store_id": store_id,
-            "keys": _parse_key_index(data.get("keys")),
-        }
+        return _parse_key_index(load_yaml_dict(self.location).get("keys"))
 
     def _write_index(self, index: dict[str, Any]) -> None:
-        payload = {
-            "store_id": index["store_id"],
-            "keys": {key: dict(index["keys"][key]) for key in sorted(index["keys"])},
-        }
+        payload = {"keys": {key: dict(index[key]) for key in sorted(index)}}
         self.location.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(self.location, payload)
 
     def _read_local(self) -> dict[str, Any]:
-        if not self._local_index.exists():
-            return {"schema_version": 1, "keys": {}}
+        """Read this device's keychain namespace and what it holds there.
+
+        The namespace is this device's own: the shared index travels between
+        machines, and a join that adopted another machine's namespace would
+        leave the values entered here out of reach.
+
+        The generations describe values in the namespace recorded beside them,
+        so a record without that namespace -- absent, unparsable, or written
+        before the namespace moved here -- describes nothing this device can
+        read. It starts over as a new namespace holding nothing, which makes
+        every shared key one to fetch rather than one that claims to be here
+        and is not. The new namespace is kept by the first write.
+
+        A record that exists but cannot be read is an error, not a fresh start:
+        the next write would replace the namespace it names and leave the
+        values there where nothing records them.
+        """
         try:
             data = json.loads(self._local_index.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"schema_version": 1, "keys": {}}
-        if not isinstance(data, dict):
-            return {"schema_version": 1, "keys": {}}
+        except (FileNotFoundError, ValueError):
+            data = None
+        except OSError as exc:
+            raise SecretStoreError(str(exc)) from exc
+        store_id = data.get("store_id") if isinstance(data, dict) else None
+        if not isinstance(store_id, str) or not store_id:
+            return {"store_id": uuid.uuid4().hex, "keys": {}}
         raw_keys = data.get("keys")
         keys: dict[str, dict[str, Any]] = {}
         if isinstance(raw_keys, dict):
@@ -598,20 +615,16 @@ class KeyringSecretStore(SecretStore):
                     "generation": generation,
                     "pending_send": bool(meta.get("pending_send", False)),
                 }
-        return {"schema_version": 1, "keys": keys}
+        return {"store_id": store_id, "keys": keys}
 
-    def _write_local(self, payload: dict[str, Any]) -> None:
-        self._local_index.parent.mkdir(parents=True, exist_ok=True)
-        self._local_index.write_text(
+    def _write_local(self, local: dict[str, Any]) -> None:
+        # Replaced whole, never truncated in place: a torn record reads as one
+        # without a namespace and would orphan every value held under it.
+        payload = {"schema_version": 1, **local}
+        atomic_write_text(
+            self._local_index,
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
-
-    def _drop_local_generation(self, key: str) -> None:
-        local = self._read_local()
-        if key in local["keys"]:
-            del local["keys"][key]
-            self._write_local(local)
 
 
 def keyring_available() -> bool:

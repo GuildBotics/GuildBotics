@@ -620,7 +620,6 @@ class SimpleProjectSetupService:
         files.extend(self.ensure_sample_commands(config.config_dir, config.language))
 
         store = resolve_secret_store(config.config_dir, create_default=True)
-        store.ensure_initialized()
         files.append(CreatedFile(path=store.location, action="create"))
         self._store_provider_api_keys(config, store)
 

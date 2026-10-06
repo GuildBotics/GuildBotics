@@ -45,9 +45,7 @@ ACTIVITY_EVENT_JSON = json.dumps(
 MEMORY_JOURNAL = (
     "state/documents/memory_events/019c5e8d-31ce-7a62-a8a9-6ce16cb88945.jsonl"
 )
-SECRETS_INDEX = yaml.safe_dump(
-    {"store_id": "abc", "keys": {"GITHUB_TOKEN": {"generation": 2}}}
-).encode()
+SECRETS_INDEX = yaml.safe_dump({"keys": {"GITHUB_TOKEN": {"generation": 2}}}).encode()
 
 
 @pytest.mark.parametrize(
@@ -203,19 +201,30 @@ def test_the_secret_index_may_name_keys_but_hold_no_value() -> None:
     validate_shared_file("config/secrets.yml", REGULAR_FILE_MODE, SECRETS_INDEX)
 
 
+def test_the_secret_index_does_not_choose_a_keychain_namespace() -> None:
+    """The namespace is each device's own (``local/secrets.json``): an index
+    that named one would hand every device the namespace of whichever device
+    wrote it, and a join would put this device's unsent values out of reach."""
+    with pytest.raises(SharedFileInvalidError) as error:
+        validate_shared_file(
+            "config/secrets.yml",
+            REGULAR_FILE_MODE,
+            yaml.safe_dump({"store_id": "abc", "keys": {}}).encode(),
+        )
+
+    assert "carries store_id" in error.value.reason
+
+
 @pytest.mark.parametrize(
     ("payload", "fragment"),
     [
-        ({"store_id": "a", "keys": {"GITHUB_TOKEN": "ghp-x"}}, "stores a value"),
+        ({"keys": {"GITHUB_TOKEN": "ghp-x"}}, "stores a value"),
         (
-            {
-                "store_id": "a",
-                "keys": {"GITHUB_TOKEN": {"generation": 1, "value": "x"}},
-            },
+            {"keys": {"GITHUB_TOKEN": {"generation": 1, "value": "x"}}},
             "records value",
         ),
-        ({"store_id": "a", "keys": {}, "values": {}}, "carries values"),
-        ({"store_id": "a", "keys": {"T": {"generation": "one"}}}, "non-numeric"),
+        ({"keys": {}, "values": {}}, "carries values"),
+        ({"keys": {"T": {"generation": "one"}}}, "non-numeric"),
     ],
 )
 def test_the_secret_index_refuses_anywhere_a_value_could_sit(

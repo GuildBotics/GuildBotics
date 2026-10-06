@@ -598,7 +598,7 @@ the process cwd or a member working clone.
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
 | Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
-| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this device's keychain namespace and held generations), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
 
 Invariants:
 
@@ -706,7 +706,7 @@ The generation check only reaches records that declare one, so every record writ
 A second literal would be a fault rather than a duplication: the boundary runs on the sending
 side too, so raising one kind's version alone makes the device that wrote it reject its own
 file and stop its own queue. `config/secrets.yml` is the one record that cannot carry a
-version, because the index admits nothing but `store_id` and `keys` — the same restriction
+version, because the index admits nothing but `keys` — the same restriction
 that keeps secret values out of the history structurally.
 
 **Joining.** A device with existing content commits it first, then adopts the hub's version
@@ -823,8 +823,11 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 `SLACK_APP_TOKEN`). Non-secret GitHub App IDs live in `person.yml` `account_info`.
 
 - **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
-  non-secret index in `.guildbotics/config/secrets.yml` (`store_id`, logical key
-  names, generations) and device generations in `.guildbotics/local/secrets.json`.
+  non-secret index in `.guildbotics/config/secrets.yml` (logical key names,
+  generations). `.guildbotics/local/secrets.json` holds this device's keychain
+  namespace (`store_id`, the service `GuildBotics/<store_id>`) and the generations it
+  holds there; a record without a `store_id` starts over as a new, empty namespace.
+  Joining or synchronizing never changes it.
   There is no env-file backend and no `GUILDBOTICS_SECRETS_BACKEND` switch. A
   missing or locked keychain is an error. Machine moves use `guildbotics secrets
   export` / `import` (dotenv is an exchange format only). `secrets set --from-file`

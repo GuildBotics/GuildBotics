@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -9,7 +10,7 @@ from guildbotics.utils.fileio import (
     dump_yaml,
     load_yaml_dict,
 )
-from guildbotics.utils.keychain import InvalidSecretKeyError
+from guildbotics.utils.keychain import InvalidSecretKeyError, SecretStoreError
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     SecretKeyStatus,
@@ -262,11 +263,8 @@ def test_a_key_only_the_local_record_names_is_still_a_key(
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("OPENAI_API_KEY", "sk-test")
     # Synchronization delivers the hub's index as a checkout, and the entry
-    # this device created is not in it. The workspace's keychain namespace is
-    # part of that file and is unchanged.
-    index = load_yaml_dict(store.location)
-    index["keys"] = {}
-    store.location.write_text(dump_yaml(index), encoding="utf-8")
+    # this device created is not in it.
+    store.location.write_text(dump_yaml({"keys": {}}), encoding="utf-8")
 
     assert store.keys() == ["OPENAI_API_KEY"]
     assert store.key_state("OPENAI_API_KEY").status is SecretKeyStatus.PENDING_SEND
@@ -366,3 +364,226 @@ def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
     assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 2
     assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") is None
     assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.stale_keys()
+
+
+def _local_record(workspace) -> dict:
+    return json.loads(
+        (workspace / ".guildbotics" / "local" / "secrets.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def _namespaces(fake_keyring) -> set[str]:
+    return {service for service, _ in fake_keyring.passwords}
+
+
+def test_the_keychain_namespace_is_this_devices_own(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """The namespace is kept beside the generations this device holds, never in
+    the index every device shares, and a new store -- a later process -- uses
+    the same one."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    config_dir = tmp_path / ".guildbotics" / "config"
+    resolve_secret_store(config_dir, create_default=True)
+    store_id = _local_record(tmp_path)["store_id"]
+
+    KeyringSecretStore(config_dir).set("OPENAI_API_KEY", "sk-test")
+
+    index = load_yaml_dict(config_dir / "secrets.yml")
+    assert list(index) == ["keys"]
+    assert list(index["keys"]) == ["OPENAI_API_KEY"]
+    assert _local_record(tmp_path)["store_id"] == store_id
+    assert _namespaces(fake_keyring) == {f"GuildBotics/{store_id}"}
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "sk-test"
+
+
+def test_every_operation_uses_this_devices_namespace(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("FIRST_TOKEN", "one")
+    namespace = f"GuildBotics/{_local_record(tmp_path)['store_id']}"
+    store.confirm_shared({"FIRST_TOKEN": 1}, sent={"FIRST_TOKEN": "one"})
+    assert store.key_state("FIRST_TOKEN").status is SecretKeyStatus.READY
+    store.set("SECOND_TOKEN", "two")
+    store.rename("SECOND_TOKEN", "RENAMED_TOKEN")
+    _publish_shared_generation(store, "FIRST_TOKEN", 2)
+    store.adopt_received("FIRST_TOKEN", "fetched", 2)
+    store.set("GONE_TOKEN", "three")
+    store.delete("GONE_TOKEN")
+
+    assert fake_keyring.passwords == {
+        (namespace, "FIRST_TOKEN"): "fetched",
+        (namespace, "RENAMED_TOKEN"): "two",
+    }
+    assert store.get("FIRST_TOKEN") == "fetched"
+    assert store.get("RENAMED_TOKEN") == "two"
+
+
+def test_adopting_another_devices_index_keeps_the_namespace(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """Joining a hub or synchronizing replaces the shared index wholesale; a
+    value entered here and not yet sent stays readable."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("UNSENT_TOKEN", "typed-here")
+    store_id = _local_record(tmp_path)["store_id"]
+
+    store.location.write_text(
+        dump_yaml({"keys": {"HUB_TOKEN": {"generation": 3}}}), encoding="utf-8"
+    )
+
+    assert store.get("UNSENT_TOKEN") == "typed-here"
+    assert store.key_state("UNSENT_TOKEN").status is SecretKeyStatus.PENDING_SEND
+    assert store.key_state("HUB_TOKEN").status is SecretKeyStatus.MISSING
+    assert _local_record(tmp_path)["store_id"] == store_id
+
+
+@pytest.mark.parametrize(
+    "local_text",
+    [
+        json.dumps({"keys": {"OPENAI_API_KEY": {"generation": 1}}}),
+        json.dumps({"store_id": "", "keys": {"OPENAI_API_KEY": {"generation": 1}}}),
+        "{not json",
+    ],
+    ids=["no-namespace", "empty-namespace", "unparsable"],
+)
+def test_generations_without_their_namespace_start_over_empty(
+    fake_keyring, tmp_path, monkeypatch, local_text
+):
+    """Generations describe values in the namespace recorded beside them. Kept
+    without it, a key would read as held while nothing can be read, and a held
+    key is never fetched -- so the record starts over, and every shared key is
+    one to fetch from the hub."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    config_dir = tmp_path / ".guildbotics" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "secrets.yml").write_text(
+        dump_yaml({"keys": {"OPENAI_API_KEY": {"generation": 1}}}), encoding="utf-8"
+    )
+    local = tmp_path / ".guildbotics" / "local" / "secrets.json"
+    local.parent.mkdir(parents=True)
+    local.write_text(local_text, encoding="utf-8")
+    store = KeyringSecretStore(config_dir)
+
+    assert store.key_state("OPENAI_API_KEY").status is SecretKeyStatus.MISSING
+    assert store.get("OPENAI_API_KEY") is None
+
+    store.adopt_received("OPENAI_API_KEY", "fetched", 1)
+
+    store_id = _local_record(tmp_path)["store_id"]
+    assert store_id
+    assert _namespaces(fake_keyring) == {f"GuildBotics/{store_id}"}
+    assert store.key_state("OPENAI_API_KEY").status is SecretKeyStatus.READY
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "fetched"
+
+
+@pytest.mark.parametrize("relocate", [shutil.move, shutil.copytree])
+def test_a_moved_or_copied_workspace_keeps_its_namespace(
+    fake_keyring, tmp_path, monkeypatch, relocate
+):
+    """The namespace travels with ``local/``: a copy made on the same device
+    shares it, so copying does not separate the secrets."""
+    source = tmp_path / "source"
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(source))
+    KeyringSecretStore(source / ".guildbotics" / "config").set("TOKEN", "value")
+    store_id = _local_record(source)["store_id"]
+
+    target = tmp_path / "target"
+    relocate(str(source), str(target))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(target))
+    store = KeyringSecretStore(target / ".guildbotics" / "config")
+
+    assert store.get("TOKEN") == "value"
+    assert _local_record(target)["store_id"] == store_id
+
+
+def test_no_secret_value_reaches_a_workspace_file(fake_keyring, tmp_path, monkeypatch):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("TOKEN", "value-that-must-stay-in-the-keychain")
+    store.confirm_shared(
+        {"TOKEN": 1}, sent={"TOKEN": "value-that-must-stay-in-the-keychain"}
+    )
+    store.adopt_received("OTHER_TOKEN", "fetched-value-that-must-stay", 1)
+
+    for path in (tmp_path / ".guildbotics").rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            assert "must-stay" not in text, path
+
+
+def test_a_key_only_the_local_record_names_can_be_deleted_and_renamed(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """After a join adopts an index without this device's entry, the key is
+    still listed, so the operations on listed keys must reach it too."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("GONE_TOKEN", "one")
+    store.set("OLD_TOKEN", "two")
+    store.location.write_text(dump_yaml({"keys": {}}), encoding="utf-8")
+
+    store.delete("GONE_TOKEN")
+    store.rename("OLD_TOKEN", "NEW_TOKEN")
+
+    assert store.keys() == ["NEW_TOKEN"]
+    assert store.get("NEW_TOKEN") == "two"
+    assert store.key_state("NEW_TOKEN").status is SecretKeyStatus.PENDING_SEND
+    assert load_yaml_dict(store.location) == {"keys": {}}
+    namespace = f"GuildBotics/{_local_record(tmp_path)['store_id']}"
+    assert fake_keyring.passwords == {(namespace, "NEW_TOKEN"): "two"}
+
+
+def test_initializing_again_keeps_the_namespace_and_what_it_holds(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("TOKEN", "value")
+    before = _local_record(tmp_path)
+
+    store.ensure_initialized()
+
+    assert _local_record(tmp_path) == before
+    assert store.get("TOKEN") == "value"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda store: store.delete("UNKNOWN"),
+        lambda store: store.rename("UNKNOWN", "NEW"),
+    ],
+    ids=["delete", "rename"],
+)
+def test_an_operation_on_an_unknown_key_records_no_namespace(
+    fake_keyring, tmp_path, monkeypatch, operation
+):
+    """A namespace no value was written under is not one to keep."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+
+    operation(store)
+
+    assert not (tmp_path / ".guildbotics" / "local" / "secrets.json").exists()
+    assert not store.location.exists()
+
+
+def test_a_record_that_exists_but_cannot_be_read_is_an_error(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """Starting over would replace the namespace the record names on the next
+    write, leaving its values where nothing records them."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    (tmp_path / ".guildbotics" / "local" / "secrets.json").mkdir(parents=True)
+
+    with pytest.raises(SecretStoreError):
+        store.set("TOKEN", "value")
+
+    assert fake_keyring.passwords == {}
