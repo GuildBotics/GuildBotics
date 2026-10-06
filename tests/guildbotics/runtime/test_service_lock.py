@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
+import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -193,33 +197,131 @@ def test_the_service_keeps_the_machine_awake_while_held_when_set(
     assert wakepy.modecount() == 0
 
 
-def test_a_changed_setting_applies_to_a_held_service_at_once(
-    tmp_path, workspace
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+@pytest.fixture
+def quick_poll(monkeypatch) -> None:
+    monkeypatch.setattr(service_lock_module, "SETTING_POLL_SECONDS", 0.01)
+
+
+@pytest.mark.parametrize("write", ["api", "editor"])
+def test_a_held_service_follows_the_setting_however_it_is_written(
+    tmp_path, workspace, quick_poll, write
 ) -> None:
+    """The holder reads the file itself: the Desktop's API may run in another
+    process, and a CLI user edits the file by hand."""
+    settings = workspace / ".guildbotics" / "local" / "service.yml"
+
+    def switch(enabled: bool) -> None:
+        if write == "api":
+            set_service_keeps_awake(enabled)
+        else:
+            settings.parent.mkdir(parents=True, exist_ok=True)
+            settings.write_text(
+                f"keep_awake: {str(enabled).lower()}\n", encoding="utf-8"
+            )
+
     service_lock = ServiceLock(tmp_path / "service.lock")
-    service_lock.acquire(owner="desktop", workspace=workspace)
+    service_lock.acquire(owner="cli", workspace=workspace)
     try:
-        set_service_keeps_awake(True)
-        service_lock.follow_keep_awake()
-        turned_on = wakepy.modecount()
-        set_service_keeps_awake(False)
-        service_lock.follow_keep_awake()
-        turned_off = wakepy.modecount()
+        switch(True)
+        turned_on = _wait_until(lambda: wakepy.modecount() == 1)
+        switch(False)
+        turned_off = _wait_until(lambda: wakepy.modecount() == 0)
     finally:
         service_lock.release()
 
-    assert (turned_on, turned_off) == (1, 0)
+    assert (turned_on, turned_off) == (True, True)
 
 
-def test_the_setting_does_not_hold_a_service_that_is_not_running(
-    tmp_path, workspace
+def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
+    tmp_path, workspace, quick_poll, caplog
+) -> None:
+    set_service_keeps_awake(True)
+    settings = workspace / ".guildbotics" / "local" / "service.yml"
+    service_lock = ServiceLock(tmp_path / "service.lock")
+    service_lock.acquire(owner="cli", workspace=workspace)
+    try:
+        with caplog.at_level(logging.WARNING):
+            _replace(settings, "keep_awake: [")
+            time.sleep(0.2)
+            held_while_unreadable = wakepy.modecount()
+            _replace(settings, "keep_awake: false\n")
+            released = _wait_until(lambda: wakepy.modecount() == 0)
+    finally:
+        service_lock.release()
+
+    warned = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("guildbotics")
+    ]
+    assert held_while_unreadable == 1
+    assert released is True
+    assert len(warned) == 1
+    assert "keep-awake setting cannot be read" in warned[0]
+
+
+def _replace(path: Path, text: str) -> None:
+    staged = path.with_name(f"{path.name}.staged")
+    staged.write_text(text, encoding="utf-8")
+    os.replace(staged, path)
+
+
+def test_a_held_service_reads_the_setting_only_when_it_changes(
+    tmp_path, workspace, quick_poll, monkeypatch
+) -> None:
+    """An open file cannot be replaced on Windows, so the holder must not keep
+    the file open for the writer's save to land on."""
+    reads = []
+    original = service_lock_module.service_keeps_awake
+
+    def counting(workspace=None):
+        reads.append(workspace)
+        return original(workspace)
+
+    monkeypatch.setattr(service_lock_module, "service_keeps_awake", counting)
+    service_lock = ServiceLock(tmp_path / "service.lock")
+    service_lock.acquire(owner="cli", workspace=workspace)
+    try:
+        time.sleep(0.3)
+        unchanged = len(reads)
+        set_service_keeps_awake(True)
+        followed = _wait_until(lambda: wakepy.modecount() == 1)
+        time.sleep(0.3)
+        changed = len(reads)
+    finally:
+        service_lock.release()
+
+    # The read at acquire and the first poll, then one for the one change.
+    assert unchanged == 2
+    assert followed is True
+    assert changed == 3
+
+
+def test_a_released_service_no_longer_follows_the_setting(
+    tmp_path, workspace, quick_poll
 ) -> None:
     service_lock = ServiceLock(tmp_path / "service.lock")
-    set_service_keeps_awake(True)
+    service_lock.acquire(owner="cli", workspace=workspace)
+    service_lock.release()
 
-    service_lock.follow_keep_awake()
+    set_service_keeps_awake(True)
+    time.sleep(0.2)
 
     assert wakepy.modecount() == 0
+    assert [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "guildbotics-service-keep-awake"
+    ] == []
 
 
 def test_an_unreadable_setting_fails_the_start_without_holding_the_lock(

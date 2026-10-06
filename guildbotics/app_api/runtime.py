@@ -1134,8 +1134,8 @@ class AppRuntime:
         return ServiceKeepAwake(enabled=service_keeps_awake())
 
     def update_service_keep_awake(self, request: ServiceKeepAwake) -> ServiceKeepAwake:
+        # The process holding the service, this one or a CLI, follows the file.
         set_service_keeps_awake(request.enabled)
-        self._lifecycle.follow_keep_awake()
         return self.get_service_keep_awake()
 
     def get_system_alerts(self) -> SystemAlertsResponse:
