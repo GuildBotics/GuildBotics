@@ -266,6 +266,30 @@ describe("GitHubAppRegistrationPanel", () => {
     expect(appNameField()).toHaveValue("other-bot-acme");
   });
 
+  it("shows no failure of a start the form has moved on from", async () => {
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(startGitHubAppRegistration).mockReturnValue(
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+    );
+    const user = userEvent.setup();
+    const switchMember = renderSwitchablePanel();
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    );
+
+    switchMember();
+    fail(new Error("GitHub App name must be 1-34 characters."));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+      ).not.toHaveAttribute("data-loading"),
+    );
+    expect(screen.queryByText("GitHub App name must be 1-34 characters.")).not.toBeInTheDocument();
+  });
+
   it("cannot register before the member has an ID", () => {
     renderPanel(vi.fn(), "", { personId: " " });
 

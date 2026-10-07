@@ -3550,6 +3550,10 @@ function MembersSection({
       setEditingPersonId(null);
     },
   });
+  // What answers a pending save, reload or delete lands on the form that sent
+  // it, so the form stays on its member until then.
+  const memberFormBusy =
+    savingMember || memberConfigMutation.isPending || deleteMemberMutation.isPending;
 
   const effectiveIsActive = isHumanMember ? false : isActive;
   const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
@@ -4086,6 +4090,7 @@ function MembersSection({
                   <Button
                     size="xs"
                     variant="default"
+                    disabled={memberFormBusy}
                     onClick={() => startEditMode(member.person_id)}
                   >
                     {t("setup.members.editButton")}
@@ -4116,7 +4121,7 @@ function MembersSection({
             ) : (
               <span />
             )}
-            <Button variant="default" onClick={startAddMode}>
+            <Button variant="default" disabled={memberFormBusy} onClick={startAddMode}>
               {t("setup.members.newButton")}
             </Button>
           </Group>
@@ -5048,6 +5053,7 @@ function MembersSection({
                     color="danger"
                     variant="default"
                     loading={deleteMemberMutation.isPending}
+                    disabled={memberFormBusy}
                     onClick={() => setDeleteConfirmOpen(true)}
                   >
                     {t("setup.members.deleteButton")}

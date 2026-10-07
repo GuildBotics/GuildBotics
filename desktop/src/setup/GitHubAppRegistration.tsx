@@ -3,6 +3,7 @@ import type { TFunction } from "i18next";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type Dispatch,
@@ -153,11 +154,26 @@ export function GitHubAppRegistrationPanel({
     [onApplied, setRegistration],
   );
 
+  // The form this panel serves now. A start answered after the form moved on
+  // (another member, ID or mode) belongs to a session that no longer exists:
+  // nothing of it is applied, and no browser is sent to create its app.
+  const sessionRef = useRef("");
+  const session = `${memberKey}\n${personId.trim()}`;
+  // A layout effect: a session that changed on a promise's answer is seen
+  // before any later answer, not a task later.
+  useLayoutEffect(() => {
+    sessionRef.current = session;
+    return () => {
+      sessionRef.current = "";
+    };
+  }, [session]);
+
   const handleStart = async () => {
     const name = appName.trim();
     if (!name) {
       return;
     }
+    const startedFor = session;
     setStarting(true);
     setError("");
     appliedStatusRef.current = "";
@@ -167,10 +183,15 @@ export function GitHubAppRegistrationPanel({
         person_id: personId.trim(),
         organization: organization.trim(),
       });
+      if (sessionRef.current !== startedFor) {
+        return;
+      }
       setRegistration(started);
       await openExternal(started.start_url);
     } catch (startError) {
-      setError(getRegistrationErrorMessage(startError, t));
+      if (sessionRef.current === startedFor) {
+        setError(getRegistrationErrorMessage(startError, t));
+      }
     } finally {
       setStarting(false);
     }
