@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-from git import Git, Repo
+from git import Git, GitCommandError, Repo
 
 from guildbotics.sync.local_repository import (
     GITIGNORE_CONTENT,
@@ -40,8 +40,18 @@ def test_initialize_ignores_device_local_data_and_hidden_paths(tmp_path: Path) -
     (hidden_directory / "session").write_text("local state")
     (tmp_path / ".guildbotics" / "state" / "kept.json").write_text("{}")
 
-    assert repository.stage_changes() == ["state/kept.json"]
+    assert repository.stage_changes().paths == ("state/kept.json",)
     assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == GITIGNORE_CONTENT
+
+
+def test_a_locked_index_is_not_a_change_that_cannot_be_sent(tmp_path: Path) -> None:
+    """A locked index is Git failing, not a path the user has to repair."""
+    repository = _workspace(tmp_path)
+    (tmp_path / ".guildbotics" / "state" / "kept.json").write_text("{}")
+    (repository.path / ".git" / "index.lock").write_text("")
+
+    with pytest.raises(GitCommandError, match="index.lock"):
+        repository.stage_changes()
 
 
 def test_initialize_is_repeatable(tmp_path: Path) -> None:
@@ -142,7 +152,7 @@ def test_paths_with_spaces_survive_scanning_and_diffing(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text("{}")
 
-    assert repository.stage_changes() == [name]
+    assert repository.stage_changes().paths == (name,)
     repository.stage_changes()
     head = repository.commit("first")
     assert head is not None

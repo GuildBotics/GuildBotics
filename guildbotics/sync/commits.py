@@ -71,12 +71,14 @@ def commit_shared_changes(
     file is staged as content, so it is checked as content.
     """
     changes = repository.stage_changes()
-    if not changes:
+    if not changes.paths and not changes.refused:
         return CommitOutcome(head=repository.head(), unsendable=())
 
     # A path staged as a deletion is absent here. There is no content to
     # check, and removing a file cannot make the shared set unreadable.
-    staged = repository.read_staged(changes)
+    # A path Git could not stage has no index entry either: it joins the
+    # held set from the refusal, without a mode to validate.
+    staged = repository.read_staged(changes.paths)
     held: list[UnsendableChange] = []
     for path, entry in staged.items():
         try:
@@ -87,7 +89,10 @@ def commit_shared_changes(
         # Unstaging a path puts back everything the commit holds beneath it,
         # so the deletions a link left where a directory was wait with it.
         repository.unstage([item.path for item in held])
-    sendable = [path for path in changes if not held_covers(held, path)]
+    held.extend(
+        UnsendableChange(path=item.path, reason=item.reason) for item in changes.refused
+    )
+    sendable = [path for path in changes.paths if not held_covers(held, path)]
     if sendable:
         deleted = sum(1 for path in sendable if path not in staged)
         repository.commit(_commit_message(len(sendable), deleted, device_id))

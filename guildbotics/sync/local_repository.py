@@ -70,6 +70,9 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 _PATH_BATCH = 200
 #: ``git status --porcelain`` prefixes every entry with ``XY `` before the path.
 _STATUS_PREFIX = 3
+#: ``git add --ignore-errors`` exits with 1 when it skipped a path and staged
+#: the rest. Any other non-zero status is a failure of the command itself.
+_ADD_REFUSED_A_PATH = 1
 
 
 class SyncRepositoryError(RuntimeError):
@@ -151,6 +154,38 @@ def _run_remote_git(
             or f"'git {arguments[0]}' exited with code {process.returncode}."
         )
     return stdout
+
+
+@dataclass(frozen=True)
+class RefusedChange:
+    """A path a status listed that did not enter the index.
+
+    Attributes:
+        path (str): The path relative to ``.guildbotics/``, with no trailing
+            slash. A directory Git reports as ``config/commands/`` is named
+            ``config/commands`` here, which is also the name a later commit
+            stages as a gitlink.
+        reason (str): Why it stayed out, phrased to follow the path.
+    """
+
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class StagedChanges:
+    """What staging one scan of the shared roots left in the index.
+
+    Attributes:
+        paths (tuple[str, ...]): Paths now staged.
+        refused (tuple[RefusedChange, ...]): Paths a status listed that Git
+            did not stage. An embedded repository with no commit is the one
+            ``git add`` cannot index; it is returned here so the cycle can
+            hold it instead of failing.
+    """
+
+    paths: tuple[str, ...]
+    refused: tuple[RefusedChange, ...]
 
 
 @dataclass(frozen=True)
@@ -328,8 +363,8 @@ class LocalSyncRepository:
         shutil.rmtree(self.path / ".git", onexc=_remove_read_only)
         (self.path / ".gitignore").unlink(missing_ok=True)
 
-    def stage_changes(self) -> list[str]:
-        """Stage every shared change and return the paths it staged.
+    def stage_changes(self) -> StagedChanges:
+        """Stage every shared change and report what Git refused to stage.
 
         This is what recovers a change whose save notification was lost, and
         what picks up an edit made directly with an external editor.
@@ -340,28 +375,62 @@ class LocalSyncRepository:
         deletions; staging the root records the link and those deletions
         together. The answer is read back from the index, so it names what is
         staged rather than what a status saw a moment earlier.
+
+        An embedded repository with no commit cannot be indexed, and a plain
+        ``git add`` then fails the whole root -- nothing else in it is staged,
+        and the cycle reports the hub as unreachable. ``--ignore-errors``
+        stages the rest and exits 1. A path the status listed that the index
+        does not hold afterwards is refused. Any other exit status still
+        raises: a locked index is not a file the user has to fix.
         """
         repository = self._repo()
-        status = repository.git.status(
-            "--porcelain",
-            "-z",
-            "--untracked-files=all",
-            "--no-renames",
-            "--",
-            *SHARED_ROOTS,
+        listed = _status_paths(
+            repository.git.status(
+                "--porcelain",
+                "-z",
+                "--untracked-files=all",
+                "--no-renames",
+                "--",
+                *SHARED_ROOTS,
+            )
         )
         # A root nothing lists may not exist, and Git refuses to add it then.
-        roots = sorted(
-            {entry[_STATUS_PREFIX:].split("/", 1)[0] for entry in status.split("\0")}
-            & set(SHARED_ROOTS)
-        )
+        roots = sorted({path.split("/", 1)[0] for path in listed} & set(SHARED_ROOTS))
         if not roots:
-            return []
-        repository.git.add("--all", "--", *roots)
-        staged = repository.git.diff(
-            "--cached", "--name-only", "-z", "--no-renames", "--", *SHARED_ROOTS
+            return StagedChanges(paths=(), refused=())
+        status_code, _, stderr = repository.git.add(
+            "--all",
+            "--ignore-errors",
+            "--",
+            *roots,
+            with_extended_output=True,
+            with_exceptions=False,
         )
-        return [path for path in staged.split("\0") if path]
+        staged = tuple(
+            path
+            for path in repository.git.diff(
+                "--cached", "--name-only", "-z", "--no-renames", "--", *SHARED_ROOTS
+            ).split("\0")
+            if path
+        )
+        staged_names = set(staged)
+        refused = tuple(
+            sorted(
+                (
+                    RefusedChange(path=path, reason=_refusal_reason(self.path / path))
+                    for path in listed
+                    if path not in staged_names
+                ),
+                key=lambda item: item.path,
+            )
+        )
+        if _add_failed(status_code, refused):
+            raise GitCommandError(
+                ["git", "add", "--all", "--ignore-errors", "--", *roots],
+                status_code,
+                stderr,
+            )
+        return StagedChanges(paths=staged, refused=refused)
 
     def read_entries(
         self, revision: str, paths: Sequence[str]
@@ -710,6 +779,53 @@ def _remove_read_only(
 def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
     for start in range(0, len(paths), _PATH_BATCH):
         yield paths[start : start + _PATH_BATCH]
+
+
+def _status_paths(status: str) -> list[str]:
+    """Return the paths a ``git status -z`` listed, without trailing slashes.
+
+    A directory is reported as ``name/``. Stripping that slash is what makes
+    it the same name ``git add`` uses for the gitlink once the directory has
+    a commit. Records are NUL-separated and may be empty.
+    """
+    paths: list[str] = []
+    seen: set[str] = set()
+    for entry in status.split("\0"):
+        if len(entry) <= _STATUS_PREFIX:
+            continue
+        path = entry[_STATUS_PREFIX:].rstrip("/")
+        if path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+def _refusal_reason(path: Path) -> str:
+    """Why ``path`` stayed out of the index, phrased to follow the path.
+
+    Git's own message quotes the path, and a quote in the path breaks that
+    quoting, so the reason is read from the directory itself. No commit
+    checked out is exactly when ``git add`` refuses an embedded repository.
+    """
+    if (path / ".git").exists() and not _has_commit(path):
+        return "is a Git repository with no commit"
+    return "could not be staged"
+
+
+def _has_commit(path: Path) -> bool:
+    """True when ``path`` is a repository whose HEAD names a commit."""
+    try:
+        Git(path).rev_parse("--verify", "--quiet", "HEAD")
+    except GitCommandError:
+        return False
+    return True
+
+
+def _add_failed(status_code: int, refused: Sequence[RefusedChange]) -> bool:
+    """True when ``git add`` failed for a reason other than a refused path."""
+    if status_code == 0:
+        return False
+    return status_code != _ADD_REFUSED_A_PATH or not refused
 
 
 def _configure_git(repository: Repo) -> None:

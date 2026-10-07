@@ -792,7 +792,11 @@ pass, a link or a gitlink does not — its content is a path or a commit, which 
 valid text — and neither does any path with an element starting with `.`, since Git reads
 some of those itself. A held change covers everything beneath it by path element: a held
 link is a directory on this device, so the hub's writes and deletions there are skipped
-rather than carried to its target, while the rest still converges. The repository's own
+rather than carried to its target, while the rest still converges. An embedded repository
+with no commit never enters the index, and adding it used to abort the rest of its shared
+root and report the hub unreachable. The add ignores that per-path error. A path the status
+listed that the index does not hold is held back with the others, and once that repository
+has a commit Git stages a gitlink, which the mode check holds. The repository's own
 `info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
 a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
 differ from the blob that was checked.

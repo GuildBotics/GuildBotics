@@ -142,7 +142,8 @@ def test_an_in_progress_atomic_write_is_not_part_of_the_shared_set(
 
     changed = first.repository.stage_changes()
 
-    assert changed == ["state/thing.json"]
+    assert changed.paths == ("state/thing.json",)
+    assert changed.refused == ()
 
 
 def test_nothing_to_commit_leaves_the_head_alone(first: Device) -> None:
@@ -218,6 +219,89 @@ def test_a_link_is_held_back_and_left_on_disk(
     assert "config/commands" not in _committed_paths(first.repository)
     assert "config/team/project.yml" in _committed_paths(first.repository)
     assert (first.shared / "config/commands").is_symlink()
+
+
+def _init_repository(path: Path) -> Repo:
+    path.mkdir()
+    (path / "note.md").write_text("note\n")
+    return Repo.init(path)
+
+
+def test_a_repository_with_no_commit_is_held_and_its_root_is_still_sent(
+    first: Device,
+) -> None:
+    """``git init`` with no commit makes ``git add`` refuse that directory.
+
+    The refusal used to abort the add, so nothing else in the root was sent
+    and the cycle was reported as a hub this device could not reach. The
+    directory waits with a reason, and the file beside it is committed.
+    """
+    _init_repository(first.shared / "config/commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit")
+    ]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert "config/commands" not in _committed_paths(first.repository)
+    assert "config/commands/note.md" not in _committed_paths(first.repository)
+    assert (first.shared / "config/commands/note.md").read_text() == "note\n"
+    assert first.repository._repo().git.diff("--cached", "--name-only") == ""
+
+
+def test_every_repository_with_no_commit_is_held(first: Device) -> None:
+    """One refused directory is not the only one, and another root still goes."""
+    _init_repository(first.shared / "config/commands")
+    _init_repository(first.shared / "config/other")
+    first.write("state/kept.json", "{}\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit"),
+        ("config/other", "is a Git repository with no commit"),
+    ]
+    assert "state/kept.json" in _committed_paths(first.repository)
+
+
+def test_a_repository_whose_name_is_a_pattern_is_held_alone(first: Device) -> None:
+    """``a[b]`` is a name, not a pattern that also matches ``ab``."""
+    _init_repository(first.shared / "config/a[b]")
+    first.write("config/ab.yml", "kept: true\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [item.path for item in outcome.unsendable] == ["config/a[b]"]
+    assert "config/ab.yml" in _committed_paths(first.repository)
+
+
+def test_a_repository_path_with_a_space_is_held_under_that_name(first: Device) -> None:
+    _init_repository(first.shared / "config/my commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [item.path for item in outcome.unsendable] == ["config/my commands"]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+
+
+def test_a_commit_in_a_nested_repository_holds_it_as_a_gitlink(first: Device) -> None:
+    """The same directory, once it has a commit, is the gitlink #723 holds."""
+    nested = _init_repository(first.shared / "config/commands")
+    commit_shared_changes(first.repository, device_id="device-mac")
+    nested.index.add(["note.md"])
+    nested.index.commit("commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is not a regular file (Git mode 160000)")
+    ]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert "config/commands" not in _committed_paths(first.repository)
 
 
 def test_an_embedded_repository_is_held_back_under_its_own_name(

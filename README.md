@@ -857,6 +857,11 @@ becomes a change that cannot be sent until it is a regular file again. Meanwhile
 from the hub are not applied to that path or anything beneath it, so synchronization never
 rewrites or deletes the files a link points at. Every other file keeps synchronizing.
 
+A repository created with `git init` that has no commit yet is also a change that cannot
+be sent. Synchronization does not stop, and every other file is still sent. After its first
+commit it is held back like any other nested repository. The files inside it are not shared
+in either case.
+
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set
