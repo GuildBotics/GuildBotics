@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from git import GitCommandError, Repo
 
+import guildbotics.sync.local_repository as local_repository
 from guildbotics.sync.local_repository import (
     REJECTED_REF_PREFIX,
     HubCommandError,
@@ -44,6 +45,9 @@ from guildbotics.utils.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 CONFIG = "config/team/project.yml"
+#: ``synchronize`` lists status once for the clean tree, then once inside
+#: converge before it restores the hub. The race belongs on that second read.
+CONVERGE_STATUS_CALL = 2
 #: A shared record whose syntax the boundary still refuses to send.
 BROKEN = "state/chat_state/slack/aiko/channels/C1.json"
 
@@ -99,6 +103,52 @@ def test_saved_state_reaches_the_hub(first: Device, hub: Path) -> None:
     assert status.state == "idle"
     assert status.ahead_count == 0
     assert status.last_success_at is not None
+
+
+def test_a_file_put_back_during_convergence_does_not_overwrite_the_hub(
+    first: Device, second: Device, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient edit during converge is not a path Git refused to stage.
+
+    ``second`` still has ``en`` when ``first`` has published ``ja``. The status
+    inside converge sees ``fr`` and the editor puts ``en`` back before add, so
+    add exits 0. Holding ``en`` used to skip restoring ``ja``. The commit after
+    that restore then sent ``en`` to the hub, with no rejection, and ``ja``
+    was gone on every device.
+    """
+    first.write(CONFIG, "language: en\n")
+    first.manager.synchronize()
+    second.manager.synchronize()
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+
+    path = second.shared / CONFIG
+    original = local_repository._changed_paths
+    calls = 0
+    seen_during_the_race: list[bool] = []
+
+    def wrapped(repository: Repo) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls != CONVERGE_STATUS_CALL:
+            return original(repository)
+        path.write_bytes(b"language: fr\n")
+        try:
+            listed = original(repository)
+        finally:
+            path.write_bytes(b"language: en\n")
+        seen_during_the_race.append(CONFIG in listed)
+        return listed
+
+    monkeypatch.setattr(local_repository, "_changed_paths", wrapped)
+    second.manager.synchronize()
+    first.manager.synchronize()
+
+    assert seen_during_the_race == [True]
+    assert second.read(CONFIG) == "language: ja\n"
+    assert first.read(CONFIG) == "language: ja\n"
+    assert _hub_file(hub, CONFIG) == "language: ja\n"
+    assert second.rejections == []
 
 
 def test_another_device_receives_what_the_hub_holds(

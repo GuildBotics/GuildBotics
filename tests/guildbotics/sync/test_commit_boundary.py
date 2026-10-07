@@ -14,11 +14,14 @@ into the history.
 
 from __future__ import annotations
 
+import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from git import Repo
 
+import guildbotics.sync.local_repository as local_repository
 from guildbotics.sync.commits import (
     UnsendableChange,
     commit_shared_changes,
@@ -142,7 +145,8 @@ def test_an_in_progress_atomic_write_is_not_part_of_the_shared_set(
 
     changed = first.repository.stage_changes()
 
-    assert changed == ["state/thing.json"]
+    assert changed.paths == ("state/thing.json",)
+    assert changed.refused == ()
 
 
 def test_nothing_to_commit_leaves_the_head_alone(first: Device) -> None:
@@ -218,6 +222,330 @@ def test_a_link_is_held_back_and_left_on_disk(
     assert "config/commands" not in _committed_paths(first.repository)
     assert "config/team/project.yml" in _committed_paths(first.repository)
     assert (first.shared / "config/commands").is_symlink()
+
+
+def _init_repository(path: Path) -> Repo:
+    path.mkdir()
+    (path / "note.md").write_text("note\n")
+    return Repo.init(path)
+
+
+def test_a_repository_with_no_commit_is_held_and_its_root_is_still_sent(
+    first: Device,
+) -> None:
+    """``git init`` with no commit makes ``git add`` refuse that directory.
+
+    The refusal used to abort the add, so nothing else in the root was sent
+    and the cycle was reported as a hub this device could not reach. The
+    directory waits with a reason, and the file beside it is committed.
+    """
+    _init_repository(first.shared / "config/commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit")
+    ]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert "config/commands" not in _committed_paths(first.repository)
+    assert "config/commands/note.md" not in _committed_paths(first.repository)
+    assert (first.shared / "config/commands/note.md").read_text() == "note\n"
+    assert first.repository._repo().git.diff("--cached", "--name-only") == ""
+
+
+def test_every_repository_with_no_commit_is_held(first: Device) -> None:
+    """One refused directory is not the only one, and another root still goes."""
+    _init_repository(first.shared / "config/commands")
+    _init_repository(first.shared / "config/other")
+    first.write("state/kept.json", "{}\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit"),
+        ("config/other", "is a Git repository with no commit"),
+    ]
+    assert "state/kept.json" in _committed_paths(first.repository)
+
+
+def test_a_repository_whose_name_is_a_pattern_is_held_alone(first: Device) -> None:
+    """``a[b]`` is a name, not a pattern that also matches ``ab``."""
+    _init_repository(first.shared / "config/a[b]")
+    first.write("config/ab.yml", "kept: true\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [item.path for item in outcome.unsendable] == ["config/a[b]"]
+    assert "config/ab.yml" in _committed_paths(first.repository)
+
+
+def test_a_repository_path_with_a_space_is_held_under_that_name(first: Device) -> None:
+    _init_repository(first.shared / "config/my commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [item.path for item in outcome.unsendable] == ["config/my commands"]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+
+
+def test_a_commit_in_a_nested_repository_holds_it_as_a_gitlink(first: Device) -> None:
+    """The same directory, once it has a commit, is the gitlink #723 holds."""
+    nested = _init_repository(first.shared / "config/commands")
+    commit_shared_changes(first.repository, device_id="device-mac")
+    nested.index.add(["note.md"])
+    nested.index.commit("commands")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is not a regular file (Git mode 160000)")
+    ]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert "config/commands" not in _committed_paths(first.repository)
+
+
+def _race_the_status_before_add(
+    monkeypatch: pytest.MonkeyPatch,
+    change: Callable[[], None],
+    restore: Callable[[], None],
+) -> None:
+    """Change the tree for the first status of this pass, and put it back before add.
+
+    ``stage_changes`` reads status, then adds. A path that exists only for that
+    read used to be reported as refused. ``change`` and ``restore`` are called
+    with no arguments.
+    """
+    original = local_repository._changed_paths
+    calls = 0
+
+    def wrapped(repository: Repo) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls != 1:
+            return original(repository)
+        change()
+        try:
+            return original(repository)
+        finally:
+            restore()
+
+    monkeypatch.setattr(local_repository, "_changed_paths", wrapped)
+
+
+def test_a_file_that_vanishes_between_status_and_add_is_not_refused(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An editor scratch file can disappear after status and before add.
+
+    It was never skipped by ``git add``. Reporting it as refused holds the
+    path, and a later restore then leaves the previous bytes in place.
+    """
+    scratch = first.shared / "state/scratch.json"
+    first.write("state/kept.json", "{}\n")
+
+    def appear() -> None:
+        scratch.write_text("{}\n")
+
+    def disappear() -> None:
+        scratch.unlink()
+
+    _race_the_status_before_add(monkeypatch, appear, disappear)
+    changed = first.repository.stage_changes()
+
+    assert changed.refused == ()
+    assert changed.paths == ("state/kept.json",)
+
+
+def test_a_tracked_file_put_back_before_add_is_not_refused(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tracked file edited and then restored to HEAD is not a skipped path.
+
+    Add exits 0: the file matches HEAD again, so there is nothing to stage
+    and nothing to hold.
+    """
+    first.write("config/team/project.yml", "language: en\n")
+    commit_shared_changes(first.repository, device_id="device-mac")
+    path = first.shared / "config/team/project.yml"
+
+    def edit() -> None:
+        path.write_bytes(b"language: fr\n")
+
+    def restore() -> None:
+        path.write_bytes(b"language: en\n")
+
+    _race_the_status_before_add(monkeypatch, edit, restore)
+    changed = first.repository.stage_changes()
+
+    assert changed.refused == ()
+    assert changed.paths == ()
+
+
+def test_a_file_that_vanishes_before_add_is_not_unsendable(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit boundary must not hold a path add never refused."""
+    scratch = first.shared / "config/scratch.yml"
+    first.write("state/kept.json", "{}\n")
+
+    def appear() -> None:
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.write_text("temporary: true\n")
+
+    def disappear() -> None:
+        scratch.unlink()
+
+    _race_the_status_before_add(monkeypatch, appear, disappear)
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert outcome.unsendable == ()
+    assert "state/kept.json" in _committed_paths(first.repository)
+    assert not scratch.exists()
+
+
+def test_a_tracked_file_put_back_before_add_is_not_unsendable(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restoring HEAD content before add leaves that content, and no hold."""
+    first.write("config/team/project.yml", "language: en\n")
+    commit_shared_changes(first.repository, device_id="device-mac")
+    path = first.shared / "config/team/project.yml"
+    first.write("state/kept.json", "{}\n")
+
+    def edit() -> None:
+        path.write_bytes(b"language: fr\n")
+
+    def restore() -> None:
+        path.write_bytes(b"language: en\n")
+
+    _race_the_status_before_add(monkeypatch, edit, restore)
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert outcome.unsendable == ()
+    assert _committed(first, "config/team/project.yml").data == b"language: en\n"
+    assert "state/kept.json" in _committed_paths(first.repository)
+
+
+def test_a_skipped_repository_is_still_held_when_another_path_vanishes(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 1 holds the path add skipped, not the one status alone saw."""
+    _init_repository(first.shared / "config/commands")
+    scratch = first.shared / "state/scratch.json"
+    first.write("config/team/project.yml", "language: ja\n")
+
+    def appear() -> None:
+        scratch.write_text("{}\n")
+
+    def disappear() -> None:
+        scratch.unlink()
+
+    _race_the_status_before_add(monkeypatch, appear, disappear)
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit")
+    ]
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert "state/scratch.json" not in _committed_paths(first.repository)
+
+
+def _on_the_follow_up_status(
+    monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]
+) -> None:
+    """Run ``change`` just before the status that follows a failing add."""
+    original = local_repository._changed_paths
+    calls = 0
+    follow_up = 2
+
+    def wrapped(repository: Repo) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls == follow_up:
+            change()
+        return original(repository)
+
+    monkeypatch.setattr(local_repository, "_changed_paths", wrapped)
+
+
+def test_a_skipped_repository_removed_before_the_follow_up_does_not_abort(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skipped directory can disappear after add and before the next status.
+
+    Nothing remains to hold. That is not a failed ``git add``: the file beside
+    the directory is still committed, and the cycle is not reported as a hub
+    this device could not reach.
+    """
+    commands = first.shared / "config/commands"
+    _init_repository(commands)
+    first.write("config/team/project.yml", "language: ja\n")
+
+    def remove() -> None:
+        shutil.rmtree(commands)
+
+    _on_the_follow_up_status(monkeypatch, remove)
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert outcome.unsendable == ()
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert not commands.exists()
+
+
+def test_losing_git_metadata_before_the_follow_up_holds_the_directory(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without ``.git``, status lists the files inside the directory.
+
+    Holding those files would not cover the rest of the directory, and a
+    later restore would write the hub's files into it. The hold keeps the
+    directory the earlier status named.
+    """
+    commands = first.shared / "config/commands"
+    _init_repository(commands)
+    (commands / "other.md").write_text("other\n")
+    first.write("config/team/project.yml", "language: ja\n")
+
+    def drop_metadata() -> None:
+        shutil.rmtree(commands / ".git")
+
+    _on_the_follow_up_status(monkeypatch, drop_metadata)
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [item.path for item in outcome.unsendable] == ["config/commands"]
+    assert held_covers(outcome.unsendable, "config/commands/extra.md")
+    assert "config/team/project.yml" in _committed_paths(first.repository)
+    assert (commands / "note.md").is_file()
+
+
+def test_a_dirty_gitlink_already_indexed_is_not_refused(
+    first: Device,
+) -> None:
+    """Status keeps listing a gitlink whose commit did not change.
+
+    Add exits 1 because another repository has no commit. The gitlink is
+    already in the index, so it is not a path add skipped. Refusing it would
+    hold the path and skip restoring whatever the hub has there.
+    """
+    nested = _init_repository(first.shared / "config/plugin")
+    nested.index.add(["note.md"])
+    nested.index.commit("plugin")
+    first.write("state/kept.json", "{}\n")
+    repository = first.repository._repo()
+    repository.git.add("--", "config/plugin", "state/kept.json")
+    repository.git.commit("--no-verify", "-m", "history that already has the gitlink")
+    (first.shared / "config/plugin/note.md").write_text("dirty\n")
+    _init_repository(first.shared / "config/commands")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", "is a Git repository with no commit")
+    ]
+    assert "config/plugin" not in [item.path for item in outcome.unsendable]
 
 
 def test_an_embedded_repository_is_held_back_under_its_own_name(
