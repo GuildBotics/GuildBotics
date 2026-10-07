@@ -199,6 +199,63 @@ def test_directories_without_member_config_are_not_runtime_members(client, confi
     assert listing.json()["members"] == []
 
 
+@pytest.mark.parametrize("action", ["rename", "delete"])
+def test_colliding_members_are_repairable_without_changing_shared_secrets(
+    client, config_dir, monkeypatch, action
+):
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    for name in ("alice-bak", "alice_bak"):
+        directory = config_dir / "team/members" / name
+        directory.mkdir(parents=True)
+        (directory / "person.yml").write_text(f"person_id: {name}\nname: Test\n")
+    store = KeyringSecretStore(config_dir)
+    store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-shared-token")
+    before = store.location.read_bytes()
+    listing = client.get("/team", headers=AUTH_HEADERS)
+    assert listing.status_code == HTTP_OK
+    for name in ("alice-bak", "alice_bak"):
+        assert (
+            str(config_dir / "team/members" / name / "person.yml")
+            in listing.json()["problem"]
+        )
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("repair accessed ambiguous secrets")
+
+    with monkeypatch.context() as guarded:
+        for operation in ("get", "set", "rename", "delete", "keys"):
+            guarded.setattr(KeyringSecretStore, operation, unexpected)
+        read = client.get("/config/members/alice-bak", headers=AUTH_HEADERS)
+        assert read.status_code == HTTP_OK
+        assert read.json()["has_slack_bot_token"] is False
+        if action == "rename":
+            response = client.put(
+                "/config/members/alice-bak",
+                headers=AUTH_HEADERS,
+                json=_member_payload(
+                    config_dir,
+                    read.json()["revisions"],
+                    original_person_id="alice-bak",
+                    person_id="repaired",
+                ),
+            )
+        else:
+            response = client.request(
+                "DELETE",
+                "/config/members/alice-bak",
+                headers=AUTH_HEADERS,
+                json={
+                    "config_dir": str(config_dir),
+                    "expected_revisions": read.json()["revisions"],
+                },
+            )
+        assert response.status_code == HTTP_OK
+    assert store.location.read_bytes() == before
+    assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-shared-token"
+    assert client.get("/team", headers=AUTH_HEADERS).json()["problem"] == ""
+
+
 @pytest.mark.parametrize("name", ["Alice", "alice.bak", "alice backup", "あいこ"])
 def test_repair_read_requires_an_actual_stored_member(client, config_dir, name):
     directory = config_dir / "team/members" / name

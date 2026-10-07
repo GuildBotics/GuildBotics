@@ -16,6 +16,46 @@ from guildbotics.utils.secret_store import KeyringSecretStore
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
 
+@pytest.mark.parametrize("requested", ["alice-bak", "alice"])
+def test_slack_avatar_never_reads_or_uses_colliding_member_token(
+    client, test_workspace, monkeypatch, requested
+):
+    config = test_workspace / ".guildbotics/config"
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(config))
+    for name in ("alice", "alice-bak", "alice_bak"):
+        directory = config / "team/members" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "person.yml").write_text(
+            f"person_id: {name}\nname: Test\nperson_type: agent\naccount_info:\n  slack_user_id: U12345\n"
+        )
+    store = KeyringSecretStore(config)
+    store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-keychain-token")
+    # Cover both sources, including fallback for a unique requested member.
+    monkeypatch.setenv("ALICE_BAK_SLACK_BOT_TOKEN", "fake-env-token")
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ALICE_SLACK_BOT_TOKEN", raising=False)
+    original = KeyringSecretStore.get
+
+    def guarded_get(self, key):
+        assert key != "ALICE_BAK_SLACK_BOT_TOKEN"
+        return original(self, key)
+
+    monkeypatch.setattr(KeyringSecretStore, "get", guarded_get)
+    with patch(
+        "guildbotics.app_api.avatar.get_slack_avatar_url", new_callable=AsyncMock
+    ) as lookup:
+        response = client.post(
+            f"/config/members/{requested}/avatar/slack", headers=AUTH_HEADERS
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == (
+            "member_config_invalid"
+            if requested == "alice-bak"
+            else "slack_token_missing"
+        )
+        lookup.assert_not_called()
+
+
 class RuntimeStub:
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(

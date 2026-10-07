@@ -5,3 +5,4 @@ en:
   invalid_fields: "Invalid member fields: %{fields}. Correct the configuration in setup."
   invalid_yaml: "The member file is not valid YAML. Correct the configuration in setup."
   invalid: "Cannot load member configuration %{path}: %{reason}"
+  prefix_conflict: "The secret prefix conflicts with %{members}. Rename or delete one member in setup; shared secrets will be preserved."
