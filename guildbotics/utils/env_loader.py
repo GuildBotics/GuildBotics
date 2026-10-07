@@ -10,6 +10,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.log_utils import get_logger
+from guildbotics.utils.person_id import ambiguous_person_env_keys
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     SecretStore,
@@ -51,10 +52,12 @@ def read_workspace_secrets(
     of failing: real environment variables always keep working without one.
     """
     try:
-        store = KeyringSecretStore(get_workspace_config_dir())
+        config_dir = get_workspace_config_dir()
+        store = KeyringSecretStore(config_dir)
     except WorkspaceNotConfiguredError:
         return {}
     values: dict[str, str] = {}
+    skip = skip | ambiguous_person_env_keys(config_dir / "team/members")
     try:
         stored_keys = store.keys()
         # Register provenance before the skip decision and before any fetch:

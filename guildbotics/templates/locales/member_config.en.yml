@@ -5,3 +5,5 @@ en:
   invalid_fields: "Invalid member fields: %{fields}. Correct the configuration in setup."
   invalid_yaml: "The member file is not valid YAML. Correct the configuration in setup."
   invalid: "Cannot load member configuration %{path}: %{reason}"
+  prefix_conflict: "The secret prefix conflicts with %{members}. Rename or delete colliding members in setup; shared secrets will remain with the remaining members. After repair, check their credentials in setup."
+  target_prefix_conflict: "Member ID \"%{person_id}\" cannot be used because it shares credential storage with \"%{members}\" (\"-\" and \"_\" and letter case are treated the same). Choose a different ID."
