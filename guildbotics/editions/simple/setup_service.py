@@ -26,6 +26,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
     save_yaml_file,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import (
     is_valid_person_id,
     iter_member_config_directories,
@@ -34,7 +35,6 @@ from guildbotics.utils.person_id import (
     person_env_prefix,
     stored_person_config_directory,
     validate_member_directory_name,
-    validate_person_env_prefix,
     validate_person_id,
 )
 from guildbotics.utils.secret_store import (
@@ -74,6 +74,21 @@ class SetupServiceError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _validate_person_env_target(
+    members: Path, person_id: str, *, exclude: str | None = None
+) -> None:
+    """Reject a proposed ID before touching credentials or member files."""
+    if conflicts := person_env_conflicts(members, person_id, exclude=exclude):
+        raise SetupServiceError(
+            "person_env_prefix_conflict",
+            t(
+                "member_config.target_prefix_conflict",
+                person_id=person_id,
+                members=", ".join(path.name for path in conflicts),
+            ),
+        )
 
 
 class GitHubUserReference(BaseModel):
@@ -1049,7 +1064,9 @@ class SimplePersonSetupService:
         """
         # SecretStore first, as in update_person: a store failure leaves no
         # member config claiming credentials it does not have.
-        validate_person_env_prefix(config.config_dir / "team/members", config.person_id)
+        _validate_person_env_target(
+            config.config_dir / "team/members", config.person_id
+        )
         store = resolve_secret_store(config.config_dir)
         secrets = self.build_person_secrets(config, github_private_key)
         for key, value in secrets.items():
@@ -1087,7 +1104,7 @@ class SimplePersonSetupService:
 
         old_person_dir = original_person_file.parent
         new_person_dir = _person_config_dir(config.config_dir, config.person_id)
-        validate_person_env_prefix(
+        _validate_person_env_target(
             config.config_dir / "team/members",
             config.person_id,
             exclude=config.original_person_id,

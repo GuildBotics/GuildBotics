@@ -9,6 +9,7 @@ from guildbotics.editions.simple.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
     SimplePersonSetupService,
+    SetupServiceError,
 )
 from guildbotics.entities.team import Person
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
@@ -121,7 +122,7 @@ def test_save_refuses_other_namespace_owner_before_secrets(
     previous = i18n.get("locale")
     i18n.set("locale", language)
     try:
-        with pytest.raises(MemberConfigError) as error:
+        with pytest.raises(SetupServiceError) as error:
             data = member_input(
                 config, person_id=target, slack_bot_token="fake-new-token"
             )
@@ -131,11 +132,10 @@ def test_save_refuses_other_namespace_owner_before_secrets(
                 service.update_person(
                     PersonUpdateInput(**data.model_dump(), original_person_id="bob")
                 )
-        assert str(other) in str(error.value)
+        assert error.value.code == "person_env_prefix_conflict"
+        assert target in str(error.value) and existing in str(error.value)
         assert str(error.value) == t(
-            "member_config.invalid",
-            path=config / "team/members" / target / "person.yml",
-            reason=t("member_config.prefix_conflict", members=str(other)),
+            "member_config.target_prefix_conflict", person_id=target, members=existing
         )
     finally:
         i18n.set("locale", previous)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import i18n
 import pytest
 from fastapi.testclient import TestClient
 from yaml import safe_load
@@ -15,6 +16,7 @@ from yaml import safe_load
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.utils.i18n_tool import t
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -254,6 +256,49 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
     assert store.location.read_bytes() == before
     assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-shared-token"
     assert client.get("/team", headers=AUTH_HEADERS).json()["problem"] == ""
+
+
+@pytest.mark.parametrize("action", ["create", "rename"])
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_candidate_namespace_conflict_offers_a_different_id(
+    client, config_dir, action, language
+):
+    for name in ("alice-bak", "bob"):
+        directory = config_dir / "team/members" / name
+        directory.mkdir(parents=True)
+        (directory / "person.yml").write_text(f"person_id: {name}\nname: Test\n")
+    before = {
+        path: path.read_bytes()
+        for path in (config_dir / "team/members").rglob("*")
+        if path.is_file()
+    }
+    payload = _member_payload(config_dir, {}, person_id="alice_bak")
+    previous = i18n.get("locale")
+    i18n.set("locale", language)
+    try:
+        if action == "create":
+            response = client.post(
+                "/config/members", headers=AUTH_HEADERS, json=payload
+            )
+        else:
+            payload["original_person_id"] = "bob"
+            response = client.put(
+                "/config/members/bob", headers=AUTH_HEADERS, json=payload
+            )
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert response.json()["code"] == "person_env_prefix_conflict"
+        assert response.json()["message"] == t(
+            "member_config.target_prefix_conflict",
+            person_id="alice_bak",
+            members="alice-bak",
+        )
+    finally:
+        i18n.set("locale", previous)
+    assert {
+        path: path.read_bytes()
+        for path in (config_dir / "team/members").rglob("*")
+        if path.is_file()
+    } == before
 
 
 @pytest.mark.parametrize("name", ["Alice", "alice.bak", "alice backup", "あいこ"])
