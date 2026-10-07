@@ -862,6 +862,12 @@ be sent. Synchronization does not stop, and every other file is still sent. Afte
 commit it is held back like any other nested repository. The files inside it are not shared
 in either case.
 
+A file this machine cannot read, or a directory whose contents it cannot list, is not held
+back. Synchronization stops with **Hub sync failed**, and nothing else is sent until it is
+fixed; **Error details** names the path. A directory that cannot be listed is never sent as
+the deletion of the files inside it. A file another application has open exclusively stops
+synchronization the same way until it is closed.
+
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set

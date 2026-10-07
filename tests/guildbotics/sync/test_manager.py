@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -441,6 +442,53 @@ def test_a_repaired_file_is_sent_by_the_next_scan(first: Device, hub: Path) -> N
 
     assert status.invalid_paths == ()
     assert _hub_file(hub, BROKEN) is not None
+
+
+def test_an_unreadable_file_fails_the_cycle_and_is_named(
+    first: Device, hub: Path, posix_permissions: None
+) -> None:
+    """A file Git cannot read is not held: nothing of the cycle is sent."""
+    first.write(CONFIG, "language: ja\n")
+    first.write("config/locked.md", "locked\n")
+    locked = first.shared / "config/locked.md"
+    locked.chmod(0)
+    try:
+        status = first.manager.synchronize()
+    finally:
+        locked.chmod(0o644)
+
+    assert status.state == "unreachable"
+    assert "config/locked.md" in (status.last_error_detail or "")
+    assert _hub_file(hub, CONFIG) is None
+
+
+def test_a_directory_that_cannot_be_listed_fails_the_cycle_and_is_named(
+    first: Device, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git only warns about such a directory, and stages what it tracks as deleted.
+
+    The deletion would reach the hub and remove those files on every device.
+    The listing is refused by replacing it, so no file system permission is
+    needed to reach this.
+    """
+    first.write("config/hidden/kept.md", "kept\n")
+    first.manager.synchronize()
+    first.write(CONFIG, "language: ja\n")
+    unlistable = first.shared / "config/hidden"
+    listing = os.scandir
+
+    def scandir(path: str) -> Any:
+        if Path(path) == unlistable:
+            raise PermissionError(13, "Permission denied", path)
+        return listing(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    status = first.manager.synchronize()
+
+    assert status.state == "unreachable"
+    assert str(unlistable) in (status.last_error_detail or "")
+    assert _hub_file(hub, "config/hidden/kept.md") == "kept\n"
+    assert _hub_file(hub, CONFIG) is None
 
 
 # -- Only regular files travel ------------------------------------------------

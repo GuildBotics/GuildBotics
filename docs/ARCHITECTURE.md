@@ -792,18 +792,18 @@ pass, a link or a gitlink does not — its content is a path or a commit, which 
 valid text — and neither does any path with an element starting with `.`, since Git reads
 some of those itself. A held change covers everything beneath it by path element: a held
 link is a directory on this device, so the hub's writes and deletions there are skipped
-rather than carried to its target, while the rest still converges. An embedded repository
-with no commit never enters the index, and adding it used to abort the rest of its shared
-root and report the hub unreachable. The add ignores that per-path error and exits 1. Only a
-path that is still changed afterwards, and that this add did not stage, is held back. A path
-that disappeared or returned to HEAD between the status and the add is not: holding it would
-skip restoring the hub's copy, and the next commit would send the old bytes. A skipped
-directory that is already gone is not held either, and does not fail the cycle. If the
-follow-up status lists the files inside a directory the earlier status named, the hold is
-that directory, so it still covers everything beneath it. A gitlink whose commit is already
-in the index is not held for this reason either — status keeps listing it while the nested
-worktree is dirty, and add did not skip it. Exit 0 skipped nothing. Once that repository
-has a commit Git stages a gitlink, which the mode check holds. The repository's own
+rather than carried to its target, while the rest still converges. What `git add` cannot
+handle is found before it runs, never guessed from what it left behind. An embedded
+repository with no commit cannot be indexed and would fail its whole shared root; status
+names an embedded repository, and only that, as a directory (`config/commands/`), so those
+with no commit are excluded from the add (`:(exclude,literal)`, every path still a literal
+name) and held back under that name. Once that repository has a commit Git stages a
+gitlink, which the mode check holds. Any other failure of the add — an unreadable file, a
+file another process holds open exclusively, a locked index — fails the cycle instead of
+being held. Git only warns about a directory it cannot list and stages the tracked files
+inside it as deleted, so the shared roots are walked first and such a directory fails the
+cycle, naming its path. `core.longpaths` is set so that Git for Windows does not silently
+leave out a path longer than 260 characters. The repository's own
 `info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
 a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
 differ from the blob that was checked.
