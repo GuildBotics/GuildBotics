@@ -33,6 +33,67 @@ def validate_optional_person_id(value: str) -> str:
 
 OptionalPersonId = Annotated[str, AfterValidator(validate_optional_person_id)]
 
+PERSON_SECRET_ENV_SUFFIXES = (
+    "GITHUB_ACCESS_TOKEN",
+    "GITHUB_PRIVATE_KEY",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+)
+
+
+def person_env_prefix(person_id: str) -> str:
+    """Return the shared secret and environment namespace for a stored ID."""
+    return person_id.replace("-", "_").upper()
+
+
+def member_env_prefix_groups(members: Path) -> dict[str, list[Path]]:
+    """Group all stored members, including repairable configs, by namespace."""
+    groups: dict[str, list[Path]] = {}
+    for directory in iter_member_config_directories(members):
+        groups.setdefault(person_env_prefix(directory.name), []).append(directory)
+    return groups
+
+
+def person_env_conflicts(
+    members: Path, person_id: str, *, exclude: str | None = None
+) -> list[Path]:
+    """Find other owners of a namespace, without reading member data or secrets."""
+    return [
+        directory
+        for directory in member_env_prefix_groups(members).get(
+            person_env_prefix(person_id), []
+        )
+        if directory.name not in {person_id, exclude}
+    ]
+
+
+def validate_person_env_prefix(
+    members: Path, person_id: str, *, exclude: str | None = None
+) -> None:
+    """Refuse to use an ambiguous namespace and identify its config files."""
+    if conflicts := person_env_conflicts(members, person_id, exclude=exclude):
+        from guildbotics.utils.i18n_tool import t
+
+        raise MemberConfigError(
+            members / person_id / "person.yml",
+            ValueError(
+                t(
+                    "member_config.prefix_conflict",
+                    members=", ".join(str(path / "person.yml") for path in conflicts),
+                )
+            ),
+        )
+
+
+def ambiguous_person_env_keys(members: Path) -> frozenset[str]:
+    """Keys whose stored member owner cannot be identified uniquely."""
+    return frozenset(
+        f"{prefix}_{suffix}"
+        for prefix, directories in member_env_prefix_groups(members).items()
+        if len(directories) > 1
+        for suffix in PERSON_SECRET_ENV_SUFFIXES
+    )
+
 
 def validate_member_directory_name(value: str) -> str:
     """Address stored configuration for repair, without authorizing a member."""

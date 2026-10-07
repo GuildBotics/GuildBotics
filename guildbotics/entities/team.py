@@ -7,7 +7,13 @@ from langcodes import Language
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from guildbotics.entities.task import ScheduledCommand
-from guildbotics.utils.person_id import validate_person_id
+from guildbotics.utils.fileio import get_config_path
+from guildbotics.utils.person_id import (
+    PERSON_SECRET_ENV_SUFFIXES,
+    person_env_prefix,
+    validate_person_env_prefix,
+    validate_person_id,
+)
 
 KNOWN_LANGUAGE_NAMES = {
     "en": "English",
@@ -304,16 +310,11 @@ class Person(BaseModel):
     # IDs and file paths stay in plain configuration. GITHUB_PRIVATE_KEY holds
     # the App PEM content itself and is never published to the environment
     # (see ``secret_store.is_environment_secret``).
-    SECRET_ENV_SUFFIXES: ClassVar[tuple[str, ...]] = (
-        "GITHUB_ACCESS_TOKEN",
-        "GITHUB_PRIVATE_KEY",
-        "SLACK_BOT_TOKEN",
-        "SLACK_APP_TOKEN",
-    )
+    SECRET_ENV_SUFFIXES: ClassVar[tuple[str, ...]] = PERSON_SECRET_ENV_SUFFIXES
 
     def to_person_env_key(self, key) -> str:
-        sanitized_id = self.person_id.replace("-", "_")
-        return f"{sanitized_id.upper()}_{key.upper()}"
+        validate_person_env_prefix(get_config_path("team/members"), self.person_id)
+        return f"{person_env_prefix(self.person_id)}_{key.upper()}"
 
     def get_account_info(self, key: str) -> str:
         """Return a non-secret account identifier from person configuration."""

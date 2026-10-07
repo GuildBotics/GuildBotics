@@ -833,6 +833,15 @@ Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) 
 person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN` /
 `SLACK_APP_TOKEN`). Non-secret GitHub App IDs live in `person.yml` `account_info`.
 
+Member prefixes come from `utils/person_id.py` (replace `-` with `_`, then
+uppercase). Stored member directories, including invalid configs awaiting repair,
+must have distinct prefixes. Creation and rename reject an occupied prefix; team
+loading reports the colliding config files and refuses execution. Runtime key
+resolution and bulk loading do not read ambiguous member secrets. Setup keeps
+these members editable with secret-presence flags cleared: renaming or deleting
+one preserves the ambiguous old keys, and a renamed member needs its own secrets
+entered again. Slack avatar lookup also excludes ambiguous tokens from fallback.
+
 - **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
   non-secret index in `.guildbotics/config/secrets.yml` (logical key names,
   generations). `.guildbotics/local/secrets.json` holds this device's keychain
