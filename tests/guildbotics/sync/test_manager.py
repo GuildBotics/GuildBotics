@@ -132,11 +132,11 @@ def test_a_file_put_back_during_convergence_does_not_overwrite_the_hub(
         calls += 1
         if calls != CONVERGE_STATUS_CALL:
             return original(repository)
-        path.write_text("language: fr\n")
+        path.write_bytes(b"language: fr\n")
         try:
             listed = original(repository)
         finally:
-            path.write_text("language: en\n")
+            path.write_bytes(b"language: en\n")
         seen_during_the_race.append(CONFIG in listed)
         return listed
 

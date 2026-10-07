@@ -372,10 +372,10 @@ def test_a_tracked_file_put_back_before_add_is_not_refused(
     path = first.shared / "config/team/project.yml"
 
     def edit() -> None:
-        path.write_text("language: fr\n")
+        path.write_bytes(b"language: fr\n")
 
     def restore() -> None:
-        path.write_text("language: en\n")
+        path.write_bytes(b"language: en\n")
 
     _race_the_status_before_add(monkeypatch, edit, restore)
     changed = first.repository.stage_changes()
@@ -416,10 +416,10 @@ def test_a_tracked_file_put_back_before_add_is_not_unsendable(
     first.write("state/kept.json", "{}\n")
 
     def edit() -> None:
-        path.write_text("language: fr\n")
+        path.write_bytes(b"language: fr\n")
 
     def restore() -> None:
-        path.write_text("language: en\n")
+        path.write_bytes(b"language: en\n")
 
     _race_the_status_before_add(monkeypatch, edit, restore)
     outcome = commit_shared_changes(first.repository, device_id="device-mac")
