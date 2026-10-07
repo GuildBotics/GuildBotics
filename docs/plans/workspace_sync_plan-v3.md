@@ -2533,7 +2533,7 @@ command-authoring等                  .guildbotics/local/work/
 - `config/secrets.yml`はstore ID、logical key名、世代だけを持つschemaへ切り替える
 - `local/secrets.json`へdevice固有のgenerationを保存する
 - GitHub App private key等のfile inputは登録時に値を秘密ストアへ吸収し、恒久pathを保存しない
-- 生成したprivate keyのtemporary fileはOS temporary directoryに置き、登録後に削除する
+- 自動登録で生成したprivate keyはfileへ書かず、登録IDで参照してメンバー保存時に秘密ストアへ保存する
 - `secrets status`をOS秘密ストアの接続可否、lock状態、登録key数の表示へ変更する
 - `secrets set --from-file`相当の取り込みを追加する
 - dotenv serializerは明示的な`secrets export / import`交換形式だけに残す

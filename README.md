@@ -244,7 +244,7 @@ For an existing fine-grained PAT, open the token under **Fine-grained tokens** f
 
 **Using a GitHub App**:
 
-The member edit screen in the desktop app (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID, private key, and installation ID are then filled in automatically, so the manual steps below are not needed.
+The member edit screen in the desktop app (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID and installation ID are then filled in automatically, and saving the member stores the app's private key in the keychain, so the manual steps below are not needed. Save the member within 30 minutes of starting the registration; after that, the registration expires and the app has to be registered again.
 
 When creating the GitHub App manually, configure the following permissions.
 
@@ -457,7 +457,7 @@ GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text fi
 - **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. This machine's keychain namespace and the generations it holds are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
 - **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
 - **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
-- **GitHub App private key:** member save absorbs the PEM into the keychain. Generated registration files are written under the OS temporary directory and deleted after absorb. The key material is never exposed in environment variables.
+- **GitHub App private key:** member save absorbs the PEM into the keychain. A key from auto-registration is never written to a file or shown on screen: the Local API holds it in memory until the member is saved. The key material is never exposed in environment variables.
 - **Exchange format:** `guildbotics secrets export` / `import` use dotenv only as a transfer file. `secrets set --from-file` absorbs a file (for example a PEM) into the keychain.
 
 Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/cli_reference.md#guildbotics-secrets) for all subcommands and options):

@@ -1,6 +1,4 @@
 import json
-import os
-import stat
 from pathlib import Path
 
 import httpx
@@ -24,7 +22,7 @@ from guildbotics.integrations.github.app_manifest import (
 )
 
 CALLBACK_URL = "http://127.0.0.1:8765/github-app/registrations/callback"
-KEY_MODE_MASK = 0o777
+PEM = "-----BEGIN RSA PRIVATE KEY-----\nkey\n"
 
 
 @pytest.fixture
@@ -37,11 +35,21 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             app_id=1978826,
             slug="my-bot",
             html_url="https://github.com/apps/my-bot",
-            pem="-----BEGIN RSA PRIVATE KEY-----\nkey\n",
+            pem=PEM,
         )
+
+    async def fake_list(app_id: str, pem: bytes, *, transport=None):
+        assert app_id == "1978826"
+        return [
+            AppInstallation(installation_id=11, account_login="a"),
+            AppInstallation(installation_id=86632391, account_login="b"),
+        ]
 
     monkeypatch.setattr(
         github_app_setup.app_manifest, "convert_manifest_code", fake_convert
+    )
+    monkeypatch.setattr(
+        github_app_setup.app_manifest, "list_app_installations", fake_list
     )
     monkeypatch.setattr(
         SimplePersonSetupService,
@@ -59,10 +67,16 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _start(service: GitHubAppRegistrationService, tmp_path: Path):
     return service.start(
         app_name="my-bot",
+        person_id="alice",
         organization="",
         callback_url=CALLBACK_URL,
-        key_dir=tmp_path / "github-apps",
     )
+
+
+async def _install(service: GitHubAppRegistrationService, tmp_path: Path):
+    registration = _start(service, tmp_path)
+    await service.complete(registration.state, "tmp-code")
+    return await service.check_installation(registration.state)
 
 
 def test_start_rejects_invalid_app_name(tmp_path: Path) -> None:
@@ -71,9 +85,9 @@ def test_start_rejects_invalid_app_name(tmp_path: Path) -> None:
         with pytest.raises(SetupServiceError) as exc_info:
             service.start(
                 app_name=name,
+                person_id="alice",
                 organization="",
                 callback_url=CALLBACK_URL,
-                key_dir=tmp_path,
             )
         assert exc_info.value.code == "invalid_github_app_name"
 
@@ -97,9 +111,9 @@ def test_manifest_form_embeds_state_and_callback(tmp_path: Path) -> None:
     service = GitHubAppRegistrationService()
     registration = service.start(
         app_name="my-bot",
+        person_id="alice",
         organization="acme",
         callback_url=CALLBACK_URL,
-        key_dir=tmp_path,
     )
     url, manifest_json = service.manifest_form(registration.state)
     assert url == (
@@ -112,7 +126,7 @@ def test_manifest_form_embeds_state_and_callback(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_stores_credentials_and_writes_key_file(
+async def test_complete_holds_credentials_in_memory_only(
     service: GitHubAppRegistrationService, tmp_path: Path
 ) -> None:
     registration = _start(service, tmp_path)
@@ -127,11 +141,9 @@ async def test_complete_stores_credentials_and_writes_key_file(
         completed.installation_page_url
         == "https://github.com/apps/my-bot/installations/new"
     )
-    key_file = Path(completed.private_key_path)
-    assert key_file == tmp_path / "github-apps/my-bot.private-key.pem"
-    assert key_file.read_text() == "-----BEGIN RSA PRIVATE KEY-----\nkey\n"
-    if os.name != "nt":
-        assert stat.S_IMODE(key_file.stat().st_mode) & KEY_MODE_MASK == 0o600
+    assert completed.pem == PEM
+    assert "pem" not in completed.info_dump()
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -177,20 +189,7 @@ async def test_check_installation_detects_latest_installation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registration = _start(service, tmp_path)
-    await service.complete(registration.state, "tmp-code")
-
-    async def fake_list(app_id: str, pem: bytes, *, transport=None):
-        assert app_id == "1978826"
-        return [
-            AppInstallation(installation_id=11, account_login="a"),
-            AppInstallation(installation_id=86632391, account_login="b"),
-        ]
-
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "list_app_installations", fake_list
-    )
-    checked = await service.check_installation(registration.state)
+    checked = await _install(service, tmp_path)
     assert checked.status == STATUS_INSTALLED
     assert checked.installation_id == 86632391
 
@@ -207,18 +206,56 @@ async def test_check_installation_is_noop_before_conversion(
 
 
 @pytest.mark.asyncio
-async def test_expired_unclaimed_registration_deletes_key_file(
+async def test_claim_returns_the_installed_registration_until_discarded(
     service: GitHubAppRegistrationService, tmp_path: Path
 ) -> None:
-    registration = _start(service, tmp_path)
-    completed = await service.complete(registration.state, "tmp-code")
-    key_file = Path(completed.private_key_path)
-    assert key_file.exists()
+    installed = await _install(service, tmp_path)
 
-    registration.created_at -= github_app_setup.REGISTRATION_TTL_SECONDS + 1
-    with pytest.raises(SetupServiceError):
-        service.get(registration.state)
-    assert not key_file.exists()
+    # A save that fails after the claim retries with the same registration.
+    assert service.claim(installed.state, "alice").pem == PEM
+    assert service.claim(installed.state, "alice").installation_id == 86632391
+
+    service.discard(installed.state)
+    with pytest.raises(SetupServiceError) as exc_info:
+        service.claim(installed.state, "alice")
+    assert exc_info.value.code == "github_app_registration_not_found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steps", [0, 1])
+async def test_claim_refuses_a_registration_not_installed_yet(
+    service: GitHubAppRegistrationService, tmp_path: Path, steps: int
+) -> None:
+    registration = _start(service, tmp_path)
+    if steps:
+        await service.complete(registration.state, "tmp-code")
+
+    with pytest.raises(SetupServiceError) as exc_info:
+        service.claim(registration.state, "alice")
+    assert exc_info.value.code == "github_app_registration_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_claim_refuses_another_member(
+    service: GitHubAppRegistrationService, tmp_path: Path
+) -> None:
+    installed = await _install(service, tmp_path)
+
+    with pytest.raises(SetupServiceError) as exc_info:
+        service.claim(installed.state, "bob")
+    assert exc_info.value.code == "github_app_registration_member_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_claim_refuses_an_expired_registration(
+    service: GitHubAppRegistrationService, tmp_path: Path
+) -> None:
+    installed = await _install(service, tmp_path)
+    installed.created_at -= github_app_setup.REGISTRATION_TTL_SECONDS + 1
+
+    with pytest.raises(SetupServiceError) as exc_info:
+        service.claim(installed.state, "alice")
+    assert exc_info.value.code == "github_app_registration_not_found"
 
 
 @pytest.mark.asyncio

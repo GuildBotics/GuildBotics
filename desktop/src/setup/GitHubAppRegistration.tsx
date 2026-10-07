@@ -1,6 +1,13 @@
 import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import type { TFunction } from "i18next";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -31,13 +38,22 @@ function composeAppName(memberId: string, organization: string): string {
     .replace(/-+$/, "");
 }
 
+// The app's IDs are not fields: the form shows them from the registration,
+// which is what the save stores.
 export type GitHubAppRegistrationFields = {
   githubUsername?: string;
   gitEmail?: string;
-  appId?: string;
-  privateKeyPath?: string;
-  installationId?: string;
 };
+
+/** What the last member save did with an installed registration. */
+export type GitHubAppSaveOutcome = "saved" | "expired" | "failed";
+
+/** The outcome a failed member save means for the registration it named. */
+export function githubAppSaveFailure(error: unknown): GitHubAppSaveOutcome {
+  return error instanceof ApiRequestError && error.code === "github_app_registration_not_found"
+    ? "expired"
+    : "failed";
+}
 
 export function getRegistrationErrorMessage(
   error: unknown,
@@ -62,21 +78,18 @@ function toFields(registration: GitHubAppRegistrationStatus): GitHubAppRegistrat
   if (registration.git_email) {
     fields.gitEmail = registration.git_email;
   }
-  if (registration.app_id !== null) {
-    fields.appId = String(registration.app_id);
-  }
-  if (registration.private_key_path) {
-    fields.privateKeyPath = registration.private_key_path;
-  }
-  if (registration.installation_id !== null) {
-    fields.installationId = String(registration.installation_id);
-  }
   return fields;
 }
 
 type Props = {
+  // The member whose save may store the app's key.
+  personId: string;
   defaultAppName: string;
   defaultOrganization?: string;
+  // The registration lives with the member form, which sends its ID on save.
+  registration: GitHubAppRegistrationStatus | null;
+  onRegistrationChange: Dispatch<SetStateAction<GitHubAppRegistrationStatus | null>>;
+  saveOutcome: GitHubAppSaveOutcome | null;
   onApplied: (fields: GitHubAppRegistrationFields) => void;
   pollIntervalMs?: number;
   // Identity of the member edit session; a change means the surrounding form
@@ -85,8 +98,12 @@ type Props = {
 };
 
 export function GitHubAppRegistrationPanel({
+  personId,
   defaultAppName,
   defaultOrganization = "",
+  registration,
+  onRegistrationChange: setRegistration,
+  saveOutcome,
   onApplied,
   pollIntervalMs = POLL_INTERVAL_MS,
   memberKey = "",
@@ -98,7 +115,6 @@ export function GitHubAppRegistrationPanel({
   // fallback would not.
   const [appNameOverride, setAppNameOverride] = useState<string | null>(null);
   const [organizationOverride, setOrganizationOverride] = useState<string | null>(null);
-  const [registration, setRegistration] = useState<GitHubAppRegistrationStatus | null>(null);
   const appliedStatusRef = useRef("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
@@ -108,17 +124,16 @@ export function GitHubAppRegistrationPanel({
   const appName = appNameOverride ?? composeAppName(defaultAppName, organization);
   const appNameError = appName.trim().length > APP_NAME_MAX_LENGTH;
 
-  // The form is reused for the next member, so nothing about the previous one
-  // may survive: not the hand-edited fields, and not a registration whose
-  // polling and links belong to the previous member's app. Adjusting during
-  // render (rather than in an effect) keeps the stale values from ever being
-  // painted. The dedupe marker needs no reset here: handleStart clears it, and
-  // dropping the registration already stops the poll that reads it.
+  // The form is reused for the next member, so no hand-edited field of the
+  // previous one may survive; the form drops the registration itself.
+  // Adjusting during render (rather than in an effect) keeps the stale values
+  // from ever being painted. The dedupe marker needs no reset here:
+  // handleStart clears it, and dropping the registration already stops the
+  // poll that reads it.
   if (memberKey !== appliedMemberKey) {
     setAppliedMemberKey(memberKey);
     setAppNameOverride(null);
     setOrganizationOverride(null);
-    setRegistration(null);
     setError("");
   }
 
@@ -135,7 +150,7 @@ export function GitHubAppRegistrationPanel({
         onApplied(toFields(next));
       }
     },
-    [onApplied],
+    [onApplied, setRegistration],
   );
 
   const handleStart = async () => {
@@ -149,6 +164,7 @@ export function GitHubAppRegistrationPanel({
     try {
       const started = await startGitHubAppRegistration({
         app_name: name,
+        person_id: personId.trim(),
         organization: organization.trim(),
       });
       setRegistration(started);
@@ -201,7 +217,14 @@ export function GitHubAppRegistrationPanel({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [registrationState, registrationStatus, applyRegistration, pollIntervalMs, t]);
+  }, [
+    registrationState,
+    registrationStatus,
+    applyRegistration,
+    pollIntervalMs,
+    setRegistration,
+    t,
+  ]);
 
   return (
     <Stack gap="xs" className="github-app-registration">
@@ -229,7 +252,7 @@ export function GitHubAppRegistrationPanel({
         <Button
           variant="default"
           loading={starting}
-          disabled={!appName.trim() || appNameError}
+          disabled={!appName.trim() || appNameError || !personId.trim()}
           onClick={() => void handleStart()}
         >
           {t("setup.members.githubAppRegistration.register")}
@@ -280,6 +303,22 @@ export function GitHubAppRegistrationPanel({
       {registrationStatus === "installed" ? (
         <Text size="sm" c="teal">
           {t("setup.members.githubAppRegistration.installed")}
+        </Text>
+      ) : null}
+      {registrationStatus === "installed" && saveOutcome === "failed" ? (
+        <Text c="danger" size="xs">
+          {t("setup.members.githubAppRegistration.saveFailed")}
+        </Text>
+      ) : null}
+      {/* An outcome describes the last save, not a registration started since. */}
+      {!registration && !error && saveOutcome === "saved" ? (
+        <Text size="sm" c="teal">
+          {t("setup.members.githubAppRegistration.saved")}
+        </Text>
+      ) : null}
+      {!registration && !error && saveOutcome === "expired" ? (
+        <Text c="danger" size="xs">
+          {t("setup.members.githubAppRegistration.errors.expired")}
         </Text>
       ) : null}
     </Stack>

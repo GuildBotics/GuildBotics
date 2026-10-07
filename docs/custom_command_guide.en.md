@@ -280,13 +280,13 @@ Only the declaration of the command you run counts; a subcommand's own declarati
 ## 4. Using built-in commands
 You can use [built-in commands](../guildbotics/templates/commands/) shipped with GuildBotics.
 
-`ask` delegates the request on stdin to a member in the directory specified by `--cwd`. For example, to ask alice to review the current working tree, write the request into a UTF-8 file in the OS temporary directory, then run this on macOS/Linux:
+`ask` delegates the request on stdin to a member in the directory specified by `--cwd`. For example, to ask alice to review the current working tree, write the request into a UTF-8 file in a directory of your own made with `mktemp -d` (on Windows, a new randomly named directory under your user's temporary directory), then run this on macOS/Linux:
 
 ```shell
 "$HOME/.guildbotics/bin/guildbotics" run ask --person alice --cwd "/path/to/repo" < "/path/to/temporary-request.txt"
 ```
 
-On Windows, use `guildbotics` and pipe the file's UTF-8 text to stdin. Delete the temporary file after the command exits, including on failure. In a skill session, the active member handles this invocation for you.
+On Windows, use `guildbotics` and pipe the file's UTF-8 text to stdin. Delete that directory after the command exits, including on failure. In a skill session, the active member handles this invocation for you.
 
 `ask` uses `brain: agent` and requires a message. It reads uncommitted changes in the same working tree and returns text on stdout. A review request permits reading only; a fix request permits the requested edits and verification. Unless a read/write grant contains the working tree, the member works on a copy, and only the changes to regular files are written back to the working tree when the task ends well. The delegate does not commit or push; the requester reviews the written-back changes and publishes them. Select the GuildBotics workspace first (`--cwd` selects the working tree, not the workspace configuration), and prepare the receiving member's isolated agent environment and AI CLI login on this machine. Start it from the host (the command itself runs in the isolated environment, with `--cwd` as its working directory), allow several minutes with a longer caller timeout or background execution, and wait for the result. Environment/login failures return the existing runtime refusal reason.
 

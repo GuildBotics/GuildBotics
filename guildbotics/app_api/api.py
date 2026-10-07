@@ -160,7 +160,6 @@ from guildbotics.editions.simple.setup_service import (
     SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
-    github_app_key_dir,
     person_config_paths,
     stored_person_config_dir,
     stored_person_config_paths,
@@ -1451,6 +1450,29 @@ def create_app(
             raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
+    github_app_registrations = GitHubAppRegistrationService()
+
+    def claim_github_app[Member: PersonSetupInput](
+        member: Member, owner: str
+    ) -> tuple[Member, str]:
+        """The member with its registered app's IDs, and the app's PEM.
+
+        Nothing else may pair with a registration's key: the IDs and the key
+        come from the registration, whatever the screen sent for them.
+        """
+        if not member.github_app_registration_id:
+            return member, ""
+        registration = github_app_registrations.claim(
+            member.github_app_registration_id, owner
+        )
+        return member.model_copy(
+            update={
+                "github_app_id": registration.app_id,
+                "github_installation_id": registration.installation_id,
+                "github_private_key_path": None,
+            }
+        ), registration.pem
+
     @app.post(
         "/config/members",
         response_model=ConfigWriteResponse,
@@ -1465,17 +1487,22 @@ def create_app(
             status = app_runtime.get_config_status()
             if status.config_dir is not None:
                 payload["config_dir"] = status.config_dir
-            member = PersonSetupInput.model_validate(payload)
+            member, pem = claim_github_app(
+                PersonSetupInput.model_validate(payload), request.person_id
+            )
 
             receipt = apply_config_write(
                 member.config_dir,
-                lambda: SimplePersonSetupService().write_person(member),
+                lambda: SimplePersonSetupService().write_person(
+                    member, github_private_key=pem
+                ),
                 report=lambda: config_repository(member.config_dir).revisions(
                     person_config_paths(member.person_id)
                 ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, reason=exc.message) from exc
+        github_app_registrations.discard(member.github_app_registration_id)
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.get(
@@ -1522,11 +1549,14 @@ def create_app(
                 )
             config_dir = _resolve_member_config_dir(app_runtime)
             payload["config_dir"] = config_dir
+            member, pem = claim_github_app(
+                PersonUpdateInput.model_validate(payload), person_id
+            )
 
             receipt = apply_config_write(
                 config_dir,
                 lambda: SimplePersonSetupService().update_person(
-                    PersonUpdateInput.model_validate(payload)
+                    member, github_private_key=pem
                 ),
                 expected=request.expected_revisions,
                 # The member may have been renamed, so the paths that matter
@@ -1538,6 +1568,7 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, reason=exc.message) from exc
+        github_app_registrations.discard(member.github_app_registration_id)
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.delete(
@@ -1586,8 +1617,6 @@ def create_app(
             raise AppApiError(exc.code, reason=exc.message) from exc
         return MemberResolveResponse.model_validate(reference.model_dump())
 
-    github_app_registrations = GitHubAppRegistrationService()
-
     @app.post(
         "/config/members/github-app/registrations",
         response_model=GitHubAppRegistrationStatus,
@@ -1601,9 +1630,9 @@ def create_app(
         try:
             registration = github_app_registrations.start(
                 app_name=request.app_name,
+                person_id=request.person_id,
                 organization=request.organization,
                 callback_url=f"{base}/github-app/registrations/callback",
-                key_dir=github_app_key_dir(),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, reason=exc.message) from exc

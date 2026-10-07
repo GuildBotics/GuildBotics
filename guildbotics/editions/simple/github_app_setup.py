@@ -7,9 +7,10 @@ one-time code, and this module converts the code into credentials. The GUI
 then polls the registration until the user has installed the app and the
 installation ID could be detected.
 
-Registrations are held in memory only; the PEM is additionally written to a
-key file so the ordinary member-save path (``github_private_key_path``)
-persists it like a manually downloaded key.
+Registrations are held in memory only. The PEM never leaves this process
+except into the OS secret store: the member save names the registration, takes
+the key and the app's IDs from it here, and discards it once the member and
+the key are saved.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import asyncio
 import json
 import secrets
 import time
-from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, Field, computed_field
@@ -43,12 +43,12 @@ class GitHubAppRegistrationInfo(BaseModel):
     state: str
     status: str = STATUS_PENDING
     app_name: str
+    person_id: str
     slug: str = ""
     app_id: int | None = None
     html_url: str = ""
     github_username: str = ""
     git_email: str = ""
-    private_key_path: str = ""
     installation_id: int | None = None
     installation_check_error: str = ""
 
@@ -65,7 +65,6 @@ class GitHubAppRegistration(GitHubAppRegistrationInfo):
 
     organization: str
     callback_url: str
-    key_dir: Path
     created_at: float = Field(default_factory=time.time)
     pem: str = ""
 
@@ -85,9 +84,9 @@ class GitHubAppRegistrationService:
         self,
         *,
         app_name: str,
+        person_id: str,
         organization: str,
         callback_url: str,
-        key_dir: Path,
     ) -> GitHubAppRegistration:
         name = app_name.strip()
         if not name or len(name) > GITHUB_APP_NAME_MAX_LENGTH:
@@ -99,9 +98,9 @@ class GitHubAppRegistrationService:
         registration = GitHubAppRegistration(
             state=secrets.token_urlsafe(32),
             app_name=name,
+            person_id=person_id,
             organization=organization.strip(),
             callback_url=callback_url,
-            key_dir=key_dir,
         )
         self._registrations[registration.state] = registration
         return registration
@@ -139,7 +138,6 @@ class GitHubAppRegistrationService:
         registration.app_id = conversion.app_id
         registration.html_url = conversion.html_url
         registration.pem = conversion.pem
-        registration.private_key_path = str(self._write_key_file(registration))
         registration.github_username = f"{conversion.slug}[bot]"
         registration.git_email = await self._resolve_bot_email(conversion.slug)
         registration.status = STATUS_CONVERTED
@@ -169,12 +167,32 @@ class GitHubAppRegistrationService:
             registration.status = STATUS_INSTALLED
         return registration
 
-    def _write_key_file(self, registration: GitHubAppRegistration) -> Path:
-        registration.key_dir.mkdir(parents=True, exist_ok=True)
-        key_file = registration.key_dir / f"{registration.slug}.private-key.pem"
-        key_file.write_text(registration.pem, encoding="utf-8")
-        key_file.chmod(0o600)
-        return key_file
+    def claim(self, state: str, person_id: str) -> GitHubAppRegistration:
+        """Return the installed registration a save of ``person_id`` names.
+
+        It stays held, so a save that fails after this can be retried with
+        the same registration; :meth:`discard` it once the save succeeded.
+
+        Raises:
+            SetupServiceError: The registration is missing, expired or already
+                saved, is not installed yet, or was started for another member.
+        """
+        registration = self.get(state)
+        if registration.status != STATUS_INSTALLED:
+            raise SetupServiceError(
+                "github_app_registration_incomplete",
+                "GitHub App registration has not been installed yet.",
+            )
+        if registration.person_id != person_id:
+            raise SetupServiceError(
+                "github_app_registration_member_mismatch",
+                "GitHub App registration was started for another member.",
+            )
+        return registration
+
+    def discard(self, state: str) -> None:
+        """Forget a registration whose key the secret store now holds."""
+        self._registrations.pop(state, None)
 
     async def _resolve_bot_email(self, slug: str) -> str:
         # The bot user usually exists right after the app is created; if the
@@ -192,19 +210,8 @@ class GitHubAppRegistrationService:
 
     def _purge_expired(self) -> None:
         deadline = time.time() - REGISTRATION_TTL_SECONDS
-        for state, registration in list(self._registrations.items()):
-            if registration.created_at < deadline:
-                self._discard_unclaimed_key_file(registration)
-                del self._registrations[state]
-
-    @staticmethod
-    def _discard_unclaimed_key_file(registration: GitHubAppRegistration) -> None:
-        """Delete the written PEM for an abandoned registration.
-
-        Member save absorbs the PEM into the OS secret store and deletes a
-        flow-generated file. An expired registration that was never saved is
-        an orphan and is cleaned up here.
-        """
-        if not registration.private_key_path:
-            return
-        Path(registration.private_key_path).unlink(missing_ok=True)
+        self._registrations = {
+            state: registration
+            for state, registration in self._registrations.items()
+            if registration.created_at >= deadline
+        }

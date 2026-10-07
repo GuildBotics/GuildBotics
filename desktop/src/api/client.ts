@@ -713,6 +713,7 @@ type MemberWriteRequestBase = {
   github_installation_id?: number;
   github_app_id?: number;
   github_private_key_path?: string;
+  github_app_registration_id?: string;
   github_access_token?: string;
   slack_user_id?: string;
   slack_bot_token?: string;
@@ -739,6 +740,7 @@ export type MemberResolveResponse = {
 
 export type GitHubAppRegistrationStartRequest = {
   app_name: string;
+  person_id: string;
   organization?: string;
 };
 
@@ -746,13 +748,13 @@ export type GitHubAppRegistrationStatus = {
   state: string;
   status: "pending" | "converted" | "installed";
   app_name: string;
+  person_id: string;
   start_url: string;
   slug: string;
   app_id: number | null;
   html_url: string;
   github_username: string;
   git_email: string;
-  private_key_path: string;
   installation_id: number | null;
   installation_page_url: string;
   installation_check_error: string;

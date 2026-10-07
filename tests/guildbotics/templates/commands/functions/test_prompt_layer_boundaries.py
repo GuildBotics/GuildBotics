@@ -386,7 +386,7 @@ def test_member_prompt_layers_use_shell_neutral_content_files():
 
     reference = bodies[0]
     assert "UTF-8" in reference
-    assert "OS temporary directory" in reference
+    assert "`mktemp -d`" in reference
     assert "outside the repository and worktree" in reference
     assert "even when the command fails" in reference
 
@@ -400,10 +400,9 @@ def test_interactive_skill_preserves_posix_path_and_documents_windows_bare_cli()
 
 def test_interactive_skill_keeps_content_files_outside_the_worktree():
     body = load_markdown_with_frontmatter(SKILL_PATH)["body"]
-    assert "OS temporary directory" in body
+    assert "`mktemp -d`" in body
     assert "outside the repository and worktree" in body
-    assert "unique file name" in body
-    assert "even when the command fails" in body
+    assert "delete the directory even when the command fails" in body
     assert body.count("<temporary_content_file>") == 2
     assert "guildbotics-content.txt" not in body
 

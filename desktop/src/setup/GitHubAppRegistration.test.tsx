@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,7 +12,11 @@ import {
 import i18n from "../i18n";
 import "../i18n";
 import { openExternal } from "../openExternal";
-import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
+import {
+  GitHubAppRegistrationPanel,
+  githubAppSaveFailure,
+  type GitHubAppSaveOutcome,
+} from "./GitHubAppRegistration";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -30,13 +35,13 @@ const pendingRegistration: GitHubAppRegistrationStatus = {
   state: "state-1",
   status: "pending",
   app_name: "my-bot",
+  person_id: "my-bot",
   start_url: "http://127.0.0.1:8765/github-app/registrations/state-1/start",
   slug: "",
   app_id: null,
   html_url: "",
   github_username: "",
   git_email: "",
-  private_key_path: "",
   installation_id: null,
   installation_page_url: "",
   installation_check_error: "",
@@ -51,7 +56,6 @@ const convertedRegistration: GitHubAppRegistrationStatus = {
   html_url: "https://github.com/apps/my-bot",
   github_username: "my-bot[bot]",
   git_email: "233270845+my-bot[bot]@users.noreply.github.com",
-  private_key_path: "/data/github-apps/my-bot.private-key.pem",
   installation_page_url: "https://github.com/apps/my-bot/installations/new",
 };
 
@@ -61,15 +65,39 @@ const installedRegistration: GitHubAppRegistrationStatus = {
   installation_id: 86632391,
 };
 
-function renderPanel(onApplied = vi.fn(), defaultOrganization = "") {
+type PanelProps = Omit<
+  ComponentProps<typeof GitHubAppRegistrationPanel>,
+  "registration" | "onRegistrationChange"
+> & { initialRegistration?: GitHubAppRegistrationStatus | null };
+
+/** Holds the registration the way the member form does. */
+function Harness({ initialRegistration = null, ...props }: PanelProps) {
+  const [registration, setRegistration] = useState(initialRegistration);
+  return (
+    <GitHubAppRegistrationPanel
+      {...props}
+      registration={registration}
+      onRegistrationChange={setRegistration}
+    />
+  );
+}
+
+function renderPanel(
+  onApplied = vi.fn(),
+  defaultOrganization = "",
+  extra: Partial<PanelProps> = {},
+) {
   render(
     <TestMantineProvider>
-      <GitHubAppRegistrationPanel
+      <Harness
+        personId="my-bot"
         defaultAppName="my-bot"
         defaultOrganization={defaultOrganization}
+        saveOutcome={null}
         onApplied={onApplied}
         pollIntervalMs={20}
         memberKey="edit:my-bot"
+        {...extra}
       />
     </TestMantineProvider>,
   );
@@ -81,17 +109,19 @@ function renderSwitchablePanel() {
     defaultOrganization: "acme",
     onApplied: vi.fn(),
     pollIntervalMs: 20,
+    saveOutcome: null,
   };
   const { rerender } = render(
     <TestMantineProvider>
-      <GitHubAppRegistrationPanel {...props} defaultAppName="my-bot" memberKey="edit:my-bot" />
+      <Harness {...props} personId="my-bot" defaultAppName="my-bot" memberKey="edit:my-bot" />
     </TestMantineProvider>,
   );
   return () =>
     rerender(
       <TestMantineProvider>
-        <GitHubAppRegistrationPanel
+        <Harness
           {...props}
+          personId="other-bot"
           defaultAppName="other-bot"
           memberKey="edit:other-bot"
         />
@@ -125,6 +155,7 @@ describe("GitHubAppRegistrationPanel", () => {
     await waitFor(() =>
       expect(startGitHubAppRegistration).toHaveBeenCalledWith({
         app_name: "my-bot-acme",
+        person_id: "my-bot",
         organization: "acme",
       }),
     );
@@ -132,7 +163,7 @@ describe("GitHubAppRegistrationPanel", () => {
     expect(screen.getByText(t("setup.members.githubAppRegistration.pending"))).toBeInTheDocument();
   });
 
-  it("applies converted credentials and then the detected installation ID", async () => {
+  it("applies the bot identity and follows the registration to its installation", async () => {
     const user = userEvent.setup();
     const onApplied = renderPanel();
 
@@ -146,8 +177,6 @@ describe("GitHubAppRegistrationPanel", () => {
       expect(onApplied).toHaveBeenCalledWith({
         githubUsername: "my-bot[bot]",
         gitEmail: "233270845+my-bot[bot]@users.noreply.github.com",
-        appId: "1978826",
-        privateKeyPath: "/data/github-apps/my-bot.private-key.pem",
       }),
     );
     expect(
@@ -155,13 +184,8 @@ describe("GitHubAppRegistrationPanel", () => {
     ).toBeInTheDocument();
 
     vi.mocked(getGitHubAppRegistration).mockResolvedValue(installedRegistration);
-    await waitFor(() =>
-      expect(onApplied).toHaveBeenCalledWith(
-        expect.objectContaining({ installationId: "86632391" }),
-      ),
-    );
     expect(
-      screen.getByText(t("setup.members.githubAppRegistration.installed")),
+      await screen.findByText(t("setup.members.githubAppRegistration.installed")),
     ).toBeInTheDocument();
   });
 
@@ -187,6 +211,7 @@ describe("GitHubAppRegistrationPanel", () => {
     await waitFor(() =>
       expect(startGitHubAppRegistration).toHaveBeenCalledWith({
         app_name: "my-bot",
+        person_id: "my-bot",
         organization: "",
       }),
     );
@@ -217,12 +242,13 @@ describe("GitHubAppRegistrationPanel", () => {
     await waitFor(() =>
       expect(startGitHubAppRegistration).toHaveBeenCalledWith({
         app_name: "custom-name",
+        person_id: "my-bot",
         organization: "acme-2",
       }),
     );
   });
 
-  it("drops the previous member's edited fields and started registration", async () => {
+  it("drops the previous member's edited fields", async () => {
     const user = userEvent.setup();
     const switchMember = renderSwitchablePanel();
 
@@ -238,10 +264,63 @@ describe("GitHubAppRegistrationPanel", () => {
     switchMember();
 
     expect(appNameField()).toHaveValue("other-bot-acme");
-    // The pending state polls and reopens the previous member's registration.
+  });
+
+  it("cannot register before the member has an ID", () => {
+    renderPanel(vi.fn(), "", { personId: " " });
+
     expect(
-      screen.queryByText(t("setup.members.githubAppRegistration.pending")),
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    ).toBeDisabled();
+  });
+
+  it.each<[GitHubAppSaveOutcome | null, GitHubAppRegistrationStatus | null, string | null]>([
+    [null, installedRegistration, "setup.members.githubAppRegistration.installed"],
+    ["failed", installedRegistration, "setup.members.githubAppRegistration.saveFailed"],
+    ["saved", null, "setup.members.githubAppRegistration.saved"],
+    ["expired", null, "setup.members.githubAppRegistration.errors.expired"],
+  ])("shows the %s save outcome of a registration", (saveOutcome, registration, key) => {
+    renderPanel(vi.fn(), "", { saveOutcome, initialRegistration: registration });
+
+    expect(screen.getByText(t(key!))).toBeInTheDocument();
+  });
+
+  it("does not show the last save outcome beside a later registration's failure", async () => {
+    const user = userEvent.setup();
+    renderPanel(vi.fn(), "", { saveOutcome: "saved" });
+    vi.mocked(getGitHubAppRegistration).mockRejectedValue(
+      new ApiRequestError({ code: "github_app_registration_not_found", message: "", context: {} }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+    );
+
+    expect(
+      await screen.findByText(t("setup.members.githubAppRegistration.errors.expired")),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(t("setup.members.githubAppRegistration.saved")),
     ).not.toBeInTheDocument();
+  });
+
+  it("hides the last save outcome once another registration starts", () => {
+    renderPanel(vi.fn(), "", { saveOutcome: "saved", initialRegistration: pendingRegistration });
+
+    expect(
+      screen.queryByText(t("setup.members.githubAppRegistration.saved")),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(t("setup.members.githubAppRegistration.pending"))).toBeInTheDocument();
+  });
+
+  it("reads an unknown registration as expired and any other save failure as failed", () => {
+    const apiError = (code: string) => new ApiRequestError({ code, message: code, context: {} });
+
+    expect(githubAppSaveFailure(apiError("github_app_registration_not_found"))).toBe("expired");
+    expect(githubAppSaveFailure(apiError("github_app_registration_member_mismatch"))).toBe(
+      "failed",
+    );
+    expect(githubAppSaveFailure(new Error("keychain unavailable"))).toBe("failed");
   });
 
   it("caps the suggested name at the length the backend accepts", async () => {

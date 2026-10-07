@@ -843,8 +843,9 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   `local/debug.env`. GuildBotics never reads a workspace `.env`.
 - **Exception**: `*_GITHUB_PRIVATE_KEY` (GitHub App PEM content) is _never_ injected
   into the environment. Consumers read it on demand through the secret store.
-  Generated registration PEMs are written under the OS temporary directory and
-  deleted after the keychain absorbs them.
+  A PEM from GitHub App auto-registration stays in the Local API's memory: the
+  member save names the registration, and the API stores its key in the
+  keychain and discards the registration.
 - **Distribution between machines** (`guildbotics/secrets/`, `hub/secret_host.py`,
   `hub/secret_stream.py`): the shared history carries key names and generations only.
   Values live in each machine's OS keychain, and the hub machine's keychain is the

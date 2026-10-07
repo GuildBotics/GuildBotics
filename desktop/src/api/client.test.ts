@@ -202,13 +202,18 @@ describe("request headers and body", () => {
 
   it("POSTs the GitHub App registration with the API base as callback", async () => {
     const { calls } = captureFetch(jsonResponse({ state: "s1", status: "pending" }));
-    await startGitHubAppRegistration({ app_name: "my-bot", organization: "acme" });
+    await startGitHubAppRegistration({
+      app_name: "my-bot",
+      person_id: "my-bot",
+      organization: "acme",
+    });
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/github-app/registrations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
         app_name: "my-bot",
+        person_id: "my-bot",
         organization: "acme",
         callback_base_url: "http://127.0.0.1:8765",
       }),
