@@ -468,11 +468,12 @@ _CROSS_CUTTING_RULES: list[str] = [
     "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
     "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "
-    "`--content-file <file>`. Create the UTF-8 file in the OS temporary directory, outside "
-    "the repository and worktree, and use a unique file name. Write the exact content with a "
-    "file-editing capability instead of an inline shell literal, pass the path as one argv value, "
-    "and delete the file even when the command fails. Titles are single-line `--title` values "
-    "and never belong in the content file.",
+    "`--content-file <file>`. Create a dedicated directory exclusively, outside the "
+    "repository and worktree, with `mktemp -d` (on Windows, a new randomly named directory "
+    "under your user's temporary directory), and create the UTF-8 file inside it. Write the "
+    "exact content with a file-editing capability instead of an inline shell literal, pass the "
+    "path as one argv value, and delete the directory with the file even when the command "
+    "fails. Titles are single-line `--title` values and never belong in the content file.",
     "Files the user hands over from the Desktop are read-only copies GuildBotics keeps for "
     "the app session, so never leave a result beside them. Unless the request names a "
     "destination, put what you produce for the user -- a converted document, a resized "

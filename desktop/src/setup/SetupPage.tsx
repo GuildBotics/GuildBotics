@@ -77,6 +77,7 @@ import {
   type IntelligenceConfig,
   type ModelDefinition,
   type MemberSetupRequest,
+  type GitHubAppRegistrationStatus,
   type ChatParticipationPolicy,
   type MemberConfig,
   type LaneMap,
@@ -138,7 +139,11 @@ import {
   useCliAgentLastTurns,
 } from "../cliAgent";
 import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
-import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
+import {
+  GitHubAppRegistrationPanel,
+  githubAppSaveFailure,
+  type GitHubAppSaveOutcome,
+} from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
@@ -3028,6 +3033,13 @@ function MembersSection({
   const [githubInstallationId, setGithubInstallationId] = useState("");
   const [githubAppId, setGithubAppId] = useState("");
   const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
+  // A GitHub App registered from this form: once installed, the save names it
+  // and the backend stores its key and IDs, so neither passes through here.
+  const [githubAppRegistration, setGithubAppRegistration] =
+    useState<GitHubAppRegistrationStatus | null>(null);
+  const [githubAppSaveOutcome, setGithubAppSaveOutcome] = useState<GitHubAppSaveOutcome | null>(
+    null,
+  );
   // GitHub Apps entry mode: register a new app on GitHub, or reference an
   // already-registered one via its settings URL.
   const [githubAppsSetupMode, setGithubAppsSetupMode] = useState<"create" | "existing">("create");
@@ -3318,6 +3330,8 @@ function MembersSection({
     setGithubInstallationId("");
     setGithubAppId("");
     setGithubPrivateKeyPath("");
+    setGithubAppRegistration(null);
+    setGithubAppSaveOutcome(null);
     setGithubAppsSetupMode("create");
     if (withDefaults) {
       setSpeakingStylePreset("energetic");
@@ -3362,10 +3376,15 @@ function MembersSection({
     // deterministic across reloads (changes only when the avatar changes).
     setAvatarTimestamp(member.avatar_timestamp ?? 0);
     setPersonType(nextPersonType);
+    // A registration started in this form outlives a reload of the member:
+    // its app already exists on GitHub, and only a save stores its key.
+    const keepsRegistration = githubAppRegistration !== null;
     setGithubAccountType(
-      nextPersonType === "human"
-        ? "human"
-        : toGitHubAccountType(member.github_account_type || member.person_type),
+      keepsRegistration
+        ? "github_apps"
+        : nextPersonType === "human"
+          ? "human"
+          : toGitHubAccountType(member.github_account_type || member.person_type),
     );
     setIdentity("");
     setPersonId(member.person_id);
@@ -3395,7 +3414,9 @@ function MembersSection({
     setGithubAppId(member.github_app_id?.toString() ?? "");
     setGithubPrivateKeyPath("");
     setGithubAppsSetupMode(
-      member.github_app_id != null || member.has_github_app_id ? "existing" : "create",
+      !keepsRegistration && (member.github_app_id != null || member.has_github_app_id)
+        ? "existing"
+        : "create",
     );
     setSlackBotToken("");
     setSlackAppToken("");
@@ -3529,6 +3550,10 @@ function MembersSection({
       setEditingPersonId(null);
     },
   });
+  // What answers a pending save, reload or delete lands on the form that sent
+  // it, so the form stays on its member until then.
+  const memberFormBusy =
+    savingMember || memberConfigMutation.isPending || deleteMemberMutation.isPending;
 
   const effectiveIsActive = isHumanMember ? false : isActive;
   const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
@@ -3539,12 +3564,22 @@ function MembersSection({
 
   const requiresGitHubAuth = githubAccountType === "machine_user";
   const requiresGitHubAppsAuth = githubAccountType === "github_apps";
+  // Leaving the registration flow abandons its registration, so no app ID of
+  // it can be saved beside another app's key.
+  if (githubAppRegistration && (!requiresGitHubAppsAuth || githubAppsSetupMode !== "create")) {
+    setGithubAppRegistration(null);
+    setGithubAppSaveOutcome(null);
+  }
+  const githubAppRegistrationId =
+    githubAppRegistration?.status === "installed" ? githubAppRegistration.state : "";
   const authReady = requiresGitHubAuth
     ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
     : requiresGitHubAppsAuth
-      ? githubInstallationId.trim().length > 0 &&
-        githubAppId.trim().length > 0 &&
-        (githubPrivateKeyPath.trim().length > 0 || storedMemberSecrets.githubPrivateKeyPath)
+      ? githubAppRegistration
+        ? Boolean(githubAppRegistrationId)
+        : githubInstallationId.trim().length > 0 &&
+          githubAppId.trim().length > 0 &&
+          (githubPrivateKeyPath.trim().length > 0 || storedMemberSecrets.githubPrivateKeyPath)
       : true;
   const githubIdentityReady =
     !usesGitHubMember || (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
@@ -3560,6 +3595,7 @@ function MembersSection({
       githubInstallationId,
       githubAppId,
       githubPrivateKeyPath,
+      githubAppRegistrationId: githubAppRegistration?.state ?? "",
       githubAccessToken,
       slackBotToken,
       slackAppToken,
@@ -3813,7 +3849,9 @@ function MembersSection({
         ? []
         : buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
-    if (githubAccountType === "github_apps") {
+    if (githubAppRegistrationId) {
+      request.github_app_registration_id = githubAppRegistrationId;
+    } else if (githubAccountType === "github_apps") {
       request.github_installation_id = githubInstallationId
         ? Number(githubInstallationId)
         : undefined;
@@ -3856,8 +3894,10 @@ function MembersSection({
       return;
     }
     setSavingMember(true);
+    const request = buildMemberRequest();
+    const savedRegistration = githubAppRegistration;
+    let memberWritten = false;
     try {
-      const request = buildMemberRequest();
       if (formMode === "edit" && editingPersonId) {
         if (!memberRevisions) return;
         await updateMemberMutation.mutateAsync({
@@ -3868,6 +3908,21 @@ function MembersSection({
             expected_revisions: memberRevisions,
           },
         });
+        memberWritten = true;
+        if (request.github_app_registration_id && savedRegistration) {
+          // The backend consumed the registration; the member now holds its
+          // key and IDs as any stored member does.
+          setGithubAppId(String(savedRegistration.app_id ?? ""));
+          setGithubInstallationId(String(savedRegistration.installation_id ?? ""));
+          setGithubAppRegistration(null);
+          setGithubAppSaveOutcome("saved");
+          setStoredMemberSecrets((current) => ({
+            ...current,
+            githubInstallationId: true,
+            githubAppId: true,
+            githubPrivateKeyPath: true,
+          }));
+        }
         syncAgentFieldAfterSave(request);
         if (!isHumanMember) {
           await memberIntelligenceSaveRef.current?.save?.();
@@ -3875,8 +3930,16 @@ function MembersSection({
         return;
       }
       await addMemberMutation.mutateAsync(request);
+      memberWritten = true;
       syncAgentFieldAfterSave(request);
     } catch (error) {
+      if (!memberWritten && request.github_app_registration_id) {
+        const outcome = githubAppSaveFailure(error);
+        setGithubAppSaveOutcome(outcome);
+        if (outcome === "expired") {
+          setGithubAppRegistration(null);
+        }
+      }
       if (isStaleConfigSave(error) && editingPersonId) {
         // Reload the member rather than resend this form: the input it holds
         // is what would have overwritten the change that arrived.
@@ -3896,7 +3959,10 @@ function MembersSection({
         });
         return;
       }
-      throw error;
+      // The member write's own alert reports its failure.
+      if (memberWritten) {
+        throw error;
+      }
     } finally {
       setSavingMember(false);
     }
@@ -3911,6 +3977,8 @@ function MembersSection({
 
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
+    setGithubAppRegistration(null);
+    setGithubAppSaveOutcome(null);
     setMemberRevisions(null);
     setEditingPersonId(memberId);
     setMode("edit");
@@ -4022,6 +4090,7 @@ function MembersSection({
                   <Button
                     size="xs"
                     variant="default"
+                    disabled={memberFormBusy}
                     onClick={() => startEditMode(member.person_id)}
                   >
                     {t("setup.members.editButton")}
@@ -4052,7 +4121,7 @@ function MembersSection({
             ) : (
               <span />
             )}
-            <Button variant="default" onClick={startAddMode}>
+            <Button variant="default" disabled={memberFormBusy} onClick={startAddMode}>
               {t("setup.members.newButton")}
             </Button>
           </Group>
@@ -4262,6 +4331,13 @@ function MembersSection({
                     aria-required
                     value={personId}
                     onChange={(event) => setPersonId(event.currentTarget.value)}
+                    // A registration is for the member it was started for.
+                    disabled={formMode === "add" && githubAppRegistration !== null}
+                    description={
+                      formMode === "add" && githubAppRegistration !== null
+                        ? t("setup.members.personIdFixedByGitHubApp")
+                        : undefined
+                    }
                     error={memberErrors.personId}
                   />
                   <TextInput
@@ -4602,23 +4678,18 @@ function MembersSection({
                     {githubAccountType === "github_apps" && githubAppsSetupMode === "create" ? (
                       <GitHubAppRegistrationPanel
                         memberKey={memberFormKey}
+                        personId={editingPersonId ?? personId}
                         defaultAppName={personId}
                         defaultOrganization={githubOrganizationDefault}
+                        registration={githubAppRegistration}
+                        onRegistrationChange={setGithubAppRegistration}
+                        saveOutcome={githubAppSaveOutcome}
                         onApplied={(fields) => {
                           if (fields.githubUsername) {
                             setGithubUsername(fields.githubUsername);
                           }
                           if (fields.gitEmail) {
                             setGitEmail(fields.gitEmail);
-                          }
-                          if (fields.appId) {
-                            setGithubAppId(fields.appId);
-                          }
-                          if (fields.privateKeyPath) {
-                            setGithubPrivateKeyPath(fields.privateKeyPath);
-                          }
-                          if (fields.installationId) {
-                            setGithubInstallationId(fields.installationId);
                           }
                           setIdentityResolveError("");
                         }}
@@ -4710,25 +4781,37 @@ function MembersSection({
                           label={<RequiredLabel text={t("setup.members.installationId")} />}
                           aria-label={t("setup.members.installationId")}
                           aria-required
-                          value={githubInstallationId}
+                          value={
+                            githubAppRegistration
+                              ? String(githubAppRegistration.installation_id ?? "")
+                              : githubInstallationId
+                          }
                           onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
+                          readOnly={githubAppRegistration !== null}
                           error={memberErrors.githubInstallationId}
                         />
                         <TextInput
                           label={<RequiredLabel text={t("setup.members.appId")} />}
                           aria-label={t("setup.members.appId")}
                           aria-required
-                          value={githubAppId}
+                          value={
+                            githubAppRegistration
+                              ? String(githubAppRegistration.app_id ?? "")
+                              : githubAppId
+                          }
                           onChange={(event) => setGithubAppId(event.currentTarget.value)}
+                          readOnly={githubAppRegistration !== null}
                           error={memberErrors.githubAppId}
                         />
-                        <FilePicker
-                          label={t("setup.members.privateKeyPath")}
-                          withAsterisk={!storedMemberSecrets.githubPrivateKeyPath}
-                          value={githubPrivateKeyPath}
-                          onChange={setGithubPrivateKeyPath}
-                          error={memberErrors.githubPrivateKeyPath}
-                        />
+                        {githubAppRegistration ? null : (
+                          <FilePicker
+                            label={t("setup.members.privateKeyPath")}
+                            withAsterisk={!storedMemberSecrets.githubPrivateKeyPath}
+                            value={githubPrivateKeyPath}
+                            onChange={setGithubPrivateKeyPath}
+                            error={memberErrors.githubPrivateKeyPath}
+                          />
+                        )}
                       </>
                     ) : null}
                     {githubAccountType === "machine_user" ? (
@@ -4970,6 +5053,7 @@ function MembersSection({
                     color="danger"
                     variant="default"
                     loading={deleteMemberMutation.isPending}
+                    disabled={memberFormBusy}
                     onClick={() => setDeleteConfirmOpen(true)}
                   >
                     {t("setup.members.deleteButton")}
@@ -6305,6 +6389,9 @@ export function getMemberFieldErrors(
     githubInstallationId: string;
     githubAppId: string;
     githubPrivateKeyPath: string;
+    // A registration supplies the app's IDs and key; the save waits for it
+    // to be installed.
+    githubAppRegistrationId: string;
     githubAccessToken: string;
     slackUserId: string;
     slackBotToken: string;
@@ -6399,7 +6486,7 @@ export function getMemberFieldErrors(
     errors.gitEmail = t("setup.validation.memberGitEmailInvalid");
   }
 
-  if (values.githubAccountType === "github_apps") {
+  if (values.githubAccountType === "github_apps" && !values.githubAppRegistrationId) {
     if (!values.githubInstallationId.trim()) {
       errors.githubInstallationId = t("setup.validation.githubInstallationIdRequired");
     } else if (

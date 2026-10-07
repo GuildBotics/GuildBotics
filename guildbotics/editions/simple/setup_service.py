@@ -23,7 +23,6 @@ from guildbotics.intelligences.cli_agents import (
 )
 from guildbotics.utils.fileio import (
     get_template_path,
-    host_temporary_root,
     load_yaml_file,
     save_yaml_file,
 )
@@ -56,15 +55,6 @@ CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
 DEFAULT_LANE_READY = "Todo"
 DEFAULT_LANE_WORKING = "In Progress"
 DEFAULT_LANE_DONE = "Done"
-
-
-def github_app_key_dir() -> Path:
-    """Where PEM files from GitHub App registration are kept for a moment.
-
-    Generated keys are absorbed into the OS secret store and then deleted.
-    User-supplied key files live elsewhere and are never touched.
-    """
-    return host_temporary_root() / "github-apps"
 
 
 def _to_int_or_none(value: object) -> int | None:
@@ -280,6 +270,9 @@ class PersonSetupInput(BaseModel):
     github_installation_id: int | None = None
     github_app_id: int | None = None
     github_private_key_path: Path | None = None
+    # A finished GitHub App registration whose key and IDs this save stores;
+    # the API layer resolves it, the PEM never travels through the screen.
+    github_app_registration_id: str = ""
     github_access_token: str = ""
     slack_user_id: str = ""
     slack_bot_token: str = ""
@@ -1035,28 +1028,45 @@ class SimplePersonSetupService:
         )
 
     @shared_write_operation
-    def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
-        files: list[CreatedFile] = []
+    def write_person(
+        self, config: PersonSetupInput, *, github_private_key: str = ""
+    ) -> PersonSetupResult:
+        """Store the member's secrets, then write its config.
+
+        Args:
+            config (PersonSetupInput): The member to add.
+            github_private_key (str): A GitHub App PEM held in memory, stored
+                instead of reading ``config.github_private_key_path``.
+        """
+        # SecretStore first, as in update_person: a store failure leaves no
+        # member config claiming credentials it does not have.
+        store = resolve_secret_store(config.config_dir)
+        secrets = self.build_person_secrets(config, github_private_key)
+        for key, value in secrets.items():
+            store.set(key, value)
+
         person_config_file = _person_config_file(config.config_dir, config.person_id)
         person_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(
             person_config_file,
             self.build_person_config(config, include_initial_defaults=True),
         )
-        files.append(CreatedFile(path=person_config_file, action="create"))
-
-        store = resolve_secret_store(config.config_dir)
-        secrets = self.build_person_secrets(config)
-        for key, value in secrets.items():
-            store.set(key, value)
-        stored_pem = self._store_private_key_content(store, config)
-        if secrets or stored_pem:
+        files = [CreatedFile(path=person_config_file, action="create")]
+        if secrets:
             files.append(CreatedFile(path=store.location, action="update"))
-
         return PersonSetupResult(files=files)
 
     @shared_write_operation
-    def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
+    def update_person(
+        self, config: PersonUpdateInput, *, github_private_key: str = ""
+    ) -> PersonSetupResult:
+        """Move and update the member's secrets, then its config.
+
+        Args:
+            config (PersonUpdateInput): The member as edited.
+            github_private_key (str): A GitHub App PEM held in memory, stored
+                instead of reading ``config.github_private_key_path``.
+        """
         files: list[CreatedFile] = []
         original_person_file = (
             stored_person_config_dir(config.config_dir, config.original_person_id)
@@ -1072,7 +1082,9 @@ class SimplePersonSetupService:
 
         # SecretStore first: shared key metadata moves independently of local
         # value freshness, and a store failure leaves the member config
-        # untouched so the same update can be retried.
+        # untouched so the same update can be retried. The values are read
+        # before any key moves, so an unreadable key file changes nothing.
+        pending_secrets = self.build_person_secrets(config, github_private_key)
         store = resolve_secret_store(config.config_dir)
         old_prefix = self._person_env_prefix(config.original_person_id)
         new_prefix = self._person_env_prefix(config.person_id)
@@ -1084,11 +1096,9 @@ class SimplePersonSetupService:
                 if old_key in indexed:
                     store.rename(old_key, f"{new_prefix}_{suffix}")
                     renamed = True
-        pending_secrets = self.build_person_secrets(config)
-        stored_pem = self._store_private_key_content(store, config)
         for key, value in pending_secrets.items():
             store.set(key, value)
-        if renamed or pending_secrets or stored_pem:
+        if renamed or pending_secrets:
             files.append(CreatedFile(path=store.location, action="update"))
 
         if config.original_person_id != config.person_id:
@@ -1249,13 +1259,26 @@ class SimplePersonSetupService:
             "chat": chat,
         }
 
-    def build_person_secrets(self, config: PersonSetupInput) -> dict[str, str]:
-        """Return the secret values a member save stores in the secret store."""
+    def build_person_secrets(
+        self, config: PersonSetupInput, github_private_key: str = ""
+    ) -> dict[str, str]:
+        """Return the secret values a member save stores in the secret store.
+
+        The GitHub App PEM is ``github_private_key`` when given, else the
+        content of ``config.github_private_key_path``. Runtime prefers the
+        stored content over a key file, so a user-supplied file is only read.
+
+        Raises:
+            SetupServiceError: The named key file cannot be read; saving the
+                member without its key would report a success it is not.
+        """
         if config.person_type == "human":
             return {}
         prefix = self._person_env_prefix(config.person_id)
         values = {
             f"{prefix}_GITHUB_ACCESS_TOKEN": config.github_access_token,
+            f"{prefix}_GITHUB_PRIVATE_KEY": github_private_key
+            or self._read_private_key_file(config),
             f"{prefix}_SLACK_BOT_TOKEN": config.slack_bot_token,
             f"{prefix}_SLACK_APP_TOKEN": config.slack_app_token,
         }
@@ -1268,33 +1291,21 @@ class SimplePersonSetupService:
         prefix = self._person_env_prefix(person_id)
         return [f"{prefix}_{suffix}" for suffix in Person.SECRET_ENV_SUFFIXES]
 
-    def _store_private_key_content(
-        self, store: SecretStore, config: PersonSetupInput
-    ) -> bool:
-        """Copy the GitHub App PEM into the keychain.
-
-        Runtime prefers this content over the ``*_GITHUB_PRIVATE_KEY_PATH``
-        file, so the plaintext PEM can be deleted afterwards: a flow-generated
-        file is removed here, a user-supplied file is left to the user. An
-        unreadable path is ignored.
-        """
+    @staticmethod
+    def _read_private_key_file(config: PersonSetupInput) -> str:
         if not config.github_private_key_path:
-            return False
-        key_file = Path(config.github_private_key_path).expanduser()
+            return ""
         try:
-            pem = key_file.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        prefix = self._person_env_prefix(config.person_id)
-        store.set(f"{prefix}_GITHUB_PRIVATE_KEY", pem)
-        self._discard_generated_key_file(key_file)
-        return True
-
-    def _discard_generated_key_file(self, key_file: Path) -> None:
-        """Delete a registration-flow PEM once the keychain holds its content."""
-        generated_dir = github_app_key_dir().resolve(strict=False)
-        if key_file.resolve(strict=False).is_relative_to(generated_dir):
-            key_file.unlink(missing_ok=True)
+            return (
+                Path(config.github_private_key_path)
+                .expanduser()
+                .read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeDecodeError) as exc:
+            raise SetupServiceError(
+                "github_private_key_unreadable",
+                "GitHub App private key file could not be read.",
+            ) from exc
 
 
 def _normalize_slack_channel_ref(channel: str) -> str:

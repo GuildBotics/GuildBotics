@@ -1261,6 +1261,8 @@ const resources = {
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub private key path",
+          personIdFixedByGitHubApp:
+            "The member ID stays fixed while a GitHub App is registered for it.",
           agentFieldSyncFailedTitle: "Agent field update failed",
           agentFieldSyncFailedBody:
             "The member was saved, but the project's Agent field could not be updated. Update it from Setup → GitHub, or it will be synced automatically on the first run.",
@@ -1279,11 +1281,15 @@ const resources = {
             converted:
               "Created app “{{slug}}”. Choose the repositories to install it on in the browser…",
             openInstall: "Open the install page",
-            installed: "Registration finished. The fields below have been filled in.",
+            installed:
+              "Registered, waiting for save. Saving the member stores the app's private key in the keychain.",
+            saved: "Saved. The app's private key is stored in the keychain.",
+            saveFailed:
+              "The member was not saved. Until the registration expires, you can save again with it.",
             installCheckError: "Failed to check the installation status: {{message}}",
             errors: {
               invalidAppName: "App name must be 1-34 characters.",
-              expired: "The registration session has expired. Please start again.",
+              expired: "The registration has expired. Register the app on GitHub again.",
             },
           },
           slackAppsSetupMode: {
@@ -2994,6 +3000,7 @@ const resources = {
           installationId: "GitHub Installation ID",
           appId: "GitHub App ID",
           privateKeyPath: "GitHub秘密鍵パス",
+          personIdFixedByGitHubApp: "GitHub App の登録中はメンバー ID を変更できません。",
           agentFieldSyncFailedTitle: "Agent フィールドの更新に失敗しました",
           agentFieldSyncFailedBody:
             "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → GitHub から更新するか、初回実行時の自動同期をお待ちください。",
@@ -3012,11 +3019,15 @@ const resources = {
             converted:
               "App「{{slug}}」を作成しました。ブラウザでインストール先リポジトリを選択してください…",
             openInstall: "インストール画面を開く",
-            installed: "登録が完了しました。以下の項目に反映済みです。",
+            installed:
+              "登録済み・保存待ちです。メンバーを保存すると、App の秘密鍵をキーチェーンに保存します。",
+            saved: "保存しました。App の秘密鍵はキーチェーンに保存済みです。",
+            saveFailed:
+              "メンバーを保存できませんでした。登録の有効期限内は、この登録のまま再度保存できます。",
             installCheckError: "インストール状態の確認に失敗しました: {{message}}",
             errors: {
               invalidAppName: "App 名は 1〜34 文字で入力してください。",
-              expired: "登録セッションの有効期限が切れました。もう一度やり直してください。",
+              expired: "登録の有効期限が切れました。もう一度 GitHub に登録してください。",
             },
           },
           slackAppsSetupMode: {

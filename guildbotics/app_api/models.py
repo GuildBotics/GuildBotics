@@ -1533,6 +1533,9 @@ class MemberResolveResponse(BaseModel):
 
 class GitHubAppRegistrationStartRequest(BaseModel):
     app_name: str = Field(min_length=1)
+    # The member whose save may store this app's key: the one being edited,
+    # or the ID of the member being added.
+    person_id: MemberDirectoryName
     organization: str = ""
     # Base URL of this local API as seen from the user's browser; GitHub
     # redirects the manifest callback here.

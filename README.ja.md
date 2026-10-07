@@ -243,7 +243,7 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
 
 **GitHub App を利用する場合**:
 
-デスクトップアプリのメンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで、App ID・秘密鍵・インストール ID などの設定値は自動で取り込まれるため、以下の手動手順は不要です。
+デスクトップアプリのメンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで App ID とインストール ID が自動で取り込まれ、メンバーを保存すると App の秘密鍵がキーチェーンに保存されるため、以下の手動手順は不要です。登録を始めてから 30 分以内にメンバーを保存してください。過ぎると登録の有効期限が切れ、App の登録をやり直すことになります。
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
@@ -457,7 +457,7 @@ GuildBotics は、シークレット（LLM API キーおよびアカウントト
 - **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間とデバイス固有世代を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
 - **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
 - **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
-- **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。登録時に生成したファイルは OS の一時ディレクトリへ書き、吸収後に削除します。鍵の中身は環境変数には出しません。
+- **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。自動登録で発行された鍵はファイルにも画面にも出さず、メンバーを保存するまで Local API のメモリに保持します。鍵の中身は環境変数には出しません。
 - **交換形式:** `guildbotics secrets export` / `import` は dotenv を転送ファイルとしてだけ使います。`secrets set --from-file` は PEM などのファイルをキーチェーンへ取り込みます。
 
 シークレットの管理には `guildbotics secrets` CLI を使います（サブコマンドとオプションの一覧は [CLI リファレンス](docs/cli_reference.md#guildbotics-secrets)を参照）。

@@ -1019,6 +1019,16 @@ def _call_sites(
 ) -> set[tuple[str, str]]:
     """The package module and enclosing function of every call ``matches``;
     only of the awaited ones when ``awaited``."""
+    return _sites(
+        lambda node: isinstance(node, ast.Call) and matches(node), awaited=awaited
+    )
+
+
+def _sites(
+    matches: Callable[[ast.AST], bool], *, awaited: bool = False
+) -> set[tuple[str, str]]:
+    """The package module and enclosing function of every node ``matches``;
+    only of the awaited expressions when ``awaited``."""
     import guildbotics
 
     package = Path(guildbotics.__file__).parent
@@ -1031,13 +1041,13 @@ def _call_sites(
             if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
             for node in ast.walk(function)
         }
-        calls = (
+        nodes = (
             [node.value for node in ast.walk(tree) if isinstance(node, ast.Await)]
             if awaited
             else ast.walk(tree)
         )
-        for node in calls:
-            if isinstance(node, ast.Call) and matches(node):
+        for node in nodes:
+            if matches(node):
                 module = path.relative_to(package.parent).as_posix()
                 sites.add((module, enclosing.get(id(node), "<module>")))
     return sites
@@ -2000,6 +2010,60 @@ def test_the_host_keeps_what_it_names_by_path_where_no_microvm_writes() -> None:
         )
 
     assert _call_sites(uses_the_os_directory) == set(_OS_TEMPORARY)
+
+
+#: Where the package names a place under ``/tmp``, and why it may: none of
+#: them is a place the host makes, reads or trusts.
+_FIXED_TMP = {
+    ("guildbotics/intelligences/cli_agents.py", "<module>"): (
+        "an install script the snapshot build runs inside the image it builds"
+    ),
+    ("guildbotics/intelligences/agent_runtime/antigravity.py", "_run_active_turn"): (
+        "a directory of the turn's own, inside the command's microVM"
+    ),
+    ("guildbotics/utils/safe_paths.py", "_host_alias"): (
+        "spells out what macOS's /tmp is, to compare a path, not to use it"
+    ),
+}
+
+
+def test_no_temporary_place_is_chosen_by_a_fixed_name() -> None:
+    """A fixed name in a shared temporary directory is one another process
+    can make first, as a file or a link of its own: the host creates what it
+    names by path exclusively (``mkstemp``, ``TemporaryDirectory``) under
+    :func:`host_temporary_root`. So the package neither asks where the OS
+    temporary directory is, by ``gettempdir`` or the variables that choose
+    it, nor names a place under ``/tmp``; a microVM's own ``/tmp`` is
+    classified here."""
+    lookups = {"gettempdir", "gettempdirb", "tempdir"}
+
+    def asks_for_the_os_directory(node: ast.AST) -> bool:
+        # Under another name, ``tempfile`` could ask without being seen.
+        if isinstance(node, ast.Import):
+            return any(
+                alias.name == "tempfile" and alias.asname for alias in node.names
+            )
+        if isinstance(node, ast.ImportFrom) and node.module == "tempfile":
+            return any(alias.name in lookups for alias in node.names)
+        if isinstance(node, ast.Attribute):
+            return (
+                node.attr in lookups and getattr(node.value, "id", None) == "tempfile"
+            )
+        return isinstance(node, ast.Constant) and node.value in {
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+        }
+
+    def names_a_place_under_tmp(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and re.search(r"(?<![\w./-])/tmp\b", node.value) is not None
+        )
+
+    assert _sites(asks_for_the_os_directory) == set()
+    assert _sites(names_a_place_under_tmp) == set(_FIXED_TMP)
 
 
 #: Who names a place a command's microVM can write, and what the host does

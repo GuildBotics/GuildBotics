@@ -187,11 +187,11 @@ def test_reference_standardizes_free_form_input_with_utf8_files():
     text = capability_reference_text()
     assert "--content-file <file>" in text
     assert "UTF-8" in text
-    assert "OS temporary directory" in text
+    assert "Create a dedicated directory exclusively" in text
+    assert "`mktemp -d`" in text
     assert "outside the repository and worktree" in text
-    assert "unique file name" in text
     assert "one argv value" in text
-    assert "even when the command fails" in text
+    assert "delete the directory with the file even when the command fails" in text
     assert "relative name with no spaces" not in text
     assert "--content-stdin" not in text
     for removed in (

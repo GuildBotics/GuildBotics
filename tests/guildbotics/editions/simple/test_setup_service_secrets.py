@@ -14,6 +14,7 @@ from guildbotics.editions.simple.setup_service import (
     PersonUpdateInput,
     ProjectSetupInput,
     ProjectUpdateInput,
+    SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
@@ -228,32 +229,7 @@ class TestPersonSecrets:
         )
         assert snapshot.has_github_private_key is True
 
-    def test_write_person_deletes_registration_generated_key_file(
-        self, fake_keyring, tmp_path
-    ):
-        from guildbotics.editions.simple.setup_service import github_app_key_dir
-
-        config_dir = self._workspace(tmp_path)
-        generated_dir = github_app_key_dir()
-        generated_dir.mkdir(parents=True, exist_ok=True)
-        pem_file = generated_dir / "alice.private-key.pem"
-        pem_file.write_text("-----BEGIN RSA PRIVATE KEY-----\npem\n")
-
-        SimplePersonSetupService().write_person(
-            _person_input(
-                config_dir,
-                github_private_key_path=pem_file,
-                github_app_id=7,
-            )
-        )
-
-        store = KeyringSecretStore(config_dir)
-        assert store.get("ALICE_GITHUB_PRIVATE_KEY") == (
-            "-----BEGIN RSA PRIVATE KEY-----\npem\n"
-        )
-        assert not pem_file.exists()
-
-    def test_write_person_ignores_unreadable_private_key_path(
+    def test_write_person_stores_the_key_it_is_given_over_a_key_file(
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
@@ -262,10 +238,80 @@ class TestPersonSecrets:
             _person_input(
                 config_dir,
                 github_private_key_path=tmp_path / "missing.pem",
-            )
+                github_app_id=7,
+            ),
+            github_private_key="-----BEGIN RSA PRIVATE KEY-----\nheld\n",
         )
 
-        assert KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY") is None
+        assert KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY") == (
+            "-----BEGIN RSA PRIVATE KEY-----\nheld\n"
+        )
+
+    def test_update_person_stores_the_key_it_is_given(self, fake_keyring, tmp_path):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir))
+
+        service.update_person(
+            PersonUpdateInput(
+                **{
+                    **_person_input(config_dir).model_dump(),
+                    "original_person_id": "alice",
+                }
+            ),
+            github_private_key="pem-content",
+        )
+
+        assert (
+            KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY")
+            == "pem-content"
+        )
+
+    @pytest.mark.parametrize("content", [None, b"\xff\xfe"])
+    def test_write_person_rejects_an_unreadable_key_file_before_writing(
+        self, fake_keyring, tmp_path, content
+    ):
+        config_dir = self._workspace(tmp_path)
+        pem_file = tmp_path / "alice.pem"
+        if content is not None:
+            pem_file.write_bytes(content)
+
+        with pytest.raises(SetupServiceError) as exc_info:
+            SimplePersonSetupService().write_person(
+                _person_input(
+                    config_dir,
+                    github_access_token="ghp-secret",
+                    github_private_key_path=pem_file,
+                )
+            )
+
+        assert exc_info.value.code == "github_private_key_unreadable"
+        assert not (config_dir / "team" / "members" / "alice").exists()
+        assert KeyringSecretStore(config_dir).keys() == []
+
+    def test_update_person_rejects_an_unreadable_key_file_before_renaming(
+        self, fake_keyring, tmp_path
+    ):
+        config_dir = self._workspace(tmp_path)
+        service = SimplePersonSetupService()
+        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+
+        with pytest.raises(SetupServiceError) as exc_info:
+            service.update_person(
+                PersonUpdateInput(
+                    **{
+                        **_person_input(config_dir).model_dump(),
+                        "original_person_id": "alice",
+                        "person_id": "alice-2",
+                        "github_private_key_path": tmp_path / "missing.pem",
+                    }
+                )
+            )
+
+        assert exc_info.value.code == "github_private_key_unreadable"
+        store = KeyringSecretStore(config_dir)
+        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-old"
+        assert not (config_dir / "team" / "members" / "alice-2").exists()
 
     def test_update_person_rename_moves_private_key_content(
         self, fake_keyring, tmp_path
@@ -390,6 +436,22 @@ class TestStaleKeyMetadata:
 
         assert (config_dir / "team" / "members" / "alice" / "person.yml").exists()
         assert not (config_dir / "team" / "members" / "alice-2").exists()
+
+    def test_write_person_store_failure_writes_no_member_config(
+        self, fake_keyring, tmp_path, monkeypatch
+    ):
+        config_dir = self._workspace(tmp_path)
+
+        def _raise(self, key, value):
+            raise SecretStoreError("keychain is locked")
+
+        monkeypatch.setattr(KeyringSecretStore, "set", _raise)
+        with pytest.raises(SecretStoreError):
+            SimplePersonSetupService().write_person(
+                _person_input(config_dir), github_private_key="pem-content"
+            )
+
+        assert not (config_dir / "team" / "members" / "alice").exists()
 
     def test_delete_person_store_failure_keeps_member_config(
         self, fake_keyring, tmp_path, monkeypatch

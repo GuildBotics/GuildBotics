@@ -31,6 +31,7 @@ import {
   initConfig,
   resolveMemberIdentity,
   runScenarioDiagnostics,
+  startGitHubAppRegistration,
   stopScheduler,
   updateDefaultPerson,
   updateIntelligenceConfig,
@@ -43,9 +44,11 @@ import {
   type MemberConfig,
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
+  type GitHubAppRegistrationStatus,
 } from "../api/client";
 import { type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
+import { openExternal } from "../openExternal";
 import i18n from "../i18n";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
@@ -363,8 +366,10 @@ vi.mock("../api/client", async (importOriginal) => {
     updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
     updateMemberConfig: vi.fn(async () => configWriteResponse()),
     updateProjectConfig: vi.fn(async () => configWriteResponse()),
+    startGitHubAppRegistration: vi.fn(),
   };
 });
+vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1636,6 +1641,7 @@ function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberForm
     githubInstallationId: "",
     githubAppId: "",
     githubPrivateKeyPath: "",
+    githubAppRegistrationId: "",
     githubAccessToken: "",
     slackUserId: "U012345678",
     slackBotToken: "",
@@ -2138,6 +2144,20 @@ describe("getMemberFieldErrors", () => {
     expect(errors.githubInstallationId).toBe(t("setup.validation.githubInstallationIdRequired"));
     expect(errors.githubAppId).toBe(t("setup.validation.githubAppIdRequired"));
     expect(errors.githubPrivateKeyPath).toBe(t("setup.validation.githubPrivateKeyPathRequired"));
+  });
+
+  it("lets an installed registration supply the app's IDs and key", () => {
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "github_apps",
+        githubAppRegistrationId: "registration-1",
+      }),
+      t,
+    );
+    expect(errors.githubInstallationId).toBeUndefined();
+    expect(errors.githubAppId).toBeUndefined();
+    expect(errors.githubPrivateKeyPath).toBeUndefined();
   });
 
   it("accepts a stored private key for github_apps members", () => {
@@ -3086,6 +3106,413 @@ describe("MembersSection", () => {
       original_person_id: "alice",
       person_id: "alice",
       person_name: "Alice Cooper",
+    });
+  });
+
+  describe("saving a member with a registered GitHub App", () => {
+    const installed: GitHubAppRegistrationStatus = {
+      state: "registration-1",
+      status: "installed",
+      app_name: "alice-app",
+      person_id: "alice",
+      start_url: "http://127.0.0.1:8765/github-app/registrations/registration-1/start",
+      slug: "alice-app",
+      app_id: 1978826,
+      html_url: "https://github.com/apps/alice-app",
+      github_username: "alice-app[bot]",
+      git_email: "1+alice-app[bot]@users.noreply.github.com",
+      installation_id: 86632391,
+      installation_page_url: "https://github.com/apps/alice-app/installations/new",
+      installation_check_error: "",
+    };
+
+    type User = ReturnType<typeof userEvent.setup>;
+
+    async function register(user: User) {
+      await user.click(
+        await screen.findByRole("button", {
+          name: t("setup.members.githubAppRegistration.register"),
+        }),
+      );
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.installed")),
+      ).toBeInTheDocument();
+      // The key never reaches the screen, so there is no path to ask for.
+      expect(screen.queryByLabelText(t("setup.members.privateKeyPath"))).not.toBeInTheDocument();
+      for (const [label, value] of [
+        ["setup.members.appId", "1978826"],
+        ["setup.members.installationId", "86632391"],
+      ]) {
+        expect(screen.getByLabelText(t(label))).toHaveAttribute("readonly");
+        expect(screen.getByLabelText(t(label))).toHaveValue(value);
+      }
+    }
+
+    async function editAlice(user: User, member = memberConfigDetail()) {
+      vi.mocked(getMemberConfig).mockResolvedValue(member);
+      vi.mocked(startGitHubAppRegistration).mockResolvedValue(installed);
+      renderSetupPage("/setup?section=members");
+
+      await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+      await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    }
+
+    async function save(user: User, calls = 1) {
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(calls));
+      return vi.mocked(updateMemberConfig).mock.calls[calls - 1][1];
+    }
+
+    async function registerAndSave(user: User) {
+      await editAlice(user);
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await register(user);
+      await fill(
+        user,
+        screen.getByLabelText(t("setup.members.githubResolvedIdentity")),
+        installed.github_username,
+      );
+      await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), installed.git_email);
+      return save(user);
+    }
+
+    const appMember = () =>
+      memberConfigDetail({
+        github_account_type: "github_apps",
+        github_username: "old-app[bot]",
+        git_email: "2+old-app[bot]@users.noreply.github.com",
+        github_app_id: 11,
+        github_installation_id: 22,
+        has_github_app_id: true,
+        has_github_installation_id: true,
+        has_github_private_key: true,
+      });
+
+    it("names the registration instead of sending the key or the app's IDs", async () => {
+      const body = await registerAndSave(userEvent.setup());
+
+      expect(startGitHubAppRegistration).toHaveBeenCalledWith(
+        expect.objectContaining({ person_id: "alice" }),
+      );
+      expect(body.github_app_registration_id).toBe("registration-1");
+      expect(body).not.toHaveProperty("github_private_key_path");
+      expect(body).not.toHaveProperty("github_app_id");
+      expect(body).not.toHaveProperty("github_installation_id");
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.saved")),
+      ).toBeInTheDocument();
+      // The member now holds the registered app, as the backend stored it.
+      expect(screen.getByLabelText(t("setup.members.appId"))).toHaveValue("1978826");
+      expect(screen.getByLabelText(t("setup.members.installationId"))).toHaveValue("86632391");
+
+      vi.mocked(startGitHubAppRegistration).mockResolvedValue({ ...installed, status: "pending" });
+      await userEvent
+        .setup()
+        .click(
+          screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+        );
+      await screen.findByText(t("setup.members.githubAppRegistration.pending"));
+      expect(
+        screen.queryByText(t("setup.members.githubAppRegistration.saved")),
+      ).not.toBeInTheDocument();
+    });
+
+    it("pairs no registered app ID with the stored key once the registration is left", async () => {
+      const user = userEvent.setup();
+      await editAlice(user, appMember());
+      await user.click(
+        screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.create") }),
+      );
+      await register(user);
+      await user.click(
+        screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.existing") }),
+      );
+
+      expect(screen.getByLabelText(t("setup.members.appId"))).toHaveValue("11");
+      const body = await save(user);
+      expect(body).not.toHaveProperty("github_app_registration_id");
+      expect(body).toMatchObject({ github_app_id: 11, github_installation_id: 22 });
+    });
+
+    it("keeps the registration through a reload of a member changed elsewhere", async () => {
+      const user = userEvent.setup();
+      await editAlice(user, appMember());
+      await user.click(
+        screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.create") }),
+      );
+      await register(user);
+      vi.mocked(updateMemberConfig).mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "config_changed",
+          message: "changed since it was read",
+          context: { path: "config/team/members/alice/person.yml", revisions: {} },
+        }),
+      );
+      await save(user);
+      expect(await screen.findByText(t("setup.staleSave.title"))).toBeInTheDocument();
+      await waitFor(() => expect(getMemberConfig).toHaveBeenCalledTimes(2));
+
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.installed")),
+      ).toBeInTheDocument();
+      const body = await save(user, 2);
+      expect(body.github_app_registration_id).toBe("registration-1");
+    });
+
+    it("fixes a new member's ID only while its registration lasts", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getTeam).mockResolvedValue({
+        project: { name: "Demo", language_code: "en", language_name: "English" },
+        default_person_id: "",
+        members: [],
+      });
+      vi.mocked(startGitHubAppRegistration).mockResolvedValue({ ...installed, person_id: "bot" });
+      renderSetupPage("/setup?section=members");
+
+      await fill(user, await screen.findByLabelText("Member ID"), "bot");
+      const personId = async () => {
+        await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+        const field = screen.getByLabelText("Member ID");
+        await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+        return field;
+      };
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await register(user);
+      expect(startGitHubAppRegistration).toHaveBeenCalledWith(
+        expect.objectContaining({ person_id: "bot" }),
+      );
+      expect(await personId()).toBeDisabled();
+
+      await selectGitHubAccountType(user, "Machine Account (Machine User)");
+      expect(await personId()).not.toBeDisabled();
+      await selectGitHubAccountType(user, "GitHub Apps");
+      expect(
+        screen.queryByText(t("setup.members.githubAppRegistration.installed")),
+      ).not.toBeInTheDocument();
+    });
+
+    function deferredStart() {
+      let resolve: (registration: GitHubAppRegistrationStatus) => void = () => {};
+      vi.mocked(startGitHubAppRegistration).mockReturnValue(
+        new Promise((done) => {
+          resolve = done;
+        }),
+      );
+      return resolve;
+    }
+
+    async function clickRegister(user: User) {
+      await user.click(
+        await screen.findByRole("button", {
+          name: t("setup.members.githubAppRegistration.register"),
+        }),
+      );
+      await waitFor(() => expect(startGitHubAppRegistration).toHaveBeenCalled());
+    }
+
+    async function expectNoRegistrationApplied() {
+      // Let the answered start settle before asserting nothing came of it.
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
+        ).not.toHaveAttribute("data-loading"),
+      );
+      for (const key of ["pending", "installed"]) {
+        expect(
+          screen.queryByText(t(`setup.members.githubAppRegistration.${key}`)),
+        ).not.toBeInTheDocument();
+      }
+      expect(vi.mocked(openExternal).mock.calls).toEqual([]);
+    }
+
+    it("drops a start answered after the new member's ID changed", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getTeam).mockResolvedValue({
+        project: { name: "Demo", language_code: "en", language_name: "English" },
+        default_person_id: "",
+        members: [],
+      });
+      const answer = deferredStart();
+      renderSetupPage("/setup?section=members");
+      await fill(user, await screen.findByLabelText("Member ID"), "bot");
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await clickRegister(user);
+
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+      await user.clear(screen.getByLabelText("Member ID"));
+      await fill(user, screen.getByLabelText("Member ID"), "other-bot");
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      answer({ ...installed, person_id: "bot", status: "pending" });
+
+      await expectNoRegistrationApplied();
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+      expect(screen.getByLabelText("Member ID")).toHaveValue("other-bot");
+      expect(screen.getByLabelText("Member ID")).not.toBeDisabled();
+    });
+
+    it("drops a start answered after the form moved to another member", async () => {
+      const user = userEvent.setup();
+      await editAlice(user);
+      const answer = deferredStart();
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await clickRegister(user);
+
+      await user.click(screen.getByRole("button", { name: t("setup.members.newButton") }));
+      answer({ ...installed, status: "pending" });
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await selectGitHubAccountType(user, "GitHub Apps");
+
+      await expectNoRegistrationApplied();
+    });
+
+    it("drops a start answered after the registration flow was left", async () => {
+      const user = userEvent.setup();
+      await editAlice(user);
+      const answer = deferredStart();
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await clickRegister(user);
+
+      await user.click(
+        screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.existing") }),
+      );
+      answer({ ...installed, status: "pending" });
+      await user.click(
+        screen.getByRole("radio", { name: t("setup.members.githubAppsSetupMode.create") }),
+      );
+
+      await expectNoRegistrationApplied();
+    });
+
+    function pending<T>() {
+      let settle: (value: T) => void = () => {};
+      const promise = new Promise<T>((done) => {
+        settle = done;
+      });
+      return { promise, settle };
+    }
+
+    function expectFormHeld(held: boolean) {
+      for (const name of ["editButton", "newButton", "deleteButton"]) {
+        const button = screen.getByRole("button", { name: t(`setup.members.${name}`) });
+        if (held) {
+          expect(button).toBeDisabled();
+        } else {
+          expect(button).not.toBeDisabled();
+        }
+      }
+    }
+
+    it("keeps the form on its member until the save answers", async () => {
+      const user = userEvent.setup();
+      const save = pending<Awaited<ReturnType<typeof updateMemberConfig>>>();
+      vi.mocked(updateMemberConfig).mockReturnValueOnce(save.promise);
+      await editAlice(user);
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+
+      expectFormHeld(true);
+      save.settle(configWriteResponse());
+      await waitFor(() => expectFormHeld(false));
+    });
+
+    it("keeps the form on its member until a reload answers", async () => {
+      const user = userEvent.setup();
+      await editAlice(user);
+      const reload = pending<MemberConfig>();
+      vi.mocked(getMemberConfig).mockReturnValueOnce(reload.promise);
+      vi.mocked(updateMemberConfig).mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "config_changed",
+          message: "changed since it was read",
+          context: { path: "config/team/members/alice/person.yml", revisions: {} },
+        }),
+      );
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await screen.findByText(t("setup.staleSave.title"));
+
+      expectFormHeld(true);
+      reload.settle(memberConfigDetail());
+      await waitFor(() => expectFormHeld(false));
+    });
+
+    it("keeps the form on its member until a deletion answers", async () => {
+      const user = userEvent.setup();
+      const deletion = pending<Awaited<ReturnType<typeof deleteMemberConfig>>>();
+      vi.mocked(deleteMemberConfig).mockReturnValueOnce(deletion.promise);
+      await editAlice(user);
+      await user.click(screen.getByRole("button", { name: t("setup.members.deleteButton") }));
+      await user.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: t("setup.members.deleteButton"),
+        }),
+      );
+      await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
+
+      for (const name of ["editButton", "newButton"]) {
+        expect(screen.getByRole("button", { name: t(`setup.members.${name}`) })).toBeDisabled();
+      }
+      deletion.settle(configWriteResponse());
+    });
+
+    it("saves a registration for a member renamed in the same save", async () => {
+      const user = userEvent.setup();
+      await editAlice(user);
+      await selectGitHubAccountType(user, "GitHub Apps");
+      await register(user);
+      await fill(
+        user,
+        screen.getByLabelText(t("setup.members.githubResolvedIdentity")),
+        installed.github_username,
+      );
+      await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), installed.git_email);
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+      await user.clear(screen.getByLabelText("Member ID"));
+      await fill(user, screen.getByLabelText("Member ID"), "alice-2");
+      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+
+      const body = await save(user);
+
+      expect(body).toMatchObject({
+        original_person_id: "alice",
+        person_id: "alice-2",
+        github_app_registration_id: "registration-1",
+      });
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.saved")),
+      ).toBeInTheDocument();
+    });
+
+    it("asks to register again when the registration expired before the save", async () => {
+      vi.mocked(updateMemberConfig).mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "github_app_registration_not_found",
+          message: "GitHub App registration was not found or has expired.",
+          context: {},
+        }),
+      );
+
+      await registerAndSave(userEvent.setup());
+
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.errors.expired")),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText(t("setup.members.privateKeyPath"))).toBeInTheDocument();
+    });
+
+    it("keeps the registration for another save when the save failed", async () => {
+      vi.mocked(updateMemberConfig).mockRejectedValueOnce(new Error("keychain unavailable"));
+
+      await registerAndSave(userEvent.setup());
+
+      expect(
+        await screen.findByText(t("setup.members.githubAppRegistration.saveFailed")),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(t("setup.members.githubAppRegistration.installed")),
+      ).toBeInTheDocument();
     });
   });
 
