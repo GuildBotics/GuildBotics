@@ -794,8 +794,15 @@ some of those itself. A held change covers everything beneath it by path element
 link is a directory on this device, so the hub's writes and deletions there are skipped
 rather than carried to its target, while the rest still converges. An embedded repository
 with no commit never enters the index, and adding it used to abort the rest of its shared
-root and report the hub unreachable. The add ignores that per-path error. A path the status
-listed that the index does not hold is held back with the others, and once that repository
+root and report the hub unreachable. The add ignores that per-path error and exits 1. Only a
+path that is still changed afterwards, and that this add did not stage, is held back. A path
+that disappeared or returned to HEAD between the status and the add is not: holding it would
+skip restoring the hub's copy, and the next commit would send the old bytes. A skipped
+directory that is already gone is not held either, and does not fail the cycle. If the
+follow-up status lists the files inside a directory the earlier status named, the hold is
+that directory, so it still covers everything beneath it. A gitlink whose commit is already
+in the index is not held for this reason either — status keeps listing it while the nested
+worktree is dirty, and add did not skip it. Exit 0 skipped nothing. Once that repository
 has a commit Git stages a gitlink, which the mode check holds. The repository's own
 `info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
 a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
