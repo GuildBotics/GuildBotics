@@ -53,7 +53,10 @@ SYNC_REMOTE = "origin"
 REJECTED_REF_PREFIX = "refs/guildbotics/rejected"
 #: Where a hub's content is read before the workspace is connected to it.
 PREVIEW_REF = "refs/guildbotics/hub-preview"
-#: ``local/`` is device-only. Hidden paths are not GuildBotics shared data;
+#: ``local/`` is device-only, and only the one beside the shared roots: the
+#: sync port shares a ``local/`` deeper inside them, so an unanchored rule
+#: would leave it unsent with nothing reported. Hidden paths are not
+#: GuildBotics shared data;
 #: ignoring the whole category keeps OS and editor bookkeeping out at every
 #: depth and also refuses ``.env`` a second time. The final entry is an atomic
 #: write in progress: it is created beside its
@@ -61,7 +64,7 @@ PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: that enumerates it either commits a half-written name or fails its own
 #: ``git add`` when the rename beats it -- reported as a hub it could not
 #: reach. It is never a file the user meant to share.
-GITIGNORE_CONTENT = f"local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
+GITIGNORE_CONTENT = f"/local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
 #: Attributes that switch off every conversion between the index and disk.
 GIT_ATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n"
 #: Git's empty tree: the base of a comparison with a side that has no commits.

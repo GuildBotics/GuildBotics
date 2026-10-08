@@ -44,6 +44,21 @@ def test_initialize_ignores_device_local_data_and_hidden_paths(tmp_path: Path) -
     assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == GITIGNORE_CONTENT
 
 
+def test_a_local_directory_inside_a_shared_root_is_shared(tmp_path: Path) -> None:
+    """Only ``.guildbotics/local/`` is device-only.
+
+    The sync port shares a ``local/`` deeper in the shared roots, so ignoring
+    it there too would leave its files unsent with nothing reported.
+    """
+    repository = _workspace(tmp_path)
+    (tmp_path / ".guildbotics" / "local" / "run" / "pid").write_text("1")
+    nested = tmp_path / ".guildbotics" / "config" / "commands" / "local"
+    nested.mkdir(parents=True)
+    (nested / "tool.md").write_text("tool\n")
+
+    assert repository.stage_changes().paths == ("config/commands/local/tool.md",)
+
+
 def test_a_locked_index_is_not_a_change_that_cannot_be_sent(tmp_path: Path) -> None:
     """A locked index is Git failing, not a path the user has to repair."""
     repository = _workspace(tmp_path)
