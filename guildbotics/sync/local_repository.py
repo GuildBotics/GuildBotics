@@ -382,16 +382,17 @@ class LocalSyncRepository:
         the ones with no commit are excluded from the add and returned as
         refused. One with a commit is added as a gitlink, which the mode check
         holds. Any other failure of the add fails the cycle: an unreadable
-        file or a locked index is not a change to hold.
+        file or a locked index is not a change to hold, and neither is a
+        directory Git would walk but cannot list.
 
         Raises:
-            SyncRepositoryError: When a directory under a shared root cannot be
-                listed.
+            SyncRepositoryError: When a directory Git walks under a shared root
+                cannot be listed.
             GitCommandError: When ``git add`` fails.
         """
-        _refuse_unlistable_directories(self.path)
         repository = self._repo()
-        listed = _changed_paths(repository)
+        listed, unwalked = _changed_paths(repository)
+        _refuse_unlistable_directories(self.path, unwalked)
         # A root nothing lists may not exist, and Git refuses to add it then.
         roots = sorted({path.split("/", 1)[0] for path in listed} & set(SHARED_ROOTS))
         if not roots:
@@ -769,21 +770,30 @@ def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
         yield paths[start : start + _PATH_BATCH]
 
 
-def _changed_paths(repository: Repo) -> list[str]:
-    """Return the paths a status of the shared roots lists right now.
+def _changed_paths(repository: Repo) -> tuple[list[str], set[str]]:
+    """Return what a status of the shared roots lists right now.
 
-    Ordinary directories are expanded to their files, so an entry that keeps
-    its trailing slash (``config/commands/``) is an embedded repository.
+    Returns:
+        tuple[list[str], set[str]]: The changed paths, and the directories Git
+            did not walk into. Ordinary directories are expanded to their
+            files, so a changed path that keeps its trailing slash
+            (``config/commands/``) is an embedded repository. The directories
+            not walked are those, with every directory an ignore rule matched.
     """
     status = repository.git.status(
         "--porcelain",
         "-z",
         "--untracked-files=all",
+        "--ignored=matching",
         "--no-renames",
         "--",
         *SHARED_ROOTS,
     )
-    return [entry[_STATUS_PREFIX:] for entry in status.split("\0") if entry]
+    entries = [entry for entry in status.split("\0") if entry]
+    return (
+        [entry[_STATUS_PREFIX:] for entry in entries if not entry.startswith("!!")],
+        {entry[_STATUS_PREFIX:-1] for entry in entries if entry.endswith("/")},
+    )
 
 
 def _has_commit(path: Path) -> bool:
@@ -799,15 +809,30 @@ def _has_commit(path: Path) -> bool:
     return True
 
 
-def _refuse_unlistable_directories(root: Path) -> None:
-    """Fail when a directory under a shared root cannot be listed.
+def _refuse_unlistable_directories(root: Path, unwalked: set[str]) -> None:
+    """Fail when a directory Git walks under a shared root cannot be listed.
 
-    Git only warns about such a directory and exits 0, and stages every
-    tracked file inside it as deleted, which the hub then carries to every
-    other device. A missing directory is not refused: it may vanish while the
-    walk runs, and Windows reports a path too long to open the same way, which
-    Git reaches through ``core.longpaths``. Hidden directories, an embedded
-    repository's ``.git`` among them, are skipped: they are never shared.
+    Git only warns about such a directory and exits 0. A file added inside it
+    is never sent, and a tracked file inside it can be staged as deleted,
+    which the hub then carries to every other device. A missing directory is
+    not refused: it may vanish while the walk runs, and Windows reports a path
+    too long to open the same way, which Git reaches through
+    ``core.longpaths``.
+
+    Only what Git walks is checked, as Git's own status answered it: the
+    directories it reported instead of expanding are an embedded repository,
+    held as a whole, and an ignored directory with nothing tracked inside, so
+    a directory inside either stops nothing else. Git still walks a
+    repository or an ignored directory that holds tracked files, and so does
+    this. The walk starts above the shared roots so that a root which is
+    itself one of those, or a link, is not entered. ``.git`` is never listed
+    by status, so it is skipped by name with every other hidden directory the
+    ignore rules leave out.
+
+    Args:
+        root (Path): The synchronized repository's working tree.
+        unwalked (set[str]): The directories status did not walk into,
+            relative to ``root``.
 
     Raises:
         SyncRepositoryError: Naming the directory that cannot be listed.
@@ -820,9 +845,15 @@ def _refuse_unlistable_directories(root: Path) -> None:
                 "synchronized."
             ) from error
 
-    for shared in SHARED_ROOTS:
-        for _, directories, _ in os.walk(root / shared, onerror=refuse):
-            directories[:] = [name for name in directories if not name.startswith(".")]
+    for top, directories, _ in os.walk(root, onerror=refuse):
+        parent = Path(top).relative_to(root)
+        directories[:] = [
+            name
+            for name in directories
+            if (parent.parts or name in SHARED_ROOTS)
+            and not name.startswith(".")
+            and (parent / name).as_posix() not in unwalked
+        ]
 
 
 def _configure_git(repository: Repo) -> None:

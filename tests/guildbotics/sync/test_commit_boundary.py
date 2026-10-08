@@ -27,8 +27,12 @@ from guildbotics.sync.commits import (
     commit_shared_changes,
     held_covers,
 )
-from guildbotics.sync.local_repository import LocalSyncRepository, SharedEntry
-from tests.guildbotics.sync.conftest import Device
+from guildbotics.sync.local_repository import (
+    LocalSyncRepository,
+    SharedEntry,
+    SyncRepositoryError,
+)
+from tests.guildbotics.sync.conftest import Device, refuse_listing
 
 OVERSIZED = b"x" * (1_048_576 + 1)
 
@@ -307,6 +311,92 @@ def test_a_commit_in_a_nested_repository_holds_it_as_a_gitlink(first: Device) ->
     assert "config/commands" not in _committed_paths(first.repository)
 
 
+@pytest.mark.parametrize(
+    ("committed", "reason"),
+    [
+        (False, "is a Git repository with no commit"),
+        (True, "is not a regular file (Git mode 160000)"),
+    ],
+)
+def test_an_unlistable_directory_inside_a_held_repository_stops_nothing_else(
+    first: Device, monkeypatch: pytest.MonkeyPatch, committed: bool, reason: str
+) -> None:
+    """Git does not walk into an embedded repository, so neither does the check.
+
+    The repository is held as a whole. A directory inside it that cannot be
+    listed is not a shared directory, and failing on it would keep the file
+    beside the repository from being sent.
+    """
+    commands = first.shared / "config/commands"
+    nested = _init_repository(commands)
+    (commands / "private").mkdir()
+    (commands / "private/secret.md").write_text("secret\n")
+    if committed:
+        nested.index.add(["note.md"])
+        nested.index.commit("commands")
+    first.write("config/sent.md", "sent\n")
+    refuse_listing(monkeypatch, commands / "private")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert [(item.path, item.reason) for item in outcome.unsendable] == [
+        ("config/commands", reason)
+    ]
+    assert "config/sent.md" in _committed_paths(first.repository)
+
+
+def test_an_unlistable_directory_inside_an_ignored_one_stops_nothing_else(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git does not walk into a directory an ignore rule matches, so neither does the check.
+
+    The rule here is one the user may have outside the workspace's own
+    ``.gitignore``, like a global ``node_modules/``. The ignored directory is
+    also a repository with no commit: being ignored, it is not a change, so
+    it is not held either.
+    """
+    exclude = Path(first.repository._repo().git_dir) / "info" / "exclude"
+    exclude.write_text("node_modules/\n")
+    (first.shared / "config/commands").mkdir()
+    modules = first.shared / "config/commands/node_modules"
+    _init_repository(modules)
+    (modules / "private").mkdir()
+    (modules / "private/package.js").write_text("module\n")
+    first.write("config/sent.md", "sent\n")
+    refuse_listing(monkeypatch, modules / "private")
+
+    outcome = commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert outcome.unsendable == ()
+    assert "config/sent.md" in _committed_paths(first.repository)
+    assert "config/commands/node_modules/private/package.js" not in (
+        _committed_paths(first.repository)
+    )
+
+
+def test_an_ignored_directory_holding_tracked_files_is_still_checked(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git walks an ignored directory that holds tracked files, so the check does too.
+
+    Its tracked file could be staged as deleted, so the pass fails rather
+    than sending anything.
+    """
+    first.write("config/vendor/kept.md", "kept\n")
+    commit_shared_changes(first.repository, device_id="device-mac")
+    exclude = Path(first.repository._repo().git_dir) / "info" / "exclude"
+    exclude.write_text("vendor/\n")
+    first.write("config/sent.md", "sent\n")
+    head = first.repository.head()
+    refuse_listing(monkeypatch, first.shared / "config/vendor")
+
+    with pytest.raises(SyncRepositoryError, match="vendor"):
+        commit_shared_changes(first.repository, device_id="device-mac")
+
+    assert first.repository.head() == head
+    assert "config/vendor/kept.md" in _committed_paths(first.repository)
+
+
 def _race_the_status_before_add(
     monkeypatch: pytest.MonkeyPatch,
     change: Callable[[], None],
@@ -321,7 +411,7 @@ def _race_the_status_before_add(
     original = local_repository._changed_paths
     calls = 0
 
-    def wrapped(repository: Repo) -> list[str]:
+    def wrapped(repository: Repo) -> tuple[list[str], set[str]]:
         nonlocal calls
         calls += 1
         if calls != 1:

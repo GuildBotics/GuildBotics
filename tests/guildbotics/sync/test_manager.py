@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from contextlib import contextmanager
@@ -41,6 +40,7 @@ from tests.guildbotics.sync.conftest import (
     Device,
     make_device,
     push_entries,
+    refuse_listing,
 )
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
@@ -128,7 +128,7 @@ def test_a_file_put_back_during_convergence_does_not_overwrite_the_hub(
     calls = 0
     seen_during_the_race: list[bool] = []
 
-    def wrapped(repository: Repo) -> list[str]:
+    def wrapped(repository: Repo) -> tuple[list[str], set[str]]:
         nonlocal calls
         calls += 1
         if calls != CONVERGE_STATUS_CALL:
@@ -138,7 +138,7 @@ def test_a_file_put_back_during_convergence_does_not_overwrite_the_hub(
             listed = original(repository)
         finally:
             path.write_bytes(b"language: en\n")
-        seen_during_the_race.append(CONFIG in listed)
+        seen_during_the_race.append(CONFIG in listed[0])
         return listed
 
     monkeypatch.setattr(local_repository, "_changed_paths", wrapped)
@@ -465,24 +465,17 @@ def test_an_unreadable_file_fails_the_cycle_and_is_named(
 def test_a_directory_that_cannot_be_listed_fails_the_cycle_and_is_named(
     first: Device, hub: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Git only warns about such a directory, and stages what it tracks as deleted.
+    """Git only warns about such a directory and leaves what is inside unsent.
 
-    The deletion would reach the hub and remove those files on every device.
-    The listing is refused by replacing it, so no file system permission is
-    needed to reach this.
+    A tracked file inside it can even be staged as deleted, which would reach
+    the hub and remove it on every device.
     """
     first.write("config/hidden/kept.md", "kept\n")
     first.manager.synchronize()
     first.write(CONFIG, "language: ja\n")
     unlistable = first.shared / "config/hidden"
-    listing = os.scandir
+    refuse_listing(monkeypatch, unlistable)
 
-    def scandir(path: str) -> Any:
-        if Path(path) == unlistable:
-            raise PermissionError(13, "Permission denied", path)
-        return listing(path)
-
-    monkeypatch.setattr(os, "scandir", scandir)
     status = first.manager.synchronize()
 
     assert status.state == "unreachable"

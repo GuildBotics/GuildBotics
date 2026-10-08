@@ -800,10 +800,15 @@ with no commit are excluded from the add (`:(exclude,literal)`, every path still
 name) and held back under that name. Once that repository has a commit Git stages a
 gitlink, which the mode check holds. Any other failure of the add — an unreadable file, a
 file another process holds open exclusively, a locked index — fails the cycle instead of
-being held. Git only warns about a directory it cannot list and stages the tracked files
-inside it as deleted, so the shared roots are walked first and such a directory fails the
-cycle, naming its path. `core.longpaths` is set so that Git for Windows does not silently
-leave out a path longer than 260 characters. The repository's own
+being held. Git only warns about a directory it cannot list: a file added inside it is
+never sent, and a tracked file inside it can be staged as deleted (Git for Windows does so
+for a modified one). So every directory Git walks under the shared roots is listed before
+the add, and one that cannot be listed fails the cycle, naming its path. Where Git does not
+walk is Git's own answer — the directories its status reports with `--ignored=matching`
+instead of expanding: embedded repositories, held as a whole, and ignored directories with
+nothing tracked inside.
+`core.longpaths` is set so that Git for Windows does not silently leave out a path longer
+than 260 characters. The repository's own
 `info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
 a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
 differ from the blob that was checked.

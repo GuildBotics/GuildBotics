@@ -8,6 +8,8 @@ as a real one does, because that refusal is what serializes shared state.
 
 from __future__ import annotations
 
+import errno
+import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -119,6 +121,22 @@ def push_entries(
     )
     repository.git.push("origin", "HEAD:main")
     return repository.head.commit.hexsha
+
+
+def refuse_listing(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
+    """Make listing ``directory`` fail as a denied permission would.
+
+    Git still lists it, so what this pins is the check made before ``git add``,
+    and it needs no file system permission to reach.
+    """
+    listing = os.scandir
+
+    def scandir(path: Any) -> Any:
+        if Path(path) == directory:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return listing(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
 
 
 @pytest.fixture
