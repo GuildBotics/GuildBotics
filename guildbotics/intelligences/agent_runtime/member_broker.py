@@ -46,7 +46,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
 )
-from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.member_invocation import MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.async_utils import finish_on_cancel
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
@@ -258,8 +258,8 @@ class MemberCapabilityBroker:
                 context.person_id,
                 arguments,
                 member_invocation(
-                    context.conversation_key.work_kind,
                     context.run_id,
+                    context.work,
                     context.trace_id,
                     context.lease,
                     participant_labels=context.participant_labels,
@@ -540,19 +540,20 @@ def _as_guest(url: str) -> str:
 
 
 def member_invocation(
-    work_kind: str,
     run_id: str,
+    work: Work | None,
     trace_id: str,
     lease: PersonExecutionLease | None,
     *,
     participant_labels: str = "",
 ) -> MemberInvocation:
-    """What a member command asked for by ``run_id``'s work of ``work_kind``
-    runs with: a chat run's, or a task run's for any other work."""
-    chat = work_kind == "chat"
+    """What a member command asked for by ``run_id``'s ``work`` runs with: a
+    chat run's, or a task run's for any other work."""
+    chat = work is not None and work.kind == "chat"
     return MemberInvocation(
         run_id=run_id if chat else "",
         task_run_id="" if chat else run_id,
+        work=work,
         participant_labels=participant_labels,
         trace_id=trace_id,
         lease=lease,

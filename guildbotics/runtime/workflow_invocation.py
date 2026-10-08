@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from guildbotics.runtime.member_invocation import ChatSubject, Work
+
 WorkflowSource = Literal[
     "routine",
     "scheduled",
@@ -27,26 +29,30 @@ TICKET_WORKFLOW_COMMAND = "workflows/ticket_driven_workflow"
 
 @dataclass(frozen=True, slots=True)
 class WorkflowInvocation:
+    """A workflow run the host started.
+
+    ``run_id`` and ``work`` are what the host selected the run for: the run
+    its command records to, and the work its grant holds it to. A ticket or
+    chat run has both; any other has neither.
+    """
+
     command: str
     person_id: str
     source: WorkflowSource
     trigger_type: WorkflowTriggerType
     payload: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str = ""
+    run_id: str = ""
+    work: Work | None = None
 
 
 class ChatTurn(BaseModel):
     """Everything the chat workflow needs to run one AI CLI turn: the payload
-    of a chat workflow's invocation."""
+    of a chat workflow's invocation, whose work is the turn's ``subject``."""
 
-    run_id: str
     attempt: int
-    service_name: str
-    channel_id: str
-    thread_ts: str
-    event_id: str
+    subject: ChatSubject
     message_ts: str
-    work_identity: str
     context_cursor: str
     effort: str = ""
     prompt: dict[str, Any]

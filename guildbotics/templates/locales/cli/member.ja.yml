@@ -7,20 +7,12 @@ ja:
     file_not_utf8: "本文ファイルが有効な UTF-8 ではありません: %{path}"
     file_read_failed: "本文ファイル %{path} を読み取れませんでした: %{error}"
     file_in_environment: "隔離環境のコマンドは本文を --content-stdin で渡します（host はその環境のファイルを読みません）。"
-  agent:
-    help: native agent runtime state を管理します。
-    conversation_help: 永続化された native agent conversation を管理します。
-  agent_conversation_reset:
-    help: 履歴を削除せず、厳密に指定した native provider session を reset します。
-    adapter_help: 厳密な session を reset する native provider adapter。
-    work_kind_help: conversation を所有する論理作業の種類。
-    work_identity_help: 安定した ticket URL、chat thread identity、または manual work identity。
   lease:
     invalid_delegation: member command を実行できません。呼び出し元の turn がこのメンバーの execution lease を持っていません（read-only のコマンドの turn は持ちません）。
     unavailable: person execution lease は既に使用されています。
     unavailable_with_holder: "person execution lease は PID %{pid}（%{source}: %{command}）が使用しています。"
   run:
-    required: "このコマンドは呼び出し元のワークフローの実行を対象とするため、その実行の中でだけ使えます。"
+    required: "このコマンドは呼び出し元の %{kind} ワークフローの実行を対象とするため、その実行の中でだけ使えます。"
   sync:
     invalid_identity: "Workspace 同期を開始できませんでした。%{path} が不正です。コマンドによる変更はまだ行われていません。ファイルを修復してから再実行してください。"
   chat_updates:

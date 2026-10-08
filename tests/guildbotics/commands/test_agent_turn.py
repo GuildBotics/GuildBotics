@@ -14,6 +14,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.runtime.member_invocation import Work
 
 
 def _store(tmp_path) -> RunStore:
@@ -59,11 +60,8 @@ async def test_turn_retries_with_continuation_and_returns_the_completed_response
 
     result = await run_agent_turn(
         invoke=invoke,
-        ledger=HostRunLedger(),
+        ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
         execution_context={
-            "run_id": "run-1",
-            "work_kind": "ticket",
-            "work_identity": "https://example.test/1",
             "resume_policy": "fresh",
             "attempt": 1,
             "max_completion_attempts": 3,
@@ -97,11 +95,8 @@ async def test_turn_accepts_a_chat_completion_on_the_same_boundary(tmp_path):
 
     result = await run_agent_turn(
         invoke=invoke,
-        ledger=HostRunLedger(),
+        ledger=HostRunLedger("run-chat", Work("chat", "slack:C1:T1")),
         execution_context={
-            "run_id": "run-chat",
-            "work_kind": "chat",
-            "work_identity": "slack:C1:T1",
             "event_id": "E1",
             "max_completion_attempts": 2,
         },
@@ -124,10 +119,8 @@ async def test_turn_exhausts_the_configured_attempt_budget(tmp_path):
     with pytest.raises(CompletionRetryExhausted) as excinfo:
         await run_agent_turn(
             invoke=invoke,
-            ledger=HostRunLedger(),
+            ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
             execution_context={
-                "run_id": "run-1",
-                "work_kind": "ticket",
                 "max_completion_attempts": 2,
             },
         )
@@ -169,10 +162,8 @@ async def test_turn_reraises_rate_limits_without_retrying(
     with pytest.raises(CliAgentExecutionError) as excinfo:
         await run_agent_turn(
             invoke=invoke,
-            ledger=HostRunLedger(),
+            ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
             execution_context={
-                "run_id": "run-1",
-                "work_kind": "ticket",
                 "max_completion_attempts": 3,
             },
         )
@@ -210,10 +201,8 @@ async def test_turn_records_completion_missing_then_completed_events(
 
     await run_agent_turn(
         invoke=invoke,
-        ledger=HostRunLedger(),
+        ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
         execution_context={
-            "run_id": "run-1",
-            "work_kind": "ticket",
             "attempt": 4,
             "max_completion_attempts": max_attempts,
         },
@@ -245,10 +234,8 @@ async def test_turn_does_not_record_completion_missing_for_invoke_failures(
     with pytest.raises(CompletionRetryExhausted):
         await run_agent_turn(
             invoke=invoke,
-            ledger=HostRunLedger(),
+            ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
             execution_context={
-                "run_id": "run-1",
-                "work_kind": "ticket",
                 "max_completion_attempts": 2,
             },
         )
@@ -269,10 +256,8 @@ async def test_turn_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path)
     with pytest.raises(RuntimeError, match="provider failed"):
         await run_agent_turn(
             invoke=invoke,
-            ledger=HostRunLedger(),
+            ledger=HostRunLedger("run-chat", Work("chat", "slack:C1:T1")),
             execution_context={
-                "run_id": "run-chat",
-                "work_kind": "chat",
                 "max_completion_attempts": 3,
                 "retry_invoke_exceptions": False,
             },
@@ -306,10 +291,8 @@ async def test_turn_rereads_chat_evidence_for_every_attempt(tmp_path):
 
     await run_agent_turn(
         invoke=invoke,
-        ledger=HostRunLedger(),
+        ledger=HostRunLedger("run-chat", Work("chat", "slack:C1:T1")),
         execution_context={
-            "run_id": "run-chat",
-            "work_kind": "chat",
             "event_id": "E1",
             "max_completion_attempts": 2,
         },
@@ -334,10 +317,8 @@ async def test_turn_gives_ticket_turns_no_extra_parameters(tmp_path):
 
     await run_agent_turn(
         invoke=invoke,
-        ledger=HostRunLedger(),
+        ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
         execution_context={
-            "run_id": "run-1",
-            "work_kind": "ticket",
             "max_completion_attempts": 1,
         },
     )

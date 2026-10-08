@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import typing
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +17,9 @@ import pytest
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.runtime.member_invocation import (
+    ChatSubject,
     MemberInvocation,
+    Work,
     current_member_invocation,
 )
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -266,41 +269,35 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
         assert t("cli.member.lease.invalid_delegation") in stderr
 
 
-_CHAT_EVENT = ["--channel-id", "C1", "--thread-ts", "100.1", "--event-id", "E1"]
 _SUMMARY = ["--content-stdin"]
-#: The commands that write a run's record, with the invocation field that
-#: names their run.
+_CHAT = Work.of_chat(ChatSubject("slack", "C1", "100.1", "E1", "U_BOT"))
+_TICKET = Work.of_ticket("https://github.com/owner/repo/issues/1")
+#: The invocation of a run of each kind of workflow work, as its host makes it.
+_RUNS = {
+    "chat": MemberInvocation(run_id="run-1", work=_CHAT),
+    "ticket": MemberInvocation(task_run_id="run-1", work=_TICKET),
+}
+#: The commands that write a run's record, with the kind of run they act on.
 _RUN_RECORD_WRITES = [
-    (["chat", "noop", "--person", "aiko", *_CHAT_EVENT, *_SUMMARY], "run_id"),
+    (["chat", "noop", "--person", "aiko", *_SUMMARY], "chat"),
     (
-        ["chat", "complete", "--person", "aiko", *_CHAT_EVENT, "--status", "blocked"]
-        + _SUMMARY,
-        "run_id",
+        ["chat", "complete", "--person", "aiko", "--status", "blocked", *_SUMMARY],
+        "chat",
     ),
     (
-        [
-            "task",
-            "complete",
-            "--person",
-            "aiko",
-            "--ticket-url",
-            "https://github.com/owner/repo/issues/1",
-            "--status",
-            "blocked",
-            *_SUMMARY,
-        ],
-        "task_run_id",
+        ["task", "complete", "--person", "aiko", "--status", "blocked", *_SUMMARY],
+        "ticket",
     ),
 ]
 
 
-@pytest.mark.parametrize(("arguments", "run_field"), _RUN_RECORD_WRITES)
+@pytest.mark.parametrize(("arguments", "kind"), _RUN_RECORD_WRITES)
 @pytest.mark.parametrize(
     ("lease_person", "runs"),
     [(None, False), ("yuki", False), ("aiko", True)],
 )
 def test_a_run_record_is_written_only_under_the_turns_lease(
-    monkeypatch, tmp_path, arguments, run_field, lease_person, runs
+    monkeypatch, tmp_path, arguments, kind, lease_person, runs
 ) -> None:
     """A read-only command's turn holds no lease, so the guard refuses every
     write of it, these that record the run's outcome among them."""
@@ -314,14 +311,22 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
 
     exit_code, stdout, stderr = _run(
         arguments,
-        MemberInvocation(**{run_field: "run-1"}, lease=lease),
+        replace(_RUNS[kind], lease=lease),
         cwd=tmp_path,
         stdin="Nothing to do.",
     )
 
     if runs:
         assert (exit_code, stderr) == (0, "")
-        assert [record.run_id for record in RunStore().records()] == ["run-1"]
+        [record] = RunStore().records()
+        assert record.run_id == "run-1"
+        # The subject is the run's work, which no argument names.
+        if record.result is None:
+            assert record.provider_evidence[-1]["payload"]["event_id"] == "E1"
+        else:
+            assert record.result.subject_id == (
+                "slack:C1:100.1:E1" if kind == "chat" else _TICKET.identity
+            )
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in " ".join(stderr.split())
@@ -329,21 +334,29 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "run_field"),
+    ("arguments", "kind"),
     [
         *_RUN_RECORD_WRITES,
-        (["chat", "updates", "--person", "aiko"], "run_id"),
-        (["task", "status", "--person", "aiko"], "task_run_id"),
+        (["chat", "updates", "--person", "aiko"], "chat"),
+        (["task", "status", "--person", "aiko"], "ticket"),
     ],
 )
-def test_a_run_command_acts_only_on_its_invocations_run(
-    tmp_path, arguments, run_field
+def test_a_run_command_acts_only_on_its_invocations_run_and_work(
+    tmp_path, arguments, kind
 ) -> None:
-    """The run is the invocation's, never one the command names, so a call
-    whose invocation carries no run of the command's kind is refused."""
-    other_field = "task_run_id" if run_field == "run_id" else "run_id"
+    """The run and its subject are the invocation's, never ones the command
+    names, so a call whose invocation carries no run doing the command's kind
+    of work is refused."""
+    other = "ticket" if kind == "chat" else "chat"
+    run = _RUNS[kind]
 
-    for invocation in (MemberInvocation(), MemberInvocation(**{other_field: "run-1"})):
+    for invocation in (
+        MemberInvocation(),
+        _RUNS[other],
+        replace(run, work=None),
+        replace(run, work=_RUNS[other].work),
+        replace(run, work=Work("manual", "run-1")),
+    ):
         exit_code, stdout, stderr = _run(
             arguments,
             invocation,
@@ -352,7 +365,7 @@ def test_a_run_command_acts_only_on_its_invocations_run(
         )
 
         assert (exit_code, stdout) == (1, "")
-        assert t("cli.member.run.required") in " ".join(stderr.split())
+        assert t("cli.member.run.required", kind=kind) in " ".join(stderr.split())
     assert list(RunStore().records()) == []
 
 

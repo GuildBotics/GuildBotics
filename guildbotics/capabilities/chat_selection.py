@@ -21,6 +21,7 @@ from guildbotics.capabilities.chat_batch import completed_chat_event_ids
 from guildbotics.capabilities.chat_updates import (
     check_chat_updates,
     ensure_chat_current,
+    noop_payload,
 )
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.task_runs import (
@@ -60,6 +61,13 @@ from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.member_invocation import (
+    ChatSubject,
+    MemberInvocation,
+    Work,
+    current_member_invocation,
+    member_invocation_scope,
+)
 from guildbotics.runtime.workflow_invocation import ChatTurn
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import await_shared_change
@@ -97,6 +105,17 @@ class ChatBatch:
     snapshot_complete: bool
     batch_events: list[ChatEvent]
     recovered: tuple[RunStatus, list[dict[str, Any]]] | None
+
+    @property
+    def subject(self) -> ChatSubject:
+        """The event the batch's run answers, in its source thread."""
+        return ChatSubject(
+            service=self.service_name,
+            channel_id=self.channel_id,
+            thread_ts=self.event.thread_ts,
+            event_id=self.event.event_id,
+            self_user_id=self.self_user_id,
+        )
 
 
 class ChatSelector:
@@ -368,21 +387,9 @@ class ChatSelector:
                 thread_state,
             )
         return ChatTurn(
-            run_id=run_id,
             attempt=attempt.attempt_count,
-            service_name=batch.service_name,
-            channel_id=batch.channel_id,
-            thread_ts=event.thread_ts,
-            event_id=event.event_id,
+            subject=batch.subject,
             message_ts=reaction_target,
-            work_identity=":".join(
-                (
-                    batch.service_name,
-                    batch.self_user_id,
-                    batch.channel_id,
-                    event.thread_ts or event.message_ts,
-                )
-            ),
             context_cursor=batch.batch_events[-1].message_ts,
             effort=effort or "",
             prompt=prompt,
@@ -422,11 +429,6 @@ class ChatSelector:
             {
                 "event_ids": [item.event_id for item in batch.batch_events],
                 "context_cursor": batch.batch_events[-1].message_ts,
-                "person_id": self._person_id,
-                "service": batch.service_name,
-                "channel_id": batch.channel_id,
-                "thread_ts": batch.event.thread_ts,
-                "self_user_id": batch.self_user_id,
             },
         )
 
@@ -437,13 +439,23 @@ class ChatSelector:
         decision: Selection,
         reaction_target: str,
     ) -> None:
+        """Settle a batch judged to need no turn, as the run's member commands
+        would: under an invocation of the run's own work."""
+        work = Work.of_chat(batch.subject)
+        with member_invocation_scope(MemberInvocation(run_id=run_id, work=work)):
+            await self._settle_as_member(batch, decision, reaction_target)
+
+    async def _settle_as_member(
+        self, batch: ChatBatch, decision: Selection, reaction_target: str
+    ) -> None:
         person_id = self._person_id
-        event = batch.event
-        updates = check_chat_updates(person_id, run_id)
+        run_id = current_member_invocation().run_id
+        subject = batch.subject
+        updates = check_chat_updates(person_id)
         # Check provider text as well as the receive queue: edits/cancellations
         # can change the same message without introducing a new batch ID.
         latest, complete = await _fetch_thread_events(
-            context=self._context, chat_service=self._chat_service, event=event
+            context=self._context, chat_service=self._chat_service, event=batch.event
         )
         if (
             updates["status"] != "up_to_date"
@@ -453,7 +465,7 @@ class ChatSelector:
             raise ThreadContextUnavailableError(
                 "Chat changed during evaluation or reception is unavailable; reconsider the pending batch."
             )
-        ensure_chat_current(person_id, run_id)
+        ensure_chat_current(person_id)
         store = RunStore()
         if decision.route == "reaction-only":
             existing = any(
@@ -475,28 +487,18 @@ class ChatSelector:
                     channel_name=None,
                     message_ts=reaction_target,
                     reaction=decision.reaction,
-                    run_id=run_id,
                 )
         else:
             store.append_evidence(
-                run_id,
-                "chat_noop",
-                {
-                    "service": batch.service_name,
-                    "channel_id": batch.channel_id,
-                    "thread_ts": event.thread_ts,
-                    "event_id": event.event_id,
-                    "reason": decision.reason,
-                    "noop": True,
-                },
+                run_id, "chat_noop", noop_payload(subject, decision.reason)
             )
-        ensure_chat_current(person_id, run_id)
+        ensure_chat_current(person_id)
         store.complete_run(
             run_id,
             "done",
             decision.reason,
             subject_type="chat",
-            subject_id=f"{batch.service_name}:{batch.channel_id}:{event.thread_ts}:{event.event_id}",
+            subject_id=subject.subject_id,
             person_id=person_id,
         )
 

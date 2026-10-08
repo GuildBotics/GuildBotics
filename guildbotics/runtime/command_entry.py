@@ -44,10 +44,7 @@ from guildbotics.intelligences.agent_runtime.host_client import (
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.workflow_invocation import (
-    WORKFLOW_INVOCATION_KEY,
-    WorkflowInvocation,
-)
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 from guildbotics.utils.i18n_tool import t
 
 
@@ -84,9 +81,7 @@ async def run(
                 )
             request.path = str(resolve_named_command(context, request.name))
         if request.invocation is not None:
-            context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
-                **request.invocation
-            )
+            context.shared_state[WORKFLOW_INVOCATION_KEY] = request.invocation
         runner = CommandRunner(
             context,
             request.name,
@@ -94,7 +89,7 @@ async def run(
             Path(request.cwd),
             path=Path(request.path),
             mounts=facts.mounts,
-            ledger=ClientRunLedger(client),
+            ledger=ClientRunLedger(client, facts),
         )
         try:
             outcome = await runner.run()

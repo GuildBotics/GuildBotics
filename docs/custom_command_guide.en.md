@@ -849,7 +849,7 @@ The order is the same for every brain (both the LLM API path and the AI CLI tool
 
 Both mean "do not intervene". On the LLM API path a model is built fresh for every run, so this is the same as running on the model's own defaults.
 
-On the native AI CLI tool path, **the session may continue**. Changing model or effort keeps the provider session. Claude and Grok send new settings on the next turn. When a setting is omitted on resume, Claude re-sends its last recorded value and Grok keeps the value saved in its provider session. Omitting a setting does not reset it to the provider default. An explicit conversation reset starts a new session on provider defaults unless the configuration supplies settings.
+On the native AI CLI tool path, **the session may continue**. Changing model or effort keeps the provider session. Claude and Grok send new settings on the next turn. When a setting is omitted on resume, Claude re-sends its last recorded value and Grok keeps the value saved in its provider session. Omitting a setting does not reset it to the provider default. When the conversation rotates to a new session, that session starts on provider defaults unless the configuration supplies settings.
 
 ### 9.3. Model definition YAML schema
 

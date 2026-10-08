@@ -7,20 +7,12 @@ en:
     file_not_utf8: "Content file is not valid UTF-8: %{path}"
     file_read_failed: "Could not read content file %{path}: %{error}"
     file_in_environment: "A command of an isolated environment passes its content with --content-stdin: the host does not read its files."
-  agent:
-    help: Manage native agent runtime state.
-    conversation_help: Manage persisted native agent conversations.
-  agent_conversation_reset:
-    help: Reset one exact native provider session without deleting history.
-    adapter_help: Native provider adapter whose exact session should be reset.
-    work_kind_help: Kind of logical work owning the conversation.
-    work_identity_help: Stable ticket URL, chat thread identity, or manual work identity.
   lease:
     invalid_delegation: "Member command rejected: the invoking turn does not hold this member's execution lease (the turn of a read-only command holds none)."
     unavailable: Person execution lease is already held.
     unavailable_with_holder: "Person execution lease is already held by pid %{pid} (%{source}: %{command})."
   run:
-    required: "This command acts on the workflow run that invoked it and is available only inside one."
+    required: "This command acts on the %{kind} workflow run that invoked it and is available only inside one."
   sync:
     invalid_identity: "Workspace synchronization did not start because %{path} is invalid. No command changes were made; repair the file and run the command again."
   chat_updates:

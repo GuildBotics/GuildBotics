@@ -231,10 +231,6 @@ async def start_turn(
     """
     client = turn_window()
     started = await client.begin_turn(
-        tool_name,
-        str(context.cwd),
-        run_id=context.run_id,
-        conversation=context.conversation_key,
-        participant_labels=context.participant_labels,
+        tool_name, str(context.cwd), participant_labels=context.participant_labels
     )
     return Turn(client, context, started, env or {})

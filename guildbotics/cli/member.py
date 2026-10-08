@@ -20,6 +20,8 @@ from pydantic import ValidationError
 from guildbotics.capabilities.chat_updates import (
     ChatUpdatesRequired,
     check_chat_updates,
+    current_chat_run,
+    noop_payload,
 )
 from guildbotics.capabilities.command_failures import command_failure_payload
 from guildbotics.capabilities.member_activity_events import (
@@ -76,6 +78,7 @@ from guildbotics.observability.interactive_sessions import (
 )
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.runtime.member_invocation import (
+    ChatSubject,
     MemberInvocation,
     current_member_invocation,
     member_invocation_scope,
@@ -310,78 +313,6 @@ def help_cmd() -> None:
     the available commands without re-running the full context.
     """
     click.echo(capability_reference_text(), file=_call().stdout)
-
-
-@member.group(name="agent", help=t("cli.member.agent.help"))
-def agent() -> None:
-    """Manage native agent runtime state."""
-
-
-@agent.group(name="conversation", help=t("cli.member.agent.conversation_help"))
-def agent_conversation() -> None:
-    """Manage persisted native agent conversations."""
-
-
-@agent_conversation.command(
-    name="reset", help=t("cli.member.agent_conversation_reset.help")
-)
-@_person_option
-@click.option(
-    "--adapter",
-    type=click.Choice(["codex", "claude", "grok"]),
-    required=True,
-    help=t("cli.member.agent_conversation_reset.adapter_help"),
-)
-@click.option(
-    "--work-kind",
-    type=click.Choice(["ticket", "chat", "manual"]),
-    required=True,
-    help=t("cli.member.agent_conversation_reset.work_kind_help"),
-)
-@click.option(
-    "--work-identity",
-    required=True,
-    help=t("cli.member.agent_conversation_reset.work_identity_help"),
-)
-@_json_format_option
-def agent_conversation_reset(
-    person: str,
-    adapter: str,
-    work_kind: str,
-    work_identity: str,
-    output_format: str,
-) -> _CommandWork:
-    """Reset one exact native provider session without deleting history."""
-    return _agent_conversation_reset(person, adapter, work_kind, work_identity)
-
-
-async def _agent_conversation_reset(
-    person: str, adapter: str, work_kind: str, work_identity: str
-) -> dict[str, Any]:
-    from guildbotics.intelligences.agent_runtime.models import (
-        ConversationKey,
-        ResumePolicy,
-    )
-    from guildbotics.intelligences.agent_runtime.store import ConversationStore
-
-    _context, member_person = _resolve(person)
-    key = ConversationKey(
-        person_id=member_person.person_id,
-        adapter=adapter,
-        work_kind=work_kind,
-        work_identity=work_identity,
-    )
-    store = ConversationStore(get_workspace_root())
-    record = store.resolve(key, ResumePolicy.RESET)
-    store.save(record)
-    return {
-        "person_id": member_person.person_id,
-        "adapter": adapter,
-        "work_kind": work_kind,
-        "work_identity": work_identity,
-        "generation": record.generation,
-        "reset": True,
-    }
 
 
 @member.group()
@@ -850,14 +781,14 @@ async def _chat_identity(person: str, service_name: str) -> dict[str, Any]:
 @_person_option
 @_json_format_option
 def chat_updates(person: str, output_format: str) -> _CommandWork:
-    run_id = _workflow_run(current_member_invocation().run_id)
-    return _chat_updates(person, run_id)
+    _chat_run()
+    return _chat_updates(person)
 
 
-async def _chat_updates(person: str, run_id: str) -> dict[str, Any]:
+async def _chat_updates(person: str) -> dict[str, Any]:
     context, member_person = _resolve(person)
     try:
-        return check_chat_updates(member_person.person_id, run_id)
+        return check_chat_updates(member_person.person_id)
     finally:
         await context.aclose()
 
@@ -1265,31 +1196,11 @@ async def _chat_reaction_add(
 
 @chat.command(name="noop")
 @_person_option
-@_service_option
-@click.option("--channel-id", required=True, help="Channel id of the triggering event.")
-@click.option(
-    "--thread-ts", required=True, help="Thread timestamp of the triggering event."
-)
-@click.option("--event-id", required=True, help="Event id of the chat trigger.")
 @_required_content_stdin_option
 @_json_format_option
-def chat_noop(
-    person: str,
-    service_name: str,
-    channel_id: str,
-    thread_ts: str,
-    event_id: str,
-    output_format: str,
-) -> _CommandWork:
-    run_id = _workflow_run(current_member_invocation().run_id)
-    payload = {
-        "service": service_name,
-        "channel_id": channel_id,
-        "thread_ts": thread_ts,
-        "event_id": event_id,
-        "reason": _read_stdin("no-op reason"),
-        "noop": True,
-    }
+def chat_noop(person: str, output_format: str) -> _CommandWork:
+    run_id, subject = _chat_run()
+    payload = noop_payload(subject, _read_stdin("no-op reason"))
     return _chat_noop(person, run_id, payload)
 
 
@@ -1303,12 +1214,6 @@ async def _chat_noop(
 
 @chat.command(name="complete")
 @_person_option
-@_service_option
-@click.option("--channel-id", required=True, help="Channel id of the triggering event.")
-@click.option(
-    "--thread-ts", required=True, help="Thread timestamp of the triggering event."
-)
-@click.option("--event-id", required=True, help="Event id of the chat trigger.")
 @click.option(
     "--status",
     required=True,
@@ -1317,19 +1222,10 @@ async def _chat_noop(
 )
 @_required_content_stdin_option
 @_json_format_option
-def chat_complete(
-    person: str,
-    service_name: str,
-    channel_id: str,
-    thread_ts: str,
-    event_id: str,
-    status: str,
-    output_format: str,
-) -> _CommandWork:
-    run_id = _workflow_run(current_member_invocation().run_id)
+def chat_complete(person: str, status: str, output_format: str) -> _CommandWork:
+    run_id, subject = _chat_run()
     summary = _read_stdin("run summary")
-    subject_id = f"{service_name}:{channel_id}:{thread_ts}:{event_id}"
-    return _chat_complete(person, run_id, status, summary, subject_id)
+    return _chat_complete(person, run_id, status, summary, subject.subject_id)
 
 
 async def _chat_complete(
@@ -2142,9 +2038,6 @@ def task() -> None:
 @task.command(name="complete")
 @_person_option
 @click.option(
-    "--ticket-url", required=True, help="Ticket URL the completed run worked on."
-)
-@click.option(
     "--status",
     required=True,
     type=click.Choice(["done", "asking", "blocked"]),
@@ -2152,13 +2045,8 @@ def task() -> None:
 )
 @_required_content_stdin_option
 @_json_format_option
-def task_complete(
-    person: str,
-    ticket_url: str,
-    status: str,
-    output_format: str,
-) -> _CommandWork:
-    run_id = _workflow_run(current_member_invocation().task_run_id)
+def task_complete(person: str, status: str, output_format: str) -> _CommandWork:
+    run_id, ticket_url = _ticket_run()
     summary = _read_stdin("run summary")
     return _task_complete(person, run_id, ticket_url, status, summary)
 
@@ -2192,7 +2080,7 @@ async def _task_complete(
 )
 @_json_format_option
 def task_status(person: str, output_format: str) -> _CommandWork:
-    run_id = _workflow_run(current_member_invocation().task_run_id)
+    run_id, _ticket_url = _ticket_run()
     return _task_status(run_id)
 
 
@@ -2212,12 +2100,24 @@ def _resolve(person: str):
         raise click.ClickException(message) from exc
 
 
-def _workflow_run(run_id: str | None) -> str:
-    """The run of the workflow turn that invoked the command, which is the only
-    run the command may act on; a call outside one is refused."""
-    if not run_id:
-        raise click.ClickException(t("cli.member.run.required"))
-    return run_id
+def _ticket_run() -> tuple[str, str]:
+    """The ticket run that invoked the command, and the URL of its ticket: the
+    only run and subject the command may act on, as the host settled them; a
+    call outside one is refused."""
+    invocation = current_member_invocation()
+    work = invocation.work
+    if not invocation.task_run_id or work is None or work.kind != "ticket":
+        raise click.ClickException(t("cli.member.run.required", kind="ticket"))
+    return invocation.task_run_id, work.identity
+
+
+def _chat_run() -> tuple[str, ChatSubject]:
+    """The chat run that invoked the command, and the event it answers; a
+    call outside one is refused."""
+    chat_run = current_chat_run()
+    if chat_run is None:
+        raise click.ClickException(t("cli.member.run.required", kind="chat"))
+    return chat_run
 
 
 def _read_stdin(label: str, *, allow_empty: bool = False) -> str:

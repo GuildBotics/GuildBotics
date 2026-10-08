@@ -609,7 +609,11 @@ git自身が解決した送り先が、fetchとpushのどちらもhostの組み�
 - Slack: `slack:<bot-user-id>:<channel-id>:<thread-root-ts>`。同じSlackスレッドへの追加依頼は、
   保存済みのセッションから再開します。処理済み位置を示すcursorは、応答が正常に完了した後だけ
   更新します。
-- 手動実行: 呼び出し元が作業を識別する値を明示します。
+- その他のコマンド: hostの入口が指定する会話（Desktopのアシスタントの会話）。指定が無ければ
+  そのコマンドの実行そのものです。
+
+識別子はhostがコマンドを始める時点で決め、そのコマンドのturnはすべてその会話で動きます。
+コマンドのコードも隔離環境の中のturnも、別の会話を指定できません。
 
 ### Slackスレッドの文脈を渡す方法
 
@@ -701,17 +705,6 @@ ACPを使うAI CLIツールの正確な再開には、`initialize`が提示し�
 xAI独自拡張の経路でも再送され、前回turnの`turn_completed`（トークン使用量）が含まれます。
 これらも履歴として数えるだけで解釈しないため、前回のトークン使用量が今回のturnの使用量として
 二重に計上されることはありません。
-
-保存したセッションとの対応付けは、次のコマンドで明示的にリセットできます。
-
-```bash
-guildbotics member agent conversation reset \
-  --person aiko --adapter codex --work-kind ticket \
-  --work-identity https://github.com/GuildBotics/GuildBotics/issues/300
-```
-
-Slackの場合は、前述の`slack:<bot-user-id>:<channel-id>:<thread-root-ts>`形式の識別子を
-`--work-identity`に渡します。
 
 ## 並行実行と停止
 

@@ -11,23 +11,35 @@ from guildbotics.utils.i18n_tool import t
 
 
 class RunLedger(Protocol):
-    """The run record a completion-managed turn reads and reports to.
+    """The record of the command's run, which a completion-managed turn reads
+    and reports to.
 
-    The implementation belongs to the host, which alone decides where the run
-    record lives: the turn names a run, never a location.
+    The implementation belongs to the host, which alone decides which run it
+    is, what work the run does, and where its record lives: the turn names
+    none of them.
     """
 
-    def require_completion(self, run_id: str) -> None:
+    @property
+    def run_id(self) -> str:
+        """The run the command records to."""
+        ...
+
+    @property
+    def work_kind(self) -> str:
+        """The kind of work the run does."""
+        ...
+
+    def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
 
-    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+    def evidence(self) -> list[dict[str, Any]]:
         """Return the evidence the run has recorded so far."""
 
-    def record_completed(self, run_id: str, attempt: int) -> None:
+    def record_completed(self, attempt: int) -> None:
         """Record that the run's completion was found after an attempt."""
 
     def record_completion_missing(
-        self, run_id: str, attempt: int, max_attempts: int, error: str
+        self, attempt: int, max_attempts: int, error: str
     ) -> None:
         """Record an attempt that ended without the run's completion."""
 
@@ -69,11 +81,7 @@ async def run_agent_turn(
             caller is responsible for reporting the failure to the requester.
     """
     context = dict(execution_context)
-    run_id = str(context.get("run_id") or "").strip()
-    work_kind = str(context.get("work_kind") or "").strip()
-    if not run_id:
-        raise ValueError("Agent execution context requires a run_id.")
-    if work_kind not in {"ticket", "chat"}:
+    if ledger.work_kind not in {"ticket", "chat"}:
         raise ValueError(
             "Completion-managed agent turns require work_kind 'ticket' or 'chat'."
         )
@@ -93,10 +101,10 @@ async def run_agent_turn(
             "resume_policy": (
                 context.get("resume_policy", "fresh") if offset == 0 else "auto"
             ),
-            "continuation_input": _continuation_input(context),
+            "continuation_input": _continuation_input(ledger, context),
         }
         try:
-            response = await invoke(turn_context, _turn_parameters(ledger, context))
+            response = await invoke(turn_context, _turn_parameters(ledger))
         except Exception as exc:
             _raise_rate_limit(exc)
             if retry_invoke_exceptions:
@@ -105,28 +113,24 @@ async def run_agent_turn(
             raise
 
         try:
-            ledger.require_completion(run_id)
+            ledger.require_completion()
         except Exception as exc:
             _raise_rate_limit(exc)
-            ledger.record_completion_missing(
-                run_id, dispatch_attempt, attempts, str(exc)
-            )
+            ledger.record_completion_missing(dispatch_attempt, attempts, str(exc))
             last_error = exc
             continue
 
-        ledger.record_completed(run_id, dispatch_attempt)
+        ledger.record_completed(dispatch_attempt)
         return response
 
     raise CompletionRetryExhausted(attempts, last_error)
 
 
-def _turn_parameters(ledger: RunLedger, context: Mapping[str, Any]) -> dict[str, str]:
-    if context.get("work_kind") != "chat":
+def _turn_parameters(ledger: RunLedger) -> dict[str, str]:
+    if ledger.work_kind != "chat":
         return {}
     evidence = [
-        item
-        for item in ledger.evidence(str(context["run_id"]))
-        if item["evidence_type"] != "chat_batch"
+        item for item in ledger.evidence() if item["evidence_type"] != "chat_batch"
     ]
     return {
         "previous_attempt_evidence": json.dumps(
@@ -135,15 +139,14 @@ def _turn_parameters(ledger: RunLedger, context: Mapping[str, Any]) -> dict[str,
     }
 
 
-def _continuation_input(context: Mapping[str, Any]) -> str:
-    run_id = str(context.get("run_id") or "")
-    if context.get("work_kind") == "chat":
+def _continuation_input(ledger: RunLedger, context: Mapping[str, Any]) -> str:
+    if ledger.work_kind == "chat":
         return t(
             "commands.workflows.common.agent_chat_continuation",
-            run_id=run_id,
+            run_id=ledger.run_id,
             event_id=str(context.get("event_id") or ""),
         )
-    return t("commands.workflows.common.agent_continuation", run_id=run_id)
+    return t("commands.workflows.common.agent_continuation", run_id=ledger.run_id)
 
 
 def _positive_int(value: Any, default: int) -> int:

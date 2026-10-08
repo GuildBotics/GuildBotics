@@ -137,7 +137,8 @@ def command_api(tmp_path, monkeypatch, language):
             CommandFacts(
                 person_id="aiko",
                 run_id="run",
-                work_kind="",
+                work_kind="manual",
+                work_identity="run",
                 trace_id="trace",
                 access=command.access,
                 mounts={tmp_path.as_posix(): True},

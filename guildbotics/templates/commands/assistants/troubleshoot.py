@@ -10,19 +10,17 @@ COMMAND_METADATA = {
 }
 
 
-async def main(context: Any, *, conversation_id: str) -> Any:
+async def main(context: Any) -> Any:
     """Answer one troubleshooting question about the recorded diagnostics.
 
     The message is one JSON object: the user's question, what they are looking
     at, and the directories this command's turns inspect. The agent gathers its
     own evidence from those, so nothing else is sent from here. Every turn of
-    the same conversation resumes the provider's own session.
+    the conversation the host runs it for resumes the provider's own session.
     """
     return await context.invoke(
         "functions/troubleshoot",
         agent_execution_context={
-            "work_kind": "troubleshooting",
-            "work_identity": conversation_id,
             "resume_policy": "auto",
         },
     )

@@ -33,6 +33,7 @@ from guildbotics.runtime.event_listener import (
     IncomingChatEvent,
 )
 from guildbotics.runtime.integration_factory import IntegrationFactory
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyLoaderFactory,
@@ -282,7 +283,7 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
         if name != "functions/handle_chat_event":
             return None
         agent_inputs.append(json.loads(kwargs["unprocessed_messages"]))
-        run_id = kwargs["agent_execution_context"]["run_id"]
+        run_id = self.context.shared_state[WORKFLOW_INVOCATION_KEY].run_id
         store = RunStore()
         store.append_evidence(
             run_id,
@@ -1444,7 +1445,9 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
     from guildbotics.integrations import chat_receive_status
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
     from guildbotics.runtime.member_invocation import (
+        ChatSubject,
         MemberInvocation,
+        Work,
         member_invocation_scope,
     )
     from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -1453,16 +1456,12 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
     RunStore().append_evidence(
         "run",
         "chat_batch",
-        {
-            "person_id": "alice",
-            "service": "slack",
-            "channel_id": "C1",
-            "thread_ts": "100.1",
-            "self_user_id": "U_BOT",
-            "event_ids": ["E1"],
-        },
+        {"event_ids": ["E1"]},
     )
-    invocation = MemberInvocation(run_id="run")
+    invocation = MemberInvocation(
+        run_id="run",
+        work=Work.of_chat(ChatSubject("slack", "C1", "100.1", "E1", "U_BOT")),
+    )
     now = [100.0]
     monkeypatch.setattr(
         chat_receive_status,
@@ -1517,7 +1516,7 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
             runner._flush_listener(key)
             assert ChatReceiveStatus().state(*scope) == "catching_up"
             with member_invocation_scope(invocation):
-                assert check_chat_updates("alice", "run")["status"] == "catching_up"
+                assert check_chat_updates("alice")["status"] == "catching_up"
                 with pytest.raises(ChatUpdatesRequired):
                     ensure_chat_current("alice")
         assert not runner._state_store.load_pending_events(*scope)
@@ -1529,7 +1528,7 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
     runner._flush_listener(key)
     assert ChatReceiveStatus().state(*scope) == "ready"
     with member_invocation_scope(invocation):
-        result = check_chat_updates("alice", "run")
+        result = check_chat_updates("alice")
         assert [item["event_id"] for item in result["messages"]] == ["E3"]
         ensure_chat_current("alice")
 

@@ -19,7 +19,9 @@ from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.member_invocation import (
+    ChatSubject,
     MemberInvocation,
+    Work,
     member_invocation_scope,
 )
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -119,11 +121,21 @@ def bind_invocation():
     with ExitStack() as stack:
 
         def bind(**fields) -> None:
+            # A workflow run's invocation carries its work, as its host
+            # settled it: a chat run's event, or a task run's ticket.
+            if fields.get("run_id"):
+                fields.setdefault("work", CHAT_WORK)
+            elif fields.get("task_run_id"):
+                fields.setdefault("work", TICKET_WORK)
             if fields.get("lease") is not None:
                 stack.callback(fields["lease"].release)
             stack.enter_context(member_invocation_scope(MemberInvocation(**fields)))
 
         yield bind
+
+
+CHAT_WORK = Work.of_chat(ChatSubject("slack", "C1", "100.1", "E1", "U_BOT"))
+TICKET_WORK = Work.of_ticket("https://github.com/owner/repo/issues/1")
 
 
 def _bind_workflow(bind_invocation, person_id="aiko", **run_ids):
@@ -235,22 +247,6 @@ def test_member_context_outputs_no_secret(monkeypatch):
         pytest.param(["context", "--person", "hana"], id="context"),
         pytest.param(
             [
-                "agent",
-                "conversation",
-                "reset",
-                "--person",
-                "hana",
-                "--adapter",
-                "codex",
-                "--work-kind",
-                "ticket",
-                "--work-identity",
-                "issue-1",
-            ],
-            id="agent",
-        ),
-        pytest.param(
-            [
                 "git",
                 "prepare",
                 "--person",
@@ -333,7 +329,6 @@ def test_member_help_prints_capability_reference():
     assert "guildbotics member git commit" in result.output
     assert "guildbotics member chat reply" in result.output
     assert "guildbotics member memory recall" in result.output
-    assert "guildbotics member agent conversation reset" in result.output
     assert "### Rules" in result.output
     assert "#### Handling review feedback" in result.output
     assert "#### レビュー指摘への対応" in result.output
@@ -427,61 +422,6 @@ def test_repository_read_records_host_target_in_workflow_trace(
     assert _domain_event_records("type") == []
 
 
-def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
-    from guildbotics.intelligences.agent_runtime.models import (
-        ConversationKey,
-        ResumePolicy,
-    )
-    from guildbotics.intelligences.agent_runtime.store import ConversationStore
-
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return FakeContext(person), person
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    data_root = tmp_path / "data"
-    monkeypatch.setattr(member_module, "get_workspace_root", lambda: data_root)
-    key = ConversationKey("aiko", "codex", "ticket", "issue-300")
-    store = ConversationStore(data_root)
-    record = store.resolve(key, ResumePolicy.AUTO)
-    record.provider_session_id = "thread-1"
-    store.save(record)
-
-    result = CliRunner().invoke(
-        member_module.member,
-        [
-            "--workspace",
-            str(tmp_path),
-            "agent",
-            "conversation",
-            "reset",
-            "--person",
-            "aiko",
-            "--adapter",
-            "codex",
-            "--work-kind",
-            "ticket",
-            "--work-identity",
-            "issue-300",
-            "--format",
-            "json",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
-    assert payload["reset"] is True
-    assert payload["generation"] == 1
-    persisted = store.load(key)
-    assert persisted is not None
-    assert persisted.provider_session_id == ""
-    assert persisted.rotation_reason == "reset"
-
-
 def test_workflow_member_write_rejects_missing_delegation(
     monkeypatch, bind_invocation
 ) -> None:
@@ -495,19 +435,8 @@ def test_workflow_member_write_rejects_missing_delegation(
 
     result = CliRunner().invoke(
         member_module.member,
-        [
-            "agent",
-            "conversation",
-            "reset",
-            "--person",
-            "aiko",
-            "--adapter",
-            "codex",
-            "--work-kind",
-            "manual",
-            "--work-identity",
-            "forged",
-        ],
+        ["chat", "noop", "--person", "aiko", "--content-stdin"],
+        input="Nothing to do.",
     )
 
     assert result.exit_code != 0
@@ -1141,9 +1070,8 @@ CONTENT_COMMANDS = (
     "memory record --person aiko --title Title",
     "chat post --person aiko --channel-id C1",
     "chat reply --person aiko --channel-id C1 --thread-ts 100.1",
-    "chat noop --person aiko --channel-id C1 --thread-ts 100.1 --event-id E1",
-    "chat complete --person aiko --channel-id C1 "
-    "--thread-ts 100.1 --event-id E1 --status done",
+    "chat noop --person aiko",
+    "chat complete --person aiko --status done",
     "git commit --person aiko --repo-path .",
     "git publish --person aiko --repo-path .",
     "github issue comment --person aiko --url https://github.com/owner/repo/issues/1",
@@ -1154,14 +1082,16 @@ CONTENT_COMMANDS = (
     "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
     "github pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
     "--reply-target-id 1",
-    "task complete --person aiko "
-    "--ticket-url https://github.com/owner/repo/issues/1 --status done",
+    "task complete --person aiko --status done",
 )
 
 
 @pytest.mark.parametrize("command", CONTENT_COMMANDS)
 def test_required_content_commands_reject_empty_stdin(command, bind_invocation):
-    _bind_workflow(bind_invocation, run_id="run-1", task_run_id="run-1")
+    if command.startswith("task "):
+        _bind_workflow(bind_invocation, task_run_id="run-1")
+    else:
+        _bind_workflow(bind_invocation, run_id="run-1", task_run_id="run-1")
     result = CliRunner().invoke(
         member_module.member,
         [*command.split(), "--content-stdin"],
@@ -3547,12 +3477,6 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch, bind_invocation):
             "noop",
             "--person",
             "aiko",
-            "--channel-id",
-            "C1",
-            "--thread-ts",
-            "100.1",
-            "--event-id",
-            "E1",
             "--content-stdin",
         ],
         input="Not relevant.",
@@ -3564,12 +3488,6 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch, bind_invocation):
             "complete",
             "--person",
             "aiko",
-            "--channel-id",
-            "C1",
-            "--thread-ts",
-            "100.1",
-            "--event-id",
-            "E1",
             "--status",
             "done",
             "--content-stdin",
@@ -3618,8 +3536,6 @@ def test_member_task_complete_reads_summary_from_stdin(
             "complete",
             "--person",
             "aiko",
-            "--ticket-url",
-            "https://github.com/owner/repo/issues/1",
             "--status",
             "done",
             "--content-stdin",
@@ -3678,8 +3594,6 @@ def test_member_task_complete_rejects_blocked_pr_readiness(
             "complete",
             "--person",
             "aiko",
-            "--ticket-url",
-            "https://github.com/owner/repo/issues/1",
             "--status",
             "done",
             "--content-stdin",
@@ -3710,6 +3624,7 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
         "readiness": "ready",
         "completion_blockers": [],
     }
+    checked: list[str] = []
 
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
@@ -3719,7 +3634,8 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
         def __init__(self, *_args):
             pass
 
-        async def task_completion_readiness(self, _ticket_url, _evidence):
+        async def task_completion_readiness(self, ticket_url, _evidence):
+            checked.append(ticket_url)
             return [readiness]
 
         async def aclose(self):
@@ -3742,8 +3658,6 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
             "complete",
             "--person",
             "aiko",
-            "--ticket-url",
-            "https://github.com/owner/repo/issues/1",
             "--status",
             "done",
             "--content-stdin",
@@ -3752,7 +3666,11 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.output)["pr_readiness"] == [readiness]
+    payload = json.loads(result.output)
+    assert payload["pr_readiness"] == [readiness]
+    # The ticket is the run's work, which no argument names.
+    assert checked == [TICKET_WORK.identity]
+    assert payload["subject_url"] == TICKET_WORK.identity
 
 
 def test_member_cli_help_stays_in_sync_with_capability_catalog():

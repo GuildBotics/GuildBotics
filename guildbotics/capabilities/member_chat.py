@@ -244,13 +244,12 @@ class MemberChatCapabilityService:
         channel_name: str | None,
         message_ts: str,
         reaction: str,
-        run_id: str | None = None,
     ) -> dict[str, Any]:
         if reaction not in SEMANTIC_REACTIONS:
             raise MemberCapabilityError(f"Unsupported chat reaction: {reaction}")
         semantic_reaction = cast(SemanticReaction, reaction)
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
-        ensure_chat_current(self.person.person_id, run_id)
+        ensure_chat_current(self.person.person_id)
         try:
             await self._chat().add_reaction(
                 resolved_channel_id, message_ts, semantic_reaction
@@ -264,7 +263,7 @@ class MemberChatCapabilityService:
             "reaction": semantic_reaction,
             "reacted": True,
         }
-        RunStore().append_evidence(run_id or current_run_id(), "chat_reaction", payload)
+        RunStore().append_evidence(current_run_id(), "chat_reaction", payload)
         return payload
 
     async def _resolve_channel(

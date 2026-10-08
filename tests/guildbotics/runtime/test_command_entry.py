@@ -66,7 +66,8 @@ def _facts(tmp_path: Path) -> CommandFacts:
     return CommandFacts(
         person_id="aiko",
         run_id="run-1",
-        work_kind="",
+        work_kind="manual",
+        work_identity="run-1",
         trace_id="trace-1",
         access=CommandAccess(),
         mounts={tmp_path.as_posix(): True},

@@ -38,6 +38,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.observability import SpanContext
+from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 
 #: The command's window to the host, and the token every call carries.
 HOST_URL_ENV = "GUILDBOTICS_HOST_URL"
@@ -81,9 +82,9 @@ class HostCallError(Exception):
 class CommandFacts:
     """What the running command is, as its environment is told.
 
-    ``run_id`` is the run the command's grant covers, and ``work_kind`` the
-    kind of work a workflow run does (``ticket`` or ``chat``), empty for any
-    other command. ``access`` is what the command declared, and ``inspected``
+    ``run_id`` is the run the command's grant covers, and ``work_kind`` and
+    ``work_identity`` the work it does, which key the member's conversation
+    with each tool its turns run. ``access`` is what the command declared, and ``inspected``
     the directories its turns inspect, as the environment spells them.
     ``mounts`` is what the microVM mounted, by where, and whether a command or
     a turn may work under it (see :func:`admits`).
@@ -92,6 +93,7 @@ class CommandFacts:
     person_id: str
     run_id: str
     work_kind: str
+    work_identity: str
     trace_id: str
     access: CommandAccess
     inspected: dict[str, str] = field(default_factory=dict)
@@ -142,7 +144,7 @@ class CommandRequest(BaseModel):
     args: list[str]
     cwd: str
     pipe: str = ""
-    invocation: dict[str, Any] | None = None
+    invocation: WorkflowInvocation | None = None
     wants_result: bool = False
 
 
@@ -272,23 +274,14 @@ class HostClient:
         return _result(response)
 
     async def begin_turn(
-        self,
-        tool: str,
-        cwd: str,
-        *,
-        run_id: str,
-        conversation: ConversationKey,
-        participant_labels: str = "",
+        self, tool: str, cwd: str, *, participant_labels: str = ""
     ) -> HostTurn:
-        """Start a turn of ``tool`` working in ``cwd``, for ``run_id``'s work
-        of ``conversation``; the host lends the turn its login."""
+        """Start a turn of ``tool`` working in ``cwd``, doing the command's
+        work; the host lends the turn its login."""
         answer = await self.acall(
             "begin_turn",
             tool=tool,
             cwd=cwd,
-            run_id=run_id,
-            work_kind=conversation.work_kind,
-            work_identity=conversation.work_identity,
             participant_labels=participant_labels,
         )
         return HostTurn(**answer)
@@ -312,30 +305,31 @@ def command_window() -> HostClient | None:
 
 
 class ClientRunLedger:
-    """The run record, through the host (a ``RunLedger``)."""
+    """The command's run record, through the host (a ``RunLedger``)."""
 
-    def __init__(self, client: HostClient) -> None:
+    def __init__(self, client: HostClient, facts: CommandFacts) -> None:
         self._client = client
+        self.run_id = facts.run_id
+        self.work_kind = facts.work_kind
 
-    def require_completion(self, run_id: str) -> None:
+    def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
-        self._client.call("require_completion", run_id=run_id)
+        self._client.call("require_completion")
 
-    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+    def evidence(self) -> list[dict[str, Any]]:
         """Return the evidence the run has recorded so far."""
-        return list(self._client.call("evidence", run_id=run_id))
+        return list(self._client.call("evidence"))
 
-    def record_completed(self, run_id: str, attempt: int) -> None:
+    def record_completed(self, attempt: int) -> None:
         """Record that the run's completion was found after an attempt."""
-        self._client.call("record_completed", run_id=run_id, attempt=attempt)
+        self._client.call("record_completed", attempt=attempt)
 
     def record_completion_missing(
-        self, run_id: str, attempt: int, max_attempts: int, error: str
+        self, attempt: int, max_attempts: int, error: str
     ) -> None:
         """Record an attempt that ended without the run's completion."""
         self._client.call(
             "record_completion_missing",
-            run_id=run_id,
             attempt=attempt,
             max_attempts=max_attempts,
             error=error,

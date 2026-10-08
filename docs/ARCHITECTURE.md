@@ -229,7 +229,8 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
 - Before replying, reacting, pushing Git commits, or writing to GitHub, a chat agent
   calls `guildbotics member chat updates --person <person>`.
   The command returns `new_messages`, `up_to_date`, `catching_up`, or `unavailable` from the durable
-  queue for the run's original thread, without calling Slack APIs. The agent reads
+  queue for the run's original thread, which is the run's work as the host settled it,
+  not anything its record says, without calling Slack APIs. The agent reads
   new messages and reconsiders the work. Capability write boundaries independently
   reject missing checks, unseen input, and unavailable reception. Interactive and
   ticket runs have no chat precondition.
@@ -313,7 +314,12 @@ normalized events, terminal results, errors, explicit resume policy, process lif
 and redacted diagnostics. Provider adapters own only protocol translation.
 
 Logical conversations are keyed by person, adapter, work kind, and stable work identity
-(ticket URL or Slack bot/channel/thread root), not by scheduler run. The versioned
+(ticket URL or Slack bot/channel/thread root), not by scheduler run. The work is the
+host's to settle: the ticket selector and the chat selector fix it with its subject
+when they select the trigger, a Desktop assistant names its conversation, and any other
+command does its own run's manual work. The command's grant holds every turn and member
+command to it, so nothing in the isolated environment names another subject or another
+work's conversation. The versioned
 atomic store under `agent-runtime/conversations/` persists the provider-neutral
 conversation identity plus provider session/turn ids, context cursor, usage, health,
 and rotation metadata. A provider process is an
@@ -1120,8 +1126,8 @@ a monorepo on purpose.
   decides its slot and tracking on that runner, builds the command's JSON input from
   what it declares, and runs that same runner under a fresh trace labelled
   `author:<command>` / `troubleshoot:<trace_id|view>`, and reads the typed model the
-  command returns. The command invokes its prompt with a stable `work_identity` so the
-  provider resumes its own session. Both declare themselves read-only (`read_only:
+  command returns. The API names the assistant's conversation as the run's work
+  (`PreparedCommand.work`), so every turn of it resumes the provider's own session. Both declare themselves read-only (`read_only:
   true`), and a read-only command is confined by its isolated environment, not by its
   prompt or its provider: the whole run, every turn included, inherits the declaration, the
   environment spec mounts every host directory read-only with an empty working

@@ -748,7 +748,12 @@ identity`:
 - Slack: `slack:<bot-user-id>:<channel-id>:<thread-root-ts>`. Later messages in the same
   thread resume the exact session and advance the context cursor only after a terminal
   success.
-- Manual: the explicit work identity supplied by the caller.
+- Other commands: the conversation the host entry names (a Desktop assistant's
+  conversation), otherwise the command's own run.
+
+The host settles the identity when it starts the command, and every turn of the command
+runs on it: neither the command's code nor a turn inside the isolated environment names
+another conversation.
 
 ### Slack thread context delivery
 
@@ -836,16 +841,6 @@ from Slack, and from the normal transcript, and only the replayed count is recor
 History replays on the xAI extension channels as well as the standard one and includes
 the previous turn's `turn_completed` token usage, so replayed updates are counted but
 never decoded; an earlier turn's usage is never reported as the current turn's.
-
-Reset an exact logical conversation explicitly:
-
-```bash
-guildbotics member agent conversation reset \
-  --person aiko --adapter codex --work-kind ticket \
-  --work-identity https://github.com/GuildBotics/GuildBotics/issues/300
-```
-
-For Slack, pass the stable identity format shown above as `--work-identity`.
 
 ## Concurrency and shutdown
 

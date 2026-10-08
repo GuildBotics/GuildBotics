@@ -36,6 +36,7 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import ChatTurn, WorkflowInvocation
 from guildbotics.utils.timestamps import parse_iso_datetime
 
@@ -415,6 +416,8 @@ class PendingChatDispatcher:
             trigger_type="chat",
             payload=turn.model_dump(),
             idempotency_key=f"{service}:message:{channel_id}:{pending.event.event_id}",
+            run_id=pending.run_id,
+            work=Work.of_chat(turn.subject),
         )
         dispatcher = WorkflowDispatcher(
             self._context, service_run_id=self._service_run_id

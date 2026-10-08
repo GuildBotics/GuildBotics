@@ -74,9 +74,6 @@ async def main(context: Context) -> Any:
         member_workspace=str(member_workspace),
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
-            "run_id": turn["run_id"],
-            "work_kind": "ticket",
-            "work_identity": ticket_url,
             "resume_policy": "fresh",
             "attempt": 1,
             "max_completion_attempts": turn["max_completion_attempts"],

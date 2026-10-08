@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     PromptInfo,
 )
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 from tests.guildbotics.command_environment_doubles import machinery
 
@@ -271,17 +273,7 @@ async def test_the_command_runs_in_the_environment_booted_for_it(
         ["x=1"],
         guest_path(_WORK),
     )
-    assert (request.pipe, request.invocation) == (
-        "the input",
-        {
-            "command": "main",
-            "person_id": "aiko",
-            "source": "routine",
-            "trigger_type": "generic",
-            "payload": {"k": "v"},
-            "idempotency_key": "",
-        },
-    )
+    assert (request.pipe, request.invocation) == ("the input", invocation)
     assert request.wants_result is False
     assert booted.closed == 1
 
@@ -528,29 +520,36 @@ def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
-    ledger = HostRunLedger()
+    ledger = HostRunLedger("run-1", Work.of_ticket("https://example.test/1"))
 
     with pytest.raises(WorkspaceNotConfiguredError):
-        ledger.require_completion("run-1")
+        ledger.require_completion()
+
+
+_TICKET = Work.of_ticket("https://example.test/1")
+_ASSISTANT = Work("troubleshooting", "conversation-1")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("trigger", "payload", "traced", "run_id", "work_kind"),
+    ("invocation", "named", "traced", "run_id", "work"),
     [
-        ("ticket", {"run_id": "ticket-run"}, True, "ticket-run", "ticket"),
-        ("chat", {"run_id": "chat-run"}, True, "chat-run", "chat"),
-        ("scheduled", {"run_id": "ignored"}, True, "trace", ""),
-        (None, {}, True, "trace", ""),
-        (None, {}, False, None, ""),
+        (("ticket", "ticket-run", _TICKET), None, True, "ticket-run", _TICKET),
+        (("ticket", "ticket-run", _TICKET), _ASSISTANT, True, "ticket-run", _TICKET),
+        (("scheduled", "", None), None, True, "trace", Work("manual", "trace")),
+        (None, _ASSISTANT, True, "trace", _ASSISTANT),
+        (None, None, True, "trace", Work("manual", "trace")),
+        (None, None, False, None, None),
     ],
 )
-async def test_the_run_is_granted_for_its_member_and_run(
-    monkeypatch, trigger, payload, traced, run_id, work_kind
+async def test_the_run_is_granted_for_its_member_run_and_work(
+    monkeypatch, invocation, named, traced, run_id, work
 ):
     """What its microVM asks of the host is answered for the member it runs
-    as and the run it records to: its workflow run's, or else one of its own
-    -- its trace's, or a fresh one outside any."""
+    as, the run it records to -- its workflow run's, or else one of its own:
+    its trace's, or a fresh one outside any -- and the work it does: its
+    workflow run's, else the one its caller named, else its own run's manual
+    work."""
     from guildbotics.drivers.command_runner import run_in_environment
     from guildbotics.intelligences.agent_runtime.host_window import HostWindow
     from guildbotics.observability import trace_scope
@@ -560,10 +559,16 @@ async def test_the_run_is_granted_for_its_member_and_run(
     )
 
     booted = _environment(monkeypatch)
-    command = _prepared()
-    if trigger is not None:
+    command = replace(_prepared(), work=named)
+    if invocation is not None:
+        trigger, workflow_run, workflow_work = invocation
         command.context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
-            "workflows/x", "aiko", "routine", trigger, payload
+            "workflows/x",
+            "aiko",
+            "routine",
+            trigger,
+            run_id=workflow_run,
+            work=workflow_work,
         )
     if traced:
         with trace_scope("scheduler", trace_id="trace"):
@@ -573,8 +578,12 @@ async def test_the_run_is_granted_for_its_member_and_run(
 
     [grant] = [opened["host"] for opened in booted.opened]
     assert isinstance(grant, HostWindow)
-    assert (grant._person_id, grant._work_kind) == ("aiko", work_kind)
-    assert grant._run_id == run_id if run_id else len(grant._run_id) == 32
+    assert grant._person_id == "aiko"
+    if run_id is None:
+        assert len(grant._run_id) == 32
+        assert grant._work == Work("manual", grant._run_id)
+    else:
+        assert (grant._run_id, grant._work) == (run_id, work)
 
 
 @pytest.mark.asyncio

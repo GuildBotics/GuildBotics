@@ -55,6 +55,7 @@ from guildbotics.intelligences.brains.cli_agent import (
 )
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability.trace_status import resolve_trace_status
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
@@ -2114,7 +2115,7 @@ _ASSISTANTS = {
 
 @pytest.mark.asyncio
 async def test_troubleshoot_runs_its_bundled_command_as_a_manual_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, commands_in_process: list[Any]
 ) -> None:
     answer = TroubleshootingResult(message="The token expired.", trace_ids=["abc123"])
     agent = ScriptedAgent(TroubleshootingResult, answer)
@@ -2139,7 +2140,9 @@ async def test_troubleshoot_runs_its_bundled_command_as_a_manual_run(
             "templates": "/opt/guildbotics/code/guildbotics/templates",
         },
     }
-    assert turn["execution"]["work_identity"] == "conv-1"
+    # The conversation is the one the Desktop named, held by the run's grant.
+    assert commands_in_process[-1].work == Work("troubleshooting", "conv-1")
+    assert commands_in_process[-1].args == []
     assert turn["cwd"] == state / "local" / "work" / "troubleshooting"
     # A Desktop-initiated run like any other manual command: filterable in
     # diagnostics, off the activity timeline, named by its label.
@@ -2169,7 +2172,7 @@ async def test_troubleshoot_drops_trace_ids_that_were_never_recorded(
 
 @pytest.mark.asyncio
 async def test_author_command_runs_its_bundled_command_with_the_editor_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, commands_in_process: list[Any]
 ) -> None:
     ocr_source = "def main(context):\n    return context.pipe\n"
     _write(tmp_path / ".guildbotics/config/commands/ocr/extract-text.py", ocr_source)
@@ -2209,7 +2212,8 @@ async def test_author_command_runs_its_bundled_command_with_the_editor_state(
         "relative_path": "ocr/extract-text.py",
         "content": ocr_source,
     } in sent["available_commands"]
-    assert turn["execution"]["work_identity"] == "authoring-1"
+    assert commands_in_process[-1].work == Work("command_authoring", "authoring-1")
+    assert commands_in_process[-1].args == []
     assert turn["cwd"] == tmp_path / ".guildbotics/local/work/command-authoring"
     assert turn["correlation"]["trace_id"] == response.trace_id
     assert turn["correlation"]["source"] == "manual"

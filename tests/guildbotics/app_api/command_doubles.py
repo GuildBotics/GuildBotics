@@ -43,6 +43,8 @@ class PreparedCommand:
     result_type: Any = None
     #: The directory of the files the Desktop handed over for the command.
     inputs: Path | None = None
+    #: The work the caller runs the command for, when it names one.
+    work: Any = None
 
 
 def stub_commands(
