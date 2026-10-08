@@ -2,9 +2,10 @@ type Connection = { base: string; token: string };
 
 /**
  * The one destination every request, stream and image takes. In Desktop only
- * the sidecar's own port notice sets it, and its exit clears it.
+ * the sidecar's own port notice sets it. The sidecar's exit closes it for good,
+ * with the reason: an answer the gone backend sends late cannot reopen it.
  */
-let connection: Connection | null = null;
+let connection: Connection | Error | null = null;
 let apiLanguage = "en";
 
 /**
@@ -16,15 +17,25 @@ export function setApiLanguage(language: string) {
 }
 
 export function configureApi(token: string, base: string) {
+  if (connection instanceof Error) {
+    throw connection;
+  }
   connection = { base, token };
 }
 
-/** Stop every path from addressing a backend that is gone. */
-export function disconnectApi() {
-  connection = null;
+/** Close the connection for good: no path addresses a backend that is gone. */
+export function closeApi(reason: Error) {
+  connection = reason;
 }
 
-function connected(): Connection {
+/**
+ * The connection to address, throwing why there is none. A caller that awaited
+ * something asks again before trusting what it got meanwhile.
+ */
+export function connected(): Connection {
+  if (connection instanceof Error) {
+    throw connection;
+  }
   if (!connection) {
     throw new Error("GuildBotics backend is not running.");
   }
@@ -32,7 +43,7 @@ function connected(): Connection {
 }
 
 export function memberAvatarUrl(personId: string, cacheBust?: number | string): string | undefined {
-  if (!connection) {
+  if (!connection || connection instanceof Error) {
     return undefined;
   }
   const params = new URLSearchParams({ token: connection.token });

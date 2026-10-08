@@ -54,7 +54,7 @@ CLIENT_CALLERS = {
 FRONTEND_ROUTES = {
     ("api/client.ts", ""): "the connection itself, module-private",
     ("api/client.ts", "configureApi"): "sets the connection",
-    ("api/client.ts", "disconnectApi"): "clears the connection",
+    ("api/client.ts", "closeApi"): "closes the connection for good",
     ("api/client.ts", "connected"): "the one reader of the connection",
     ("api/client.ts", "memberAvatarUrl"): "URL query, loaded by <img>",
     ("api/client.ts", "startGitHubAppRegistration"): "browser callback destination",
@@ -67,10 +67,10 @@ FRONTEND_ROUTES = {
 }
 _FRONTEND_CARRIERS = re.compile(
     r"X-GuildBotics-Session-Token|token=|[\"']token[\"']|callback_base_url"
-    r"|VITE_GUILDBOTICS_API_|backend_info|\bconfigureApi\("
+    r"|VITE_GUILDBOTICS_API_|backend_info|\bconfigureApi\(|\bconnected\(\)"
 )
 #: Read only where the connection lives.
-_CONNECTION_READS = re.compile(r"\bconnection\b|\bconnected\(\)")
+_CONNECTION_READS = re.compile(r"\bconnection\b")
 _FRONTEND_FUNCTION = re.compile(
     r"^(?:export )?(?:default )?(?:async )?function\*? ?(\w+)"
     r"|^(?:export )?(?:const|let) (\w+) = (?:async )?\("

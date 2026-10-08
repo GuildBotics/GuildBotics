@@ -7,6 +7,7 @@ import {
   BackendClosedError,
   canRestartApp,
   getBootstrapLog,
+  letQuitsThrough,
   onBackendClosed,
   restartApp,
   startBackend,
@@ -22,6 +23,7 @@ vi.mock("./api/backend", async (importOriginal) => ({
   getBootstrapLog: vi.fn(async () => null),
   startBackend: vi.fn(async () => undefined),
   onBackendClosed: vi.fn(() => () => undefined),
+  letQuitsThrough: vi.fn(() => () => undefined),
   canRestartApp: vi.fn(() => false),
   restartApp: vi.fn(async () => undefined),
 }));
@@ -48,6 +50,7 @@ describe("Bootstrap", () => {
     startBackendMock.mockReset();
     getBootstrapLogMock.mockReset().mockResolvedValue(null);
     canRestartAppMock.mockReturnValue(false);
+    vi.mocked(letQuitsThrough).mockClear();
   });
 
   afterEach(() => {
@@ -120,6 +123,25 @@ describe("Bootstrap", () => {
     resolveRetry();
 
     expect(await screen.findByText("App Mock Loaded")).toBeInTheDocument();
+  });
+
+  it("lets quits through only while the App, which guards them, is not shown", async () => {
+    const stopLetting = vi.fn();
+    vi.mocked(letQuitsThrough).mockReturnValue(stopLetting);
+    let finishStart: () => void = () => {};
+    startBackendMock.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishStart = resolve;
+      }),
+    );
+
+    renderBootstrap();
+    expect(letQuitsThrough).toHaveBeenCalledTimes(1);
+    expect(stopLetting).not.toHaveBeenCalled();
+
+    finishStart();
+    await screen.findByText("App Mock Loaded");
+    expect(stopLetting).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the App for the failure screen once the backend stops", async () => {

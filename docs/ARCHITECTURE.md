@@ -1069,7 +1069,9 @@ a monorepo on purpose.
     WebSocket, and avatar URLs all take their destination from that state, so nothing
     addresses a port after the sidecar is gone. The sidecar starts again only with the
     app, so the window shows why it stopped and offers to restart the app
-    (`restart_app`).
+    (`restart_app`). Closed is final in the frontend too: an answer the gone backend
+    sends late (`backend_info`, `/health`) cannot reopen the connection or finish the
+    start. While the App is not shown, quit requests go straight to `quit_app`.
   - Host clients that find the Local API through `~/.guildbotics/data/run/app-api.json`
     (`guildbotics run` delegation and macOS Hub Secret) go through
     `utils/local_api.py`'s `connect_local_api()`. It first posts a fresh 32-byte nonce to

@@ -14,7 +14,6 @@ import {
   ensureAgentField,
   dismissSystemAlert,
   getAgentFieldState,
-  disconnectApi,
   getActivityHistory,
   getCommandFile,
   getCommandFileExecutionStatus,
@@ -98,22 +97,28 @@ describe("configureApi", () => {
   });
 });
 
-describe("disconnectApi", () => {
-  it("stops every path from addressing the old backend", async () => {
+describe("closeApi", () => {
+  it("closes every path for good, refusing a late reconnect", async () => {
+    // A fresh module: a closed connection never reopens in it.
+    vi.resetModules();
+    const client = await import("./client");
+    client.configureApi("old-token", "http://127.0.0.1:8765");
     const { mock } = captureFetch(jsonResponse({ ok: true }));
     const sockets = vi.fn();
     vi.stubGlobal("WebSocket", sockets);
-    disconnectApi();
+    const reason = new Error("the backend exited");
+    client.closeApi(reason);
 
-    await expect(getConfigStatus()).rejects.toThrow("GuildBotics backend is not running.");
+    expect(() => client.configureApi("old-token", "http://127.0.0.1:8765")).toThrow(reason);
+    await expect(client.getConfigStatus()).rejects.toBe(reason);
     await expect(
-      uploadMemberAvatar("alice", new File(["x"], "a.png", { type: "image/png" })),
-    ).rejects.toThrow("GuildBotics backend is not running.");
+      client.uploadMemberAvatar("alice", new File(["x"], "a.png", { type: "image/png" })),
+    ).rejects.toBe(reason);
     await expect(
-      startGitHubAppRegistration({ person_id: "alice", app_name: "app" }),
-    ).rejects.toThrow("GuildBotics backend is not running.");
-    expect(() => subscribeEvents(() => undefined)).toThrow("GuildBotics backend is not running.");
-    expect(memberAvatarUrl("alice")).toBeUndefined();
+      client.startGitHubAppRegistration({ person_id: "alice", app_name: "app" }),
+    ).rejects.toBe(reason);
+    expect(() => client.subscribeEvents(() => undefined)).toThrow(reason);
+    expect(client.memberAvatarUrl("alice")).toBeUndefined();
     expect(mock).not.toHaveBeenCalled();
     expect(sockets).not.toHaveBeenCalled();
   });

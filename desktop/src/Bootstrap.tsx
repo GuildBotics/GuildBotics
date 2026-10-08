@@ -8,6 +8,7 @@ import {
   BackendClosedError,
   canRestartApp,
   getBootstrapLog,
+  letQuitsThrough,
   onBackendClosed,
   restartApp,
   startBackend,
@@ -49,7 +50,10 @@ export function Bootstrap() {
     };
   }, []);
 
-  if (status.state === "ready") {
+  const showingApp = status.state === "ready";
+  useEffect(() => (showingApp ? undefined : letQuitsThrough()), [showingApp]);
+
+  if (showingApp) {
     return (
       <HashRouter>
         <App />
