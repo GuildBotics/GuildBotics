@@ -102,8 +102,12 @@ def test_person_get_scheduled_tasks_expands_all_schedules():
 
 def test_person_secret_helpers(monkeypatch):
     person = Person(person_id="u2", name="Bob")
-    key = "token"
-    env_key = f"{person.person_id.upper()}_{key.upper()}"
+    key = "slack_bot_token"
+    env_key = "U2_SLACK_BOT_TOKEN"
+
+    # Only the member's own secret keys are named
+    with pytest.raises(KeyError):
+        person.has_secret("token")
 
     # Not set
     assert person.has_secret(key) is False

@@ -10,9 +10,8 @@ from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import (
     MemberConfigError,
     iter_member_config_directories,
-    member_env_prefix_groups,
+    person_secret_env_keys,
     validate_member_directory_name,
-    validate_person_env_prefix,
 )
 
 
@@ -38,9 +37,9 @@ class YamlTeamLoader(TeamLoader):
 
         members: list[Person] = []
         members_dir = self.dir / "members"
-        for directories in member_env_prefix_groups(members_dir).values():
-            if len(directories) > 1:
-                validate_person_env_prefix(members_dir, directories[0].name)
+        # Refuse any collision before reporting a config of its members invalid.
+        for d in iter_member_config_directories(members_dir):
+            person_secret_env_keys(members_dir, d.name)
         if members_dir.exists():
             role_loader = YamlRoleLoader(project.get_language_code())
             Person.DEFINED_ROLES = role_loader.load_all()

@@ -15,11 +15,7 @@ from guildbotics.entities.team import Person
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.person_id import (
-    PERSON_SECRET_ENV_SUFFIXES,
-    MemberConfigError,
-    person_env_prefix,
-)
+from guildbotics.utils.person_id import MemberConfigError, person_secret_env_keys
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
@@ -64,8 +60,13 @@ def member_input(config, **overrides):
         ("aiko_1-2", "AIKO_1_2"),
     ],
 )
-def test_person_prefix_format_is_shared(name, prefix):
-    assert person_env_prefix(name) == prefix
+def test_person_prefix_format_is_shared(tmp_path, name, prefix):
+    assert person_secret_env_keys(tmp_path, name) == {
+        "GITHUB_ACCESS_TOKEN": f"{prefix}_GITHUB_ACCESS_TOKEN",
+        "GITHUB_PRIVATE_KEY": f"{prefix}_GITHUB_PRIVATE_KEY",
+        "SLACK_BOT_TOKEN": f"{prefix}_SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN": f"{prefix}_SLACK_APP_TOKEN",
+    }
 
 
 def test_pending_alias_cannot_read_an_existing_members_slack_tokens(
@@ -162,15 +163,12 @@ def test_load_refuses_all_colliding_configs_even_invalid_ones(
 @pytest.mark.parametrize("action", ["snapshot", "slack", "rename", "delete"])
 @pytest.mark.parametrize("names", [("alice-bak", "alice_bak"), ("Alice", "alıce")])
 def test_repair_preserves_ambiguous_secrets_without_access(
-    namespace_workspace, monkeypatch, names, action
+    namespace_workspace, monkeypatch, tmp_path, names, action
 ):
     config = namespace_workspace
     paths = [stored_member(config, name) for name in names]
     store = KeyringSecretStore(config)
-    keys = [
-        f"{person_env_prefix(names[0])}_{suffix}"
-        for suffix in PERSON_SECRET_ENV_SUFFIXES
-    ]
+    keys = person_secret_env_keys(tmp_path, names[0]).values()
     for key in keys:
         store.set(key, "fake-existing-value")
     before = store.location.read_bytes()
