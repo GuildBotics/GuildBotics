@@ -360,6 +360,11 @@ const resources = {
             detail:
               "This workspace still works, and changes are kept until they can be synchronized with the hub.",
           },
+          local_error: {
+            label: "Sync failed on this machine",
+            detail:
+              "This workspace still works. Something on this machine is keeping synchronization from running, and changes are kept until it is fixed.",
+          },
           unsendable: {
             label: "Changes that cannot be sent",
             detail: "Some files cannot be shared until they are repaired on this machine.",
@@ -379,6 +384,8 @@ const resources = {
         alerts: {
           unreachable:
             "Synchronization with the hub is failing. Local work continues, and sharing resumes automatically once the cause is resolved.",
+          local_error:
+            "Synchronization is failing because of something on this machine. Check the file or folder shown in Error details. Sharing resumes automatically once it is fixed.",
           unsendable_one: "One change cannot be sent until the file is repaired.",
           unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
           invalid_shared_state:
@@ -2413,6 +2420,11 @@ const resources = {
             detail:
               "このワークスペースはこのまま使えます。変更は Hub と同期できるまで保持されます。",
           },
+          local_error: {
+            label: "このマシンの同期エラー",
+            detail:
+              "このワークスペースはこのまま使えます。このマシン側の原因で同期できないため、変更は原因が解消するまで保持されます。",
+          },
           unsendable: {
             label: "送信できない変更",
             detail: "一部のファイルは、このマシンで直すまで共有できません。",
@@ -2431,6 +2443,8 @@ const resources = {
         alerts: {
           unreachable:
             "Hub と同期できません。このマシンでの作業は続けられ、原因が解消すると共有は自動で再開します。",
+          local_error:
+            "このマシン側の原因で同期できません。「エラー内容」に表示されたファイルやフォルダを確認してください。直すと共有は自動で再開します。",
           unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
           unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
           invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",

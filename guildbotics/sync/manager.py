@@ -40,6 +40,7 @@ from guildbotics.sync.commits import (
 from guildbotics.sync.local_repository import (
     EMPTY_TREE,
     HubCommandError,
+    HubGitError,
     LocalSyncRepository,
     SyncRepositoryError,
 )
@@ -72,6 +73,7 @@ SyncState = Literal[
     "reconciling",
     "pushing",
     "unreachable",
+    "local_error",
     "invalid_shared_state",
     "update_required",
 ]
@@ -137,8 +139,8 @@ class GitSyncStatus:
     def failure(self) -> str | None:
         """Say what kept the last cycle from sharing everything, or None.
 
-        What the hub printed says the most, so it comes first; a state with no
-        failure behind it -- a push still being redone -- is named by its code.
+        What the failure printed says the most, so it comes first; a state with
+        no failure behind it -- a push still being redone -- is named by its code.
         """
         if self.state == "idle" and self.last_error_code is None:
             return None
@@ -345,7 +347,7 @@ class GitSyncManager:
                 self._verify_local_identity()
                 self._commit_working_tree()
                 if not self._repository.has_remote():
-                    self._unreachable("hub_not_configured")
+                    self._report("unreachable", "hub_not_configured")
                     return self.status()
                 self._state = "pushing"
                 self._repository.push()
@@ -356,7 +358,7 @@ class GitSyncManager:
                 self._last_error_code = "local_write_busy"
                 return self.status()
             except (GitCommandError, SyncRepositoryError, OSError) as exc:
-                self._unreachable(type(exc).__name__, str(exc))
+                self._cycle_failed(exc)
                 return self.status()
             self._shared()
             return self.status()
@@ -397,12 +399,12 @@ class GitSyncManager:
         except SharedDataAnomaly as anomaly:
             self._halt(anomaly)
         except SharedWriteBusyError:
-            # A save is holding the workspace's files. Nothing is wrong with
-            # the hub, and the next cycle picks the work up, so the state stays
-            # as it was rather than claiming unreachable.
+            # A save is holding the workspace's files. Nothing has failed, and
+            # the next cycle picks the work up, so the state stays as it was
+            # rather than claiming a failure.
             self._last_error_code = "local_write_busy"
         except (GitCommandError, SyncRepositoryError, OSError) as exc:
-            self._unreachable(type(exc).__name__, str(exc))
+            self._cycle_failed(exc)
         return self.status()
 
     def status(self) -> GitSyncStatus:
@@ -426,8 +428,12 @@ class GitSyncManager:
             invalid_paths=self._invalid_paths,
             last_success_at=self._last_success_at,
             last_error_code=self._last_error_code,
+            # A cycle under way after a failure has not failed yet; what the
+            # last one printed belongs to the state that reported it.
             last_error_detail=(
-                self._last_error_detail if self._state == "unreachable" else None
+                self._last_error_detail
+                if self._state in {"unreachable", "local_error"}
+                else None
             ),
         )
 
@@ -436,14 +442,13 @@ class GitSyncManager:
         self._verify_local_identity()
         self._commit_working_tree()
         if not self._repository.has_remote():
-            self._unreachable("hub_not_configured")
+            self._report("unreachable", "hub_not_configured")
             return
         for _ in range(self._max_push_attempts):
             if self._synchronize_once():
                 self._shared()
                 return
-        self._state = "idle"
-        self._last_error_code = "push_retry_exhausted"
+        self._report("idle", "push_retry_exhausted")
 
     def _synchronize_once(self) -> bool:
         """Run one fetch, converge, and push. True when local state is shared."""
@@ -695,27 +700,40 @@ class GitSyncManager:
 
     def _shared(self) -> None:
         """Record that everything committed here has reached the hub."""
-        self._state = "idle"
-        self._last_error_code = None
-        self._last_error_detail = None
+        self._report("idle", None)
         self._last_success_at = utc_now_iso()
         self._resolve_shared()
 
-    def _unreachable(self, code: str, detail: str | None = None) -> None:
-        """Stop at an unreachable hub, keeping what the failure said.
+    def _cycle_failed(self, exc: Exception) -> None:
+        """Stop at a failed cycle, telling the hub's failures from this device's.
+
+        Only a Git command that reaches the hub raises :class:`HubGitError`, so
+        the operation that failed decides, never the words of the failure. A
+        lock left in the index, a file Git cannot read, or a directory it
+        cannot list is this device's to fix, and saying the hub failed would
+        send the user looking in the wrong place.
+        """
+        state: SyncState = (
+            "unreachable" if isinstance(exc, HubGitError) else "local_error"
+        )
+        self._report(state, type(exc).__name__, str(exc))
+
+    def _report(
+        self, state: SyncState, code: str | None, detail: str | None = None
+    ) -> None:
+        """Enter ``state``, keeping what the failure said.
 
         The detail is logged only when it changes: the queue retries on every
         cycle, and one line per reason is what makes diagnostics readable.
         """
         if detail and detail != self._last_error_detail:
             LOGGER.warning("Workspace synchronization failed: %s", detail)
-        self._state = "unreachable"
+        self._state = state
         self._last_error_code = code
         self._last_error_detail = detail
 
     def _halt(self, anomaly: SharedDataAnomaly) -> None:
-        self._state = anomaly.state
-        self._last_error_code = anomaly.code
+        self._report(anomaly.state, anomaly.code)
         # Nothing more will be pushed until the damage is repaired, so waiting
         # barriers are told now instead of timing out one by one.
         self._settle(lambda change: True, shared=False)

@@ -457,7 +457,7 @@ def test_an_unreadable_file_fails_the_cycle_and_is_named(
     finally:
         locked.chmod(0o644)
 
-    assert status.state == "unreachable"
+    assert status.state == "local_error"
     assert "config/locked.md" in (status.last_error_detail or "")
     assert _hub_file(hub, CONFIG) is None
 
@@ -478,10 +478,49 @@ def test_a_directory_that_cannot_be_listed_fails_the_cycle_and_is_named(
 
     status = first.manager.synchronize()
 
-    assert status.state == "unreachable"
+    assert status.state == "local_error"
     assert str(unlistable) in (status.last_error_detail or "")
     assert _hub_file(hub, "config/hidden/kept.md") == "kept\n"
     assert _hub_file(hub, CONFIG) is None
+
+
+def test_a_lock_left_in_the_index_is_this_devices_failure_not_the_hubs(
+    first: Device, hub: Path
+) -> None:
+    """A crashed Git leaves ``index.lock`` behind, and the add fails on it.
+
+    Nothing is wrong with the hub, so the cycle stops as this device's failure,
+    naming the lock, and resumes on its own once the lock is gone.
+    """
+    first.write(CONFIG, "language: ja\n")
+    lock = first.shared / ".git" / "index.lock"
+    lock.touch()
+
+    status = first.manager.synchronize()
+
+    assert status.state == "local_error"
+    assert status.last_error_code == "GitCommandError"
+    assert str(lock) in (status.last_error_detail or "")
+    assert _hub_file(hub, CONFIG) is None
+
+    lock.unlink()
+    status = first.manager.synchronize()
+
+    assert status.state == "idle"
+    assert status.last_error_detail is None
+    assert _hub_file(hub, CONFIG) == "language: ja\n"
+
+
+def test_a_local_failure_raised_by_the_one_shot_is_this_devices(
+    first: Device,
+) -> None:
+    first.write(CONFIG, "language: ja\n")
+    (first.shared / ".git" / "index.lock").touch()
+
+    status = first.manager.commit_and_push_once(timeout=0.1)
+
+    assert status.state == "local_error"
+    assert "index.lock" in (status.last_error_detail or "")
 
 
 # -- Only regular files travel ------------------------------------------------
@@ -1160,7 +1199,7 @@ def test_a_busy_workspace_is_not_reported_as_an_unreachable_hub(
 
     assert not holder.is_alive()
     assert status.last_error_code == "local_write_busy"
-    assert status.state != "unreachable"
+    assert status.state == "idle"
 
 
 def test_synchronize_reports_sync_busy_when_another_process_holds_the_lock(
@@ -1188,14 +1227,14 @@ def test_one_shot_commits_even_when_push_fails(
     first.write(CONFIG, "language: ja\n")
 
     def fail_push() -> None:
-        raise OSError("Hub unavailable")
+        raise HubCommandError("Hub unavailable")
 
     monkeypatch.setattr(first.repository, "push", fail_push)
 
     status = first.manager.commit_and_push_once(timeout=0.1)
 
     assert status.state == "unreachable"
-    assert status.last_error_code == "OSError"
+    assert status.last_error_code == "HubCommandError"
     assert status.local_head is not None
     assert Repo(first.shared).head.commit.message.startswith("Sync shared state")
 

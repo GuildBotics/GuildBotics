@@ -12,6 +12,7 @@ export type SyncIndicatorState =
   | "update_required"
   | "invalid_shared_state"
   | "unreachable"
+  | "local_error"
   | "unsendable"
   | "receiving"
   | "sending"
@@ -23,6 +24,7 @@ const NEEDS_ATTENTION: ReadonlySet<SyncIndicatorState> = new Set([
   "update_required",
   "invalid_shared_state",
   "unreachable",
+  "local_error",
   "unsendable",
 ]);
 
@@ -38,8 +40,10 @@ export function syncIndicatorState(status: WorkspaceSyncStatus | undefined): Syn
   if (status.state === "invalid_shared_state") {
     return "invalid_shared_state";
   }
-  if (status.state === "unreachable") {
-    return "unreachable";
+  // A cycle that failed, whether at the hub or on a file of this machine's,
+  // sent nothing at all, so it outranks what was merely held back.
+  if (status.state === "unreachable" || status.state === "local_error") {
+    return status.state;
   }
   // Changes that cannot leave this machine outrank ones merely queued: waiting
   // will not clear them, and only the user can.
@@ -61,7 +65,7 @@ export function syncNeedsAttention(state: SyncIndicatorState): boolean {
 
 /** Whether the user can usefully ask for another attempt right now. */
 export function syncCanRetry(state: SyncIndicatorState): boolean {
-  return state === "unreachable" || state === "invalid_shared_state";
+  return state === "unreachable" || state === "local_error" || state === "invalid_shared_state";
 }
 
 export type SyncTone = "danger" | "warning" | "info" | "success" | "neutral";
@@ -72,6 +76,7 @@ export function syncTone(state: SyncIndicatorState): SyncTone {
     case "invalid_shared_state":
       return "danger";
     case "unreachable":
+    case "local_error":
     case "unsendable":
       return "warning";
     case "receiving":

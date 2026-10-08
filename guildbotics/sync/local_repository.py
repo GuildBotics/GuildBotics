@@ -62,8 +62,8 @@ PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: write in progress: it is created beside its
 #: destination, so for a shared file it lands inside this tree, and a cycle
 #: that enumerates it either commits a half-written name or fails its own
-#: ``git add`` when the rename beats it -- reported as a hub it could not
-#: reach. It is never a file the user meant to share.
+#: ``git add`` when the rename beats it. It is never a file the user meant to
+#: share.
 GITIGNORE_CONTENT = f"/local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
 #: Attributes that switch off every conversion between the index and disk.
 GIT_ATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n"
@@ -79,11 +79,23 @@ class SyncRepositoryError(RuntimeError):
     """Raised when the local synchronization repository cannot be operated."""
 
 
-class HubTimeoutError(SyncRepositoryError):
+class HubGitError(SyncRepositoryError):
+    """Raised when a Git command that reaches the hub fails or does not answer.
+
+    Every such command runs through ``_run_remote_git``, and nothing else
+    raises this, so a failure of this type means the hub operation failed and
+    any other failure was this device's own. A fetch or push that fails on
+    something in the local ``.git`` is still a hub operation that failed: the
+    operation decides, never what Git printed. One that never starts, because
+    Git cannot be run here, has not reached the hub and stays this device's.
+    """
+
+
+class HubTimeoutError(HubGitError):
     """Raised when a Git command that reaches the hub does not answer in time."""
 
 
-class HubCommandError(SyncRepositoryError):
+class HubCommandError(HubGitError):
     """Raised when a Git command that reaches the hub fails.
 
     The message is what Git, ssh, and the hub printed, exactly as printed. It

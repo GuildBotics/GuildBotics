@@ -54,10 +54,10 @@ class SharedWriteBusyError(RuntimeError):
     """Raised when the other writer held the lock for the whole wait.
 
     Deliberately outside the ``OSError`` family that :class:`TimeoutError`
-    belongs to. Synchronization catches that family to mean "the environment
-    failed" and reports the hub unreachable; the hub has nothing to do with
-    this, and a caller that has to tell the two apart should not have to name
-    a lock timeout to do it.
+    belongs to. Synchronization catches that family to mean "the cycle
+    failed" and stops in a failed state until the cause is fixed; a save
+    holding the lock is not a failure at all, and a caller that has to tell
+    the two apart should not have to name a lock timeout to do it.
     """
 
 

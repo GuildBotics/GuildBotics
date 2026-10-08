@@ -863,10 +863,11 @@ commit it is held back like any other nested repository. The files inside it are
 in either case.
 
 A file this machine cannot read, or a directory whose contents it cannot list, is not held
-back. Synchronization stops with **Hub sync failed**, and nothing else is sent until it is
-fixed; **Error details** names the path. A directory that cannot be listed is never sent as
-the deletion of the files inside it. A file another application has open exclusively stops
-synchronization the same way until it is closed.
+back. Synchronization stops with **Sync failed on this machine**, and nothing else is sent
+until it is fixed; **Error details** names the path. A directory that cannot be listed is
+never sent as the deletion of the files inside it. A file another application has open
+exclusively stops synchronization the same way until it is closed, and so does a Git lock
+file (`index.lock`) an interrupted process left in `.guildbotics/.git`.
 
 #### Recover a change that was not applied
 
@@ -937,6 +938,7 @@ discarding; the activity history record stays either way.
 | Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
 | Receiving | Content from the hub is being taken in | Wait |
 | Hub sync failed | Local work continues; sharing is delayed | Read the **Error details** shown with it, fix the cause, and select **Try again**. If SSH is the cause, check the prerequisites in [Set up the first machine](#set-up-the-first-machine) |
+| Sync failed on this machine | Local work continues; sharing is delayed | Fix the file or folder named in **Error details** (a leftover lock file, permissions, a file another application holds open). Sharing resumes automatically; **Try again** also works |
 | Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
 | Shared data problem | Content could not be reconciled automatically | Open **Sync** |
 | Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |

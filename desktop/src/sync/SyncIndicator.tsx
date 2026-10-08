@@ -27,6 +27,7 @@ const ICONS: Record<SyncIndicatorState, typeof CircleCheck> = {
   update_required: TriangleAlert,
   invalid_shared_state: TriangleAlert,
   unreachable: CircleAlert,
+  local_error: CircleAlert,
   unsendable: CircleAlert,
   receiving: Download,
   sending: Upload,
