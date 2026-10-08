@@ -4,7 +4,14 @@ import { HashRouter } from "react-router";
 import { useTranslation } from "react-i18next";
 
 import { App } from "./App";
-import { getBootstrapLog, onBackendClosed, startBackend } from "./api/backend";
+import {
+  BackendClosedError,
+  canRestartApp,
+  getBootstrapLog,
+  onBackendClosed,
+  restartApp,
+  startBackend,
+} from "./api/backend";
 
 type BootStatus =
   | { state: "loading" }
@@ -12,7 +19,7 @@ type BootStatus =
   | {
       state: "error";
       title: "failed" | "stopped";
-      message: string;
+      error: unknown;
       logPath: string;
       logTail: string;
     };
@@ -33,8 +40,8 @@ export function Bootstrap() {
         setStatus(next);
       }
     };
-    // Nothing restarts the backend, so its exit ends the app's session.
-    const stopWatching = onBackendClosed((message) => void showFailure("stopped", message, update));
+    // The backend starts again only with the app, so its exit ends this session.
+    const stopWatching = onBackendClosed((error) => void showFailure("stopped", error, update));
     void connectBackend(update);
     return () => {
       active = false;
@@ -61,7 +68,11 @@ export function Bootstrap() {
         <Alert color="danger" title={t(`app.loading.${status.title}`)} maw={520}>
           <Stack gap="sm">
             <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-              {status.message}
+              {status.error instanceof BackendClosedError
+                ? t(`app.loading.reasons.${status.error.closure.reason}`, {
+                    detail: status.error.closure.detail,
+                  })
+                : String(status.error)}
             </Text>
             {status.logPath ? (
               <Text size="xs">
@@ -69,9 +80,15 @@ export function Bootstrap() {
               </Text>
             ) : null}
             {status.logTail ? <pre className="command-output">{status.logTail}</pre> : null}
-            <Button variant="light" onClick={connect}>
-              {t("app.loading.retry")}
-            </Button>
+            {canRestartApp() ? (
+              <Button variant="light" onClick={() => void restartApp()}>
+                {t("app.loading.restart")}
+              </Button>
+            ) : (
+              <Button variant="light" onClick={connect}>
+                {t("app.loading.retry")}
+              </Button>
+            )}
           </Stack>
         </Alert>
       )}
@@ -84,22 +101,22 @@ async function connectBackend(update: (status: BootStatus) => void) {
     await startBackend();
     update({ state: "ready" });
   } catch (error) {
-    await showFailure("failed", String(error), update);
+    await showFailure("failed", error, update);
   }
 }
 
 async function showFailure(
   title: "failed" | "stopped",
-  message: string,
+  error: unknown,
   update: (status: BootStatus) => void,
 ) {
   // Leave the App at once: its screens cannot reach the backend any more.
-  update({ state: "error", title, message, logPath: "", logTail: "" });
+  update({ state: "error", title, error, logPath: "", logTail: "" });
   const log = await getBootstrapLog().catch(() => null);
   update({
     state: "error",
     title,
-    message,
+    error,
     logPath: log?.path ?? "",
     logTail: log?.tail ?? "",
   });

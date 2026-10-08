@@ -28,12 +28,27 @@ struct BackendState {
 }
 
 /// Where the sidecar can be reached. Only its own port notice makes it
-/// `Ready`, and `Closed` is final: nothing restarts the sidecar.
+/// `Ready`, and `Closed` is final: the sidecar starts again only with the app.
 #[derive(Clone, Debug, PartialEq)]
 enum Connection {
     Starting,
     Ready(u16),
-    Closed(String),
+    Closed(Closure),
+}
+
+/// Why the connection closed: a reason code the frontend puts into words, and
+/// the technical detail behind it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct Closure {
+    reason: &'static str,
+    detail: String,
+}
+
+fn closed(reason: &'static str, detail: impl Into<String>) -> Connection {
+    Connection::Closed(Closure {
+        reason,
+        detail: detail.into(),
+    })
 }
 
 /// The one stdout line through which the sidecar announces the port it bound;
@@ -60,10 +75,8 @@ impl Connection {
             .filter(|port| *port != 0);
         Some(match (self, port) {
             (Connection::Starting, Some(port)) => Connection::Ready(port),
-            (Connection::Starting, None) => {
-                Connection::Closed(format!("the backend announced an invalid port: {notice}"))
-            }
-            _ => Connection::Closed("the backend announced its port twice".to_owned()),
+            (Connection::Starting, None) => closed("invalid_notice", notice),
+            _ => closed("duplicate_notice", ""),
         })
     }
 }
@@ -83,7 +96,7 @@ impl BackendState {
 
     /// Apply one transition unless the connection is already closed; the
     /// reason, when this one closed it.
-    fn advance(&self, next: impl FnOnce(&Connection) -> Connection) -> Option<String> {
+    fn advance(&self, next: impl FnOnce(&Connection) -> Connection) -> Option<Closure> {
         let mut connection = lock(&self.connection);
         if matches!(*connection, Connection::Closed(_)) {
             return None;
@@ -98,15 +111,15 @@ impl BackendState {
     /// `advance`, where closing stops a sidecar that may still run and tells
     /// every window, so no path keeps the old destination.
     fn update(&self, app: &tauri::AppHandle, next: impl FnOnce(&Connection) -> Connection) {
-        if let Some(reason) = self.advance(next) {
+        if let Some(closure) = self.advance(next) {
             if let Some(sidecar) = lock(&self.sidecar).take() {
                 let _ = sidecar.child.kill();
             }
             let _ = append_boot_log(
                 &self.boot_log_path,
-                format!("backend closed: {reason}").as_bytes(),
+                format!("backend closed: {} {}", closure.reason, closure.detail).as_bytes(),
             );
-            let _ = app.emit(BACKEND_CLOSED_EVENT, reason);
+            let _ = app.emit(BACKEND_CLOSED_EVENT, closure);
         }
     }
 }
@@ -176,12 +189,19 @@ const MANAGED_SKILL_METADATA: &str = ".guildbotics-managed.json";
 /// The sidecar's port and token once it announced the port, `null` while it
 /// starts, or why it is gone.
 #[tauri::command]
-fn backend_info(state: tauri::State<'_, BackendState>) -> Result<serde_json::Value, String> {
+fn backend_info(state: tauri::State<'_, BackendState>) -> Result<serde_json::Value, Closure> {
     match &*lock(&state.connection) {
         Connection::Starting => Ok(serde_json::Value::Null),
         Connection::Ready(port) => Ok(serde_json::json!({ "port": port, "token": state.token })),
-        Connection::Closed(reason) => Err(reason.clone()),
+        Connection::Closed(closure) => Err(closure.clone()),
     }
+}
+
+/// Start the whole app again: the way back from a closed backend, since the
+/// sidecar starts only with the app.
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.request_restart();
 }
 
 #[tauri::command]
@@ -854,10 +874,10 @@ mod tests {
             );
         }
         let ready = Connection::Ready(8765);
-        assert!(matches!(
+        assert_eq!(
             ready.after_stdout(b"GUILDBOTICS_APP_API_PORT=8765\n"),
-            Some(Connection::Closed(_))
-        ));
+            Some(closed("duplicate_notice", ""))
+        );
         for line in [
             "GUILDBOTICS_APP_API_PORT=\n",
             "GUILDBOTICS_APP_API_PORT=0\n",
@@ -869,7 +889,10 @@ mod tests {
             assert!(
                 matches!(
                     starting.after_stdout(line.as_bytes()),
-                    Some(Connection::Closed(_))
+                    Some(Connection::Closed(Closure {
+                        reason: "invalid_notice",
+                        ..
+                    }))
                 ),
                 "{line}"
             );
@@ -881,13 +904,10 @@ mod tests {
         let state = connected(Connection::Starting, "token");
         assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
         assert_eq!(state.port(), Some(8765));
-        let first = state.advance(|_| Connection::Closed("exited".to_owned()));
-        assert_eq!(first.as_deref(), Some("exited"));
+        let first = state.advance(|_| closed("exited", "code 1"));
+        assert_eq!(first.map(|closure| closure.reason), Some("exited"));
         assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
-        assert_eq!(
-            state.advance(|_| Connection::Closed("again".to_owned())),
-            None
-        );
+        assert_eq!(state.advance(|_| closed("timeout", "45")), None);
         assert_eq!(state.port(), None);
     }
 
@@ -904,10 +924,7 @@ mod tests {
 
     #[test]
     fn nothing_is_sent_until_the_backend_announced_its_port() {
-        for connection in [
-            Connection::Starting,
-            Connection::Closed("exited".to_owned()),
-        ] {
+        for connection in [Connection::Starting, closed("exited", "code 1")] {
             let state = connected(connection, "session-token");
             let error = request_backend_shutdown(&state).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::NotConnected);
@@ -1534,6 +1551,7 @@ pub fn run() {
         .plugin(hotkeys::plugin())
         .invoke_handler(tauri::generate_handler![
             backend_info,
+            restart_app,
             bootstrap_log,
             cli_agent_skill_statuses,
             force_update_cli_agent_skill,
@@ -1626,11 +1644,12 @@ pub fn run() {
                                     );
                                 }
                                 CommandEvent::Terminated(status) => {
-                                    state.update(&events, |_| {
-                                        Connection::Closed(format!(
-                                            "the backend exited: {status:?}"
-                                        ))
-                                    });
+                                    let detail = match (status.code, status.signal) {
+                                        (Some(code), _) => format!("code {code}"),
+                                        (_, Some(signal)) => format!("signal {signal}"),
+                                        _ => String::new(),
+                                    };
+                                    state.update(&events, |_| closed("exited", detail));
                                     break;
                                 }
                                 _ => {}
@@ -1642,18 +1661,15 @@ pub fn run() {
                         handle.state::<BackendState>().update(
                             &handle,
                             |connection| match connection {
-                                Connection::Starting => Connection::Closed(format!(
-                                    "the backend did not announce its port within {} seconds",
-                                    STARTUP_TIMEOUT.as_secs()
-                                )),
+                                Connection::Starting => {
+                                    closed("timeout", STARTUP_TIMEOUT.as_secs().to_string())
+                                }
                                 _ => connection.clone(),
                             },
                         );
                     });
                 }
-                Err(error) => state.update(&handle, |_| {
-                    Connection::Closed(format!("sidecar spawn failed: {error}"))
-                }),
+                Err(error) => state.update(&handle, |_| closed("spawn_failed", error.to_string())),
             }
             Ok(())
         })

@@ -1065,8 +1065,9 @@ a monorepo on purpose.
     sidecar's exit closes it for good, kills the sidecar, and sends `backend-closed` to
     every window. `backend_info`, the host's own requests, and the frontend's HTTP,
     WebSocket, and avatar URLs all take their destination from that state, so nothing
-    addresses a port after the sidecar is gone. Nothing restarts the sidecar; the
-    window shows that it stopped.
+    addresses a port after the sidecar is gone. The sidecar starts again only with the
+    app, so the window shows why it stopped and offers to restart the app
+    (`restart_app`).
   - Host clients that find the Local API through `~/.guildbotics/data/run/app-api.json`
     (`guildbotics run` delegation and macOS Hub Secret) go through
     `utils/local_api.py`'s `connect_local_api()`. It first posts a fresh 32-byte nonce to

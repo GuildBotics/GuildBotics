@@ -16,7 +16,7 @@ vi.mock("./client", () => ({
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-type ClosedHandler = (event: { payload: string }) => void;
+type ClosedHandler = (event: { payload: { reason: string; detail: string } }) => void;
 const closedHandlers: ClosedHandler[] = [];
 const listen = vi.fn(async (_event: string, handler: ClosedHandler) => {
   closedHandlers.push(handler);
@@ -120,13 +120,14 @@ describe("startBackend - Tauri runtime", () => {
   });
 
   it("fails with the host's reason and connects nothing", async () => {
-    invoke.mockRejectedValue("the backend announced its port twice");
+    const closure = { reason: "duplicate_notice", detail: "" };
+    invoke.mockRejectedValue(closure);
 
     const backend = await loadBackend();
 
-    await expect(backend.startBackend()).rejects.toThrow(
-      "GuildBotics backend is not running: the backend announced its port twice",
-    );
+    const failure = await backend.startBackend().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(backend.BackendClosedError);
+    expect((failure as InstanceType<typeof backend.BackendClosedError>).closure).toEqual(closure);
     expect(configureApi).not.toHaveBeenCalled();
   });
 
@@ -139,10 +140,20 @@ describe("startBackend - Tauri runtime", () => {
     await backend.startBackend();
 
     expect(listen).toHaveBeenCalledTimes(1);
-    closedHandlers[0]({ payload: "the backend exited" });
+    const closure = { reason: "exited", detail: "code 137" };
+    closedHandlers[0]({ payload: closure });
 
     expect(disconnectApi).toHaveBeenCalledTimes(1);
-    expect(closed).toHaveBeenCalledWith("GuildBotics backend is not running: the backend exited");
+    expect(closed).toHaveBeenCalledWith(expect.objectContaining({ closure }));
+  });
+
+  it("restarts the app through the host", async () => {
+    const backend = await loadBackend();
+
+    expect(backend.canRestartApp()).toBe(true);
+    await backend.restartApp();
+
+    expect(invoke).toHaveBeenCalledWith("restart_app");
   });
 });
 

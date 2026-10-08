@@ -155,6 +155,8 @@ def test_every_caller_of_a_proof_gated_client_is_classified():
 
 
 #: A line comment or a block comment's line; ``*x = ...`` is Rust code.
+#: Any other item starting at the margin ends the function before it.
+_TOP_LEVEL = re.compile(r"^[^\s})\]]")
 _COMMENT = re.compile(r"^\s*(?://|/\*|\*(?:[ /]|$))")
 
 
@@ -182,6 +184,8 @@ def _routes(
                 continue
             if declared := function.match(line):
                 enclosing = next(name for name in declared.groups() if name)
+            elif _TOP_LEVEL.match(line):
+                enclosing = ""
             if carrier.search(line):
                 found.add((name, enclosing))
     return found

@@ -3,17 +3,27 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Bootstrap } from "./Bootstrap";
-import { getBootstrapLog, onBackendClosed, startBackend } from "./api/backend";
+import {
+  BackendClosedError,
+  canRestartApp,
+  getBootstrapLog,
+  onBackendClosed,
+  restartApp,
+  startBackend,
+} from "./api/backend";
 import i18n from "./i18n";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
 
-vi.mock("./api/backend", () => ({
+vi.mock("./api/backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api/backend")>()),
   getBootstrapLog: vi.fn(async () => null),
   startBackend: vi.fn(async () => undefined),
   onBackendClosed: vi.fn(() => () => undefined),
+  canRestartApp: vi.fn(() => false),
+  restartApp: vi.fn(async () => undefined),
 }));
 
 vi.mock("./App", () => ({
@@ -23,6 +33,7 @@ vi.mock("./App", () => ({
 const startBackendMock = vi.mocked(startBackend);
 const getBootstrapLogMock = vi.mocked(getBootstrapLog);
 const onBackendClosedMock = vi.mocked(onBackendClosed);
+const canRestartAppMock = vi.mocked(canRestartApp);
 
 function renderBootstrap() {
   return render(
@@ -36,6 +47,7 @@ describe("Bootstrap", () => {
   beforeEach(() => {
     startBackendMock.mockReset();
     getBootstrapLogMock.mockReset().mockResolvedValue(null);
+    canRestartAppMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -111,7 +123,7 @@ describe("Bootstrap", () => {
   });
 
   it("leaves the App for the failure screen once the backend stops", async () => {
-    let close: (message: string) => void = () => {};
+    let close: (error: BackendClosedError) => void = () => {};
     const stopWatching = vi.fn();
     onBackendClosedMock.mockImplementation((listener) => {
       close = listener;
@@ -121,13 +133,30 @@ describe("Bootstrap", () => {
 
     const { unmount } = renderBootstrap();
     await screen.findByText("App Mock Loaded");
-    close("GuildBotics backend is not running: the backend exited");
+    close(new BackendClosedError({ reason: "exited", detail: "code 137" }));
 
     expect(await screen.findByText(t("app.loading.stopped"))).toBeInTheDocument();
-    expect(screen.getByText(/the backend exited/)).toBeInTheDocument();
+    expect(
+      screen.getByText(t("app.loading.reasons.exited", { detail: "code 137" })),
+    ).toBeInTheDocument();
     expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
     unmount();
     expect(stopWatching).toHaveBeenCalled();
+  });
+
+  it("offers to restart the app in Desktop, where retrying cannot bring the backend back", async () => {
+    const user = userEvent.setup();
+    canRestartAppMock.mockReturnValue(true);
+    startBackendMock.mockRejectedValue(new BackendClosedError({ reason: "timeout", detail: "45" }));
+
+    renderBootstrap();
+
+    expect(
+      await screen.findByText(t("app.loading.reasons.timeout", { detail: "45" })),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("app.loading.retry") })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t("app.loading.restart") }));
+    expect(restartApp).toHaveBeenCalled();
   });
 
   it("does not update state after unmount when startBackend resolves late", async () => {

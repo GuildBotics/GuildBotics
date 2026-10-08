@@ -39,11 +39,21 @@ export async function getBootstrapLog(): Promise<BootstrapLog | null> {
   return invoke<BootstrapLog>("bootstrap_log");
 }
 
-const closedListeners = new Set<(reason: string) => void>();
+/** Why the host closed the connection; `reason` is a code the screen words. */
+export type BackendClosure = { reason: string; detail: string };
+
+/** The backend is gone for good: only restarting the app starts it again. */
+export class BackendClosedError extends Error {
+  constructor(readonly closure: BackendClosure) {
+    super(`GuildBotics backend is not running: ${closure.reason} ${closure.detail}`);
+  }
+}
+
+const closedListeners = new Set<(error: BackendClosedError) => void>();
 let watchingForClose: Promise<unknown> | null = null;
 
 /** Be told, with the host's reason, once the backend has gone for good. */
-export function onBackendClosed(listener: (message: string) => void): () => void {
+export function onBackendClosed(listener: (error: BackendClosedError) => void): () => void {
   closedListeners.add(listener);
   return () => closedListeners.delete(listener);
 }
@@ -76,8 +86,8 @@ export async function startBackend() {
   const { invoke } = await import("@tauri-apps/api/core");
   for (;;) {
     const info = await invoke<{ port: number; token: string } | null>("backend_info").catch(
-      (reason: unknown) => {
-        throw new Error(notRunning(reason));
+      (closure: BackendClosure) => {
+        throw new BackendClosedError(closure);
       },
     );
     if (info) {
@@ -90,16 +100,22 @@ export async function startBackend() {
 
 function watchForClose() {
   watchingForClose ??= import("@tauri-apps/api/event").then(({ listen }) =>
-    listen<string>("backend-closed", ({ payload }) => {
+    listen<BackendClosure>("backend-closed", ({ payload }) => {
       disconnectApi();
-      closedListeners.forEach((listener) => listener(notRunning(payload)));
+      closedListeners.forEach((listener) => listener(new BackendClosedError(payload)));
     }),
   );
   return watchingForClose;
 }
 
-function notRunning(reason: unknown) {
-  return `GuildBotics backend is not running: ${String(reason)}`;
+/** Whether the app itself can be started again, which brings a new backend. */
+export function canRestartApp() {
+  return isTauriRuntime();
+}
+
+export async function restartApp() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("restart_app");
 }
 
 /**
