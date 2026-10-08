@@ -1059,7 +1059,9 @@ a monorepo on purpose.
   goes only to a process that showed it holds the port or the token.
   - Desktop starts the sidecar with `--port 0`. The sidecar binds, listens, and then
     announces the port as the only line its stdout ever carries
-    (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is stderr. The host keeps one
+    (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is stderr. It announces
+    before loading the workspace, whose secrets can wait on a keychain prompt, so the
+    host's deadline measures binding only; the frontend waits on `/health` meanwhile. The host keeps one
     connection state (`Starting` / `Ready(port)` / `Closed`) that only that notice makes
     `Ready`. A missing notice after 45 seconds, an invalid or second notice, or the
     sidecar's exit closes it for good, kills the sidecar, and sends `backend-closed` to

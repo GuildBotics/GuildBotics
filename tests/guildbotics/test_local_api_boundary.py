@@ -63,7 +63,7 @@ FRONTEND_ROUTES = {
     ("api/client.ts", "request"): "header",
     ("api/backend.ts", ""): "shipped code: inlined only into a preview build",
     ("api/backend.ts", "startBackend"): "connection from the announced port",
-    ("api/backend.ts", "waitForHealth"): "header, preview backend only",
+    ("api/backend.ts", "waitForHealth"): "header, to the connection just set",
 }
 _FRONTEND_CARRIERS = re.compile(
     r"X-GuildBotics-Session-Token|token=|[\"']token[\"']|callback_base_url"

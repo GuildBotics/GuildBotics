@@ -156,22 +156,8 @@ def main() -> None:
 
     token = _read_session_token()
     allowed_origins = _read_allowed_origins()
-    workspace_problem = ""
-    try:
-        _restore_active_workspace()
-    except (UnsafePathError, OSError) as exc:
-        workspace_problem = str(exc)
-        for key in (GUILDBOTICS_WORKSPACE_ROOT, GUILDBOTICS_CONFIG_DIR):
-            os.environ.pop(key, None)
-
-    app = create_app(
-        session_token=token,
-        allowed_origins=allowed_origins,
-        restore_workspace_environment=True,
-        workspace_problem=workspace_problem,
-    )
     config = uvicorn.Config(
-        app,
+        "",  # Built once the port is announced, below.
         host=args.host,
         port=args.port,
         access_log=False,
@@ -184,13 +170,30 @@ def main() -> None:
         # Listen before announcing: a port that is bound but not listening can
         # still be bound by another socket with SO_REUSEADDR on Linux.
         sock.listen(config.backlog)
+        # Announced before anything that can wait on the user: loading the
+        # workspace's secrets can stop on a keychain prompt, and the launcher's
+        # deadline is for binding only. Connections wait in the backlog.
+        _announce_port(sock.getsockname()[1])
+        workspace_problem = ""
+        try:
+            _restore_active_workspace()
+        except (UnsafePathError, OSError) as exc:
+            workspace_problem = str(exc)
+            for key in (GUILDBOTICS_WORKSPACE_ROOT, GUILDBOTICS_CONFIG_DIR):
+                os.environ.pop(key, None)
+        app = create_app(
+            session_token=token,
+            allowed_origins=allowed_origins,
+            restore_workspace_environment=True,
+            workspace_problem=workspace_problem,
+        )
+        config.app = app
         endpoint = LocalApiEndpoint(
             port=sock.getsockname()[1],
             token=token,
             service_instance_id=app.state.runtime.system_service_run_id,
             workspace=app.state.runtime.get_config_status().workspace,
         )
-        _announce_port(endpoint.port)
         endpoint.publish()
 
         def workspace_changed(workspace: Path) -> None:

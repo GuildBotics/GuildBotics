@@ -50,6 +50,7 @@ export class BackendClosedError extends Error {
 }
 
 const closedListeners = new Set<(error: BackendClosedError) => void>();
+let closedBy: BackendClosedError | null = null;
 let watchingForClose: Promise<unknown> | null = null;
 
 /** Be told, with the host's reason, once the backend has gone for good. */
@@ -73,7 +74,7 @@ export async function startBackend() {
   // Dev / browser preview: the backend is started externally with a fixed token.
   if (STATIC_TOKEN) {
     configureApi(STATIC_TOKEN, STATIC_BASE);
-    await waitForHealth();
+    await waitForHealth(STATIC_BASE, STATIC_TOKEN, Date.now() + 45_000);
     return;
   }
 
@@ -91,7 +92,11 @@ export async function startBackend() {
       },
     );
     if (info) {
-      configureApi(info.token, `http://127.0.0.1:${info.port}`);
+      const base = `http://127.0.0.1:${info.port}`;
+      configureApi(info.token, base);
+      // The port is announced before the backend loads the workspace, which can
+      // wait on a keychain prompt; the host ends the wait if the backend goes.
+      await waitForHealth(base, info.token, Infinity);
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -102,7 +107,9 @@ function watchForClose() {
   watchingForClose ??= import("@tauri-apps/api/event").then(({ listen }) =>
     listen<BackendClosure>("backend-closed", ({ payload }) => {
       disconnectApi();
-      closedListeners.forEach((listener) => listener(new BackendClosedError(payload)));
+      const error = new BackendClosedError(payload);
+      closedBy = error;
+      closedListeners.forEach((listener) => listener(error));
     }),
   );
   return watchingForClose;
@@ -154,14 +161,15 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-async function waitForHealth() {
-  // An externally started backend may still be starting.
-  const deadline = Date.now() + 45_000;
+async function waitForHealth(base: string, token: string, deadline: number) {
   let lastError: unknown = null;
   while (Date.now() < deadline) {
+    if (closedBy) {
+      throw closedBy;
+    }
     try {
-      const response = await fetch(`${STATIC_BASE}/health`, {
-        headers: { "X-GuildBotics-Session-Token": STATIC_TOKEN },
+      const response = await fetch(`${base}/health`, {
+        headers: { "X-GuildBotics-Session-Token": token },
       });
       if (response.ok) {
         return;

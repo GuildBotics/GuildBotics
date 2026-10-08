@@ -317,6 +317,9 @@ def test_main_announces_the_port_it_bound_once_it_listens(monkeypatch, captured_
     def announce(port: int) -> None:
         # A port bound but not yet listening can still be taken on Linux.
         assert listening
+        # The launcher's deadline must not count a keychain prompt, which
+        # loading the workspace's secrets in create_app can wait on.
+        assert "create_app" not in captured_launch
         announced.append(port)
 
     monkeypatch.setattr(server, "_announce_port", announce)

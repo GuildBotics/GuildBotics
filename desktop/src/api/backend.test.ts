@@ -105,8 +105,10 @@ describe("startBackend - Tauri runtime", () => {
         return null;
       })
       .mockResolvedValueOnce({ port: 7777, token: "runtime-token" });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => okResponse()),
+    );
 
     const backend = await loadBackend();
     const started = backend.startBackend();
@@ -116,7 +118,50 @@ describe("startBackend - Tauri runtime", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenCalledWith("backend_info");
     expect(configureApi).toHaveBeenCalledWith("runtime-token", "http://127.0.0.1:7777");
-    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting past the preview deadline while the backend loads the workspace", async () => {
+    invoke.mockResolvedValue({ port: 7777, token: "runtime-token" });
+    const fetchMock = vi.fn<FetchMock>(async () => {
+      // A keychain prompt holds the backend before it answers.
+      throw new Error("timed out");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const backend = await loadBackend();
+    let settled = false;
+    const started = backend.startBackend().finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    fetchMock.mockResolvedValue(okResponse());
+    await vi.advanceTimersByTimeAsync(300);
+    await started;
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:7777/health");
+    expect((init.headers as Record<string, string>)["X-GuildBotics-Session-Token"]).toBe(
+      "runtime-token",
+    );
+  });
+
+  it("stops waiting once the host reports the backend gone", async () => {
+    invoke.mockResolvedValue({ port: 7777, token: "runtime-token" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timed out");
+      }),
+    );
+
+    const backend = await loadBackend();
+    const started = backend.startBackend().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(300);
+    closedHandlers[0]({ payload: { reason: "timeout", detail: "45" } });
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(await started).toBeInstanceOf(backend.BackendClosedError);
   });
 
   it("fails with the host's reason and connects nothing", async () => {
@@ -133,6 +178,10 @@ describe("startBackend - Tauri runtime", () => {
 
   it("disconnects and tells its listeners once the host reports an exit", async () => {
     invoke.mockResolvedValue({ port: 7777, token: "runtime-token" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => okResponse()),
+    );
     const backend = await loadBackend();
     const closed = vi.fn();
     backend.onBackendClosed(closed);
