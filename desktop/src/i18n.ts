@@ -920,6 +920,8 @@ const resources = {
           defaultCliAgent: "Default AI CLI tool",
           inferenceFailure: {
             summary: "Latest call failed: {{reason}} ({{time}} · This machine)",
+            responseWithStatus: "Provider's answer (status {{status}}): {{response}}",
+            response: "Provider's answer: {{response}}",
             categories: {
               authentication: "the API key is missing or was rejected",
               credit: "the account is out of credit; check the provider's billing settings",
@@ -2691,6 +2693,8 @@ const resources = {
           defaultCliAgent: "デフォルトの AI CLIツール",
           inferenceFailure: {
             summary: "直近の呼び出しが失敗しました: {{reason}}（{{time}}・このマシン）",
+            responseWithStatus: "provider の応答（ステータス {{status}}）: {{response}}",
+            response: "provider の応答: {{response}}",
             categories: {
               authentication: "API キーが無いか、拒否されました",
               credit:

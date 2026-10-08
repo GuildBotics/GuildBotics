@@ -7,7 +7,10 @@ way what is called is settled here from the host's own settings -- the model
 of the member's slot, its effort mapping, its rate limit -- and the call is
 recorded here, under the span the brain opened: the span's end names the
 provider whose key was used and, when the call failed, why the provider
-refused it, so the latest outcome per provider is read from the records.
+refused it and what it answered, so the latest outcome per provider is read
+from the records. The answer is recorded with the key the call used and the
+workspace's secrets masked: the records are read inside the environment of a
+command that inspects them.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.rate_limiter import acquire
+from guildbotics.utils.shared_redaction import redact_for_sharing
 
 
 async def request(key: str, method: str, path: str, payload: Any = None):
@@ -100,6 +104,7 @@ class DirectInference:
                 status: str,
                 usage: dict[str, Any] | None = None,
                 failure: InferenceFailure | None = None,
+                key: str = "",
             ) -> None:
                 # A definition that names no model id of its own leaves the span's
                 # model empty -- the request ran on the provider's default, which
@@ -112,7 +117,7 @@ class DirectInference:
                     duration_ms=(time.monotonic() - started) * 1000,
                     attributes={
                         "model.slot": config.name,
-                        **_credential_attributes("llm", provider, failure),
+                        **_credential_attributes("llm", provider, failure, key),
                     },
                     model=model,
                     effort=effort,
@@ -146,7 +151,11 @@ class DirectInference:
                 failure = _classified(
                     provider, failures[-1] if failures else RuntimeError()
                 )
-                summary("failed", failure=failure if failures else None)
+                summary(
+                    "failed",
+                    failure=failure if failures else None,
+                    key=str(getattr(model_instance, "api_key", None) or ""),
+                )
                 raise failure
             content = response.content
             record_correlated_io(
@@ -186,7 +195,7 @@ class DirectInference:
                     call.model,
                     status,
                     duration_ms=(time.monotonic() - started) * 1000,
-                    attributes=_credential_attributes(JEV_PROVIDER, "", failure),
+                    attributes=_credential_attributes(JEV_PROVIDER, "", failure, key),
                     model=str((result or {}).get("model") or ""),
                     usage=(result or {}).get("usage"),
                 )
@@ -240,15 +249,21 @@ def _classified(provider: str, exc: BaseException) -> InferenceFailure:
 
 
 def _credential_attributes(
-    service: str, provider: str, failure: InferenceFailure | None
-) -> dict[str, str]:
+    service: str, provider: str, failure: InferenceFailure | None, key: str = ""
+) -> dict[str, Any]:
     """What a span's end says of the key it used: the service (``llm`` or
-    ``jev``), the LLM provider, and why it was refused."""
-    return {
-        "credential.provider": service,
-        **({"llm.provider": provider} if provider else {}),
-        **({"error.category": failure.category} if failure else {}),
-    }
+    ``jev``), the LLM provider, and why it was refused, with what the
+    provider answered -- ``key`` and the workspace's secrets masked."""
+    attributes: dict[str, Any] = {"credential.provider": service}
+    if provider:
+        attributes["llm.provider"] = provider
+    if failure:
+        response = failure.response.replace(key, "***") if key else failure.response
+        attributes["error.category"] = failure.category
+        attributes["error.response"] = redact_for_sharing(response)
+        if failure.status_code:
+            attributes["error.status_code"] = failure.status_code
+    return attributes
 
 
 def _output_class(schema: dict[str, Any]) -> type[BaseModel]:

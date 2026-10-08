@@ -37,11 +37,16 @@ class InferenceFailure(Exception):
     """A failed inference call, told by what failed, the status the provider
     reported, and why -- never by its message, which may carry credentials.
 
+    What the provider answered is kept apart, for the host to record once it
+    has masked the credentials in it; it never reaches a command's
+    environment.
+
     Attributes:
         error_type: The class of the error the call failed with first.
         status_code: The HTTP status reported. It may be an SDK default
             without an HTTP response.
         reported_type: The error type the provider reported, if any.
+        response: What the provider answered, unmasked.
         category: Why the provider refused the call.
     """
 
@@ -56,6 +61,7 @@ class InferenceFailure(Exception):
         )
         reported = getattr(chain[-1], "type", None)
         self.reported_type = reported if isinstance(reported, str) else ""
+        self.response = _answer(chain[-1])
         self.category: FailureCategory = "other"
         super().__init__(
             t(
@@ -66,6 +72,18 @@ class InferenceFailure(Exception):
             if self.status_code
             else t("intelligences.inference.failed", error_type=self.error_type)
         )
+
+
+def _answer(error: BaseException) -> str:
+    """The body of the response ``error`` carries, else the SDK's account of
+    the error: what the provider said, as it said it."""
+    response = getattr(error, "response", None)
+    try:
+        body = response.text if response is not None else None
+    except Exception:
+        # A response whose body was never read.
+        body = None
+    return body if isinstance(body, str) and body else str(error)
 
 
 def _status(error: BaseException) -> object:

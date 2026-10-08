@@ -299,7 +299,11 @@ def _openai_slot(monkeypatch, reply: httpx.Response) -> list[dict[str, Any]]:
             "default": agno_agent.ModelConfig(
                 name="models/openai/default.yml",
                 model_class="agno.models.openai.OpenAIChat",
-                parameters={"id": "gpt-test", "api_key": "sk-test", "max_retries": 0},
+                parameters={
+                    "id": "gpt-test",
+                    "api_key": "sk-test-0123456789",
+                    "max_retries": 0,
+                },
             )
         },
     )
@@ -339,7 +343,7 @@ async def test_a_refusal_agno_answers_with_is_raised_with_why(monkeypatch) -> No
             429,
             json={
                 "error": {
-                    "message": "You exceeded your current quota.",
+                    "message": "You exceeded your current quota (sk-test-0123456789).",
                     "type": "insufficient_quota",
                     "code": "credit_balance_exhausted",
                 }
@@ -354,6 +358,8 @@ async def test_a_refusal_agno_answers_with_is_raised_with_why(monkeypatch) -> No
     assert refused.value.error_type == "RateLimitError"
     assert refused.value.status_code == 429
     assert "quota" not in str(refused.value)
+    # What the provider answered is recorded as it said it, the key the call
+    # was made with masked: the records are read inside an inspecting command.
     assert [(span["status"], span["attributes"]) for span in spans] == [
         (
             "failed",
@@ -362,6 +368,17 @@ async def test_a_refusal_agno_answers_with_is_raised_with_why(monkeypatch) -> No
                 "credential.provider": "llm",
                 "llm.provider": "openai",
                 "error.category": "credit",
+                "error.status_code": 429,
+                "error.response": json.dumps(
+                    {
+                        "error": {
+                            "message": "You exceeded your current quota (***).",
+                            "type": "insufficient_quota",
+                            "code": "credit_balance_exhausted",
+                        }
+                    },
+                    separators=(",", ":"),
+                ),
             },
         )
     ]
@@ -409,12 +426,14 @@ async def test_a_jev_refusal_is_raised_with_why(monkeypatch) -> None:
     async def request(*_args):
         url = "https://api.typesafe.ai/v1/systemone"
         raise httpx.HTTPStatusError(
-            "Bearer sk-secret",
+            "Bearer jev-key-0123456789",
             request=httpx.Request("POST", url),
-            response=httpx.Response(401),
+            response=httpx.Response(401, text="Invalid key jev-key-0123456789"),
         )
 
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    monkeypatch.setattr(
+        inference_host, "credential", lambda _root: "jev-key-0123456789"
+    )
     monkeypatch.setattr(inference_host, "request", request)
     spans: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -426,9 +445,17 @@ async def test_a_jev_refusal_is_raised_with_why(monkeypatch) -> None:
         await brain.run(json.dumps({"state": {}, "questions": {}}))
 
     assert refused.value.category == "authentication"
-    assert "sk-secret" not in str(refused.value)
+    assert "jev-key" not in str(refused.value)
     assert [(span["status"], span["attributes"]) for span in spans] == [
-        ("failed", {"credential.provider": "jev", "error.category": "authentication"})
+        (
+            "failed",
+            {
+                "credential.provider": "jev",
+                "error.category": "authentication",
+                "error.status_code": 401,
+                "error.response": "Invalid key ***",
+            },
+        )
     ]
 
 

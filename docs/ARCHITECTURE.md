@@ -1001,7 +1001,13 @@ classifies every secret store access and member key spelling in the package.
   raises `InferenceFailure` instead. Every such call ends its span naming the key
   (`credential.provider` `llm` / `jev`, `llm.provider`) and, when refused, why
   (`error.category`: `authentication`, `credit`, `rate_limit`, `other`, decided by
-  the status and error type the provider reported in `llm_providers.classify_failure`).
+  the status and error type the provider reported in `llm_providers.classify_failure`),
+  with the status and what the provider answered (`error.status_code`,
+  `error.response`). The answer is recorded with the key the call used and the
+  workspace's secrets masked and bounded (`redact_for_sharing()`), because the
+  records are mounted into the environment of a command that inspects
+  diagnostics; it never crosses the command window, which carries only the
+  failure's kind, status, and category.
   The span is the record: the alert is one per provider account
   (`credential:llm:<provider>`, `credential:jev:`), opened by an `authentication` or
   `credit` refusal and closed by the next call of the same key that succeeds; a rate

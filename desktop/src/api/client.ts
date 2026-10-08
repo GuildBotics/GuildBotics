@@ -1740,6 +1740,9 @@ export async function getCliAgentLastTurns(): Promise<CliAgentLastTurn[]> {
 export type InferenceFailure = {
   category: "authentication" | "credit" | "rate_limit" | "other";
   timestamp: string;
+  // What the provider answered, credentials masked, and the status it reported.
+  status_code?: number | null;
+  response?: string;
 };
 
 export type InferenceFailuresResponse = {

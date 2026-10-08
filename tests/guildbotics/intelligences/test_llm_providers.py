@@ -176,3 +176,18 @@ def test_a_failure_names_the_providers_error_never_its_message() -> None:
 )
 def test_provider_of_a_model_definition(path: str, provider: str) -> None:
     assert provider_of(path) == provider
+
+
+def test_a_failure_keeps_what_the_provider_answered_apart_from_its_message() -> None:
+    from google.genai import errors
+
+    openai = InferenceFailure(_provider_error("openai", 429, "insufficient_quota"))
+    gemini = InferenceFailure(
+        errors.ClientError(400, {"error": {"status": "INVALID_ARGUMENT"}})
+    )
+
+    # A response without a body leaves the SDK's account of the error (the body
+    # itself is what test_inference records from a real provider answer).
+    assert openai.response == "synthetic"
+    assert "INVALID_ARGUMENT" in gemini.response
+    assert "INVALID_ARGUMENT" not in str(gemini)

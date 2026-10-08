@@ -52,7 +52,8 @@ def latest_inference_failures(
         key = inference_key(record)
         timestamp = str(record.get("timestamp") or "")
         when = parse_iso_datetime(timestamp)
-        category = record["attributes"].get("error.category")
+        attributes = record["attributes"]
+        category = attributes.get("error.category")
         failed = record.get("type") == "span.failed"
         if key is None or when is None or (failed and not category):
             continue
@@ -60,7 +61,12 @@ def latest_inference_failures(
         if previous is None or when >= previous[0]:
             latest[key] = (
                 when,
-                InferenceFailureStatus(category=category, timestamp=timestamp)
+                InferenceFailureStatus(
+                    category=category,
+                    timestamp=timestamp,
+                    status_code=attributes.get("error.status_code"),
+                    response=str(attributes.get("error.response") or ""),
+                )
                 if failed
                 else None,
             )

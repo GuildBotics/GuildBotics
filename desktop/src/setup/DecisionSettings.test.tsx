@@ -48,7 +48,12 @@ it("shows why Jev refused the latest call until a call succeeds", async () => {
   vi.mocked(getDecisionOptions).mockResolvedValue({ credential_present: true });
   vi.mocked(getInferenceFailures).mockResolvedValue({
     llm: { openai: { category: "credit", timestamp: "2026-10-08T10:00:00Z" } },
-    jev: { category: "authentication", timestamp: "2026-10-08T10:00:00Z" },
+    jev: {
+      category: "authentication",
+      timestamp: "2026-10-08T10:00:00Z",
+      status_code: 401,
+      response: '{"error":"invalid key ***"}',
+    },
   });
   mount("jev");
   expect(
@@ -56,6 +61,15 @@ it("shows why Jev refused the latest call until a call succeeds", async () => {
       t("setup.intelligence.inferenceFailure.summary", {
         reason: t("setup.intelligence.inferenceFailure.categories.authentication"),
         time: new Date("2026-10-08T10:00:00Z").toLocaleString("en"),
+      }),
+    ),
+  ).toBeInTheDocument();
+  // What the provider answered, as it said it (the backend masked the key).
+  expect(
+    screen.getByText(
+      t("setup.intelligence.inferenceFailure.responseWithStatus", {
+        status: 401,
+        response: '{"error":"invalid key ***"}',
       }),
     ),
   ).toBeInTheDocument();

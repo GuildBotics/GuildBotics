@@ -25,7 +25,15 @@ def _call(
             "attributes": {
                 "credential.provider": service,
                 **({"llm.provider": provider} if provider else {}),
-                **({"error.category": category} if category else {}),
+                **(
+                    {
+                        "error.category": category,
+                        "error.status_code": 429,
+                        "error.response": f"{category} answer",
+                    }
+                    if category
+                    else {}
+                ),
             },
             "payload": {},
         }
@@ -81,9 +89,16 @@ def test_each_keys_latest_call_decides_its_state(tmp_path) -> None:
             "anthropic": {
                 "category": "rate_limit",
                 "timestamp": "2026-10-08T19:10:00+09:00",
+                "status_code": 429,
+                "response": "rate_limit answer",
             }
         },
-        "jev": {"category": "authentication", "timestamp": "2026-10-08T10:00:00Z"},
+        "jev": {
+            "category": "authentication",
+            "timestamp": "2026-10-08T10:00:00Z",
+            "status_code": 429,
+            "response": "authentication answer",
+        },
     }
 
 
@@ -107,6 +122,13 @@ def test_api_reads_the_device_records_and_requires_token(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "llm": {"openai": {"category": "credit", "timestamp": "2026-10-08T10:00:00Z"}},
+        "llm": {
+            "openai": {
+                "category": "credit",
+                "timestamp": "2026-10-08T10:00:00Z",
+                "status_code": 429,
+                "response": "credit answer",
+            }
+        },
         "jev": None,
     }

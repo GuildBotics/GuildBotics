@@ -56,10 +56,16 @@ class CliAgentLastTurn(BaseModel):
 
 
 class InferenceFailureStatus(BaseModel):
-    """Why the latest call with a workspace key was refused, and when."""
+    """Why the latest call with a workspace key was refused, and when.
+
+    ``response`` is what the provider answered, with credentials masked;
+    ``status_code`` the status it reported, which may be an SDK default.
+    """
 
     category: Literal["authentication", "credit", "rate_limit", "other"]
     timestamp: str
+    status_code: int | None = None
+    response: str = ""
 
 
 class InferenceFailuresResponse(BaseModel):

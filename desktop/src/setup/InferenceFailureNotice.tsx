@@ -20,12 +20,28 @@ export function useInferenceFailures(enabled = true) {
 export function InferenceFailureNotice({ failure }: { failure: InferenceFailure | undefined }) {
   const { t, i18n } = useTranslation();
   if (!failure) return null;
+  const answer = failure.status_code
+    ? t("setup.intelligence.inferenceFailure.responseWithStatus", {
+        status: failure.status_code,
+        response: failure.response ?? "",
+      })
+    : failure.response
+      ? t("setup.intelligence.inferenceFailure.response", { response: failure.response })
+      : "";
   return (
-    <Text size="xs" c={failure.category === "rate_limit" ? "warning" : "danger"}>
-      {t("setup.intelligence.inferenceFailure.summary", {
-        reason: t(`setup.intelligence.inferenceFailure.categories.${failure.category}`),
-        time: new Date(failure.timestamp).toLocaleString(i18n.language),
-      })}
-    </Text>
+    <>
+      <Text size="xs" c={failure.category === "rate_limit" ? "warning" : "danger"}>
+        {t("setup.intelligence.inferenceFailure.summary", {
+          reason: t(`setup.intelligence.inferenceFailure.categories.${failure.category}`),
+          time: new Date(failure.timestamp).toLocaleString(i18n.language),
+        })}
+      </Text>
+      {answer ? (
+        // A provider's answer is often one long JSON line.
+        <Text size="xs" c="dimmed" lineClamp={3} title={answer} style={{ wordBreak: "break-all" }}>
+          {answer}
+        </Text>
+      ) : null}
+    </>
   );
 }
