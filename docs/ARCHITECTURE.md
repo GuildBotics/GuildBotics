@@ -1009,9 +1009,12 @@ classifies every secret store access and member key spelling in the package.
   diagnostics; it never crosses the command window, which carries only the
   failure's kind, status, and category.
   The span is the record: the alert is one per provider account
-  (`credential:llm:<provider>`, `credential:jev:`), opened by an `authentication` or
+  (`inference:llm:<provider>`, `inference:jev:`), opened by an `authentication` or
   `credit` refusal and closed by the next call of the same key that succeeds; a rate
-  limit passes by itself and opens none. The setup screen shows each key's latest
+  limit passes by itself and opens none. It is keyed apart from the verify and
+  diagnostics checks of whether the key is configured (`credential:llm:<provider>`),
+  which say nothing of whether the provider takes it and so never settle a refusal;
+  the converse holds, so a call that succeeds also closes the key's missing-key alert. The setup screen shows each key's latest
   refusal, of any category, from the same spans (`/intelligences/inference-failures`).
   The desktop
   polls `/system-alerts` and renders the result above every route with links to

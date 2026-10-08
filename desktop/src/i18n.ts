@@ -434,7 +434,7 @@ const resources = {
         },
         keyRefusals: {
           authentication:
-            "The API key is missing or was rejected by the provider. Check the key in Setup.",
+            "The API key is missing, or the provider refused the key or its permissions. Check the key in Setup and its permissions on the provider's site.",
           credit:
             "The provider reports that the account is out of credit. Check the billing settings on the provider's site.",
         },
@@ -923,10 +923,11 @@ const resources = {
             responseWithStatus: "Provider's answer (status {{status}}): {{response}}",
             response: "Provider's answer: {{response}}",
             categories: {
-              authentication: "the API key is missing or was rejected",
+              authentication:
+                "the API key is missing, or the provider refused it or its permissions",
               credit: "the account is out of credit; check the provider's billing settings",
               rate_limit: "temporarily rate limited",
-              other: "an error other than the key (see Diagnostics)",
+              other: "the cause could not be classified",
             },
           },
           lastTurn: {
@@ -1737,7 +1738,7 @@ const resources = {
             description: "The selected LLM provider did not accept the minimal validation request.",
             categories: {
               authentication:
-                "The API key of the selected LLM provider is missing or was rejected.",
+                "The API key of the selected LLM provider is missing, or the provider refused the key or its permissions.",
               credit:
                 "The selected LLM provider reports that the account is out of credit. Check the billing settings on the provider's site.",
               rate_limit:
@@ -2519,7 +2520,7 @@ const resources = {
         },
         keyRefusals: {
           authentication:
-            "API キーが無いか、provider に拒否されました。設定画面でキーを確認してください。",
+            "API キーが無いか、provider がキーまたはその権限を拒否しました。設定画面のキーと、provider のサイトでの権限を確認してください。",
           credit:
             "provider がアカウントのクレジット不足を報告しています。provider のサイトで課金設定を確認してください。",
         },
@@ -2696,11 +2697,11 @@ const resources = {
             responseWithStatus: "provider の応答（ステータス {{status}}）: {{response}}",
             response: "provider の応答: {{response}}",
             categories: {
-              authentication: "API キーが無いか、拒否されました",
+              authentication: "API キーが無いか、provider がキーまたはその権限を拒否しました",
               credit:
                 "アカウントのクレジットが不足しています。provider の課金設定を確認してください",
               rate_limit: "一時的なレート制限です",
-              other: "キー以外のエラーです（診断で確認できます）",
+              other: "原因を分類できませんでした",
             },
           },
           lastTurn: {
@@ -3824,7 +3825,8 @@ const resources = {
             title: "LLM の検証に失敗しました",
             description: "選択中の LLM provider が最小リクエストを受け付けませんでした。",
             categories: {
-              authentication: "選択中の LLM provider の API キーが無いか、拒否されました。",
+              authentication:
+                "選択中の LLM provider の API キーが無いか、provider がキーまたはその権限を拒否しました。",
               credit:
                 "選択中の LLM provider がアカウントのクレジット不足を報告しています。provider のサイトで課金設定を確認してください。",
               rate_limit:

@@ -207,6 +207,22 @@ def _inference(
     }
 
 
+def _key_check(event_type: str, status: str | None) -> dict[str, object]:
+    """A check of whether openai's key is configured: verify or diagnostics,
+    finding it (``ok``), missing it (``error``), or not run (``None``)."""
+    check = {
+        "section": "llm",
+        "code": "llm_api_key",
+        "status": status,
+        "context": {"provider": "openai"},
+    }
+    return _event(
+        event_type,
+        timestamp="2026-07-11T10:01:00+09:00",
+        payload={"checks": [check] if status else []},
+    )
+
+
 def test_llm_diagnostics_open_one_alert_per_provider(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
@@ -236,8 +252,24 @@ def test_llm_diagnostics_open_one_alert_per_provider(tmp_path: Path) -> None:
         (alert.id, alert.code, alert.person_id, alert.command) for alert in alerts
     ] == [("credential:llm:openai", "credential_llm", "", "openai")]
 
-    # The live call diagnostics make is an inference call: its span closes it.
+    # A call of the key that succeeds shows it is configured: the live call a
+    # diagnostics run makes once the key is there closes it.
     store.record(_inference("finished", timestamp="2026-07-11T10:01:00+09:00"))
+
+    assert service.list_alerts(_runtime()).alerts == []
+
+
+def test_finding_the_key_configured_closes_its_missing_key_alert(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(_key_check("diagnostics.completed", "error"))
+    service = SystemAlertService(store)
+    assert [alert.id for alert in service.list_alerts(_runtime()).alerts] == [
+        "credential:llm:openai"
+    ]
+
+    store.record(_key_check("verify.completed", "ok"))
 
     assert service.list_alerts(_runtime()).alerts == []
 
@@ -276,9 +308,7 @@ def test_a_refused_inference_call_opens_the_providers_alert_until_one_succeeds(
     assert [
         (alert.id, alert.code, alert.reason, alert.command, alert.trace_id)
         for alert in alerts
-    ] == [
-        (f"credential:{service_name}:{provider}", code, category, provider, "trace-1")
-    ]
+    ] == [(f"inference:{service_name}:{provider}", code, category, provider, "trace-1")]
 
     # Another provider's success says nothing about this key.
     store.record(
@@ -314,34 +344,41 @@ def test_a_refusal_that_passes_by_itself_opens_no_alert(
     assert SystemAlertService(store).list_alerts(_runtime()).alerts == []
 
 
-def test_a_key_found_present_does_not_close_what_the_provider_refused(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [("verify.completed", "ok")],
+        [("verify.completed", "error"), ("verify.completed", "ok")],
+        [("verify.completed", None)],
+        [("diagnostics.completed", "error"), ("verify.completed", "ok")],
+        [("diagnostics.completed", None)],
+    ],
+)
+def test_checking_the_key_is_configured_never_settles_a_refusal(
+    tmp_path: Path, checks: list[tuple[str, str | None]]
 ) -> None:
-    """Saving settings verifies the key is there, not that the provider takes it."""
+    """Whether the key is there says nothing of whether the provider takes it:
+    only a call of the key that succeeds closes what a refusal opened."""
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
         _inference("failed", timestamp="2026-07-11T10:00:00+09:00", category="credit")
     )
-    store.record(
-        _event(
-            "verify.completed",
-            timestamp="2026-07-11T10:01:00+09:00",
-            payload={
-                "checks": [
-                    {
-                        "code": "llm_api_key",
-                        "status": "ok",
-                        "context": {"provider": "openai"},
-                    }
-                ]
-            },
-        )
-    )
+    for event_type, status in checks:
+        store.record(_key_check(event_type, status))
     service = SystemAlertService(store)
 
-    assert [alert.reason for alert in service.list_alerts(_runtime()).alerts] == [
-        "credit"
-    ]
+    def refusals() -> list[str]:
+        return [
+            alert.reason
+            for alert in service.list_alerts(_runtime()).alerts
+            if alert.reason
+        ]
+
+    assert refusals() == ["credit"]
+
+    store.record(_inference("finished", timestamp="2026-07-11T10:02:00+09:00"))
+
+    assert refusals() == []
 
 
 def test_full_diagnostics_keep_provider_alerts_of_no_member(tmp_path: Path) -> None:
@@ -363,7 +400,7 @@ def test_full_diagnostics_keep_provider_alerts_of_no_member(tmp_path: Path) -> N
 
     alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
 
-    assert [alert.id for alert in alerts] == ["credential:llm:openai"]
+    assert [alert.id for alert in alerts] == ["inference:llm:openai"]
 
 
 def test_full_diagnostics_closes_alert_for_removed_member(tmp_path: Path) -> None:

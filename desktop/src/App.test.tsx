@@ -423,7 +423,7 @@ describe("App", () => {
     "tells why the provider refused the %s key, and opens the intelligence settings",
     (code, provider) => {
       const alert = (reason: string) => ({
-        id: `credential:${code === "credential_llm" ? "llm" : "jev"}:${provider}`,
+        id: `inference:${code === "credential_llm" ? "llm" : "jev"}:${provider}`,
         code,
         severity: "critical" as const,
         opened_at: "",

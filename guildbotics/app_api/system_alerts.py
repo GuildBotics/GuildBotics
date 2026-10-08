@@ -33,7 +33,7 @@ _DIAGNOSTIC_CREDENTIAL_CODES = {
         "slack_app_token_invalid",
         "slack_bot_auth",
     },
-    # A live call is an inference call: its span opens and closes the alert.
+    # A live call is an inference call: its span settles the key's alerts.
     "llm": {"llm_api_key"},
 }
 _VERIFY_CREDENTIAL_CODES = {"llm_api_key": "llm"}
@@ -330,11 +330,7 @@ class SystemAlertService:
                     **_credential_scope(section, scope),
                     actions=["diagnostics", "setup"],
                 )
-            elif any(check.get("status") == "ok" for check in checks) and not (
-                # A check that finds the key cannot tell the provider accepts
-                # it: only a call of it closes what a refusal opened.
-                key in alerts and alerts[key].reason
-            ):
+            elif any(check.get("status") == "ok" for check in checks):
                 alerts.pop(key, None)
 
     def _open_credential_alert(
@@ -369,11 +365,18 @@ class SystemAlertService:
     ) -> None:
         """An inference call with a workspace key: the provider refusing it
         for a reason the user has to act on opens the provider's alert, and
-        any later call of it that succeeds closes the alert."""
-        key = f"credential:{service}:{provider}"
+        any later call of it that succeeds closes the alert.
+
+        The alert is keyed apart from the checks of whether the key is
+        configured, which say nothing of whether the provider takes it: only
+        a call of the key settles what a refusal opened. The converse holds,
+        so a call that succeeds also closes the key's missing-key alert.
+        """
+        key = f"inference:{service}:{provider}"
         if record.get("type") == "span.finished":
-            alerts.pop(key, None)
-            self._dismissed.discard(key)
+            for settled in (key, f"credential:{service}:{provider}"):
+                alerts.pop(settled, None)
+                self._dismissed.discard(settled)
             return
         category = str(record["attributes"].get("error.category") or "")
         if category not in CREDENTIAL_FAILURES:
@@ -445,7 +448,7 @@ class SystemAlertService:
         trace_id = str(record.get("trace_id") or "")
         # A workspace key's alert names no member: the trace is the cause.
         return any(
-            key.startswith("credential:")
+            key.startswith(("credential:", "inference:"))
             and alert.person_id in (person_id, "")
             and bool(trace_id)
             and alert.trace_id == trace_id
