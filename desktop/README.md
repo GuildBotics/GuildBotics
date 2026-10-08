@@ -45,7 +45,7 @@ scripts/desktop-dev-frontend.sh
 scripts/desktop-dev-tauri.sh
 ```
 
-> **ブラウザ preview は単一ユーザーのホストでのみ使ってください。** Vite は Local API の session token を配信物へ埋め込むため、同一ホストの別ユーザーや別ページから読み取られる可能性が構造的に残ります（token をランダム化してもこの前提は変わりません）。共有ホストでは `scripts/desktop-dev-tauri.sh`（Tauri webview）を使ってください。
+> **ブラウザ preview（`desktop-dev-backend.sh` + `desktop-dev-frontend.sh`）と E2E は単一ユーザーのホストでのみ使ってください。** Vite は Local API の session token を配信物へ埋め込むため、同一ホストの別ユーザーや別ページから読み取られる可能性が構造的に残ります（token をランダム化してもこの前提は変わりません）。また画面は、固定ポートの相手が正規の Local API かを確かめずに token を送ります。共有ホストでは `scripts/desktop-dev-tauri.sh`（Tauri webview）を使ってください。配布版と同じく、sidecar が自分で bind して通知したポートにだけ接続します。
 
 backend の session token はコマンドライン引数では渡さず、`GUILDBOTICS_APP_API_TOKEN` 環境変数だけで受け取ります（未設定で起動するとエラー終了します）。`desktop-dev-backend.sh` は未設定なら起動ごとにランダムな token を生成し、`$TMPDIR/guildbotics-dev/<port>.token`（ディレクトリ 0700 / ファイル 0600、終了時に削除）へ書き出します。`desktop-dev-frontend.sh` は同じファイルから読み取るため、通常は token を意識する必要はありません。
 

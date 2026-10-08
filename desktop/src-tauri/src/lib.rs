@@ -1,30 +1,114 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
+use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 mod hotkeys;
 mod tray;
 
-/// Holds the Local API sidecar process and the connection details the frontend
-/// needs to talk to it.
+/// Holds the Local API sidecar process and the one connection state every
+/// request to it, from this host or the frontend, takes its destination from.
 ///
 /// The sidecar is spawned once per app process and torn down when the app
 /// exits, so a closed/reopened window reuses the same backend instead of
-/// starting a second one. A freshly picked port avoids colliding with a sidecar
-/// that may have been orphaned by a previous force-quit.
+/// starting a second one. It binds a port of its own choosing, so it never
+/// collides with a sidecar orphaned by a previous force-quit.
 struct BackendState {
     token: String,
-    port: u16,
+    connection: Mutex<Connection>,
     boot_log_path: PathBuf,
     sidecar: Mutex<Option<Sidecar>>,
+}
+
+/// Where the sidecar can be reached. Only its own port notice makes it
+/// `Ready`, and `Closed` is final: nothing restarts the sidecar.
+#[derive(Clone, Debug, PartialEq)]
+enum Connection {
+    Starting,
+    Ready(u16),
+    Closed(String),
+}
+
+/// The one stdout line through which the sidecar announces the port it bound;
+/// `PORT_NOTICE_PREFIX` in `guildbotics/app_api/server.py`.
+const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
+/// Matches the frontend's former health deadline: the first launch after an
+/// install has the OS check every bundled library before the sidecar binds.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+const BACKEND_CLOSED_EVENT: &str = "backend-closed";
+
+impl Connection {
+    /// The connection after one stdout line, or `None` for plain log output.
+    ///
+    /// A line may arrive with its `\r` and `\n` split apart, so terminators
+    /// are not part of the notice.
+    fn after_stdout(&self, line: &[u8]) -> Option<Connection> {
+        let line = String::from_utf8_lossy(line);
+        let notice = line
+            .trim_end_matches(['\r', '\n'])
+            .strip_prefix(PORT_NOTICE_PREFIX)?;
+        let port = Some(notice)
+            .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|digits| digits.parse::<u16>().ok())
+            .filter(|port| *port != 0);
+        Some(match (self, port) {
+            (Connection::Starting, Some(port)) => Connection::Ready(port),
+            (Connection::Starting, None) => {
+                Connection::Closed(format!("the backend announced an invalid port: {notice}"))
+            }
+            _ => Connection::Closed("the backend announced its port twice".to_owned()),
+        })
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Tolerate a poisoned mutex so the app can still exit cleanly.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl BackendState {
+    fn port(&self) -> Option<u16> {
+        match *lock(&self.connection) {
+            Connection::Ready(port) => Some(port),
+            _ => None,
+        }
+    }
+
+    /// Apply one transition unless the connection is already closed; the
+    /// reason, when this one closed it.
+    fn advance(&self, next: impl FnOnce(&Connection) -> Connection) -> Option<String> {
+        let mut connection = lock(&self.connection);
+        if matches!(*connection, Connection::Closed(_)) {
+            return None;
+        }
+        *connection = next(&connection);
+        match &*connection {
+            Connection::Closed(reason) => Some(reason.clone()),
+            _ => None,
+        }
+    }
+
+    /// `advance`, where closing stops a sidecar that may still run and tells
+    /// every window, so no path keeps the old destination.
+    fn update(&self, app: &tauri::AppHandle, next: impl FnOnce(&Connection) -> Connection) {
+        if let Some(reason) = self.advance(next) {
+            if let Some(sidecar) = lock(&self.sidecar).take() {
+                let _ = sidecar.child.kill();
+            }
+            let _ = append_boot_log(
+                &self.boot_log_path,
+                format!("backend closed: {reason}").as_bytes(),
+            );
+            let _ = app.emit(BACKEND_CLOSED_EVENT, reason);
+        }
+    }
 }
 
 struct Sidecar {
@@ -89,12 +173,15 @@ const CLI_AGENTS: [CliAgent; 5] = [
 const GUILDBOTICS_SKILL: &str = include_str!("../../../skills/guildbotics/SKILL.md");
 const MANAGED_SKILL_METADATA: &str = ".guildbotics-managed.json";
 
+/// The sidecar's port and token once it announced the port, `null` while it
+/// starts, or why it is gone.
 #[tauri::command]
-fn backend_info(state: tauri::State<'_, BackendState>) -> serde_json::Value {
-    serde_json::json!({
-        "port": state.port,
-        "token": state.token,
-    })
+fn backend_info(state: tauri::State<'_, BackendState>) -> Result<serde_json::Value, String> {
+    match &*lock(&state.connection) {
+        Connection::Starting => Ok(serde_json::Value::Null),
+        Connection::Ready(port) => Ok(serde_json::json!({ "port": port, "token": state.token })),
+        Connection::Closed(reason) => Err(reason.clone()),
+    }
 }
 
 #[tauri::command]
@@ -176,7 +263,13 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
 }
 
 /// One request to the Local API over loopback: the status code and the body.
-fn backend_request(port: u16, token: &str, method: &str, path: &str) -> io::Result<(u16, String)> {
+/// Fails with `NotConnected`, sending nothing, unless the sidecar announced
+/// its port and is still running.
+fn backend_request(state: &BackendState, method: &str, path: &str) -> io::Result<(u16, String)> {
+    let port = state
+        .port()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "the backend is not running"))?;
+    let token = &state.token;
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::from(([127, 0, 0, 1], port)),
         BACKEND_REQUEST_TIMEOUT,
@@ -206,8 +299,8 @@ fn backend_request(port: u16, token: &str, method: &str, path: &str) -> io::Resu
 /// Returns how long the backend says that teardown may take. The host waits
 /// that long rather than keeping a number of its own, which would go stale the
 /// moment the teardown gained a step and cut an orderly teardown short.
-fn request_backend_shutdown(port: u16, token: &str) -> io::Result<Duration> {
-    let (status, body) = backend_request(port, token, "POST", "/shutdown")?;
+fn request_backend_shutdown(state: &BackendState) -> io::Result<Duration> {
+    let (status, body) = backend_request(state, "POST", "/shutdown")?;
     if status != 202 {
         return Err(io::Error::other(format!(
             "unexpected shutdown response: {status}"
@@ -222,15 +315,17 @@ fn request_backend_shutdown(port: u16, token: &str) -> io::Result<Duration> {
 
 /// Whether the backend has work that a quit would cut off. Anything short of
 /// a clear "no" counts as yes: an unreadable state says nothing about the work.
+/// A backend that never announced its port or has gone runs nothing.
 #[cfg(any(target_os = "macos", test))]
-fn backend_has_active_work(port: u16, token: &str) -> bool {
-    let Ok((200, body)) = backend_request(port, token, "GET", "/scheduler/status") else {
-        return true;
-    };
-    serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|status| status.get("has_active_work")?.as_bool())
-        .unwrap_or(true)
+fn backend_has_active_work(state: &BackendState) -> bool {
+    match backend_request(state, "GET", "/scheduler/status") {
+        Ok((200, body)) => serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|status| status.get("has_active_work")?.as_bool())
+            .unwrap_or(true),
+        Err(error) => error.kind() != io::ErrorKind::NotConnected,
+        Ok(_) => true,
+    }
 }
 
 /// Whether a quit the app did not start itself (the Dock's Quit, logout) has
@@ -239,7 +334,7 @@ fn backend_has_active_work(port: u16, token: &str) -> bool {
 #[cfg(target_os = "macos")]
 pub(crate) fn quit_needs_confirmation(app: &tauri::AppHandle) -> bool {
     app.try_state::<BackendState>()
-        .is_none_or(|state| backend_has_active_work(state.port, &state.token))
+        .is_none_or(|state| backend_has_active_work(&state))
 }
 
 fn wait_for_exit(exited: &Receiver<()>, timeout: Duration) -> io::Result<()> {
@@ -259,15 +354,10 @@ fn wait_for_exit(exited: &Receiver<()>, timeout: Duration) -> io::Result<()> {
 /// Quit, logout), so the quit confirmation cannot be what keeps the backend
 /// from being cut off mid-write.
 fn stop_backend(state: &BackendState) {
-    // Tolerate a poisoned mutex so the app can still exit cleanly.
-    let mut guard = match state.sidecar.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let Some(sidecar) = guard.take() else {
+    let Some(sidecar) = lock(&state.sidecar).take() else {
         return;
     };
-    let stopped = request_backend_shutdown(state.port, &state.token)
+    let stopped = request_backend_shutdown(state)
         .and_then(|budget| wait_for_exit(&sidecar.exited, budget + BACKEND_EXIT_MARGIN));
     let outcome = match stopped {
         Ok(()) => "backend shut down gracefully".to_owned(),
@@ -277,16 +367,6 @@ fn stop_backend(state: &BackendState) {
         }
     };
     let _ = append_boot_log(&state.boot_log_path, outcome.as_bytes());
-}
-
-/// Reserve a free loopback TCP port by binding to port 0 and reading back the
-/// assigned port. Falls back to the historical default if the probe fails.
-fn pick_free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .ok()
-        .and_then(|listener| listener.local_addr().ok())
-        .map(|addr| addr.port())
-        .unwrap_or(8765)
 }
 
 fn home_dir() -> io::Result<PathBuf> {
@@ -710,6 +790,7 @@ fn install_cli_agent_assets(programs: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
 
     struct TestDir {
         path: PathBuf,
@@ -741,6 +822,99 @@ mod tests {
             .expect("known AI CLI tool")
     }
 
+    fn connected(connection: Connection, token: &str) -> BackendState {
+        BackendState {
+            token: token.to_owned(),
+            connection: Mutex::new(connection),
+            boot_log_path: PathBuf::new(),
+            sidecar: Mutex::new(None),
+        }
+    }
+
+    fn ready(port: u16, token: &str) -> BackendState {
+        connected(Connection::Ready(port), token)
+    }
+
+    /// A loopback port nothing listens on.
+    fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("addr").port()
+    }
+
+    #[test]
+    fn only_the_first_well_formed_notice_makes_the_connection_ready() {
+        let starting = Connection::Starting;
+        for line in [
+            "GUILDBOTICS_APP_API_PORT=8765\n",
+            "GUILDBOTICS_APP_API_PORT=8765\r",
+        ] {
+            assert_eq!(
+                starting.after_stdout(line.as_bytes()),
+                Some(Connection::Ready(8765))
+            );
+        }
+        let ready = Connection::Ready(8765);
+        assert!(matches!(
+            ready.after_stdout(b"GUILDBOTICS_APP_API_PORT=8765\n"),
+            Some(Connection::Closed(_))
+        ));
+        for line in [
+            "GUILDBOTICS_APP_API_PORT=\n",
+            "GUILDBOTICS_APP_API_PORT=0\n",
+            "GUILDBOTICS_APP_API_PORT=65536\n",
+            "GUILDBOTICS_APP_API_PORT=+8765\n",
+            "GUILDBOTICS_APP_API_PORT=8765 \n",
+            "GUILDBOTICS_APP_API_PORT=87a5\n",
+        ] {
+            assert!(
+                matches!(
+                    starting.after_stdout(line.as_bytes()),
+                    Some(Connection::Closed(_))
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_closed_connection_stays_closed() {
+        let state = connected(Connection::Starting, "token");
+        assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
+        assert_eq!(state.port(), Some(8765));
+        let first = state.advance(|_| Connection::Closed("exited".to_owned()));
+        assert_eq!(first.as_deref(), Some("exited"));
+        assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
+        assert_eq!(
+            state.advance(|_| Connection::Closed("again".to_owned())),
+            None
+        );
+        assert_eq!(state.port(), None);
+    }
+
+    #[test]
+    fn other_stdout_lines_are_log_output() {
+        for line in ["\n", "INFO started\n", " GUILDBOTICS_APP_API_PORT=8765\n"] {
+            assert_eq!(
+                Connection::Starting.after_stdout(line.as_bytes()),
+                None,
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_sent_until_the_backend_announced_its_port() {
+        for connection in [
+            Connection::Starting,
+            Connection::Closed("exited".to_owned()),
+        ] {
+            let state = connected(connection, "session-token");
+            let error = request_backend_shutdown(&state).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+            assert!(!backend_has_active_work(&state));
+        }
+    }
+
     /// Serve one canned HTTP response and hand back the request that came in.
     fn serve_once(response: &'static str) -> (u16, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -763,7 +937,7 @@ mod tests {
         let (port, server) =
             serve_once("HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":60.5}");
 
-        let budget = request_backend_shutdown(port, "session-token").expect("accepted");
+        let budget = request_backend_shutdown(&ready(port, "session-token")).expect("accepted");
 
         assert_eq!(budget, Duration::from_millis(60_500));
 
@@ -776,7 +950,7 @@ mod tests {
     fn shutdown_request_fails_unless_the_backend_accepts_it() {
         let (port, server) = serve_once("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
 
-        let error = request_backend_shutdown(port, "stale").unwrap_err();
+        let error = request_backend_shutdown(&ready(port, "stale")).unwrap_err();
 
         server.join().expect("server");
         assert!(error.to_string().contains("401"));
@@ -788,7 +962,7 @@ mod tests {
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"has_active_work\":false}",
         );
 
-        assert!(!backend_has_active_work(port, "session-token"));
+        assert!(!backend_has_active_work(&ready(port, "session-token")));
 
         let request = server.join().expect("server");
         assert!(request.starts_with("GET /scheduler/status HTTP/1.1\r\n"));
@@ -804,10 +978,10 @@ mod tests {
             "HTTP/1.1 401 Unauthorized\r\n\r\n{\"has_active_work\":false}",
         ] {
             let (port, server) = serve_once(response);
-            assert!(backend_has_active_work(port, "token"), "{response}");
+            assert!(backend_has_active_work(&ready(port, "token")), "{response}");
             server.join().expect("server");
         }
-        assert!(backend_has_active_work(pick_free_port(), "token"));
+        assert!(backend_has_active_work(&ready(closed_port(), "token")));
     }
 
     #[test]
@@ -819,7 +993,7 @@ mod tests {
         ] {
             let (port, server) = serve_once(response);
             assert!(
-                request_backend_shutdown(port, "token").is_err(),
+                request_backend_shutdown(&ready(port, "token")).is_err(),
                 "{response}"
             );
             server.join().expect("server");
@@ -828,9 +1002,7 @@ mod tests {
 
     #[test]
     fn shutdown_request_fails_when_nothing_listens() {
-        let port = pick_free_port();
-
-        assert!(request_backend_shutdown(port, "token").is_err());
+        assert!(request_backend_shutdown(&ready(closed_port(), "token")).is_err());
     }
 
     #[test]
@@ -1351,7 +1523,6 @@ fn fit_main_window(window: &tauri::WebviewWindow) {
 
 pub fn run() {
     let token = uuid::Uuid::new_v4().to_string();
-    let port = pick_free_port();
 
     tauri::Builder::default()
         // `tray::build` installs the app menu: the default one quits through
@@ -1392,7 +1563,6 @@ pub fn run() {
                 fit_main_window(&window);
             }
 
-            let port_arg = port.to_string();
             let boot_log_path = app.path().app_log_dir()?.join("bootstrap.log");
             let _ = append_boot_log(&boot_log_path, b"--- GuildBotics backend start ---");
             let command = app
@@ -1415,57 +1585,76 @@ pub fn run() {
                 "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
                 "http://127.0.0.1:1420",
             );
-            let spawn_result = command
-                .args(["--host", "127.0.0.1", "--port", &port_arg])
-                .spawn();
-            let sidecar = match spawn_result {
+            // Managed before the spawn: the sidecar's first line can arrive
+            // before this closure returns.
+            app.manage(BackendState {
+                token,
+                connection: Mutex::new(Connection::Starting),
+                boot_log_path: boot_log_path.clone(),
+                sidecar: Mutex::new(None),
+            });
+            let handle = app.handle().clone();
+            let state = app.state::<BackendState>();
+            match command.args(["--host", "127.0.0.1", "--port", "0"]).spawn() {
                 Ok((mut rx, child)) => {
-                    // Keep the child's stdout/stderr pipe drained so it never blocks.
-                    let event_log_path = boot_log_path.clone();
                     let (running, exited) = mpsc::channel::<()>();
+                    *lock(&state.sidecar) = Some(Sidecar { child, exited });
+                    let events = handle.clone();
+                    // Keep the child's stdout/stderr pipe drained so it never blocks.
                     tauri::async_runtime::spawn(async move {
                         // Dropped when this task ends, which is how
                         // `stop_backend` sees the process exit.
                         let _running = running;
+                        let state = events.state::<BackendState>();
                         while let Some(event) = rx.recv().await {
                             match event {
+                                CommandEvent::Stdout(bytes) => {
+                                    state.update(&events, |connection| {
+                                        connection.after_stdout(&bytes).unwrap_or_else(|| {
+                                            let _ = append_boot_log(&boot_log_path, &bytes);
+                                            connection.clone()
+                                        })
+                                    })
+                                }
                                 CommandEvent::Stderr(bytes) => {
-                                    let _ = append_boot_log(&event_log_path, &bytes);
+                                    let _ = append_boot_log(&boot_log_path, &bytes);
                                 }
                                 CommandEvent::Error(error) => {
                                     let _ = append_boot_log(
-                                        &event_log_path,
+                                        &boot_log_path,
                                         format!("sidecar error: {error}").as_bytes(),
                                     );
                                 }
                                 CommandEvent::Terminated(status) => {
-                                    let _ = append_boot_log(
-                                        &event_log_path,
-                                        format!("sidecar terminated: {status:?}").as_bytes(),
-                                    );
+                                    state.update(&events, |_| {
+                                        Connection::Closed(format!(
+                                            "the backend exited: {status:?}"
+                                        ))
+                                    });
                                     break;
                                 }
                                 _ => {}
                             }
                         }
                     });
-                    Some(Sidecar { child, exited })
+                    std::thread::spawn(move || {
+                        std::thread::sleep(STARTUP_TIMEOUT);
+                        handle.state::<BackendState>().update(
+                            &handle,
+                            |connection| match connection {
+                                Connection::Starting => Connection::Closed(format!(
+                                    "the backend did not announce its port within {} seconds",
+                                    STARTUP_TIMEOUT.as_secs()
+                                )),
+                                _ => connection.clone(),
+                            },
+                        );
+                    });
                 }
-                Err(error) => {
-                    let _ = append_boot_log(
-                        &boot_log_path,
-                        format!("sidecar spawn failed: {error}").as_bytes(),
-                    );
-                    None
-                }
-            };
-
-            app.manage(BackendState {
-                token,
-                port,
-                boot_log_path,
-                sidecar: Mutex::new(sidecar),
-            });
+                Err(error) => state.update(&handle, |_| {
+                    Connection::Closed(format!("sidecar spawn failed: {error}"))
+                }),
+            }
             Ok(())
         })
         .on_window_event(tray::on_window_event)

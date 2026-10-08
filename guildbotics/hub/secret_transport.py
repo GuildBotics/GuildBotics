@@ -9,7 +9,7 @@ import httpx
 
 from guildbotics.hub import host, secret_service
 from guildbotics.hub.secret_host import HubSecretError
-from guildbotics.utils.local_api import read_endpoint
+from guildbotics.utils.local_api import connect_local_api
 
 DELEGATES_TO_DESKTOP = sys.platform == "darwin"
 
@@ -28,33 +28,21 @@ def execute(
     host.require_workspace_id(workspace_id)
     if not DELEGATES_TO_DESKTOP:
         return secret_service.handle(operation, workspace_id, payload, keys)
-    endpoint = read_endpoint()
-    if endpoint is not None:
-        try:
-            with httpx.Client(
-                base_url=f"http://127.0.0.1:{endpoint.port}",
-                headers={"X-GuildBotics-Session-Token": endpoint.token},
-                trust_env=False,
-                timeout=30.0,
-            ) as client:
-                health = client.get("/health", timeout=2.0)
-                health.raise_for_status()
-                if (
-                    health.json().get("service_instance_id")
-                    == endpoint.service_instance_id
-                ):
-                    response = client.post(
-                        f"/hub/secrets/{workspace_id}/{operation}",
-                        params=[("key", key) for key in keys],
-                        content=payload,
-                        headers={"Content-Type": "application/octet-stream"},
-                    )
-                    if response.status_code == HTTPStatus.BAD_REQUEST:
-                        raise HubSecretError("The Hub refused the secret request.")
-                    response.raise_for_status()
-                    return response.content
-        except (httpx.HTTPError, ValueError, AttributeError):
-            pass
+    try:
+        with connect_local_api(timeout=30.0) as client:
+            if client is not None:
+                response = client.post(
+                    f"/hub/secrets/{workspace_id}/{operation}",
+                    params=[("key", key) for key in keys],
+                    content=payload,
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+                if response.status_code == HTTPStatus.BAD_REQUEST:
+                    raise HubSecretError("The Hub refused the secret request.")
+                response.raise_for_status()
+                return response.content
+    except httpx.HTTPError:
+        pass
     return secret_service.handle(
         operation, workspace_id, payload, keys, unavailable=True
     )

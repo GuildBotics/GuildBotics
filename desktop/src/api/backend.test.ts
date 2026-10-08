@@ -4,28 +4,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // resets the module registry and re-imports it freshly.
 
 const configureApi = vi.fn();
+const disconnectApi = vi.fn();
 const setWorkspace = vi.fn(async () => ({}));
-let apiBase = "http://127.0.0.1:8765";
-const getApiBase = vi.fn(() => apiBase);
 
 vi.mock("./client", () => ({
   configureApi,
-  getApiBase,
+  disconnectApi,
   setWorkspace,
 }));
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+type ClosedHandler = (event: { payload: string }) => void;
+const closedHandlers: ClosedHandler[] = [];
+const listen = vi.fn(async (_event: string, handler: ClosedHandler) => {
+  closedHandlers.push(handler);
+  return () => undefined;
+});
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
+
 type BackendModule = typeof import("./backend");
 
 async function loadBackend(): Promise<BackendModule> {
   vi.resetModules();
   return import("./backend");
-}
-
-function setApiBase(base: string) {
-  apiBase = base;
 }
 
 type FetchMock = (url: string, init: RequestInit) => Promise<Response>;
@@ -49,11 +52,12 @@ function setTauriRuntime(enabled: boolean) {
 beforeEach(() => {
   vi.useFakeTimers();
   configureApi.mockReset();
+  disconnectApi.mockReset();
   setWorkspace.mockReset();
   setWorkspace.mockResolvedValue({});
-  getApiBase.mockClear();
   invoke.mockReset();
-  apiBase = "http://127.0.0.1:8765";
+  listen.mockClear();
+  closedHandlers.length = 0;
   localStorage.clear();
   setTauriRuntime(false);
   vi.unstubAllEnvs();
@@ -71,7 +75,6 @@ describe("startBackend - browser preview mode", () => {
   it("configures the API and health-checks without invoking Tauri", async () => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
     vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
     const fetchMock = vi.fn<FetchMock>(async () => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -90,33 +93,62 @@ describe("startBackend - browser preview mode", () => {
 });
 
 describe("startBackend - Tauri runtime", () => {
-  it("uses the port and token returned by backend_info", async () => {
+  beforeEach(() => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "");
     setTauriRuntime(true);
-    invoke.mockResolvedValue({ port: 7777, token: "runtime-token" });
-    const fetchMock = vi.fn<FetchMock>(async () => {
-      setApiBase("http://127.0.0.1:7777");
-      return okResponse();
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    // getApiBase returns whatever configureApi would have set.
-    setApiBase("http://127.0.0.1:7777");
-
-    const backend = await loadBackend();
-    await backend.startBackend();
-
-    expect(invoke).toHaveBeenCalledWith("backend_info");
-    expect(configureApi).toHaveBeenCalledWith("runtime-token", "http://127.0.0.1:7777");
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:7777/health");
-    expect((init.headers as Record<string, string>)["X-GuildBotics-Session-Token"]).toBe(
-      "runtime-token",
-    );
   });
 
+  it("waits for the announced port, listening for an exit first", async () => {
+    invoke
+      .mockImplementationOnce(async () => {
+        expect(listen).toHaveBeenCalledWith("backend-closed", expect.any(Function));
+        return null;
+      })
+      .mockResolvedValueOnce({ port: 7777, token: "runtime-token" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const backend = await loadBackend();
+    const started = backend.startBackend();
+    await vi.advanceTimersByTimeAsync(300);
+    await started;
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledWith("backend_info");
+    expect(configureApi).toHaveBeenCalledWith("runtime-token", "http://127.0.0.1:7777");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails with the host's reason and connects nothing", async () => {
+    invoke.mockRejectedValue("the backend announced its port twice");
+
+    const backend = await loadBackend();
+
+    await expect(backend.startBackend()).rejects.toThrow(
+      "GuildBotics backend is not running: the backend announced its port twice",
+    );
+    expect(configureApi).not.toHaveBeenCalled();
+  });
+
+  it("disconnects and tells its listeners once the host reports an exit", async () => {
+    invoke.mockResolvedValue({ port: 7777, token: "runtime-token" });
+    const backend = await loadBackend();
+    const closed = vi.fn();
+    backend.onBackendClosed(closed);
+    await backend.startBackend();
+    await backend.startBackend();
+
+    expect(listen).toHaveBeenCalledTimes(1);
+    closedHandlers[0]({ payload: "the backend exited" });
+
+    expect(disconnectApi).toHaveBeenCalledTimes(1);
+    expect(closed).toHaveBeenCalledWith("GuildBotics backend is not running: the backend exited");
+  });
+});
+
+describe("startBackend - neither Tauri nor browser preview", () => {
   it("throws a clear error when neither Tauri nor a static token is available", async () => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "");
-    setTauriRuntime(false);
 
     const backend = await loadBackend();
     await expect(backend.startBackend()).rejects.toThrow(
@@ -131,7 +163,6 @@ describe("waitForHealth", () => {
   it("retries past transient fetch failures then succeeds", async () => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
     vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new Error("ECONNREFUSED"))
@@ -151,7 +182,6 @@ describe("waitForHealth", () => {
   it("fails past the deadline including the last error", async () => {
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
     vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
     const fetchMock = vi.fn(async () => failResponse(500, "still booting"));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -236,7 +266,6 @@ describe("workspace persistence", () => {
     localStorage.setItem("guildbotics.workspace", "/restored");
     vi.stubEnv("VITE_GUILDBOTICS_API_TOKEN", "preview-token");
     vi.stubEnv("VITE_GUILDBOTICS_API_BASE", "http://preview.test:9000");
-    setApiBase("http://preview.test:9000");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => okResponse()),

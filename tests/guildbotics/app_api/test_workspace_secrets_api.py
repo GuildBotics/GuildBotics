@@ -75,12 +75,11 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
                 endpoint = LocalApiEndpoint(
                     port=port,
                     token="secret",
-                    pid=1,
                     service_instance_id=health["service_instance_id"],
                     workspace=None,
                 )
+                endpoint.publish()
                 monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
-                monkeypatch.setattr(secret_transport, "read_endpoint", lambda: endpoint)
                 _store().set("A_TOKEN", TOKEN)
                 response = browser.post(
                     "/workspace/secrets/send", json={"keys": ["A_TOKEN"]}
@@ -113,11 +112,12 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
 
 def test_mac_hub_requires_desktop_with_localized_guidance(real_connected, monkeypatch):
     from guildbotics.hub import secret_transport
+    from guildbotics.utils import local_api
     from guildbotics.utils.i18n_tool import t
 
     _store().set("A_TOKEN", TOKEN)
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
-    monkeypatch.setattr(secret_transport, "read_endpoint", lambda: None)
+    local_api.endpoint_path().unlink(missing_ok=True)
     payload = _json(real_connected.get("/workspace/secrets", headers=AUTH_HEADERS))
     assert payload["hub_reachable"] is True
     assert payload["hub_secret_store"] == {

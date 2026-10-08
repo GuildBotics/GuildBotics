@@ -892,7 +892,7 @@ classifies every secret store access and member key spelling in the package.
   a header can carry one.
 - **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
   requests, including those arriving over SSH, use Desktop's discovery record and
-  session token. `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
+  session token, once the Local API proved it holds that token (section 11). `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
   `send`, or `receive` and passes framed bytes to `hub/secret_service.py`. It requires
   a loopback peer and the session token, validates a registered Hub Workspace ID,
   and does not depend on the workspace open in Desktop. This binary transfer route
@@ -1055,6 +1055,32 @@ a monorepo on purpose.
   launcher-supplied: CORS allows the Tauri origin plus whatever
   `GUILDBOTICS_APP_API_ALLOWED_ORIGINS` lists, so a page on an arbitrary localhost
   port cannot reach the API.
+- **Who receives the token**: a loopback port is not owned by an OS user, so the token
+  goes only to a process that showed it holds the port or the token.
+  - Desktop starts the sidecar with `--port 0`. The sidecar binds, listens, and then
+    announces the port as the only line its stdout ever carries
+    (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is stderr. The host keeps one
+    connection state (`Starting` / `Ready(port)` / `Closed`) that only that notice makes
+    `Ready`. A missing notice after 45 seconds, an invalid or second notice, or the
+    sidecar's exit closes it for good, kills the sidecar, and sends `backend-closed` to
+    every window. `backend_info`, the host's own requests, and the frontend's HTTP,
+    WebSocket, and avatar URLs all take their destination from that state, so nothing
+    addresses a port after the sidecar is gone. Nothing restarts the sidecar; the
+    window shows that it stopped.
+  - Host clients that find the Local API through `~/.guildbotics/data/run/app-api.json`
+    (`guildbotics run` delegation and macOS Hub Secret) go through
+    `utils/local_api.py`'s `connect_local_api()`. It first posts a fresh 32-byte nonce to
+    `/local-api/proof`, which takes no token and answers
+    `HMAC-SHA256(token, "guildbotics-local-api-proof\n" + nonce + "\n" + service_instance_id)`.
+    Only a matching proof for the recorded instance attaches the token; a stale record,
+    a replayed answer, a malformed answer, or a timeout sends neither the token nor
+    anything it guards. A live PID or a health answer is no evidence.
+  - Remaining limits: a port the genuine server leaves after a client's proof can be
+    taken before the client's next connection (later requests usually reuse the proved
+    connection). A browser redirected by GitHub App registration still reaches the
+    sidecar's port after the sidecar exited, carrying the one-time `code`. The browser
+    preview and E2E stack send their static token to a fixed port without a proof, so
+    they are for single-user hosts only.
 - **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
   its own process and reports states to the UI. Desktop and CLI `guildbotics start`
   use the same machine-wide `service.lock`, so only one background service can own

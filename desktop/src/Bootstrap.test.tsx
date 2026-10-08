@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Bootstrap } from "./Bootstrap";
-import { getBootstrapLog, startBackend } from "./api/backend";
+import { getBootstrapLog, onBackendClosed, startBackend } from "./api/backend";
 import i18n from "./i18n";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import "./i18n";
@@ -13,6 +13,7 @@ const t = i18n.getFixedT("en");
 vi.mock("./api/backend", () => ({
   getBootstrapLog: vi.fn(async () => null),
   startBackend: vi.fn(async () => undefined),
+  onBackendClosed: vi.fn(() => () => undefined),
 }));
 
 vi.mock("./App", () => ({
@@ -21,6 +22,7 @@ vi.mock("./App", () => ({
 
 const startBackendMock = vi.mocked(startBackend);
 const getBootstrapLogMock = vi.mocked(getBootstrapLog);
+const onBackendClosedMock = vi.mocked(onBackendClosed);
 
 function renderBootstrap() {
   return render(
@@ -106,6 +108,26 @@ describe("Bootstrap", () => {
     resolveRetry();
 
     expect(await screen.findByText("App Mock Loaded")).toBeInTheDocument();
+  });
+
+  it("leaves the App for the failure screen once the backend stops", async () => {
+    let close: (message: string) => void = () => {};
+    const stopWatching = vi.fn();
+    onBackendClosedMock.mockImplementation((listener) => {
+      close = listener;
+      return stopWatching;
+    });
+    getBootstrapLogMock.mockResolvedValue({ path: "/logs/bootstrap.log", tail: "exited" });
+
+    const { unmount } = renderBootstrap();
+    await screen.findByText("App Mock Loaded");
+    close("GuildBotics backend is not running: the backend exited");
+
+    expect(await screen.findByText(t("app.loading.stopped"))).toBeInTheDocument();
+    expect(screen.getByText(/the backend exited/)).toBeInTheDocument();
+    expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
+    unmount();
+    expect(stopWatching).toHaveBeenCalled();
   });
 
   it("does not update state after unmount when startBackend resolves late", async () => {

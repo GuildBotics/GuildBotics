@@ -65,6 +65,7 @@ const resources = {
         loading: {
           title: "Starting GuildBotics",
           failed: "GuildBotics could not start",
+          stopped: "GuildBotics stopped working",
           retry: "Retry",
           logPath: "Bootstrap log",
         },
@@ -2152,6 +2153,7 @@ const resources = {
         loading: {
           title: "GuildBotics を起動しています",
           failed: "GuildBotics を起動できませんでした",
+          stopped: "GuildBotics が停止しました",
           retry: "再試行",
           logPath: "ブートログ",
         },

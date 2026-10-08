@@ -4,12 +4,18 @@ import { HashRouter } from "react-router";
 import { useTranslation } from "react-i18next";
 
 import { App } from "./App";
-import { getBootstrapLog, startBackend } from "./api/backend";
+import { getBootstrapLog, onBackendClosed, startBackend } from "./api/backend";
 
 type BootStatus =
   | { state: "loading" }
   | { state: "ready" }
-  | { state: "error"; message: string; logPath: string; logTail: string };
+  | {
+      state: "error";
+      title: "failed" | "stopped";
+      message: string;
+      logPath: string;
+      logTail: string;
+    };
 
 export function Bootstrap() {
   const { t } = useTranslation();
@@ -22,13 +28,17 @@ export function Bootstrap() {
 
   useEffect(() => {
     let active = true;
-    void connectBackend((next) => {
+    const update = (next: BootStatus) => {
       if (active) {
         setStatus(next);
       }
-    });
+    };
+    // Nothing restarts the backend, so its exit ends the app's session.
+    const stopWatching = onBackendClosed((message) => void showFailure("stopped", message, update));
+    void connectBackend(update);
     return () => {
       active = false;
+      stopWatching();
     };
   }, []);
 
@@ -48,7 +58,7 @@ export function Bootstrap() {
           <Title order={3}>{t("app.loading.title")}</Title>
         </Stack>
       ) : (
-        <Alert color="danger" title={t("app.loading.failed")} maw={520}>
+        <Alert color="danger" title={t(`app.loading.${status.title}`)} maw={520}>
           <Stack gap="sm">
             <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
               {status.message}
@@ -74,12 +84,23 @@ async function connectBackend(update: (status: BootStatus) => void) {
     await startBackend();
     update({ state: "ready" });
   } catch (error) {
-    const log = await getBootstrapLog().catch(() => null);
-    update({
-      state: "error",
-      message: String(error),
-      logPath: log?.path ?? "",
-      logTail: log?.tail ?? "",
-    });
+    await showFailure("failed", String(error), update);
   }
+}
+
+async function showFailure(
+  title: "failed" | "stopped",
+  message: string,
+  update: (status: BootStatus) => void,
+) {
+  // Leave the App at once: its screens cannot reach the backend any more.
+  update({ state: "error", title, message, logPath: "", logTail: "" });
+  const log = await getBootstrapLog().catch(() => null);
+  update({
+    state: "error",
+    title,
+    message,
+    logPath: log?.path ?? "",
+    logTail: log?.tail ?? "",
+  });
 }

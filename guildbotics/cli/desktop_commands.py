@@ -6,8 +6,7 @@ import click
 import httpx
 
 from guildbotics.utils.i18n_tool import get_language
-from guildbotics.utils.local_api import read_endpoint
-from guildbotics.utils.processes import pid_exists
+from guildbotics.utils.local_api import connect_local_api
 
 
 def run_on_desktop(
@@ -23,27 +22,17 @@ def run_on_desktop(
     Probing is bounded. Execution has no timeout and is never retried locally:
     after POST, even a lost connection may mean the work already ran.
     """
-    endpoint = read_endpoint()
-    if endpoint is None or not pid_exists(endpoint.pid):
-        return None
-    with httpx.Client(
-        base_url=f"http://127.0.0.1:{endpoint.port}",
-        headers={
-            "X-GuildBotics-Session-Token": endpoint.token,
-            "Accept-Language": get_language(),
-        },
-        trust_env=False,
-        timeout=None,
+    with connect_local_api(
+        headers={"Accept-Language": get_language()}, timeout=None
     ) as client:
+        if client is None:
+            return None
         try:
             response = client.get("/health", timeout=2.0)
             response.raise_for_status()
             health = response.json()
-            if (
-                not isinstance(health, dict)
-                or health.get("status") != "ok"
-                or health.get("service_instance_id") != endpoint.service_instance_id
-                or health.get("workspace") != str(workspace.resolve())
+            if not isinstance(health, dict) or health.get("workspace") != str(
+                workspace.resolve()
             ):
                 return None
         except (httpx.HTTPError, ValueError):

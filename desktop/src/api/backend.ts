@@ -1,4 +1,4 @@
-import { configureApi, getApiBase, setWorkspace } from "./client";
+import { configureApi, disconnectApi, setWorkspace } from "./client";
 
 const STATIC_TOKEN = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
 const STATIC_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
@@ -39,6 +39,15 @@ export async function getBootstrapLog(): Promise<BootstrapLog | null> {
   return invoke<BootstrapLog>("bootstrap_log");
 }
 
+const closedListeners = new Set<(reason: string) => void>();
+let watchingForClose: Promise<unknown> | null = null;
+
+/** Be told, with the host's reason, once the backend has gone for good. */
+export function onBackendClosed(listener: (message: string) => void): () => void {
+  closedListeners.add(listener);
+  return () => closedListeners.delete(listener);
+}
+
 /**
  * Connect the frontend to the Local API backend.
  *
@@ -46,13 +55,15 @@ export async function getBootstrapLog(): Promise<BootstrapLog | null> {
  * app process and killed when the app exits. The frontend only discovers the
  * port + session token via the `backend_info` command and reuses that running
  * backend. This avoids starting a second sidecar (and the resulting session
- * token / port collision) when a closed window is reopened.
+ * token / port collision) when a closed window is reopened. The host answers
+ * only once the sidecar announced the port it bound, and owns the deadline for
+ * that.
  */
 export async function startBackend() {
   // Dev / browser preview: the backend is started externally with a fixed token.
   if (STATIC_TOKEN) {
     configureApi(STATIC_TOKEN, STATIC_BASE);
-    await waitForHealth(STATIC_TOKEN);
+    await waitForHealth();
     return;
   }
 
@@ -60,10 +71,35 @@ export async function startBackend() {
     throw new Error("GuildBotics backend is not configured for browser preview.");
   }
 
+  // Listening first: the host does not repeat an exit that came before.
+  await watchForClose();
   const { invoke } = await import("@tauri-apps/api/core");
-  const info = await invoke<{ port: number; token: string }>("backend_info");
-  configureApi(info.token, `http://127.0.0.1:${info.port}`);
-  await waitForHealth(info.token);
+  for (;;) {
+    const info = await invoke<{ port: number; token: string } | null>("backend_info").catch(
+      (reason: unknown) => {
+        throw new Error(notRunning(reason));
+      },
+    );
+    if (info) {
+      configureApi(info.token, `http://127.0.0.1:${info.port}`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
+
+function watchForClose() {
+  watchingForClose ??= import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<string>("backend-closed", ({ payload }) => {
+      disconnectApi();
+      closedListeners.forEach((listener) => listener(notRunning(payload)));
+    }),
+  );
+  return watchingForClose;
+}
+
+function notRunning(reason: unknown) {
+  return `GuildBotics backend is not running: ${String(reason)}`;
 }
 
 /**
@@ -102,17 +138,14 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-async function waitForHealth(token: string) {
-  // On the first launch after an install or update, the OS checks every bundled
-  // library the sidecar loads before uvicorn answers. Keep a generous deadline
-  // so that cold start is not flagged as a backend failure.
+async function waitForHealth() {
+  // An externally started backend may still be starting.
   const deadline = Date.now() + 45_000;
-  const base = getApiBase();
   let lastError: unknown = null;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${base}/health`, {
-        headers: { "X-GuildBotics-Session-Token": token },
+      const response = await fetch(`${STATIC_BASE}/health`, {
+        headers: { "X-GuildBotics-Session-Token": STATIC_TOKEN },
       });
       if (response.ok) {
         return;

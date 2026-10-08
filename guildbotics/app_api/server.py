@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -29,6 +30,9 @@ from guildbotics.utils.workspace_state import (
 
 TOKEN_ENV = "GUILDBOTICS_APP_API_TOKEN"
 ALLOWED_ORIGINS_ENV = "GUILDBOTICS_APP_API_ALLOWED_ORIGINS"
+#: The one stdout line that tells the launching Desktop which port this server
+#: bound. Every other stdout line is plain log output.
+PORT_NOTICE_PREFIX = "GUILDBOTICS_APP_API_PORT="
 
 
 def _parent_is_alive(parent_pid: int) -> bool:
@@ -131,6 +135,19 @@ def _read_allowed_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def _announce_port(port: int) -> None:
+    """Tell the launcher the bound port as the only line stdout ever carries.
+
+    The launcher passes port 0 and learns the port only from this line, so it
+    never addresses a port this process does not hold. Afterwards stdout is
+    stderr, so nothing, not even a subprocess inheriting it, can write a
+    second notice.
+    """
+    # Starting on a line of its own, whatever was written before it.
+    print(f"\n{PORT_NOTICE_PREFIX}{port}", flush=True)
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the GuildBotics local app API.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -153,19 +170,6 @@ def main() -> None:
         restore_workspace_environment=True,
         workspace_problem=workspace_problem,
     )
-    endpoint = LocalApiEndpoint(
-        port=args.port,
-        token=token,
-        pid=os.getpid(),
-        service_instance_id=app.state.runtime.system_service_run_id,
-        workspace=app.state.runtime.get_config_status().workspace,
-    )
-
-    def workspace_changed(workspace: Path) -> None:
-        endpoint.workspace = workspace
-        endpoint.publish()
-
-    app.state.runtime.on_workspace_changed = workspace_changed
     config = uvicorn.Config(
         app,
         host=args.host,
@@ -177,8 +181,23 @@ def main() -> None:
     )
     # A failed bind must not replace a running Desktop's discovery record.
     with config.bind_socket() as sock:
-        endpoint.port = sock.getsockname()[1]
+        # Listen before announcing: a port that is bound but not listening can
+        # still be bound by another socket with SO_REUSEADDR on Linux.
+        sock.listen(config.backlog)
+        endpoint = LocalApiEndpoint(
+            port=sock.getsockname()[1],
+            token=token,
+            service_instance_id=app.state.runtime.system_service_run_id,
+            workspace=app.state.runtime.get_config_status().workspace,
+        )
+        _announce_port(endpoint.port)
         endpoint.publish()
+
+        def workspace_changed(workspace: Path) -> None:
+            endpoint.workspace = workspace
+            endpoint.publish()
+
+        app.state.runtime.on_workspace_changed = workspace_changed
         try:
             _start_parent_watchdog(endpoint.discard)
             uvicorn_server = uvicorn.Server(config)

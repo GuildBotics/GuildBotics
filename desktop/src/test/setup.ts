@@ -1,8 +1,15 @@
 import "@testing-library/jest-dom/vitest";
 import { createElement, forwardRef } from "react";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import type { TextareaProps } from "@mantine/core";
+
+import { configureApi } from "../api/client";
+
+// Components render inside an app whose backend announced its port.
+beforeEach(() => {
+  configureApi("test-token", "http://127.0.0.1:8765");
+});
 
 afterEach(() => {
   cleanup();
