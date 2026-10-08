@@ -55,6 +55,26 @@ class CliAgentLastTurn(BaseModel):
     timestamp: str
 
 
+class InferenceFailureStatus(BaseModel):
+    """Why the latest call with a workspace key was refused, and when.
+
+    ``response`` is what the provider answered, with credentials masked;
+    ``status_code`` the status it reported, which may be an SDK default.
+    """
+
+    category: Literal["authentication", "credit", "rate_limit", "other"]
+    timestamp: str
+    status_code: int | None = None
+    response: str = ""
+
+
+class InferenceFailuresResponse(BaseModel):
+    """The keys whose latest call was refused: LLM providers by id, and Jev."""
+
+    llm: dict[str, InferenceFailureStatus] = Field(default_factory=dict)
+    jev: InferenceFailureStatus | None = None
+
+
 class VerifyCheck(BaseModel):
     code: str
     status: str = Field(pattern="^(ok|warning|error)$")
@@ -1063,6 +1083,7 @@ SystemAlertCode = Literal[
     "credential_github",
     "credential_slack",
     "credential_llm",
+    "credential_jev",
     "command_failed",
     "rate_limited",
     "scheduler_failed",

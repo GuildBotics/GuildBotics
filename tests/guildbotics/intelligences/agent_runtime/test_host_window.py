@@ -1052,6 +1052,7 @@ async def test_jev_is_asked_by_the_host(tmp_path, monkeypatch, in_the_environmen
         asked.append(payload)
         return {"model": "jev-1", "answers": {"q": 1}}
 
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     async with _command(monkeypatch, tmp_path):
         in_the_environment(environment.running_command().endpoint)
@@ -1134,6 +1135,8 @@ def test_inference_failure_text_is_safe_and_localized(language, source, caplog):
     assert failure.category == "failed"
     assert failure.details == {
         "error_type": type(error).__name__,
+        # Why the provider refused it is decided where the call was made.
+        "category": "other",
         **({"status_code": status} if status else {}),
     }
     assert str(failure) == t(

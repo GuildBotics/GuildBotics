@@ -20,6 +20,7 @@ import {
   getConfigStatus,
   getIntelligenceConfig,
   getCliAgentLastTurns,
+  getInferenceFailures,
   saveDecisionCredential,
   getMemberConfig,
   getAgentEnvironmentStatus,
@@ -199,6 +200,7 @@ vi.mock("../api/client", async (importOriginal) => {
       storage_dir: "/workspace/.guildbotics",
     })),
     getCliAgentLastTurns: vi.fn(async () => []),
+    getInferenceFailures: vi.fn(async () => ({ llm: {}, jev: null })),
     getIntelligenceConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
       revisions: {},
@@ -510,6 +512,39 @@ describe("SetupPage", () => {
     expect(
       await screen.findByRole("heading", { name: t("setup.agentEnvironment.title") }),
     ).toBeInTheDocument();
+  });
+
+  it("shows on each provider why its key was refused until a call succeeds", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    vi.mocked(getInferenceFailures).mockResolvedValue({
+      llm: {
+        openai: { category: "credit", timestamp: "2026-10-08T10:00:00Z" },
+        anthropic: { category: "rate_limit", timestamp: "2026-10-08T11:00:00Z" },
+      },
+      jev: null,
+    });
+    renderSetupPage("/setup?section=intelligence");
+
+    const summary = (category: string, timestamp: string) =>
+      t("setup.intelligence.inferenceFailure.summary", {
+        reason: t(`setup.intelligence.inferenceFailure.categories.${category}`),
+        time: new Date(timestamp).toLocaleString("en"),
+      });
+    const openai = await screen.findByRole("button", { name: "OpenAI" });
+    expect(openai).toHaveAccessibleDescription(
+      expect.stringContaining(summary("credit", "2026-10-08T10:00:00Z")),
+    );
+    expect(screen.getByRole("button", { name: "Anthropic Claude" })).toHaveAccessibleDescription(
+      expect.stringContaining(summary("rate_limit", "2026-10-08T11:00:00Z")),
+    );
+    // A provider whose latest call succeeded shows nothing.
+    const prefix = t("setup.intelligence.inferenceFailure.summary", {
+      reason: "|",
+      time: "|",
+    }).split("|")[0];
+    expect(screen.getByRole("button", { name: "Google Gemini" })).not.toHaveAccessibleDescription(
+      expect.stringContaining(prefix),
+    );
   });
 
   it("keeps environment controls out of the intelligence advanced settings", async () => {
@@ -1467,6 +1502,44 @@ describe("SetupPage", () => {
     expect(screen.getAllByText("LLM API key is missing").length).toBeGreaterThan(0);
     expect(screen.queryByText(t("overview.scenarioDiagnostics.ok"))).not.toBeInTheDocument();
   });
+
+  it.each(["authentication", "credit", "rate_limit"])(
+    "explains an LLM live check refused for %s by why",
+    async (category) => {
+      const user = userEvent.setup();
+      vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+      vi.mocked(runScenarioDiagnostics).mockResolvedValue(
+        scenarioResponse({
+          ok: false,
+          checks: [
+            diagnosticCheck({
+              status: "error",
+              section: "llm",
+              code: "llm_live_call",
+              message: "LLM live check failed: The inference call failed (RateLimitError).",
+              context: { provider: "openai", error_type: "RateLimitError", category },
+            }),
+          ],
+        }),
+      );
+      renderSetupPage("/setup?section=verification");
+
+      await user.click(
+        await screen.findByRole("button", { name: t("overview.scenarioDiagnostics.run") }),
+      );
+
+      expect(
+        (
+          await screen.findAllByText(
+            t(`overview.diagnosticChecks.llm_live_call.categories.${category}`),
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        screen.queryByText(t("overview.diagnosticChecks.llm_live_call.description")),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("shows an alert when scenario diagnostics fail in verification section", async () => {
     const user = userEvent.setup();

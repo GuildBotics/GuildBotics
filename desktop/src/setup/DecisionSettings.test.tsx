@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
-import { getDecisionOptions } from "../api/client";
+import { getDecisionOptions, getInferenceFailures } from "../api/client";
 import i18n from "../i18n";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 import { DecisionSettings } from "./DecisionSettings";
@@ -11,6 +11,7 @@ import { DecisionSettings } from "./DecisionSettings";
 vi.mock("../api/client", async (original) => ({
   ...(await original<typeof import("../api/client")>()),
   getDecisionOptions: vi.fn(),
+  getInferenceFailures: vi.fn(),
 }));
 const t = i18n.getFixedT("en");
 function mount(engine: "llm" | "cli" | "jev" | null = "llm") {
@@ -40,6 +41,44 @@ beforeEach(async () => {
   vi.mocked(getDecisionOptions).mockResolvedValue({
     credential_present: false,
   });
+  vi.mocked(getInferenceFailures).mockResolvedValue({ llm: {}, jev: null });
+});
+
+it("shows why Jev refused the latest call until a call succeeds", async () => {
+  vi.mocked(getDecisionOptions).mockResolvedValue({ credential_present: true });
+  vi.mocked(getInferenceFailures).mockResolvedValue({
+    llm: { openai: { category: "credit", timestamp: "2026-10-08T10:00:00Z" } },
+    jev: {
+      category: "authentication",
+      timestamp: "2026-10-08T10:00:00Z",
+      status_code: 401,
+      response: '{"error":"invalid key ***"}',
+    },
+  });
+  mount("jev");
+  expect(
+    await screen.findByText(
+      t("setup.intelligence.inferenceFailure.summary", {
+        reason: t("setup.intelligence.inferenceFailure.categories.authentication"),
+        time: new Date("2026-10-08T10:00:00Z").toLocaleString("en"),
+      }),
+    ),
+  ).toBeInTheDocument();
+  // What the provider answered, as it said it (the backend masked the key).
+  expect(
+    screen.getByText(
+      t("setup.intelligence.inferenceFailure.responseWithStatus", {
+        status: 401,
+        response: '{"error":"invalid key ***"}',
+      }),
+    ),
+  ).toBeInTheDocument();
+  // Another key's refusal is not Jev's.
+  expect(
+    screen.queryByText(t("setup.intelligence.inferenceFailure.categories.credit"), {
+      exact: false,
+    }),
+  ).not.toBeInTheDocument();
 });
 
 it("shows credential input for the draft Jev selection without action buttons", async () => {

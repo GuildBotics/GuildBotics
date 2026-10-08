@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from guildbotics.app_api.agent_environment_status import EnvironmentProblemEntry
+from guildbotics.app_api.inference_failures import KEY_SERVICES, inference_key
 from guildbotics.app_api.models import (
     DeviceSetting,
     RuntimeStatus,
@@ -18,6 +19,7 @@ from guildbotics.app_api.models import (
     SystemAlertSeverity,
     SystemAlertsResponse,
 )
+from guildbotics.intelligences.llm_providers import CREDENTIAL_FAILURES
 from guildbotics.observability.diagnostics_store import (
     DiagnosticsCursor,
     DiagnosticsStore,
@@ -31,14 +33,17 @@ _DIAGNOSTIC_CREDENTIAL_CODES = {
         "slack_app_token_invalid",
         "slack_bot_auth",
     },
-    "llm": {"llm_api_key", "llm_live_call"},
+    # A live call is an inference call: its span settles the key's alerts.
+    "llm": {"llm_api_key"},
 }
 _VERIFY_CREDENTIAL_CODES = {"llm_api_key": "llm"}
 _CREDENTIAL_ALERT_CODES: dict[str, SystemAlertCode] = {
     "github": "credential_github",
     "slack": "credential_slack",
     "llm": "credential_llm",
+    "jev": "credential_jev",
 }
+
 _IGNORED_COMMAND_FAILURES = {
     "cancelled",
     "cli_agent_authentication",
@@ -213,6 +218,8 @@ class SystemAlertService:
             self._resolve_execution_alerts(alerts, record)
         elif event_type == "credential.failed":
             self._open_credential_alert(alerts, record)
+        elif (inference := inference_key(record)) is not None:
+            self._apply_inference(alerts, record, *inference)
         elif event_type == "credential.verified":
             # The same credential proven again by the same person closes the
             # alert, as a finished command closes an execution alert.
@@ -258,8 +265,12 @@ class SystemAlertService:
             code = str(check.get("code") or "")
             if code not in _DIAGNOSTIC_CREDENTIAL_CODES.get(section, set()):
                 continue
-            person_id = "" if section == "llm" else str(check.get("person_id") or "")
-            grouped[(section, person_id)].append(check)
+            scope = (
+                _check_provider(check)
+                if section == "llm"
+                else str(check.get("person_id") or "")
+            )
+            grouped[(section, scope)].append(check)
         self._apply_credential_groups(alerts, record, grouped)
 
     def _resolve_removed_credentials(
@@ -277,6 +288,7 @@ class SystemAlertService:
                 if (
                     len(parts) == _ALERT_ID_PARTS
                     and parts[0] == "credential"
+                    and parts[1] not in KEY_SERVICES
                     and parts[2]
                     and parts[2] not in active_members
                 ):
@@ -295,14 +307,10 @@ class SystemAlertService:
             section = _VERIFY_CREDENTIAL_CODES.get(str(check.get("code") or ""))
             if section is None:
                 continue
-            context = check.get("context")
-            person_id = (
-                str(context.get("person_id") or "") if isinstance(context, dict) else ""
-            )
-            grouped[(section, person_id)].append(check)
+            grouped[(section, _check_provider(check))].append(check)
         self._apply_credential_groups(alerts, record, grouped)
         if not grouped:
-            alerts.pop("credential:llm:", None)
+            _remove_alert_prefix(alerts, "credential:llm:")
 
     def _apply_credential_groups(
         self,
@@ -310,8 +318,8 @@ class SystemAlertService:
         record: dict[str, Any],
         grouped: dict[tuple[str, str], list[dict[str, Any]]],
     ) -> None:
-        for (section, person_id), checks in grouped.items():
-            key = f"credential:{section}:{person_id}"
+        for (section, scope), checks in grouped.items():
+            key = f"credential:{section}:{scope}"
             if any(check.get("status") == "error" for check in checks):
                 self._open(
                     alerts,
@@ -319,7 +327,7 @@ class SystemAlertService:
                     code=_CREDENTIAL_ALERT_CODES[section],
                     severity="critical",
                     record=record,
-                    person_id=person_id,
+                    **_credential_scope(section, scope),
                     actions=["diagnostics", "setup"],
                 )
             elif any(check.get("status") == "ok" for check in checks):
@@ -346,6 +354,47 @@ class SystemAlertService:
             person_id=person_id,
             trace_id=trace_id,
             actions=actions,
+        )
+
+    def _apply_inference(
+        self,
+        alerts: dict[str, SystemAlert],
+        record: dict[str, Any],
+        service: str,
+        provider: str,
+    ) -> None:
+        """An inference call with a workspace key: the provider refusing it
+        for a reason the user has to act on opens the provider's alert, and
+        any later call of it that succeeds closes the alert.
+
+        The alert is keyed apart from the checks of whether the key is
+        configured, which say nothing of whether the provider takes it: only
+        a call of the key settles what a refusal opened. The converse holds,
+        so a call that succeeds also closes the key's missing-key alert.
+        """
+        key = f"inference:{service}:{provider}"
+        if record.get("type") == "span.finished":
+            for settled in (key, f"credential:{service}:{provider}"):
+                alerts.pop(settled, None)
+                self._dismissed.discard(settled)
+            return
+        category = str(record["attributes"].get("error.category") or "")
+        if category not in CREDENTIAL_FAILURES:
+            return
+        trace_id = str(record.get("trace_id") or "")
+        self._remove_execution_alerts_for_cause(
+            alerts, str(record.get("person_id") or ""), trace_id
+        )
+        self._open(
+            alerts,
+            key=key,
+            code=_CREDENTIAL_ALERT_CODES[service],
+            severity="critical",
+            record=record,
+            **_credential_scope(service, provider),
+            trace_id=trace_id,
+            reason=category,
+            actions=["setup", "trace"] if trace_id else ["setup"],
         )
 
     def _open_execution_alert(
@@ -397,9 +446,10 @@ class SystemAlertService:
         record: dict[str, Any],
     ) -> bool:
         trace_id = str(record.get("trace_id") or "")
+        # A workspace key's alert names no member: the trace is the cause.
         return any(
-            key.startswith("credential:")
-            and alert.person_id == person_id
+            key.startswith(("credential:", "inference:"))
+            and alert.person_id in (person_id, "")
             and bool(trace_id)
             and alert.trace_id == trace_id
             for key, alert in alerts.items()
@@ -525,6 +575,7 @@ class SystemAlertService:
         person_id: str = "",
         command: str = "",
         trace_id: str = "",
+        reason: str = "",
         actions: list[SystemAlertAction],
     ) -> None:
         self._dismissed.discard(key)
@@ -540,6 +591,7 @@ class SystemAlertService:
                 person_id=person_id,
                 command=command,
                 trace_id=trace_id,
+                reason=reason,
                 actions=actions,
             )
             return
@@ -548,6 +600,7 @@ class SystemAlertService:
                 "updated_at": timestamp,
                 "occurrence_count": current.occurrence_count + 1,
                 "trace_id": trace_id or current.trace_id,
+                "reason": reason,
             }
         )
 
@@ -565,7 +618,22 @@ def _checks(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _is_relevant_record(record: dict[str, Any]) -> bool:
-    return record.get("kind") == "event" and record.get("type") in _RELEVANT_EVENT_TYPES
+    return inference_key(record) is not None or (
+        record.get("kind") == "event" and record.get("type") in _RELEVANT_EVENT_TYPES
+    )
+
+
+def _check_provider(check: dict[str, Any]) -> str:
+    context = check.get("context")
+    return str(context.get("provider") or "") if isinstance(context, dict) else ""
+
+
+def _credential_scope(service: str, scope: str) -> dict[str, str]:
+    """Whom a credential alert names: the member for a member's own
+    credential, the provider for a workspace key."""
+    if service in KEY_SERVICES:
+        return {"command": scope}
+    return {"person_id": scope}
 
 
 def _remove_alert_prefix(alerts: dict[str, SystemAlert], prefix: str) -> None:

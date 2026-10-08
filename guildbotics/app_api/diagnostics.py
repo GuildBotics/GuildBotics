@@ -32,6 +32,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.intelligences.brains.inference import InferenceFailure
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.intelligences.llm_providers import provider_env_keys
@@ -365,9 +366,17 @@ class ScenarioDiagnosticsService:
                     "ok",
                     "LLM provider accepted a minimal request.",
                     person_id=member.person_id,
+                    context={"provider": provider},
                 )
             ]
         except Exception as exc:
+            facts: dict[str, Any] = {
+                "provider": provider,
+                "error_type": type(exc).__name__,
+            }
+            if isinstance(exc, InferenceFailure):
+                # What the provider said, not the wrapper the call raised.
+                facts.update(error_type=exc.error_type, category=exc.category)
             return [
                 self._check(
                     "llm",
@@ -375,7 +384,7 @@ class ScenarioDiagnosticsService:
                     "error",
                     self._safe_error("LLM live check failed", exc),
                     person_id=member.person_id,
-                    context={"error_type": type(exc).__name__},
+                    context=facts,
                 )
             ]
         finally:

@@ -40,6 +40,7 @@ from guildbotics.app_api.config_revisions import apply_config_write
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.inference_failures import latest_inference_failures
 from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
@@ -67,6 +68,7 @@ from guildbotics.app_api.models import (
     CommandRunRequest,
     CommandRunResponse,
     ConfigStatus,
+    InferenceFailuresResponse,
     MemberSummary,
     MemoryEvent,
     MemoryEventsResponse,
@@ -1838,6 +1840,9 @@ class AppRuntime:
 
     def get_cli_agent_last_turns(self) -> list[CliAgentLastTurn]:
         return last_cli_agent_turns(self._diagnostics_store)
+
+    def get_inference_failures(self) -> InferenceFailuresResponse:
+        return latest_inference_failures(self._diagnostics_store)
 
     async def get_cli_agent_usage(
         self, agent_name: str, refresh: bool = False

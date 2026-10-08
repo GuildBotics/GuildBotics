@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.intelligences.brains import inference_host, jev
+from guildbotics.intelligences.brains.inference import JevCall
 from guildbotics.intelligences.brains.brain import (
     Brain,
     ExecutionMetadata,
@@ -501,6 +502,7 @@ async def test_jev_uses_latest_and_records_the_returned_version(monkeypatch):
             "usage": {"input_tokens": 12},
         }
 
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     await brain.run(json.dumps({"state": "test", "questions": {}}))
@@ -522,6 +524,7 @@ async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
         calls.append(args)
         raise RuntimeError("private-test-key")
 
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     factory = SimpleNamespace(create_brain=lambda *args, **kwargs: brain)
@@ -726,5 +729,8 @@ async def test_jev_credentials_are_fresh_and_never_fall_back_to_environment(
     store.set(jev.JEV_KEY, "current-secret")
     assert jev.credential(tmp_path) == "current-secret"
     store.delete(jev.JEV_KEY)
+    monkeypatch.setattr(inference_host, "get_workspace_config_dir", lambda: tmp_path)
     with pytest.raises(ValueError, match="credentials_missing"):
-        await inference_host.request(tmp_path, "POST", "/systemone", {})
+        await inference_host.DirectInference().jev(
+            JevCall(state={}, questions={}, model=jev.JEV_MODEL)
+        )

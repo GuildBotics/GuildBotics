@@ -994,7 +994,29 @@ classifies every secret store access and member key spelling in the package.
   normalize structured authentication failures to `credential.failed`, allowing a
   workflow-time failure to become critical without waiting for diagnostics, and record
   `credential.verified` when a later turn of the same member is answered, which closes
-  that alert without a diagnostics run. The desktop
+  that alert without a diagnostics run. Inference with a workspace API key (an LLM
+  provider's through agno, Jev's) is recorded where the call is made,
+  `brains/inference_host.py`: agno keeps a failed run and answers with the error's
+  text, so the provider's own error is taken from the model instance and the call
+  raises `InferenceFailure` instead. Every such call ends its span naming the key
+  (`credential.provider` `llm` / `jev`, `llm.provider`) and, when refused, why
+  (`error.category`: `authentication`, `credit`, `rate_limit`, `other`, decided by
+  the status and error type the provider reported in `llm_providers.classify_failure`),
+  with the status and what the provider answered (`error.status_code`,
+  `error.response`). The answer is recorded with the key the call used and the
+  workspace's secrets masked and bounded (`redact_for_sharing()`), because the
+  records are mounted into the environment of a command that inspects
+  diagnostics; it never crosses the command window, which carries only the
+  failure's kind, status, and category.
+  The span is the record: the alert is one per provider account
+  (`inference:llm:<provider>`, `inference:jev:`), opened by an `authentication` or
+  `credit` refusal and closed by the next call of the same key that succeeds; a rate
+  limit passes by itself and opens none. It is keyed apart from the verify and
+  diagnostics checks of whether the key is configured (`credential:llm:<provider>`),
+  which say nothing of whether the provider takes it and so never settle a refusal;
+  the converse holds, so a call that succeeds also closes the key's missing-key alert. The setup screen shows each key's latest
+  refusal, of any category, from the same spans (`/intelligences/inference-failures`).
+  The desktop
   polls `/system-alerts` and renders the result above every route with links to
   diagnostics, setup, service state, or the correlated trace. Provider classification
   remains in the backend; the frontend only translates stable alert codes.

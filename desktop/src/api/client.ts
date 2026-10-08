@@ -211,6 +211,7 @@ export type SystemAlert = {
     | "credential_github"
     | "credential_slack"
     | "credential_llm"
+    | "credential_jev"
     | "command_failed"
     | "rate_limited"
     | "scheduler_failed"
@@ -1732,6 +1733,25 @@ export type CliAgentLastTurn = {
 
 export async function getCliAgentLastTurns(): Promise<CliAgentLastTurn[]> {
   return request("/intelligences/cli-agents/last-turns");
+}
+
+// Why the latest call with a workspace key was refused, and when: a key whose
+// latest call succeeded is absent.
+export type InferenceFailure = {
+  category: "authentication" | "credit" | "rate_limit" | "other";
+  timestamp: string;
+  // What the provider answered, credentials masked, and the status it reported.
+  status_code?: number | null;
+  response?: string;
+};
+
+export type InferenceFailuresResponse = {
+  llm: Record<string, InferenceFailure>;
+  jev: InferenceFailure | null;
+};
+
+export async function getInferenceFailures(): Promise<InferenceFailuresResponse> {
+  return request("/intelligences/inference-failures");
 }
 
 // `refresh` waits for a new probe instead of answering from the cache.

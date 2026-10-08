@@ -46,14 +46,16 @@ from guildbotics.intelligences.effort import (
     describe_overlay_problems,
     validate_effort_fields,
 )
-from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
+from guildbotics.intelligences.llm_providers import (
+    PROVIDER_DEFAULT_FILENAME,
+    provider_of,
+)
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 from guildbotics.utils.person_id import person_config_directory
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
 JEV_BRAIN_CLASS = "guildbotics.intelligences.brains.jev.JevBrain"
-MODEL_PATH_PROVIDER_INDEX = 1
 
 
 def intelligence_config_dir(person_id: str | None) -> str:
@@ -293,7 +295,7 @@ class IntelligenceConfigService:
                         self._model_effort_descriptors(
                             request.config_dir, request.person_id, model.path
                         ),
-                        f"provider '{self._provider_from_model_path(model.path)}'",
+                        f"provider '{provider_of(model.path)}'",
                     ),
                 ),
                 files,
@@ -424,7 +426,7 @@ class IntelligenceConfigService:
     ) -> None:
         if not model.path.startswith("models/"):
             return
-        provider = self._provider_from_model_path(model.path)
+        provider = provider_of(model.path)
         descriptors = self._model_effort_descriptors(config_dir, person_id, model.path)
         self._reject_unusable_effort(
             model.effort, descriptors, where=f"provider '{provider}'"
@@ -614,7 +616,7 @@ class IntelligenceConfigService:
         parameters = data.get("parameters", {}) if isinstance(data, dict) else {}
         if not isinstance(parameters, dict):
             parameters = {}
-        provider = self._provider_from_model_path(model_path)
+        provider = provider_of(model_path)
         # What this definition falls back to, mirroring the runtime: the
         # provider's own default, then the packaged definition of this path. The
         # second matters because a workspace file shadows the template
@@ -653,7 +655,7 @@ class IntelligenceConfigService:
         self, config_dir: Path, person_id: str | None, model_path: str
     ) -> dict[str, Any]:
         """Where a model definition's field descriptors come from."""
-        provider = self._provider_from_model_path(model_path)
+        provider = provider_of(model_path)
         return self._declaring(
             self._provider_default_yaml(config_dir, person_id, provider),
             # The packaged fallback is the provider's own default definition.
@@ -876,9 +878,3 @@ class IntelligenceConfigService:
         if isinstance(data, dict):
             return cast(dict[str, Any], data)
         return {}
-
-    def _provider_from_model_path(self, model_path: str) -> str:
-        parts = model_path.split("/")
-        if len(parts) > MODEL_PATH_PROVIDER_INDEX:
-            return parts[MODEL_PATH_PROVIDER_INDEX]
-        return ""
