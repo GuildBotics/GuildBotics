@@ -92,6 +92,7 @@ from guildbotics.app_api.models import (
     HubStatus,
     HubTarget,
     HubTrustRequest,
+    InferenceFailuresResponse,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
@@ -1193,6 +1194,16 @@ def create_app(
         _: None = Depends(require_token),
     ) -> list[CliAgentLastTurn]:
         return app_runtime.get_cli_agent_last_turns()
+
+    @app.get(
+        "/intelligences/inference-failures",
+        response_model=InferenceFailuresResponse,
+        responses=error_responses,
+    )
+    def inference_failures(
+        _: None = Depends(require_token),
+    ) -> InferenceFailuresResponse:
+        return app_runtime.get_inference_failures()
 
     @app.get(
         "/intelligences/cli-agents/{agent}/usage",

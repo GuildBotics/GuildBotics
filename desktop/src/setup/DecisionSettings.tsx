@@ -3,6 +3,7 @@ import { Alert, Card, PasswordInput, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { getDecisionOptions } from "../api/client";
+import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailureNotice";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
 
 export function DecisionSettings({
@@ -26,6 +27,7 @@ export function DecisionSettings({
     queryFn: getDecisionOptions,
     enabled: engine === "jev",
   });
+  const failures = useInferenceFailures(engine === "jev");
   return (
     <Card withBorder id="decision-settings">
       <Stack gap="sm">
@@ -42,6 +44,7 @@ export function DecisionSettings({
             {options.data?.credential_present === false && (
               <Text size="sm">{t("decision.keyMissing")}</Text>
             )}
+            <InferenceFailureNotice failure={failures.data?.jev ?? undefined} />
             <PasswordInput
               label={t("decision.key")}
               description={t("decision.keySaveHint")}

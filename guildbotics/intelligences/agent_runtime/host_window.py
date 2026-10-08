@@ -69,7 +69,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
-from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
+from guildbotics.intelligences.brains.inference import (
+    AgnoCall,
+    InferenceFailure,
+    JevCall,
+)
 from guildbotics.intelligences.brains.span_summary import record_summary
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.observability import bind_span, correlation_fields
@@ -84,7 +88,6 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     get_workspace_config_dir,
 )
-from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
 
 #: The kinds of work only a workflow run of that kind does.
@@ -531,26 +534,19 @@ class HostWindow:
 
 def _inference_failed(exc: Exception) -> HostCallError:
     """How a failed inference call reaches the command's environment: by its
-    kind and reported status, never its message, which may carry credentials
-    (the host's log is kept and shown, so it is not written there either).
-    The reported status may be an SDK default without an HTTP response.
-    """
-    kind = type(exc).__name__
-    status = getattr(exc, "status_code", None) or getattr(
-        getattr(exc, "response", None), "status_code", None
-    )
-    get_logger().warning("An inference call of a command failed (%s).", kind)
-    message = (
-        t(
-            "intelligences.inference.failed_with_status",
-            error_type=kind,
-            status=status,
-        )
-        if status
-        else t("intelligences.inference.failed", error_type=kind)
+    kind, reported status, and why, never its message, which may carry
+    credentials (the host's log is kept and shown, so it is not written there
+    either)."""
+    failure = exc if isinstance(exc, InferenceFailure) else InferenceFailure(exc)
+    get_logger().warning(
+        "An inference call of a command failed (%s).", failure.error_type
     )
     return HostCallError(
         "failed",
-        message,
-        {"error_type": kind, **({"status_code": status} if status else {})},
+        str(failure),
+        {
+            "error_type": failure.error_type,
+            "category": failure.category,
+            **({"status_code": failure.status_code} if failure.status_code else {}),
+        },
     )

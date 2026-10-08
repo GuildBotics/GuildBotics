@@ -2,9 +2,11 @@ import inspect
 import logging
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agno.agent import Agent
+from agno.run.base import RunStatus
 from pydantic import BaseModel, ValidationError
 
 from guildbotics.intelligences.brains import agno_agent, inference_host
@@ -29,6 +31,7 @@ async def test_agno_agent_records_request_response_and_span(
 
     class FakeResponse:
         content = "reply"
+        status = RunStatus.completed
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -49,7 +52,9 @@ async def test_agno_agent_records_request_response_and_span(
         lambda **kwargs: span_records.append(kwargs),
     )
     monkeypatch.setattr(
-        inference_host, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host,
+        "instantiate_class",
+        lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
@@ -79,7 +84,11 @@ async def test_agno_agent_records_request_response_and_span(
     # slot definition name on an attribute so traces stay searchable by slot.
     assert span_records[0]["model"] == "test-model-5"
     assert span_records[0]["effort"] == ""
-    assert span_records[0]["attributes"] == {"model.slot": "models/test.yml"}
+    # A definition outside ``models/<provider>/`` names no provider.
+    assert span_records[0]["attributes"] == {
+        "model.slot": "models/test.yml",
+        "credential.provider": "llm",
+    }
 
 
 @pytest.mark.asyncio
@@ -100,7 +109,7 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
             captured.update(kwargs)
 
         async def arun(self, message: str):
-            return type("R", (), {"content": "reply"})()
+            return SimpleNamespace(content="reply", status=RunStatus.completed)
 
     original = agno_agent.person_model_mapping.copy()
     agno_agent.person_model_mapping.clear()
@@ -108,7 +117,9 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
     monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
     monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
-        inference_host, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host,
+        "instantiate_class",
+        lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
@@ -155,7 +166,7 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
             captured.update(kwargs)
 
         async def arun(self, message: str):
-            return type("R", (), {"content": "reply"})()
+            return SimpleNamespace(content="reply", status=RunStatus.completed)
 
     original = agno_agent.person_model_mapping.copy()
     agno_agent.person_model_mapping.clear()
@@ -163,7 +174,9 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
     monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
     monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
-        inference_host, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host,
+        "instantiate_class",
+        lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
@@ -219,12 +232,12 @@ async def _run_with_effort(
             self.kwargs = kwargs
 
         async def arun(self, message: str):
-            return type("R", (), {"content": "reply"})()
+            return SimpleNamespace(content="reply", status=RunStatus.completed)
 
     def fake_instantiate(*args, **kwargs):
         kwargs.pop("expected_type", None)
         captured.update(kwargs)
-        return object()
+        return SimpleNamespace(ainvoke=None)
 
     monkeypatch.setattr(
         inference_host,
@@ -323,7 +336,7 @@ async def test_span_model_stays_empty_when_the_definition_names_no_id(
     )
     await _run_with_effort(monkeypatch, model_config=config, span_records=spans)
     assert spans[0]["model"] == ""
-    assert spans[0]["attributes"] == {"model.slot": "models/test.yml"}
+    assert spans[0]["attributes"]["model.slot"] == "models/test.yml"
 
 
 @pytest.mark.asyncio

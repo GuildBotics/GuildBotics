@@ -15,7 +15,7 @@ host builds nothing from what the environment names.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -27,6 +27,50 @@ from guildbotics.intelligences.agent_runtime.host_client import (
 )
 from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import SpanContext
+from guildbotics.utils.i18n_tool import t
+
+#: Why a provider refused an inference call (the provider catalog decides).
+FailureCategory = Literal["authentication", "credit", "rate_limit", "other"]
+
+
+class InferenceFailure(Exception):
+    """A failed inference call, told by what failed, the status the provider
+    reported, and why -- never by its message, which may carry credentials.
+
+    Attributes:
+        error_type: The class of the error the call failed with first.
+        status_code: The HTTP status reported. It may be an SDK default
+            without an HTTP response.
+        reported_type: The error type the provider reported, if any.
+        category: Why the provider refused the call.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        chain = [cause]
+        while chain[-1].__cause__ is not None:
+            chain.append(chain[-1].__cause__)
+        self.error_type = type(chain[-1]).__name__
+        self.status_code = next(
+            (status for error in chain if isinstance(status := _status(error), int)),
+            None,
+        )
+        reported = getattr(chain[-1], "type", None)
+        self.reported_type = reported if isinstance(reported, str) else ""
+        self.category: FailureCategory = "other"
+        super().__init__(
+            t(
+                "intelligences.inference.failed_with_status",
+                error_type=self.error_type,
+                status=self.status_code,
+            )
+            if self.status_code
+            else t("intelligences.inference.failed", error_type=self.error_type)
+        )
+
+
+def _status(error: BaseException) -> object:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) or getattr(error, "status_code", None)
 
 
 class AgnoCall(BaseModel):
@@ -64,6 +108,7 @@ class JevCall(BaseModel):
     state: Any
     questions: Any
     model: str
+    span: SpanContext | None = None
 
 
 class Inference(Protocol):

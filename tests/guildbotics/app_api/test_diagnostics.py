@@ -502,6 +502,42 @@ async def test_llm_live_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_llm_live_call_tells_why_the_provider_refused_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from guildbotics.intelligences.brains.inference import InferenceFailure
+
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    failure = InferenceFailure(
+        httpx.HTTPStatusError(
+            "sk-secret",
+            request=httpx.Request("POST", "https://provider.test"),
+            response=httpx.Response(429),
+        )
+    )
+    failure.category = "credit"
+    _patch_talk(monkeypatch, failure)
+    context = _StubContext(
+        team=_team([_person("alice", is_active=True)]),
+        brain=_StubBrain(_CliResult()),
+    )
+
+    response = await _run(context)
+
+    check = _by_code(response)["llm_live_call"]
+    assert check.status == "error"
+    assert "sk-secret" not in check.message
+    assert check.context == {
+        "provider": "openai",
+        "error_type": "HTTPStatusError",
+        "category": "credit",
+    }
+
+
+@pytest.mark.asyncio
 async def test_llm_check_skipped_when_api_key_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -384,6 +384,9 @@ function SystemAlertBand() {
 // to do about it, which depends on which part of the device it is: a build
 // in progress needs nothing but patience, so it gets no second sentence.
 const DEVICE_FIXES = ["runtime", "declaration", "image", "snapshot"] as const;
+// A workspace key the provider refused says why, which decides what to do.
+const KEY_ALERTS = new Set<SystemAlert["code"]>(["credential_llm", "credential_jev"]);
+const KEY_REFUSALS = ["authentication", "credit"] as const;
 
 export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
   const message = t(`systemAlerts.codes.${alert.code}`, {
@@ -392,6 +395,10 @@ export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
     count: alert.occurrence_count,
     reason: alert.reason,
   });
+  const refusal = KEY_REFUSALS.find((reason) => reason === alert.reason);
+  if (KEY_ALERTS.has(alert.code) && refusal) {
+    return `${message} ${t(`systemAlerts.keyRefusals.${refusal}`)}`;
+  }
   const fix = DEVICE_FIXES.find((part) => part === alert.setting);
   if (alert.code !== "agent_environment_unavailable" || !fix) return message;
   return `${message} ${t(`systemAlerts.environmentFix.${fix}`)}`;
@@ -432,6 +439,9 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
           ? `agent-environment-${alert.code === "agent_environment_image_differs" ? "image" : alert.setting}`
           : "agent-environment-snapshot";
     return `/setup?${new URLSearchParams({ section: "environment", focus }).toString()}`;
+  }
+  if (KEY_ALERTS.has(alert.code)) {
+    return `/setup?${new URLSearchParams({ section: "intelligence" }).toString()}`;
   }
   if (alert.code !== "credential_github" || !alert.person_id) {
     return "/setup";

@@ -6,9 +6,12 @@ from typing import Any
 
 from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
 from guildbotics.intelligences.brains.inference import JevCall, inference
+from guildbotics.observability import span_scope
 
 JEV_KEY = "TYPESAFE_API_KEY"
 JEV_MODEL = "jev-latest"
+#: What Jev's calls and their key are recorded as.
+JEV_PROVIDER = "jev"
 
 
 def credential(config_dir: Path) -> str:
@@ -32,17 +35,19 @@ class JevBrain(Brain):
 
     @property
     def configuration(self) -> dict[str, Any]:
-        return {**super().configuration, "provider": "jev", "model": self.model}
+        return {**super().configuration, "provider": JEV_PROVIDER, "model": self.model}
 
     async def run(self, message: str, **kwargs):
         payload = json.loads(message)
-        result = await inference().jev(
-            JevCall(
-                state=payload["state"],
-                questions=payload["questions"],
-                model=self.model,
+        with span_scope(JEV_PROVIDER) as span:
+            result = await inference().jev(
+                JevCall(
+                    state=payload["state"],
+                    questions=payload["questions"],
+                    model=self.model,
+                    span=span,
+                )
             )
-        )
         self.execution = ExecutionMetadata(
             model=result["model"],
             usage=result.get("usage"),

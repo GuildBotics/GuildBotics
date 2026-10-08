@@ -9,7 +9,9 @@ import logging
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from agno.run.base import RunStatus
 
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.intelligences import functions
@@ -19,11 +21,16 @@ from guildbotics.intelligences.brains import (
     jev,
     span_summary,
 )
-from guildbotics.intelligences.brains.inference import inference
+from guildbotics.intelligences.brains.inference import (
+    AgnoCall,
+    InferenceFailure,
+    inference,
+)
 from guildbotics.intelligences.brains.inference_host import DirectInference
 from guildbotics.intelligences.decisions import engines
 from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 from guildbotics.intelligences.decisions.models import DecisionConfig
+from guildbotics.intelligences.effort import ResolvedEffort
 from tests.conftest import FakeContext
 
 
@@ -109,11 +116,15 @@ class _Model:
                 # agno reads a structured answer into the output schema.
                 if schema is not None and isinstance(answer, dict):
                     answer = schema.model_validate(answer)
-                return SimpleNamespace(content=answer, metrics=None)
+                return SimpleNamespace(
+                    content=answer, metrics=None, status=RunStatus.completed
+                )
 
         monkeypatch.setattr(inference_host, "Agent", Agent)
         monkeypatch.setattr(
-            inference_host, "instantiate_class", lambda *args, **kwargs: object()
+            inference_host,
+            "instantiate_class",
+            lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
         )
         monkeypatch.setitem(
             agno_agent.person_model_mapping,
@@ -194,10 +205,11 @@ async def test_the_chat_decision_is_evaluated_through_the_brain(monkeypatch) -> 
 async def test_jev_is_asked_with_the_workspace_key(monkeypatch) -> None:
     asked: list[Any] = []
 
-    async def request(_root, method, path, payload):
-        asked.append((method, path, payload))
+    async def request(key, method, path, payload):
+        asked.append((key, method, path, payload))
         return {"model": "jev-1", "answers": {}, "usage": {"input_tokens": 3}}
 
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("p1", "chat_decision", logging.getLogger("test"))
 
@@ -206,6 +218,7 @@ async def test_jev_is_asked_with_the_workspace_key(monkeypatch) -> None:
     assert result["model"] == "jev-1"
     assert asked == [
         (
+            "jev-key",
             "POST",
             "/systemone",
             {"state": {"a": 1}, "questions": {}, "model": "jev-latest"},
@@ -272,3 +285,215 @@ async def test_a_call_given_up_on_still_ends_its_span(monkeypatch) -> None:
         await brain.run("hello")
 
     assert ended == ["failed"]
+
+
+def _openai_slot(monkeypatch, reply: httpx.Response) -> list[dict[str, Any]]:
+    """The slot ``default`` of ``p1`` on agno's real OpenAI model, whose
+    provider answers ``reply``; returns the span ends recorded."""
+    from agno.models.openai import OpenAIChat
+
+    monkeypatch.setitem(
+        agno_agent.person_model_mapping,
+        "p1",
+        {
+            "default": agno_agent.ModelConfig(
+                name="models/openai/default.yml",
+                model_class="agno.models.openai.OpenAIChat",
+                parameters={"id": "gpt-test", "api_key": "sk-test", "max_retries": 0},
+            )
+        },
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: reply))
+    monkeypatch.setattr(
+        inference_host,
+        "instantiate_class",
+        lambda _class, expected_type, **parameters: OpenAIChat(
+            **parameters, http_client=client
+        ),
+    )
+    monkeypatch.setattr(inference_host, "record_correlated_io", lambda **_: None)
+    spans: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+    )
+    return spans
+
+
+def _ask() -> AgnoCall:
+    return AgnoCall(
+        brain="functions/answer",
+        slot="default",
+        effort=ResolvedEffort(),
+        description="",
+        message="hello",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_agno_answers_with_is_raised_with_why(monkeypatch) -> None:
+    """agno keeps a failed run and answers with the error's text: the call
+    raises instead, telling why the provider refused it, and its span says so."""
+    spans = _openai_slot(
+        monkeypatch,
+        httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "You exceeded your current quota.",
+                    "type": "insufficient_quota",
+                    "code": "credit_balance_exhausted",
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(InferenceFailure) as refused:
+        await DirectInference().agno("p1", _ask())
+
+    assert refused.value.category == "credit"
+    assert refused.value.error_type == "RateLimitError"
+    assert refused.value.status_code == 429
+    assert "quota" not in str(refused.value)
+    assert [(span["status"], span["attributes"]) for span in spans] == [
+        (
+            "failed",
+            {
+                "model.slot": "models/openai/default.yml",
+                "credential.provider": "llm",
+                "llm.provider": "openai",
+                "error.category": "credit",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_answered_call_ends_its_span_naming_the_provider(monkeypatch) -> None:
+    spans = _openai_slot(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        ),
+    )
+
+    answer = await DirectInference().agno("p1", _ask())
+
+    assert answer.content == "OK"
+    assert [(span["status"], span["attributes"]) for span in spans] == [
+        (
+            "finished",
+            {
+                "model.slot": "models/openai/default.yml",
+                "credential.provider": "llm",
+                "llm.provider": "openai",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_jev_refusal_is_raised_with_why(monkeypatch) -> None:
+    async def request(*_args):
+        url = "https://api.typesafe.ai/v1/systemone"
+        raise httpx.HTTPStatusError(
+            "Bearer sk-secret",
+            request=httpx.Request("POST", url),
+            response=httpx.Response(401),
+        )
+
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    monkeypatch.setattr(inference_host, "request", request)
+    spans: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+    )
+    brain = jev.JevBrain("p1", "chat_decision", logging.getLogger("test"))
+
+    with pytest.raises(InferenceFailure) as refused:
+        await brain.run(json.dumps({"state": {}, "questions": {}}))
+
+    assert refused.value.category == "authentication"
+    assert "sk-secret" not in str(refused.value)
+    assert [(span["status"], span["attributes"]) for span in spans] == [
+        ("failed", {"credential.provider": "jev", "error.category": "authentication"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_without_the_jev_key_records_no_call(monkeypatch) -> None:
+    """Nothing was asked, so nothing says the provider refused the key."""
+    monkeypatch.setattr(inference_host, "credential", lambda _root: "")
+    spans: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+    )
+    brain = jev.JevBrain("p1", "chat_decision", logging.getLogger("test"))
+
+    with pytest.raises(ValueError, match="credentials_missing"):
+        await brain.run(json.dumps({"state": {}, "questions": {}}))
+
+    assert spans == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [RunStatus.cancelled, RunStatus.error])
+async def test_a_run_the_provider_did_not_refuse_tells_no_reason(
+    monkeypatch, status
+) -> None:
+    """A cancelled run, or one that failed after its model call succeeded,
+    is no answer: it fails without saying why a provider refused, so it
+    neither opens nor closes what a refusal opened."""
+    model = _Model(monkeypatch)
+    errors = [RuntimeError("retried"), None]
+
+    async def ainvoke(**_kwargs: Any) -> None:
+        error = errors.pop(0)
+        if error:
+            raise error
+
+    class Agent:
+        def __init__(self, **kwargs: Any) -> None:
+            self.model = kwargs["model"]
+
+        async def arun(self, message: str) -> Any:
+            # The first call fails and its retry succeeds; the run still ends
+            # without a completed answer.
+            for _ in range(2):
+                try:
+                    await self.model.ainvoke()
+                except RuntimeError:
+                    pass
+            return SimpleNamespace(content="partial", metrics=None, status=status)
+
+    monkeypatch.setattr(
+        inference_host,
+        "instantiate_class",
+        lambda *args, **kwargs: SimpleNamespace(ainvoke=ainvoke),
+    )
+    monkeypatch.setattr(inference_host, "Agent", Agent)
+    spans: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+    )
+    del model
+
+    with pytest.raises(InferenceFailure) as failed:
+        await DirectInference().agno("p1", _ask())
+
+    assert failed.value.error_type == "RuntimeError"
+    assert [(span["status"], span["attributes"]) for span in spans] == [
+        ("failed", {"model.slot": "models/test.yml", "credential.provider": "llm"})
+    ]

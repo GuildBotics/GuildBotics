@@ -416,6 +416,38 @@ describe("App", () => {
     expect(device("building")).toBe(said);
   });
 
+  it.each([
+    ["credential_llm", "openai"],
+    ["credential_jev", ""],
+  ] as const)(
+    "tells why the provider refused the %s key, and opens the intelligence settings",
+    (code, provider) => {
+      const alert = (reason: string) => ({
+        id: `credential:${code === "credential_llm" ? "llm" : "jev"}:${provider}`,
+        code,
+        severity: "critical" as const,
+        opened_at: "",
+        updated_at: "",
+        occurrence_count: 1,
+        person_id: "",
+        command: provider,
+        trace_id: "",
+        reason,
+        actions: ["setup" as const],
+      });
+      const said = t()(`systemAlerts.codes.${code}`, { command: provider });
+      expect(systemAlertMessage(t(), alert("credit"))).toBe(
+        `${said} ${t()("systemAlerts.keyRefusals.credit")}`,
+      );
+      expect(systemAlertMessage(t(), alert("authentication"))).toBe(
+        `${said} ${t()("systemAlerts.keyRefusals.authentication")}`,
+      );
+      // A key found missing by verification says nothing more.
+      expect(systemAlertMessage(t(), alert(""))).toBe(said);
+      expect(systemAlertSetupTarget(alert("credit"))).toBe("/setup?section=intelligence");
+    },
+  );
+
   it("links a GitHub credential alert to the affected member's GitHub settings", () => {
     expect(
       systemAlertSetupTarget({

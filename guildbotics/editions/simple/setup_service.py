@@ -838,11 +838,9 @@ class SimpleProjectSetupService:
         return f"models/{provider}/default.yml"
 
     def _infer_llm_api_type(self, mapping: dict) -> str:
-        # The default model path is ``models/<provider>/<file>.yml``, so the
-        # provider is simply the second path segment (matches how the rest of the
-        # stack derives provider from a model path).
-        parts = str(mapping.get("default", "")).split("/")
-        return parts[1] if len(parts) > 1 else ""
+        from guildbotics.intelligences.llm_providers import provider_of
+
+        return provider_of(str(mapping.get("default", "")))
 
     def _infer_cli_agent(self, mapping: dict) -> str:
         # The default path is ``cli_agents/<tool>/<slot>.yml``, so the tool is

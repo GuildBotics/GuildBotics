@@ -5,7 +5,9 @@ inference.inference`: on the host, here directly; inside a command's isolated
 environment, through the command's window, whose grant answers it here. Either
 way what is called is settled here from the host's own settings -- the model
 of the member's slot, its effort mapping, its rate limit -- and the call is
-recorded here, under the span the brain opened.
+recorded here, under the span the brain opened: the span's end names the
+provider whose key was used and, when the call failed, why the provider
+refused it, so the latest outcome per provider is read from the records.
 """
 
 from __future__ import annotations
@@ -14,19 +16,25 @@ import re
 import time
 from contextlib import nullcontext
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
 import httpx
 from agno.agent import Agent
 from agno.models.base import Model
+from agno.run.base import RunStatus
 from pydantic import BaseModel, ConfigDict
 
 from guildbotics.intelligences.brains.agno_agent import get_model_mapping
-from guildbotics.intelligences.brains.inference import AgnoAnswer, AgnoCall, JevCall
-from guildbotics.intelligences.brains.jev import credential
+from guildbotics.intelligences.brains.inference import (
+    AgnoAnswer,
+    AgnoCall,
+    InferenceFailure,
+    JevCall,
+)
+from guildbotics.intelligences.brains.jev import JEV_PROVIDER, credential
 from guildbotics.intelligences.brains.span_summary import record_summary
 from guildbotics.intelligences.effort import effort_diagnostics, effort_settings
+from guildbotics.intelligences.llm_providers import classify_failure, provider_of
 from guildbotics.observability import bind_span
 from guildbotics.observability.diagnostics_events import record_correlated_io
 from guildbotics.utils.fileio import get_workspace_config_dir
@@ -35,10 +43,7 @@ from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.rate_limiter import acquire
 
 
-async def request(config_dir: Path, method: str, path: str, payload: Any = None):
-    key = credential(config_dir)
-    if not key:
-        raise ValueError("credentials_missing")
+async def request(key: str, method: str, path: str, payload: Any = None):
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.request(
             method,
@@ -65,11 +70,14 @@ class DirectInference:
         parameters = deepcopy(config.parameters)
         parameters.update(deepcopy(overlay))
         restricted = config.is_restricted_model
+        provider = provider_of(config.name)
+        model_instance = instantiate_class(
+            config.model_class, expected_type=Model, **parameters
+        )
+        failures = _failures_of(model_instance)
         agent = Agent(
             name=call.brain,
-            model=instantiate_class(
-                config.model_class, expected_type=Model, **parameters
-            ),
+            model=model_instance,
             description=None if restricted else call.description,
             output_schema=(
                 _output_class(call.output_schema) if call.output_schema else None
@@ -88,7 +96,11 @@ class DirectInference:
         with bind_span(call.span) if call.span else nullcontext():
             started = time.monotonic()
 
-            def summary(status: str, usage: dict[str, Any] | None = None) -> None:
+            def summary(
+                status: str,
+                usage: dict[str, Any] | None = None,
+                failure: InferenceFailure | None = None,
+            ) -> None:
                 # A definition that names no model id of its own leaves the span's
                 # model empty -- the request ran on the provider's default, which
                 # is unknown -- while ``model.slot`` still names the slot.
@@ -98,7 +110,10 @@ class DirectInference:
                     config.name,
                     status,
                     duration_ms=(time.monotonic() - started) * 1000,
-                    attributes={"model.slot": config.name},
+                    attributes={
+                        "model.slot": config.name,
+                        **_credential_attributes("llm", provider, failure),
+                    },
                     model=model,
                     effort=effort,
                     usage=usage,
@@ -125,6 +140,14 @@ class DirectInference:
                 # Cancelled too: the window gives the call up after its time.
                 summary("failed")
                 raise
+            if response.status != RunStatus.completed:
+                # agno keeps a failed or cancelled run and answers with what it
+                # has. Only an error the provider raised tells why it refused.
+                failure = _classified(
+                    provider, failures[-1] if failures else RuntimeError()
+                )
+                summary("failed", failure=failure if failures else None)
+                raise failure
             content = response.content
             record_correlated_io(
                 io_type="llm.response",
@@ -142,12 +165,90 @@ class DirectInference:
         return AgnoAnswer(content=content, model=model, usage=usage)
 
     async def jev(self, call: JevCall) -> dict[str, Any]:
-        """Ask Jev with the workspace's key."""
-        return dict(
-            await request(
-                get_workspace_config_dir(), "POST", "/systemone", call.model_dump()
-            )
-        )
+        """Ask Jev with the workspace's key, under the span the brain opened.
+
+        A workspace without the key asks nothing, so it records no call.
+        """
+        key = credential(get_workspace_config_dir())
+        if not key:
+            raise ValueError("credentials_missing")
+        with bind_span(call.span) if call.span else nullcontext():
+            started = time.monotonic()
+
+            def summary(
+                status: str,
+                result: dict[str, Any] | None = None,
+                failure: InferenceFailure | None = None,
+            ) -> None:
+                record_summary(
+                    get_logger(),
+                    JEV_PROVIDER,
+                    call.model,
+                    status,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    attributes=_credential_attributes(JEV_PROVIDER, "", failure),
+                    model=str((result or {}).get("model") or ""),
+                    usage=(result or {}).get("usage"),
+                )
+
+            try:
+                result = dict(
+                    await request(
+                        key,
+                        "POST",
+                        "/systemone",
+                        call.model_dump(exclude={"span"}),
+                    )
+                )
+            except Exception as exc:
+                failure = _classified(JEV_PROVIDER, exc)
+                summary("failed", failure=failure)
+                raise failure from exc
+            except BaseException:
+                summary("failed")
+                raise
+            summary("finished", result)
+        return result
+
+
+def _failures_of(model: Model) -> list[Exception]:
+    """The error ``model``'s latest call failed with, if it failed.
+
+    agno's run catches it and keeps only its text, as the answer, so the
+    provider's error -- what tells why it refused -- is taken where it is
+    raised, on this instance alone. A later call that succeeds clears it.
+    """
+    failures: list[Exception] = []
+    invoke = model.ainvoke
+
+    async def ainvoke(*args: Any, **kwargs: Any) -> Any:
+        failures.clear()
+        try:
+            return await invoke(*args, **kwargs)
+        except Exception as exc:
+            failures.append(exc)
+            raise
+
+    model.ainvoke = ainvoke  # type: ignore[method-assign]  # this instance only
+    return failures
+
+
+def _classified(provider: str, exc: BaseException) -> InferenceFailure:
+    failure = InferenceFailure(exc)
+    failure.category = classify_failure(provider, failure)
+    return failure
+
+
+def _credential_attributes(
+    service: str, provider: str, failure: InferenceFailure | None
+) -> dict[str, str]:
+    """What a span's end says of the key it used: the service (``llm`` or
+    ``jev``), the LLM provider, and why it was refused."""
+    return {
+        "credential.provider": service,
+        **({"llm.provider": provider} if provider else {}),
+        **({"error.category": failure.category} if failure else {}),
+    }
 
 
 def _output_class(schema: dict[str, Any]) -> type[BaseModel]:

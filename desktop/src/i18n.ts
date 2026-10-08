@@ -420,7 +420,8 @@ const resources = {
         codes: {
           credential_github: "GitHub credentials for {{person}} could not be verified.",
           credential_slack: "Slack credentials for {{person}} could not be verified.",
-          credential_llm: "The configured LLM credentials could not be verified.",
+          credential_llm: "The API key of the LLM provider {{command}} could not be verified.",
+          credential_jev: "The Jev API key could not be verified.",
           command_failed: "{{command}} failed for {{person}}.",
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
@@ -430,6 +431,12 @@ const resources = {
           agent_environment_slot_blocked:
             "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
           agent_environment_image_differs: "{{reason}}",
+        },
+        keyRefusals: {
+          authentication:
+            "The API key is missing or was rejected by the provider. Check the key in Setup.",
+          credit:
+            "The provider reports that the account is out of credit. Check the billing settings on the provider's site.",
         },
         environmentFix: {
           runtime:
@@ -911,6 +918,15 @@ const resources = {
           defaultProvider: "Default LLM provider",
           providerDescription: "Choose the default LLM provider.",
           defaultCliAgent: "Default AI CLI tool",
+          inferenceFailure: {
+            summary: "Latest call failed: {{reason}} ({{time}} · This machine)",
+            categories: {
+              authentication: "the API key is missing or was rejected",
+              credit: "the account is out of credit; check the provider's billing settings",
+              rate_limit: "temporarily rate limited",
+              other: "an error other than the key (see Diagnostics)",
+            },
+          },
           lastTurn: {
             specified: "Explicitly configured",
             default: "Default selection",
@@ -1717,6 +1733,14 @@ const resources = {
           llm_live_call: {
             title: "LLM check failed",
             description: "The selected LLM provider did not accept the minimal validation request.",
+            categories: {
+              authentication:
+                "The API key of the selected LLM provider is missing or was rejected.",
+              credit:
+                "The selected LLM provider reports that the account is out of credit. Check the billing settings on the provider's site.",
+              rate_limit:
+                "The selected LLM provider is limiting requests for now. Try again in a while.",
+            },
           },
           github_project_access: {
             title: "GitHub project access failed",
@@ -2479,7 +2503,8 @@ const resources = {
         codes: {
           credential_github: "{{person}} の GitHub 資格情報を検証できませんでした。",
           credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
-          credential_llm: "設定された LLM 資格情報を検証できませんでした。",
+          credential_llm: "LLM provider {{command}} の API キーを検証できませんでした。",
+          credential_jev: "Jev の API キーを検証できませんでした。",
           command_failed: "{{person}} の {{command}} が失敗しました。",
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
@@ -2489,6 +2514,12 @@ const resources = {
           agent_environment_slot_blocked:
             "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
           agent_environment_image_differs: "{{reason}}",
+        },
+        keyRefusals: {
+          authentication:
+            "API キーが無いか、provider に拒否されました。設定画面でキーを確認してください。",
+          credit:
+            "provider がアカウントのクレジット不足を報告しています。provider のサイトで課金設定を確認してください。",
         },
         environmentFix: {
           runtime:
@@ -2658,6 +2689,16 @@ const resources = {
           defaultProvider: "デフォルトの LLM プロバイダ",
           providerDescription: "デフォルトの LLM プロバイダを選択します。",
           defaultCliAgent: "デフォルトの AI CLIツール",
+          inferenceFailure: {
+            summary: "直近の呼び出しが失敗しました: {{reason}}（{{time}}・このマシン）",
+            categories: {
+              authentication: "API キーが無いか、拒否されました",
+              credit:
+                "アカウントのクレジットが不足しています。provider の課金設定を確認してください",
+              rate_limit: "一時的なレート制限です",
+              other: "キー以外のエラーです（診断で確認できます）",
+            },
+          },
           lastTurn: {
             specified: "明示的に設定",
             default: "デフォルト選択",
@@ -3778,6 +3819,13 @@ const resources = {
           llm_live_call: {
             title: "LLM の検証に失敗しました",
             description: "選択中の LLM provider が最小リクエストを受け付けませんでした。",
+            categories: {
+              authentication: "選択中の LLM provider の API キーが無いか、拒否されました。",
+              credit:
+                "選択中の LLM provider がアカウントのクレジット不足を報告しています。provider のサイトで課金設定を確認してください。",
+              rate_limit:
+                "選択中の LLM provider が一時的にリクエストを制限しています。しばらくしてから再度お試しください。",
+            },
           },
           github_project_access: {
             title: "GitHub Project にアクセスできません",

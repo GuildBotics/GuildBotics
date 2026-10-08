@@ -139,6 +139,7 @@ import {
   useCliAgentLastTurns,
 } from "../cliAgent";
 import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
+import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailureNotice";
 import {
   GitHubAppRegistrationPanel,
   githubAppSaveFailure,
@@ -1880,6 +1881,7 @@ function DefaultProviderCards({
   renderExtra?: (option: LlmProviderInfo) => ReactNode;
 }) {
   const { t } = useTranslation();
+  const failures = useInferenceFailures();
   return (
     <div className="option-card-grid">
       {providers.map((option) => {
@@ -1899,6 +1901,7 @@ function DefaultProviderCards({
             disabledTooltip={t("setup.intelligence.apiKeyMissingTooltip")}
             onSelect={() => onSelect(option.provider)}
             extra={renderExtra?.(option)}
+            detail={<InferenceFailureNotice failure={failures.data?.llm[option.provider]} />}
           />
         );
       })}
@@ -5955,7 +5958,11 @@ function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
 function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
   const namespace =
     check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
-  return t(`${namespace}.${check.code}.description`, {
+  // Why the provider refused the call, when the backend could tell.
+  const category = typeof check.context.category === "string" ? check.context.category : "";
+  const keys = [`${namespace}.${check.code}.description`];
+  if (category) keys.unshift(`${namespace}.${check.code}.categories.${category}`);
+  return t(keys, {
     defaultValue: check.status === "ok" ? "" : check.message,
     ...diagnosticValues(check),
   });

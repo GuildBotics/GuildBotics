@@ -14,7 +14,7 @@ from guildbotics.intelligences.agent_environment.status import (
     device_status,
 )
 from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
-from guildbotics.intelligences.llm_providers import provider_env_keys
+from guildbotics.intelligences.llm_providers import provider_env_keys, provider_of
 from guildbotics.utils.env_loader import workspace_secret_store
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
@@ -32,13 +32,9 @@ def resolve_default_model_provider() -> str:
             dict[str, Any],
             load_yaml_file(get_config_path("intelligences/model_mapping.yml")),
         )
-        parts = str(mapping.get("default", "")).split("/")
-        if len(parts) > 1:
-            return parts[1]
+        return provider_of(str(mapping.get("default", "")))
     except Exception:
-        pass
-
-    return ""
+        return ""
 
 
 class VerifyService:
