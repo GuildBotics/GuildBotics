@@ -1,5 +1,11 @@
-let apiBase = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
-let sessionToken = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
+type Connection = { base: string; token: string };
+
+/**
+ * The one destination every request, stream and image takes. In Desktop only
+ * the sidecar's own port notice sets it. The sidecar's exit closes it for good,
+ * with the reason: an answer the gone backend sends late cannot reopen it.
+ */
+let connection: Connection | Error | null = null;
 let apiLanguage = "en";
 
 /**
@@ -10,29 +16,41 @@ export function setApiLanguage(language: string) {
   apiLanguage = language;
 }
 
-export function configureApi(token: string, baseUrl?: string) {
-  sessionToken = token;
-  if (baseUrl) {
-    apiBase = baseUrl;
+export function configureApi(token: string, base: string) {
+  if (connection instanceof Error) {
+    throw connection;
   }
+  connection = { base, token };
 }
 
-export function getApiBase(): string {
-  return apiBase;
+/** Close the connection for good: no path addresses a backend that is gone. */
+export function closeApi(reason: Error) {
+  connection = reason;
 }
 
-export function memberAvatarUrl(personId: string, cacheBust?: number | string): string {
-  const params = new URLSearchParams();
-  if (sessionToken) {
-    params.set("token", sessionToken);
+/**
+ * The connection to address, throwing why there is none. A caller that awaited
+ * something asks again before trusting what it got meanwhile.
+ */
+export function connected(): Connection {
+  if (connection instanceof Error) {
+    throw connection;
   }
+  if (!connection) {
+    throw new Error("GuildBotics backend is not running.");
+  }
+  return connection;
+}
+
+export function memberAvatarUrl(personId: string, cacheBust?: number | string): string | undefined {
+  if (!connection || connection instanceof Error) {
+    return undefined;
+  }
+  const params = new URLSearchParams({ token: connection.token });
   if (cacheBust !== undefined) {
     params.set("t", String(cacheBust));
   }
-  const query = params.toString();
-  return `${apiBase}/config/members/${encodeURIComponent(personId)}/avatar${
-    query ? `?${query}` : ""
-  }`;
+  return `${connection.base}/config/members/${encodeURIComponent(personId)}/avatar?${params}`;
 }
 
 export type ConfigStatus = {
@@ -1971,7 +1989,7 @@ export async function startGitHubAppRegistration(
 ): Promise<GitHubAppRegistrationStatus> {
   return request("/config/members/github-app/registrations", {
     method: "POST",
-    body: { ...body, callback_base_url: apiBase },
+    body: { ...body, callback_base_url: connected().base },
   });
 }
 
@@ -2031,10 +2049,11 @@ export async function uploadMemberAvatar(
 async function uploadFile<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(`${apiBase}${path}`, {
+  const { base, token } = connected();
+  const response = await fetch(`${base}${path}`, {
     method: "POST",
     headers: {
-      "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Session-Token": token,
       "X-GuildBotics-Language": apiLanguage,
     },
     body: formData,
@@ -2061,9 +2080,11 @@ export function subscribeEvents(
   onEvent: (event: RuntimeEvent) => void,
   onStatus?: (status: StreamStatus) => void,
 ): () => void {
-  const socket = new WebSocket(
-    `${websocketBase()}/events?token=${encodeURIComponent(sessionToken)}`,
-  );
+  const { base, token } = connected();
+  const url = new URL(`${base}/events`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("token", token);
+  const socket = new WebSocket(url.toString());
   onStatus?.("connecting");
   socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
@@ -2078,11 +2099,12 @@ async function request<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
+  const { base, token } = connected();
+  const response = await fetch(`${base}${path}`, {
     method: options.method ?? "GET",
     headers: {
       "Content-Type": "application/json",
-      "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Session-Token": token,
       "X-GuildBotics-Language": apiLanguage,
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -2111,10 +2133,4 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
     message: `HTTP ${response.status}`,
     context: {},
   };
-}
-
-function websocketBase(): string {
-  const url = new URL(apiBase);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString().replace(/\/$/, "");
 }

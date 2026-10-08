@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import textwrap
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -191,10 +193,16 @@ def captured_launch(monkeypatch, tmp_path: Path) -> dict[str, Any]:
         server.uvicorn.Config,
         "bind_socket",
         lambda config: nullcontext(
-            SimpleNamespace(getsockname=lambda: (config.host, config.port))
+            SimpleNamespace(
+                getsockname=lambda: (config.host, config.port),
+                listen=lambda backlog: None,
+            )
         ),
     )
     monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
+    monkeypatch.setattr(
+        server, "_announce_port", lambda port: captured.update(announced=port)
+    )
     monkeypatch.chdir(tmp_path)
     for key in (ALLOWED_ORIGINS_ENV, "GUILDBOTICS_APP_API_PARENT_PID"):
         monkeypatch.delenv(key, raising=False)
@@ -280,7 +288,6 @@ def test_discovery_is_private_tracks_workspace_and_is_removed(
 
     endpoint = captured_launch["endpoint"]
     assert endpoint.port == 8765
-    assert endpoint.pid == os.getpid()
     assert endpoint.token == "env-token"
     assert endpoint.service_instance_id == "api-instance"
     assert endpoint.workspace == tmp_path
@@ -288,6 +295,60 @@ def test_discovery_is_private_tracks_workspace_and_is_removed(
         assert captured_launch["mode"] == 0o600
     assert captured_launch["changed_endpoint"].workspace == tmp_path / "other"
     assert not endpoint_path().exists()
+
+
+def test_main_announces_the_port_it_bound_once_it_listens(monkeypatch, captured_launch):
+    """The launcher passes port 0 and must learn the port from the bound socket."""
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+    monkeypatch.setattr(sys, "argv", ["guildbotics-app-api", "--port", "0"])
+    listening: list[int] = []
+    monkeypatch.setattr(
+        server.uvicorn.Config,
+        "bind_socket",
+        lambda config: nullcontext(
+            SimpleNamespace(
+                getsockname=lambda: ("", 54321),
+                listen=listening.append,
+            )
+        ),
+    )
+    announced: list[int] = []
+
+    def announce(port: int) -> None:
+        # A port bound but not yet listening can still be taken on Linux.
+        assert listening
+        # The launcher's deadline must not count a keychain prompt, which
+        # loading the workspace's secrets in create_app can wait on.
+        assert "create_app" not in captured_launch
+        announced.append(port)
+
+    monkeypatch.setattr(server, "_announce_port", announce)
+
+    server.main()
+
+    assert announced == [54321]
+    assert captured_launch["endpoint"].port == 54321
+
+
+def test_the_port_notice_is_the_only_line_stdout_ever_carries():
+    script = textwrap.dedent(
+        """
+        import subprocess, sys
+        from guildbotics.app_api.server import _announce_port
+        print("unterminated", end="")
+        _announce_port(4321)
+        print("later output")
+        subprocess.run([sys.executable, "-c", "print('child output')"], check=True)
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.splitlines() == [
+        "unterminated",
+        f"{server.PORT_NOTICE_PREFIX}4321",
+    ]
+    assert "later output" in result.stderr and "child output" in result.stderr
 
 
 def test_discovery_is_removed_even_if_server_fails(monkeypatch, captured_launch):
@@ -309,7 +370,6 @@ def test_failed_bind_preserves_running_desktop_discovery(
     endpoint = LocalApiEndpoint(
         port=8765,
         token="first",
-        pid=42,
         service_instance_id="running",
         workspace=tmp_path,
     )
@@ -327,7 +387,7 @@ def test_failed_bind_preserves_running_desktop_discovery(
 
 def test_parent_watchdog_removes_discovery_before_exiting(monkeypatch, tmp_path):
     endpoint = LocalApiEndpoint(
-        port=8765, token="secret", pid=42, service_instance_id="old", workspace=tmp_path
+        port=8765, token="secret", service_instance_id="old", workspace=tmp_path
     )
     endpoint.publish()
     monkeypatch.setattr(server, "_parent_is_alive", lambda pid: False)
@@ -343,7 +403,7 @@ def test_parent_watchdog_removes_discovery_before_exiting(monkeypatch, tmp_path)
 
 def test_old_server_shutdown_preserves_replacement_discovery(tmp_path):
     endpoint = LocalApiEndpoint(
-        port=8765, token="secret", pid=42, service_instance_id="old", workspace=tmp_path
+        port=8765, token="secret", service_instance_id="old", workspace=tmp_path
     )
     replacement = endpoint.model_copy(update={"service_instance_id": "new"})
     replacement.publish()

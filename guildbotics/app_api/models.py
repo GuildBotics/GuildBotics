@@ -41,6 +41,7 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
+from guildbotics.utils.local_api import NONCE_PATTERN
 from guildbotics.utils.person_id import MemberDirectoryName, OptionalPersonId, PersonId
 
 
@@ -93,6 +94,14 @@ class HealthResponse(BaseModel):
     status: str
     service_instance_id: str
     workspace: Path | None
+
+
+class LocalApiProofRequest(BaseModel):
+    nonce: str = Field(pattern=NONCE_PATTERN)
+
+
+class LocalApiProofResponse(BaseModel):
+    proof: str
 
 
 class ShutdownResponse(BaseModel):

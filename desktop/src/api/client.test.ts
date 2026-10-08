@@ -14,7 +14,6 @@ import {
   ensureAgentField,
   dismissSystemAlert,
   getAgentFieldState,
-  getApiBase,
   getActivityHistory,
   getCommandFile,
   getCommandFileExecutionStatus,
@@ -76,8 +75,6 @@ function headerValue(init: RequestInit, name: string): string | undefined {
   return (init.headers as Record<string, string>)[name];
 }
 
-const ORIGINAL_BASE = getApiBase();
-
 beforeEach(() => {
   // Reset module state to a known token + base for deterministic assertions.
   configureApi("test-token", "http://127.0.0.1:8765");
@@ -86,14 +83,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  // Restore the base URL that other test files may rely on.
-  configureApi("", ORIGINAL_BASE);
 });
 
 describe("configureApi", () => {
   it("stores the token and base URL", () => {
     configureApi("abc123", "http://example.test:9000");
-    expect(getApiBase()).toBe("http://example.test:9000");
 
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     return getConfigStatus().then(() => {
@@ -101,17 +95,39 @@ describe("configureApi", () => {
       expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("abc123");
     });
   });
+});
 
-  it("keeps the existing base URL when none is provided", () => {
-    configureApi("only-token");
-    expect(getApiBase()).toBe("http://127.0.0.1:8765");
+describe("closeApi", () => {
+  it("closes every path for good, refusing a late reconnect", async () => {
+    // A fresh module: a closed connection never reopens in it.
+    vi.resetModules();
+    const client = await import("./client");
+    client.configureApi("old-token", "http://127.0.0.1:8765");
+    const { mock } = captureFetch(jsonResponse({ ok: true }));
+    const sockets = vi.fn();
+    vi.stubGlobal("WebSocket", sockets);
+    const reason = new Error("the backend exited");
+    client.closeApi(reason);
+
+    expect(() => client.configureApi("old-token", "http://127.0.0.1:8765")).toThrow(reason);
+    await expect(client.getConfigStatus()).rejects.toBe(reason);
+    await expect(
+      client.uploadMemberAvatar("alice", new File(["x"], "a.png", { type: "image/png" })),
+    ).rejects.toBe(reason);
+    await expect(
+      client.startGitHubAppRegistration({ person_id: "alice", app_name: "app" }),
+    ).rejects.toBe(reason);
+    expect(() => client.subscribeEvents(() => undefined)).toThrow(reason);
+    expect(client.memberAvatarUrl("alice")).toBeUndefined();
+    expect(mock).not.toHaveBeenCalled();
+    expect(sockets).not.toHaveBeenCalled();
   });
 });
 
 describe("memberAvatarUrl", () => {
   it("embeds the session token and cache-buster as query parameters", () => {
     configureApi("avatar-token", "http://example.test:9000");
-    const url = new URL(memberAvatarUrl("alice", 12345));
+    const url = new URL(memberAvatarUrl("alice", 12345)!);
     expect(url.pathname).toBe("/config/members/alice/avatar");
     expect(url.searchParams.get("token")).toBe("avatar-token");
     expect(url.searchParams.get("t")).toBe("12345");
@@ -119,16 +135,9 @@ describe("memberAvatarUrl", () => {
 
   it("encodes the person id and omits the cache-buster when absent", () => {
     configureApi("avatar-token", "http://example.test:9000");
-    const url = new URL(memberAvatarUrl("a/b"));
+    const url = new URL(memberAvatarUrl("a/b")!);
     expect(url.pathname).toBe("/config/members/a%2Fb/avatar");
     expect(url.searchParams.has("t")).toBe(false);
-  });
-
-  it("omits the token query when no session token is configured", () => {
-    configureApi("", "http://example.test:9000");
-    const url = new URL(memberAvatarUrl("alice", 1));
-    expect(url.searchParams.has("token")).toBe(false);
-    expect(url.searchParams.get("t")).toBe("1");
   });
 });
 

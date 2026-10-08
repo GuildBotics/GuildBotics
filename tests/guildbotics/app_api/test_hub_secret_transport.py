@@ -1,7 +1,6 @@
 """macOS CLI -> authenticated Desktop -> Hub keychain, with real wire bodies."""
 
 from functools import partial
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -19,7 +18,8 @@ from guildbotics.secrets.hub_client import (
     RemoteHubSecretClient,
     SecretOffer,
 )
-from guildbotics.utils.local_api import LocalApiEndpoint
+from guildbotics.utils import local_api
+from guildbotics.utils.local_api import PROOF_PATH, LocalApiEndpoint
 
 WORKSPACE = "11111111-2222-3333-4444-555555555555"
 TOKEN = "test-session"
@@ -43,14 +43,15 @@ def test_invalid_workspace_is_refused_before_discovery(
     def forbidden():
         pytest.fail("an invalid ID must not reach Desktop discovery or HTTP")
 
-    monkeypatch.setattr(secret_transport, "read_endpoint", forbidden)
+    monkeypatch.setattr(secret_transport, "connect_local_api", forbidden)
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
     with pytest.raises(host.InvalidWorkspaceIdError):
         secret_transport.execute(operation, workspace_id)
 
 
 @pytest.fixture
-def desktop(monkeypatch):
+def desktop(monkeypatch, tmp_path):
+    monkeypatch.setattr(local_api, "endpoint_path", lambda: tmp_path / "app-api.json")
     host.create_hub()
     host.create_workspace_repository(WORKSPACE)
     app = create_app(session_token=TOKEN, runtime=AppRuntime(EventBus()))
@@ -58,14 +59,13 @@ def desktop(monkeypatch):
     endpoint = LocalApiEndpoint(
         port=8765,
         token=TOKEN,
-        pid=1,
         service_instance_id=client.get("/health", headers=HEADERS).json()[
             "service_instance_id"
         ],
         workspace=None,
     )
+    endpoint.publish()
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
-    monkeypatch.setattr(secret_transport, "read_endpoint", lambda: endpoint)
     requests = []
 
     def exchange(request):
@@ -79,12 +79,9 @@ def desktop(monkeypatch):
         return httpx.Response(response.status_code, content=response.content)
 
     monkeypatch.setattr(
-        secret_transport,
-        "httpx",
-        SimpleNamespace(
-            Client=partial(httpx.Client, transport=httpx.MockTransport(exchange)),
-            HTTPError=httpx.HTTPError,
-        ),
+        local_api.httpx,
+        "Client",
+        partial(httpx.Client, transport=httpx.MockTransport(exchange)),
     )
     yield client, endpoint, requests
     client.close()
@@ -110,10 +107,12 @@ def test_ssh_cli_and_local_client_use_desktop_without_workspace_match(
     assert local.index().generations == {"A_TOKEN": 1}
     assert remote.fetch(["A_TOKEN"])[0].value == VALUE
     assert local.fetch(["A_TOKEN"])[0].value == VALUE
-    posts = [r for r in requests if r.method == "POST"]
-    assert len(posts) == 4
-    assert all(r.headers["X-GuildBotics-Session-Token"] == TOKEN for r in posts)
-    assert all(r.url.host == "127.0.0.1" for r in posts)
+    transfers = [r for r in requests if r.url.path.startswith("/hub/secrets/")]
+    proofs = [r for r in requests if r.url.path == PROOF_PATH]
+    assert len(transfers) == len(proofs) == 4
+    assert all(r.headers["X-GuildBotics-Session-Token"] == TOKEN for r in transfers)
+    assert not any("X-GuildBotics-Session-Token" in r.headers for r in proofs)
+    assert all(r.url.host == "127.0.0.1" for r in requests)
 
 
 @pytest.mark.parametrize("failure", ["absent", "stale", "unauthorized", "disconnected"])
@@ -122,18 +121,20 @@ def test_desktop_unavailable_never_reads_or_writes_keychain(
 ):
     _, endpoint, requests = desktop
     if failure == "absent":
-        monkeypatch.setattr(secret_transport, "read_endpoint", lambda: None)
+        local_api.endpoint_path().unlink()
     elif failure == "stale":
         endpoint.service_instance_id = "old-instance"
+        endpoint.publish()
     elif failure == "unauthorized":
         endpoint.token = "wrong-token"
+        endpoint.publish()
     else:
 
         def disconnected(request):
             raise httpx.ConnectError("private-error-text", request=request)
 
         monkeypatch.setattr(
-            secret_transport.httpx,
+            local_api.httpx,
             "Client",
             partial(
                 httpx.Client,
@@ -154,7 +155,7 @@ def test_desktop_unavailable_never_reads_or_writes_keychain(
     )
     assert local.fetch(["A_TOKEN"])[0].status == "desktop_required"
     assert secret_host.generations(WORKSPACE) == {}
-    assert not any(r.method == "POST" for r in requests)
+    assert all(r.url.path == PROOF_PATH for r in requests)
 
 
 def test_endpoint_refuses_unauthenticated_nonloopback_and_malformed_requests(
@@ -175,18 +176,20 @@ def test_endpoint_refuses_unauthenticated_nonloopback_and_malformed_requests(
 
 
 def test_post_is_not_retried_after_lost_response(desktop, monkeypatch):
+    client, _, _ = desktop
     calls = []
 
     def exchange(request):
-        calls.append(request.method)
-        if request.method == "GET":
-            return httpx.Response(
-                200, json={"service_instance_id": desktop[1].service_instance_id}
+        calls.append(request.url.path)
+        if request.url.path == PROOF_PATH:
+            response = client.post(
+                PROOF_PATH, content=request.content, headers=dict(request.headers)
             )
+            return httpx.Response(response.status_code, content=response.content)
         raise httpx.ReadError("private-error-text", request=request)
 
     monkeypatch.setattr(
-        secret_transport.httpx,
+        local_api.httpx,
         "Client",
         partial(
             httpx.Client,
@@ -195,4 +198,4 @@ def test_post_is_not_retried_after_lost_response(desktop, monkeypatch):
     )
     result = LocalHubSecretClient(WORKSPACE).send([SecretOffer("A_TOKEN", 1, VALUE)])
     assert result[0].status == "desktop_required"
-    assert calls == ["GET", "POST"]
+    assert calls == [PROOF_PATH, f"/hub/secrets/{WORKSPACE}/receive"]

@@ -96,6 +96,8 @@ from guildbotics.app_api.models import (
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
+    LocalApiProofRequest,
+    LocalApiProofResponse,
     MemberDeleteRequest,
     MemberResolveRequest,
     MemberResolveResponse,
@@ -179,6 +181,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.local_api import PROOF_PATH, TOKEN_HEADER, local_api_proof
 from guildbotics.utils.person_id import (
     MemberConfigError,
     MemberDirectoryName,
@@ -194,7 +197,6 @@ from guildbotics.utils.workspace_state import (
     unregister_workspace,
 )
 
-TOKEN_HEADER = "X-GuildBotics-Session-Token"
 #: The header the Desktop sends naming its display language, so error
 #: sentences come back in the language the screen is in.
 LANGUAGE_HEADER = "X-GuildBotics-Language"
@@ -487,6 +489,16 @@ def create_app(
             status="ok",
             service_instance_id=system_service_run_id,
             workspace=app_runtime.get_config_status().workspace,
+        )
+
+    @app.post(PROOF_PATH, response_model=LocalApiProofResponse)
+    def local_api_proof_of_token(
+        request: LocalApiProofRequest,
+    ) -> LocalApiProofResponse:
+        # Takes no token: a client asks this before it trusts the port enough
+        # to send one, and the answer reveals nothing a caller could reuse.
+        return LocalApiProofResponse(
+            proof=local_api_proof(token, request.nonce, system_service_run_id)
         )
 
     @app.post(

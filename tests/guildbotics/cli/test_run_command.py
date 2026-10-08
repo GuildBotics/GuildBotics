@@ -34,7 +34,12 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
 )
 from guildbotics.utils import local_api
-from guildbotics.utils.local_api import LocalApiEndpoint
+from guildbotics.utils.local_api import (
+    PROOF_PATH,
+    TOKEN_HEADER,
+    LocalApiEndpoint,
+    local_api_proof,
+)
 from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
@@ -66,7 +71,6 @@ def desktop_route(tmp_path, monkeypatch):
     endpoint = LocalApiEndpoint(
         port=8765,
         token="test-token",
-        pid=os.getpid(),
         service_instance_id="instance",
         workspace=tmp_path,
     )
@@ -82,12 +86,17 @@ def desktop_route(tmp_path, monkeypatch):
 
     def respond(handler):
         def request(req):
+            if req.url.path == PROOF_PATH:
+                assert TOKEN_HEADER not in req.headers
+                nonce = json.loads(req.content)["nonce"]
+                proof = local_api_proof("test-token", nonce, "instance")
+                return httpx.Response(200, json={"proof": proof})
             calls.append((req.url.path, req))
-            assert req.headers["X-GuildBotics-Session-Token"] == "test-token"
+            assert req.headers[TOKEN_HEADER] == "test-token"
             return handler(req)
 
         monkeypatch.setattr(
-            desktop_commands.httpx,
+            local_api.httpx,
             "Client",
             lambda **kwargs: client_type(
                 **kwargs, transport=httpx.MockTransport(request)
@@ -144,11 +153,9 @@ def test_cli_delegates_stdin_args_person_and_absolute_cwd(
     "state",
     [
         "missing",
-        "dead",
         "workspace",
         "health_error",
         "connection",
-        "instance",
         "malformed",
     ],
 )
@@ -158,8 +165,6 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
     endpoint, calls, respond, healthy = desktop_route
     if state == "missing":
         local_api.endpoint_path().unlink()
-    if state == "dead":
-        monkeypatch.setattr(desktop_commands, "pid_exists", lambda pid: False)
 
     def handler(req):
         if state == "connection":
@@ -169,9 +174,7 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
         if state == "malformed":
             return httpx.Response(200, json=[])
         payload = healthy(req).json()
-        payload["workspace" if state == "workspace" else "service_instance_id"] = (
-            "other"
-        )
+        payload["workspace"] = "other"
         return httpx.Response(200, json=payload)
 
     respond(handler)
