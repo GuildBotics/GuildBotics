@@ -33,7 +33,10 @@ def validate_optional_person_id(value: str) -> str:
 
 OptionalPersonId = Annotated[str, AfterValidator(validate_optional_person_id)]
 
-PERSON_SECRET_ENV_SUFFIXES = (
+# Person-scoped keys whose values are secrets; IDs and file paths stay in plain
+# configuration. GITHUB_PRIVATE_KEY holds the App PEM content itself and is
+# never published to the environment (see ``secret_store.is_environment_secret``).
+_PERSON_SECRET_ENV_SUFFIXES = (
     "GITHUB_ACCESS_TOKEN",
     "GITHUB_PRIVATE_KEY",
     "SLACK_BOT_TOKEN",
@@ -41,57 +44,51 @@ PERSON_SECRET_ENV_SUFFIXES = (
 )
 
 
-def person_env_prefix(person_id: str) -> str:
-    """Return the shared secret and environment namespace for a stored ID."""
-    return person_id.replace("-", "_").upper()
-
-
-def member_env_prefix_groups(members: Path) -> dict[str, list[Path]]:
+def _namespaces(members: Path) -> dict[str, list[Path]]:
     """Group all stored members, including repairable configs, by namespace."""
     groups: dict[str, list[Path]] = {}
     for directory in iter_member_config_directories(members):
-        groups.setdefault(person_env_prefix(directory.name), []).append(directory)
+        groups.setdefault(_prefix(directory.name), []).append(directory)
     return groups
 
 
-def person_env_conflicts(
+def _prefix(name: str) -> str:
+    return name.replace("-", "_").upper()
+
+
+def _keys(prefix: str) -> dict[str, str]:
+    return {suffix: f"{prefix}_{suffix}" for suffix in _PERSON_SECRET_ENV_SUFFIXES}
+
+
+def person_secret_env_keys(
     members: Path, person_id: str, *, exclude: str | None = None
-) -> list[Path]:
-    """Find other owners of a namespace, without reading member data or secrets."""
-    return [
+) -> dict[str, str]:
+    """The only way to a member's secret keys: those it alone owns, by suffix.
+
+    Every stored member counts, including configs awaiting repair, and the
+    directory is read on every call, so a collision that appears later
+    withholds the keys from then on. ``exclude`` is e.g. a rename's source.
+
+    Raises:
+        PersonEnvPrefixConflictError: Another stored member shares the keys.
+    """
+    prefix = _prefix(person_id)
+    if conflicts := [
         directory
-        for directory in member_env_prefix_groups(members).get(
-            person_env_prefix(person_id), []
-        )
+        for directory in _namespaces(members).get(prefix, [])
         if directory.name not in {person_id, exclude}
-    ]
-
-
-def validate_person_env_prefix(
-    members: Path, person_id: str, *, exclude: str | None = None
-) -> None:
-    """Refuse to use an ambiguous namespace and identify its config files."""
-    if conflicts := person_env_conflicts(members, person_id, exclude=exclude):
-        from guildbotics.utils.i18n_tool import t
-
-        raise MemberConfigError(
-            members / person_id / "person.yml",
-            ValueError(
-                t(
-                    "member_config.prefix_conflict",
-                    members=", ".join(str(path / "person.yml") for path in conflicts),
-                )
-            ),
-        )
+    ]:
+        raise PersonEnvPrefixConflictError(members / person_id, conflicts)
+    return _keys(prefix)
 
 
 def ambiguous_person_env_keys(members: Path) -> frozenset[str]:
     """Keys whose stored member owner cannot be identified uniquely."""
     return frozenset(
-        f"{prefix}_{suffix}"
-        for prefix, directories in member_env_prefix_groups(members).items()
+        key
+        for prefix, directories in _namespaces(members).items()
         if len(directories) > 1
-        for suffix in PERSON_SECRET_ENV_SUFFIXES
+        for key in _keys(prefix).values()
     )
 
 
@@ -148,3 +145,21 @@ class MemberConfigError(ValueError):
             else str(error)
         )
         super().__init__(t("member_config.invalid", path=path, reason=reason))
+
+
+class PersonEnvPrefixConflictError(MemberConfigError):
+    """Other stored members share a member's secret keys."""
+
+    def __init__(self, directory: Path, conflicts: list[Path]) -> None:
+        from guildbotics.utils.i18n_tool import t
+
+        self.conflicts = conflicts
+        super().__init__(
+            directory / "person.yml",
+            ValueError(
+                t(
+                    "member_config.prefix_conflict",
+                    members=", ".join(str(path / "person.yml") for path in conflicts),
+                )
+            ),
+        )

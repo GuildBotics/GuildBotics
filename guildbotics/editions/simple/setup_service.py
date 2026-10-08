@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -12,7 +13,6 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from yaml import YAMLError
 
 from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
-from guildbotics.entities.team import Person
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     validate_workspace_location,
@@ -28,16 +28,17 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import (
+    PersonEnvPrefixConflictError,
     is_valid_person_id,
     iter_member_config_directories,
     person_config_directory,
-    person_env_conflicts,
-    person_env_prefix,
+    person_secret_env_keys,
     stored_person_config_directory,
     validate_member_directory_name,
     validate_person_id,
 )
 from guildbotics.utils.secret_store import (
+    KeyringSecretStore,
     SecretStore,
     resolve_secret_store,
 )
@@ -76,19 +77,41 @@ class SetupServiceError(ValueError):
         self.message = message
 
 
-def _validate_person_env_target(
+def _target_env_keys(
     members: Path, person_id: str, *, exclude: str | None = None
-) -> None:
+) -> dict[str, str]:
     """Reject a proposed ID before touching credentials or member files."""
-    if conflicts := person_env_conflicts(members, person_id, exclude=exclude):
+    try:
+        return person_secret_env_keys(members, person_id, exclude=exclude)
+    except PersonEnvPrefixConflictError as conflict:
         raise SetupServiceError(
             "person_env_prefix_conflict",
             t(
                 "member_config.target_prefix_conflict",
                 person_id=person_id,
-                members=", ".join(path.name for path in conflicts),
+                members=", ".join(path.name for path in conflict.conflicts),
             ),
-        )
+        ) from conflict
+
+
+@dataclass(frozen=True)
+class _OwnedSecrets:
+    """A stored member's own secret keys, and the store to touch them in."""
+
+    store: KeyringSecretStore | None
+    keys: dict[str, str]
+
+    def get(self, suffix: str) -> str:
+        return (self.store.get(self.keys[suffix]) or "") if self.store else ""
+
+
+def _owned_secrets(config_dir: Path, person_id: str) -> _OwnedSecrets:
+    """No store and no keys while the keys are shared: they are nobody's own."""
+    try:
+        keys = person_secret_env_keys(config_dir / "team/members", person_id)
+    except PersonEnvPrefixConflictError:
+        return _OwnedSecrets(None, {})
+    return _OwnedSecrets(resolve_secret_store(config_dir), keys)
 
 
 class GitHubUserReference(BaseModel):
@@ -852,14 +875,8 @@ class SimplePersonSetupService:
         here. Missing members simply have no secrets and yield empty strings.
         """
         validate_member_directory_name(person_id)
-        if person_env_conflicts(config_dir / "team/members", person_id):
-            return "", ""
-        store = resolve_secret_store(config_dir)
-        prefix = person_env_prefix(person_id)
-        return (
-            store.get(f"{prefix}_SLACK_BOT_TOKEN") or "",
-            store.get(f"{prefix}_SLACK_APP_TOKEN") or "",
-        )
+        owned = _owned_secrets(config_dir, person_id)
+        return owned.get("SLACK_BOT_TOKEN"), owned.get("SLACK_APP_TOKEN")
 
     def list_person_configs(self, *, config_dir: Path) -> list[PersonConfigSummary]:
         """Read the member list without requiring a project config or secrets."""
@@ -926,16 +943,7 @@ class SimplePersonSetupService:
                 )
                 channel_participation[channel_name] = _chat_participation(participation)
 
-        store = (
-            None
-            if person_env_conflicts(config_dir / "team/members", person_id)
-            else resolve_secret_store(config_dir)
-        )
-        env_prefix = person_env_prefix(person_id)
-
-        def secret_value(key: str) -> str:
-            return (store.get(key) or "") if store is not None else ""
-
+        owned = _owned_secrets(config_dir, person_id)
         avatar_timestamp = 0
         from guildbotics.utils.avatar import find_avatar_file
 
@@ -966,21 +974,12 @@ class SimplePersonSetupService:
             github_app_id=_to_int_or_none(account_info.get("github_app_id")),
             has_github_installation_id=bool(account_info.get("github_installation_id")),
             has_github_app_id=bool(account_info.get("github_app_id")),
-            has_github_private_key=bool(
-                secret_value(f"{env_prefix}_GITHUB_PRIVATE_KEY")
-            ),
-            has_github_access_token=bool(
-                secret_value(f"{env_prefix}_GITHUB_ACCESS_TOKEN")
-            ),
+            has_github_private_key=bool(owned.get("GITHUB_PRIVATE_KEY")),
+            has_github_access_token=bool(owned.get("GITHUB_ACCESS_TOKEN")),
             slack_user_id=str(account_info.get("slack_user_id", "")),
-            has_slack_bot_token=bool(secret_value(f"{env_prefix}_SLACK_BOT_TOKEN")),
-            has_slack_app_token=bool(secret_value(f"{env_prefix}_SLACK_APP_TOKEN")),
-            secret_env_keys={
-                "github_private_key": f"{env_prefix}_GITHUB_PRIVATE_KEY",
-                "github_access_token": f"{env_prefix}_GITHUB_ACCESS_TOKEN",
-                "slack_bot_token": f"{env_prefix}_SLACK_BOT_TOKEN",
-                "slack_app_token": f"{env_prefix}_SLACK_APP_TOKEN",
-            },
+            has_slack_bot_token=bool(owned.get("SLACK_BOT_TOKEN")),
+            has_slack_app_token=bool(owned.get("SLACK_APP_TOKEN")),
+            secret_env_keys={suffix.lower(): key for suffix, key in owned.keys.items()},
             slack_channels=channels,
             slack_channel_participation=channel_participation,
             routine_commands=[
@@ -1064,11 +1063,9 @@ class SimplePersonSetupService:
         """
         # SecretStore first, as in update_person: a store failure leaves no
         # member config claiming credentials it does not have.
-        _validate_person_env_target(
-            config.config_dir / "team/members", config.person_id
-        )
+        keys = _target_env_keys(config.config_dir / "team/members", config.person_id)
         store = resolve_secret_store(config.config_dir)
-        secrets = self.build_person_secrets(config, github_private_key)
+        secrets = self.build_person_secrets(config, keys, github_private_key)
         for key, value in secrets.items():
             store.set(key, value)
 
@@ -1104,35 +1101,32 @@ class SimplePersonSetupService:
 
         old_person_dir = original_person_file.parent
         new_person_dir = _person_config_dir(config.config_dir, config.person_id)
-        _validate_person_env_target(
+        new_keys = _target_env_keys(
             config.config_dir / "team/members",
             config.person_id,
             exclude=config.original_person_id,
         )
         if new_person_dir.exists() and not old_person_dir.samefile(new_person_dir):
             raise SetupServiceError("person_id_conflict", "Member ID already exists.")
-        old_conflicts = person_env_conflicts(
-            config.config_dir / "team/members", config.original_person_id
-        )
 
         # SecretStore first: shared key metadata moves independently of local
         # value freshness, and a store failure leaves the member config
         # untouched so the same update can be retried. The values are read
         # before any key moves, so an unreadable key file changes nothing.
-        pending_secrets = self.build_person_secrets(config, github_private_key)
-        old_prefix = person_env_prefix(config.original_person_id)
-        new_prefix = person_env_prefix(config.person_id)
-        # An ambiguous source belongs to neither member individually. Repair
-        # only its config; explicitly supplied secrets use the unique target.
-        if not old_conflicts or pending_secrets:
-            store = resolve_secret_store(config.config_dir)
+        pending_secrets = self.build_person_secrets(
+            config, new_keys, github_private_key
+        )
+        # An ambiguous source owns no keys. Repair only its config; explicitly
+        # supplied secrets use the unique target.
+        old = _owned_secrets(config.config_dir, config.original_person_id)
+        if old.store or pending_secrets:
+            store = old.store or resolve_secret_store(config.config_dir)
             renamed = False
-            if not old_conflicts and old_prefix != new_prefix:
+            if old.keys and old.keys != new_keys:
                 indexed = set(store.keys())
-                for suffix in Person.SECRET_ENV_SUFFIXES:
-                    old_key = f"{old_prefix}_{suffix}"
+                for suffix, old_key in old.keys.items():
                     if old_key in indexed:
-                        store.rename(old_key, f"{new_prefix}_{suffix}")
+                        store.rename(old_key, new_keys[suffix])
                         renamed = True
             for key, value in pending_secrets.items():
                 store.set(key, value)
@@ -1163,15 +1157,13 @@ class SimplePersonSetupService:
         # SecretStore first: indexed keys are removed whether or not this
         # device holds their current generation, and a store failure leaves
         # the member config intact so the deletion can be retried.
-        if not person_env_conflicts(config_dir / "team/members", person_id):
-            store = resolve_secret_store(config_dir)
-            person_keys = set(self._person_secret_env_keys(person_id))
-            stored_keys = store.keys()
-            indexed = [key for key in stored_keys if key in person_keys]
+        owned = _owned_secrets(config_dir, person_id)
+        if owned.store:
+            indexed = sorted(set(owned.keys.values()).intersection(owned.store.keys()))
             for key in indexed:
-                store.delete(key)
+                owned.store.delete(key)
             if indexed:
-                files.append(CreatedFile(path=store.location, action="update"))
+                files.append(CreatedFile(path=owned.store.location, action="update"))
 
         shutil.rmtree(person_dir)
         files.append(CreatedFile(path=person_file, action="delete"))
@@ -1299,7 +1291,10 @@ class SimplePersonSetupService:
         }
 
     def build_person_secrets(
-        self, config: PersonSetupInput, github_private_key: str = ""
+        self,
+        config: PersonSetupInput,
+        keys: dict[str, str],
+        github_private_key: str = "",
     ) -> dict[str, str]:
         """Return the secret values a member save stores in the secret store.
 
@@ -1313,19 +1308,14 @@ class SimplePersonSetupService:
         """
         if config.person_type == "human":
             return {}
-        prefix = person_env_prefix(config.person_id)
         values = {
-            f"{prefix}_GITHUB_ACCESS_TOKEN": config.github_access_token,
-            f"{prefix}_GITHUB_PRIVATE_KEY": github_private_key
+            "GITHUB_ACCESS_TOKEN": config.github_access_token,
+            "GITHUB_PRIVATE_KEY": github_private_key
             or self._read_private_key_file(config),
-            f"{prefix}_SLACK_BOT_TOKEN": config.slack_bot_token,
-            f"{prefix}_SLACK_APP_TOKEN": config.slack_app_token,
+            "SLACK_BOT_TOKEN": config.slack_bot_token,
+            "SLACK_APP_TOKEN": config.slack_app_token,
         }
-        return {key: value for key, value in values.items() if value}
-
-    def _person_secret_env_keys(self, person_id: str) -> list[str]:
-        prefix = person_env_prefix(person_id)
-        return [f"{prefix}_{suffix}" for suffix in Person.SECRET_ENV_SUFFIXES]
+        return {keys[suffix]: value for suffix, value in values.items() if value}
 
     @staticmethod
     def _read_private_key_file(config: PersonSetupInput) -> str:

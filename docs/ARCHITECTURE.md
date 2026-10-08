@@ -838,14 +838,18 @@ Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) 
 person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN` /
 `SLACK_APP_TOKEN`). Non-secret GitHub App IDs live in `person.yml` `account_info`.
 
-Member prefixes come from `utils/person_id.py` (replace `-` with `_`, then
-uppercase). Stored member directories, including invalid configs awaiting repair,
-must have distinct prefixes. Creation and rename reject an occupied prefix; team
-loading reports the colliding config files and refuses execution. Runtime key
-resolution and bulk loading do not read ambiguous member secrets. Setup keeps
-these members editable with secret-presence flags cleared: renaming or deleting
-one preserves the ambiguous old keys, and a renamed member needs its own secrets
-entered again. Slack avatar lookup also excludes ambiguous tokens from fallback.
+A member's secret keys come only from `person_secret_env_keys()` in
+`utils/person_id.py` (prefix: replace `-` with `_`, then uppercase). It returns
+the keys a member owns alone and raises `PersonEnvPrefixConflictError` naming the
+colliding config files when another stored member directory, including an invalid
+config awaiting repair, derives the same keys. Creation and rename reject an
+occupied prefix; team loading reports the colliding config files and refuses
+execution. Runtime key resolution and bulk loading do not read ambiguous member
+secrets. Setup keeps these members editable with secret-presence flags and key
+names cleared: renaming or deleting one preserves the ambiguous old keys, and a
+renamed member needs its own secrets entered again. Slack avatar lookup also
+excludes ambiguous tokens from fallback. `tests/guildbotics/test_person_secret_boundary.py`
+classifies every secret store access and member key spelling in the package.
 
 - **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
   non-secret index in `.guildbotics/config/secrets.yml` (logical key names,

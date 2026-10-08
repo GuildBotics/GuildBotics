@@ -183,8 +183,7 @@ from guildbotics.utils.person_id import (
     MemberDirectoryName,
     PersonId,
     ambiguous_person_env_keys,
-    person_env_prefix,
-    validate_person_env_prefix,
+    person_secret_env_keys,
 )
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
@@ -1879,8 +1878,9 @@ def create_app(
 
         # Real environment variables win over keychain values, and keys they
         # already provide are not fetched from the keychain at all.
-        validate_person_env_prefix(config_dir / "team/members", person_id)
-        ambiguous_keys = ambiguous_person_env_keys(config_dir / "team/members")
+        members = config_dir / "team/members"
+        person_key = person_secret_env_keys(members, person_id)["SLACK_BOT_TOKEN"]
+        ambiguous_keys = ambiguous_person_env_keys(members)
         all_env = {
             **read_workspace_secrets(skip=frozenset(os.environ)),
             **{
@@ -1889,7 +1889,7 @@ def create_app(
                 if key not in ambiguous_keys
             },
         }
-        slack_bot_token = all_env.get(f"{person_env_prefix(person_id)}_SLACK_BOT_TOKEN")
+        slack_bot_token = all_env.get(person_key)
 
         if not slack_bot_token:
             slack_bot_token = all_env.get("SLACK_BOT_TOKEN")
