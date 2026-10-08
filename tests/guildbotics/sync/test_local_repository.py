@@ -44,6 +44,21 @@ def test_initialize_ignores_device_local_data_and_hidden_paths(tmp_path: Path) -
     assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == GITIGNORE_CONTENT
 
 
+def test_a_local_directory_inside_a_shared_root_is_shared(tmp_path: Path) -> None:
+    """Only ``.guildbotics/local/`` is device-only.
+
+    The sync port shares a ``local/`` deeper in the shared roots, so ignoring
+    it there too would leave its files unsent with nothing reported.
+    """
+    repository = _workspace(tmp_path)
+    (tmp_path / ".guildbotics" / "local" / "run" / "pid").write_text("1")
+    nested = tmp_path / ".guildbotics" / "config" / "commands" / "local"
+    nested.mkdir(parents=True)
+    (nested / "tool.md").write_text("tool\n")
+
+    assert repository.stage_changes().paths == ("config/commands/local/tool.md",)
+
+
 def test_a_locked_index_is_not_a_change_that_cannot_be_sent(tmp_path: Path) -> None:
     """A locked index is Git failing, not a path the user has to repair."""
     repository = _workspace(tmp_path)
@@ -65,6 +80,41 @@ def test_initialize_is_repeatable(tmp_path: Path) -> None:
     assert repository.initialized
     assert repository.head() == head_before
     assert ignore.read_text() == GITIGNORE_CONTENT
+
+
+def test_initialize_lets_git_reach_long_paths(tmp_path: Path) -> None:
+    """Without it, Git for Windows warns about a long path and leaves it unsent.
+
+    Re-initializing an existing workspace restores the setting, so workspaces
+    made before it existed get it too.
+    """
+    repository = _workspace(tmp_path)
+    git = repository._repo().git
+    assert git.config("--get", "core.longpaths") == "true"
+    git.config("core.longpaths", "false")
+
+    repository.initialize()
+
+    assert git.config("--get", "core.longpaths") == "true"
+
+
+def test_a_path_longer_than_windows_allows_is_staged(tmp_path: Path) -> None:
+    """Git writes and removes the file itself, so the test needs no long-path support."""
+    repository = _workspace(tmp_path)
+    git = repository._repo().git
+    seed = tmp_path / ".guildbotics" / "state" / "seed.json"
+    seed.write_text("{}")
+    blob = git.hash_object("-w", "state/seed.json")
+    seed.unlink()
+    path = "state/" + "/".join(["d" * 50] * 6) + "/kept.json"
+    git.update_index("--add", "--cacheinfo", f"100644,{blob},{path}")
+    git.checkout("--", path)
+    git.rm("--cached", "--quiet", "--", path)
+
+    try:
+        assert repository.stage_changes().paths == (path,)
+    finally:
+        git.rm("--force", "--quiet", "--", path)
 
 
 def test_initialize_replaces_a_linked_ignore_file_instead_of_writing_through_it(

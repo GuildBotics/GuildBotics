@@ -53,7 +53,10 @@ SYNC_REMOTE = "origin"
 REJECTED_REF_PREFIX = "refs/guildbotics/rejected"
 #: Where a hub's content is read before the workspace is connected to it.
 PREVIEW_REF = "refs/guildbotics/hub-preview"
-#: ``local/`` is device-only. Hidden paths are not GuildBotics shared data;
+#: ``local/`` is device-only, and only the one beside the shared roots: the
+#: sync port shares a ``local/`` deeper inside them, so an unanchored rule
+#: would leave it unsent with nothing reported. Hidden paths are not
+#: GuildBotics shared data;
 #: ignoring the whole category keeps OS and editor bookkeeping out at every
 #: depth and also refuses ``.env`` a second time. The final entry is an atomic
 #: write in progress: it is created beside its
@@ -61,7 +64,7 @@ PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: that enumerates it either commits a half-written name or fails its own
 #: ``git add`` when the rename beats it -- reported as a hub it could not
 #: reach. It is never a file the user meant to share.
-GITIGNORE_CONTENT = f"local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
+GITIGNORE_CONTENT = f"/local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
 #: Attributes that switch off every conversion between the index and disk.
 GIT_ATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n"
 #: Git's empty tree: the base of a comparison with a side that has no commits.
@@ -70,9 +73,6 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 _PATH_BATCH = 200
 #: ``git status --porcelain`` prefixes every entry with ``XY `` before the path.
 _STATUS_PREFIX = 3
-#: ``git add --ignore-errors`` exits with 1 when it skipped a path and staged
-#: the rest. Any other non-zero status is a failure of the command itself.
-_ADD_REFUSED_A_PATH = 1
 
 
 class SyncRepositoryError(RuntimeError):
@@ -158,7 +158,7 @@ def _run_remote_git(
 
 @dataclass(frozen=True)
 class RefusedChange:
-    """A path still changed after ``git add`` that did not enter the index.
+    """A changed path kept out of ``git add`` because Git cannot index it.
 
     Attributes:
         path (str): The path relative to ``.guildbotics/``, with no trailing
@@ -178,12 +178,9 @@ class StagedChanges:
 
     Attributes:
         paths (tuple[str, ...]): Paths now staged.
-        refused (tuple[RefusedChange, ...]): Paths still changed after
-            ``git add`` that the index does not hold. An embedded repository
-            with no commit is the one ``git add`` cannot index; it is returned
-            here so the cycle can hold it instead of failing. A path that
-            disappeared or returned to HEAD before the add is absent: holding
-            it would skip restoring the hub's copy.
+        refused (tuple[RefusedChange, ...]): Embedded repositories with no
+            commit, found before ``git add`` and kept out of it, so the cycle
+            can hold them instead of failing.
     """
 
     paths: tuple[str, ...]
@@ -310,6 +307,9 @@ class LocalSyncRepository:
         repository.git.config("user.name", "GuildBotics")
         repository.git.config("user.email", "sync@guildbotics.invalid")
         repository.git.config("commit.gpgsign", "false")
+        # Without it, Git for Windows warns about a path over 260 characters
+        # and leaves it out of status and add while still exiting 0.
+        repository.git.config("core.longpaths", "true")
 
     def clone(self, url: str, accept: Callable[[str], None]) -> None:
         """Fill this repository with a copy of a hub's shared content.
@@ -378,34 +378,42 @@ class LocalSyncRepository:
         together. The answer is read back from the index, so it names what is
         staged rather than what a status saw a moment earlier.
 
-        An embedded repository with no commit cannot be indexed, and a plain
-        ``git add`` then fails the whole root -- nothing else in it is staged,
-        and the cycle reports the hub as unreachable. ``--ignore-errors``
-        stages the rest and exits 1. Exit 0 skipped nothing, so nothing is
-        refused. Exit 1 refuses only a path that is still changed afterwards
-        and that this add did not stage. A path the earlier status saw, which
-        then disappeared or returned to HEAD, is not refused: holding it would
-        skip restoring the hub's copy, and the next commit would send the old
-        bytes. A skipped directory that is gone by the follow-up status is the
-        same: nothing is held, and the cycle is not failed. When that follow-up
-        lists the files inside a directory the earlier status named, the hold
-        keeps the directory, so a later restore does not write into it. Any
-        other exit status still raises: a locked index is not a file the user
-        has to fix.
+        Every path is found before ``git add`` runs, never guessed from what
+        it left behind. An embedded repository with no commit cannot be
+        indexed, and adding it fails the whole root. Status names an embedded
+        repository, and only that, as a directory (``config/commands/``), so
+        the ones with no commit are excluded from the add and returned as
+        refused. One with a commit is added as a gitlink, which the mode check
+        holds. Any other failure of the add fails the cycle: an unreadable
+        file or a locked index is not a change to hold, and neither is a
+        directory Git would walk but cannot list.
+
+        Raises:
+            SyncRepositoryError: When a directory Git walks under a shared root
+                cannot be listed.
+            GitCommandError: When ``git add`` fails.
         """
         repository = self._repo()
-        listed = _changed_paths(repository)
+        listed, unwalked = _changed_paths(repository)
+        _refuse_unlistable_directories(self.path, unwalked)
         # A root nothing lists may not exist, and Git refuses to add it then.
         roots = sorted({path.split("/", 1)[0] for path in listed} & set(SHARED_ROOTS))
         if not roots:
             return StagedChanges(paths=(), refused=())
-        status_code, _, stderr = repository.git.add(
+        refused = tuple(
+            RefusedChange(path=path, reason="is a Git repository with no commit")
+            for path in (entry[:-1] for entry in listed if entry.endswith("/"))
+            if (self.path / path / ".git").exists()
+            and not _has_commit(self.path / path)
+        )
+        # Exclusion is pathspec magic, which literal pathspecs switch off; each
+        # path is spelled ``literal`` instead, so a name is still never a pattern.
+        repository.git.add(
             "--all",
-            "--ignore-errors",
             "--",
-            *roots,
-            with_extended_output=True,
-            with_exceptions=False,
+            *(f":(literal){root}" for root in roots),
+            *(f":(exclude,literal){item.path}" for item in refused),
+            env={"GIT_LITERAL_PATHSPECS": "0"},
         )
         staged = tuple(
             path
@@ -414,45 +422,6 @@ class LocalSyncRepository:
             ).split("\0")
             if path
         )
-        # Exit 0 staged every change it was given. A path the earlier status
-        # listed, which then vanished or returned to HEAD, was not skipped.
-        if status_code == 0:
-            refused: tuple[RefusedChange, ...] = ()
-        else:
-            staged_names = set(staged)
-            # A gitlink whose commit did not change stays out of that diff, and
-            # status keeps listing it while the nested worktree is dirty. It is
-            # already in the index. Add did not skip it. Holding it would skip
-            # restoring the hub's copy of that path. A gitlink whose commit did
-            # change is staged, and the mode check holds it.
-            gitlinks = _gitlink_paths(repository)
-            refused = tuple(
-                sorted(
-                    (
-                        RefusedChange(
-                            path=path, reason=_refusal_reason(self.path / path)
-                        )
-                        for path in {
-                            _hold_path(
-                                path,
-                                listed,
-                                staged_names,
-                                gitlinks,
-                                self.path,
-                            )
-                            for path in _changed_paths(repository)
-                            if path not in staged_names and path not in gitlinks
-                        }
-                    ),
-                    key=lambda item: item.path,
-                )
-            )
-        if _add_failed(status_code):
-            raise GitCommandError(
-                ["git", "add", "--all", "--ignore-errors", "--", *roots],
-                status_code,
-                stderr,
-            )
         return StagedChanges(paths=staged, refused=refused)
 
     def read_entries(
@@ -804,120 +773,90 @@ def _batched(paths: Sequence[str]) -> Iterator[Sequence[str]]:
         yield paths[start : start + _PATH_BATCH]
 
 
-def _changed_paths(repository: Repo) -> list[str]:
-    """Return the paths a status of the shared roots lists right now.
+def _changed_paths(repository: Repo) -> tuple[list[str], set[str]]:
+    """Return what a status of the shared roots lists right now.
 
-    This is the read ``stage_changes`` takes before ``git add`` and, when that
-    add exits 1, again afterwards. The second read is what a refusal may be
-    drawn from. The first only decides which roots to add: a path it alone
-    saw is not a path Git refused.
+    Returns:
+        tuple[list[str], set[str]]: The changed paths, and the directories Git
+            did not walk into. Ordinary directories are expanded to their
+            files, so a changed path that keeps its trailing slash
+            (``config/commands/``) is an embedded repository. The directories
+            not walked are those, with every directory an ignore rule matched.
     """
-    return _status_paths(
-        repository.git.status(
-            "--porcelain",
-            "-z",
-            "--untracked-files=all",
-            "--no-renames",
-            "--",
-            *SHARED_ROOTS,
-        )
+    status = repository.git.status(
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--no-renames",
+        "--",
+        *SHARED_ROOTS,
+    )
+    entries = [entry for entry in status.split("\0") if entry]
+    return (
+        [entry[_STATUS_PREFIX:] for entry in entries if not entry.startswith("!!")],
+        {entry[_STATUS_PREFIX:-1] for entry in entries if entry.endswith("/")},
     )
 
 
-def _gitlink_paths(repository: Repo) -> set[str]:
-    """Return paths the index records as gitlinks (mode ``160000``).
-
-    ``git diff --cached`` omits a gitlink whose commit did not change, so it
-    cannot answer "is this path already indexed". The record is
-    ``<mode> SP <object> SP <stage> TAB <path>``.
-    """
-    paths: set[str] = set()
-    for record in repository.git.ls_files("-s", "-z").split("\0"):
-        if not record:
-            continue
-        meta, separator, path = record.partition("\t")
-        if separator and meta.split(" ", 1)[0] == "160000" and path:
-            paths.add(path)
-    return paths
-
-
-def _status_paths(status: str) -> list[str]:
-    """Return the paths a ``git status -z`` listed, without trailing slashes.
-
-    A directory is reported as ``name/``. Stripping that slash is what makes
-    it the same name ``git add`` uses for the gitlink once the directory has
-    a commit. Records are NUL-separated and may be empty.
-    """
-    paths: list[str] = []
-    seen: set[str] = set()
-    for entry in status.split("\0"):
-        if len(entry) <= _STATUS_PREFIX:
-            continue
-        path = entry[_STATUS_PREFIX:].rstrip("/")
-        if path and path not in seen:
-            seen.add(path)
-            paths.append(path)
-    return paths
-
-
-def _refusal_reason(path: Path) -> str:
-    """Why ``path`` stayed out of the index, phrased to follow the path.
-
-    Git's own message quotes the path, and a quote in the path breaks that
-    quoting, so the reason is read from the directory itself. No commit
-    checked out is exactly when ``git add`` refuses an embedded repository.
-    """
-    if (path / ".git").exists() and not _has_commit(path):
-        return "is a Git repository with no commit"
-    return "could not be staged"
-
-
 def _has_commit(path: Path) -> bool:
-    """True when ``path`` is a repository whose HEAD names a commit."""
+    """True when ``path`` is a repository whose HEAD names a commit.
+
+    ``-C`` rather than a working directory: GitPython runs a command whose
+    working directory is gone in its own, and would answer for that one.
+    """
     try:
-        Git(path).rev_parse("--verify", "--quiet", "HEAD")
+        Git()(C=str(path)).rev_parse("--verify", "--quiet", "HEAD")
     except GitCommandError:
         return False
     return True
 
 
-def _hold_path(
-    path: str,
-    earlier: Sequence[str],
-    staged_names: set[str],
-    gitlinks: set[str],
-    root: Path,
-) -> str:
-    """Return the path to hold for one path the follow-up status still lists.
+def _refuse_unlistable_directories(root: Path, unwalked: set[str]) -> None:
+    """Fail when a directory Git walks under a shared root cannot be listed.
 
-    Removing ``.git`` after add makes status list the files inside an embedded
-    repository instead of the directory. Holding those files does not cover
-    the rest of the directory, and a later restore writes the hub's files into
-    it. The name the earlier status saw covers the tree, and only while that
-    path is still there: a path that is already gone must not be held.
+    Git only warns about such a directory and exits 0. A file added inside it
+    is never sent, and a tracked file inside it can be staged as deleted,
+    which the hub then carries to every other device. A missing directory is
+    not refused: it may vanish while the walk runs, and Windows reports a path
+    too long to open the same way, which Git reaches through
+    ``core.longpaths``.
+
+    Only what Git walks is checked, as Git's own status answered it: the
+    directories it reported instead of expanding are an embedded repository,
+    held as a whole, and an ignored directory with nothing tracked inside, so
+    a directory inside either stops nothing else. Git still walks a
+    repository or an ignored directory that holds tracked files, and so does
+    this. The walk starts above the shared roots so that a root which is
+    itself one of those, or a link, is not entered. ``.git`` is never listed
+    by status, so it is skipped by name with every other hidden directory the
+    ignore rules leave out.
+
+    Args:
+        root (Path): The synchronized repository's working tree.
+        unwalked (set[str]): The directories status did not walk into,
+            relative to ``root``.
+
+    Raises:
+        SyncRepositoryError: Naming the directory that cannot be listed.
     """
-    cover = path
-    for candidate in earlier:
-        if candidate in staged_names or candidate in gitlinks:
-            continue
-        if path != candidate and not path.startswith(f"{candidate}/"):
-            continue
-        if len(candidate) >= len(cover):
-            continue
-        if not (root / candidate).exists():
-            continue
-        cover = candidate
-    return cover
 
+    def refuse(error: OSError) -> None:
+        if isinstance(error, PermissionError):
+            raise SyncRepositoryError(
+                f"{error.filename} cannot be listed, so its files cannot be "
+                "synchronized."
+            ) from error
 
-def _add_failed(status_code: int) -> bool:
-    """True when ``git add`` failed for a reason other than a skipped path.
-
-    Exit 1 means a path was skipped. The path may already be gone when status
-    is read again, in which case nothing is held and the command itself did
-    not fail. A locked index and every other status still fail the cycle.
-    """
-    return status_code not in (0, _ADD_REFUSED_A_PATH)
+    for top, directories, _ in os.walk(root, onerror=refuse):
+        parent = Path(top).relative_to(root)
+        directories[:] = [
+            name
+            for name in directories
+            if (parent.parts or name in SHARED_ROOTS)
+            and not name.startswith(".")
+            and (parent / name).as_posix() not in unwalked
+        ]
 
 
 def _configure_git(repository: Repo) -> None:

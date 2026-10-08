@@ -76,7 +76,7 @@ def commit_shared_changes(
 
     # A path staged as a deletion is absent here. There is no content to
     # check, and removing a file cannot make the shared set unreadable.
-    # A path Git could not stage has no index entry either: it joins the
+    # A path kept out of the add has no index entry either: it joins the
     # held set from the refusal, without a mode to validate.
     staged = repository.read_staged(changes.paths)
     held: list[UnsendableChange] = []
