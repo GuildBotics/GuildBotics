@@ -162,6 +162,37 @@ describe("SyncAlerts", () => {
     expect(retryWorkspaceSync).toHaveBeenCalledTimes(1);
   });
 
+  it("points at this machine, not the hub, when a file here stopped the cycle", async () => {
+    const user = userEvent.setup();
+    const printed = "fatal: Unable to create '/w/.guildbotics/.git/index.lock': File exists.";
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ state: "local_error", last_error_detail: printed }),
+    );
+    vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
+    renderWith(<SyncAlerts />);
+
+    expect(await screen.findByText(t("sync.state.local_error.label"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.alerts.local_error"))).toBeInTheDocument();
+    expect(screen.getByText(printed)).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.state.unreachable.label"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("sync.alerts.unreachable"))).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t("sync.actions.retry") }));
+
+    expect(retryWorkspaceSync).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["en", "ja"])("never names the hub for a failure on this machine (%s)", (lng) => {
+    const translate = i18n.getFixedT(lng);
+    for (const key of [
+      "sync.state.local_error.label",
+      "sync.state.local_error.detail",
+      "sync.alerts.local_error",
+    ]) {
+      expect(translate(key)).not.toBe(key);
+      expect(translate(key)).not.toMatch(/hub/i);
+    }
+  });
+
   it("counts the changes that cannot be sent and links to the list", async () => {
     vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
       status({

@@ -521,7 +521,7 @@ class WorkspaceSyncService:
         return stopped
 
     def retry(self) -> WorkspaceSyncStatus:
-        """Try again after an unreachable hub or repaired shared data.
+        """Try again after a failed cycle or repaired shared data.
 
         The response is this attempt: manager selection, ``resume()``, and all
         workspace-dependent response fields are evaluated inside the same

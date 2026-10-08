@@ -51,6 +51,10 @@ describe("syncIndicatorState", () => {
     expect(syncIndicatorState(status({ state: "unreachable" }))).toBe("unreachable");
   });
 
+  it("reports a cycle that failed on this machine apart from the hub", () => {
+    expect(syncIndicatorState(status({ state: "local_error" }))).toBe("local_error");
+  });
+
   it("reports changes that cannot be sent", () => {
     expect(
       syncIndicatorState(
@@ -65,6 +69,18 @@ describe("precedence when several states are true at once", () => {
     expect(syncIndicatorState(status({ state: "unreachable", ahead_count: 3 }))).toBe(
       "unreachable",
     );
+  });
+
+  it("puts a cycle that failed on this machine ahead of changes held back", () => {
+    // The failed cycle sent nothing at all, not only the held files.
+    expect(
+      syncIndicatorState(
+        status({
+          state: "local_error",
+          unsendable_changes: [{ path: "config/team/project.yml", reason: "too large" }],
+        }),
+      ),
+    ).toBe("local_error");
   });
 
   it("puts changes that cannot be sent ahead of ones merely queued", () => {
@@ -102,6 +118,7 @@ describe("precedence when several states are true at once", () => {
 describe("what the user is asked to do", () => {
   it("asks for attention only where waiting does not help", () => {
     expect(syncNeedsAttention("unreachable")).toBe(true);
+    expect(syncNeedsAttention("local_error")).toBe(true);
     expect(syncNeedsAttention("unsendable")).toBe(true);
     expect(syncNeedsAttention("invalid_shared_state")).toBe(true);
     expect(syncNeedsAttention("update_required")).toBe(true);
@@ -113,6 +130,7 @@ describe("what the user is asked to do", () => {
 
   it("offers a retry only where another attempt can succeed", () => {
     expect(syncCanRetry("unreachable")).toBe(true);
+    expect(syncCanRetry("local_error")).toBe(true);
     expect(syncCanRetry("invalid_shared_state")).toBe(true);
     // Retrying sends the same rejected bytes, and updating is not a retry.
     expect(syncCanRetry("unsendable")).toBe(false);
@@ -124,6 +142,7 @@ describe("what the user is asked to do", () => {
     expect(syncTone("synced")).toBe("success");
     expect(syncTone("sending")).toBe("info");
     expect(syncTone("unreachable")).toBe("warning");
+    expect(syncTone("local_error")).toBe("warning");
     expect(syncTone("invalid_shared_state")).toBe("danger");
     expect(syncTone("disabled")).toBe("neutral");
   });

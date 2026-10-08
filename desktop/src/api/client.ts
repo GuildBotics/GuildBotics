@@ -1194,10 +1194,7 @@ export type ApiErrorPayload = {
 /** Config-relative path -> the revision the screen was composed against. */
 export type ConfigRevisions = Record<string, string>;
 
-/**
- * The seven states the sidebar shows, ordered so that the one needing the user
- * comes first when several are true at once.
- */
+/** The queue state the backend reports for the selected workspace. */
 export type SyncState =
   | "disabled"
   | "idle"
@@ -1205,6 +1202,7 @@ export type SyncState =
   | "reconciling"
   | "pushing"
   | "unreachable"
+  | "local_error"
   | "invalid_shared_state"
   | "update_required";
 

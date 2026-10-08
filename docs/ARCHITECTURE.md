@@ -745,8 +745,8 @@ a save can land on top of content adopted while it was running, and since that o
 an ordinary local write, the next cycle commits and pushes it with nothing recording the
 other device's change as lost. Nothing holds the lock across the network, so a save never
 waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
-`OSError` family: synchronization catches that family to mean the environment failed and
-would otherwise report the hub unreachable over a local save.
+`OSError` family: synchronization catches that family to mean the cycle failed and
+would otherwise report a failure over a save that is merely in progress.
 
 Which writers must take it is not decided writer by writer. Every write to a shared path
 goes through the sync port, and the port takes the lock for it, so a writer that composes
