@@ -500,7 +500,8 @@ def test_a_lock_left_in_the_index_is_this_devices_failure_not_the_hubs(
 
     assert status.state == "local_error"
     assert status.last_error_code == "GitCommandError"
-    assert str(lock) in (status.last_error_detail or "")
+    # Git spells the path with forward slashes on every platform.
+    assert ".guildbotics/.git/index.lock" in (status.last_error_detail or "")
     assert _hub_file(hub, CONFIG) is None
 
     lock.unlink()
