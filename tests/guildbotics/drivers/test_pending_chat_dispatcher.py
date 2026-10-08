@@ -24,6 +24,7 @@ from guildbotics.intelligences.brains.cli_agent import (
 from guildbotics.observability import current_trace
 from guildbotics.observability.trace_status import resolve_trace_status
 from tests.guildbotics.command_environment_doubles import runs_as
+from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
 
 
@@ -64,14 +65,15 @@ def attempts(monkeypatch) -> list[ChatAttempt]:
             seen.append(attempt)
             await run_turn(
                 ChatTurn(
-                    run_id=attempt.run_id,
                     attempt=attempt.attempt_count,
-                    service_name=service_name,
-                    channel_id=channel_id,
-                    thread_ts=event.thread_ts,
-                    event_id=event.event_id,
+                    subject=ChatSubject(
+                        service=service_name,
+                        channel_id=channel_id,
+                        thread_ts=event.thread_ts,
+                        event_id=event.event_id,
+                        self_user_id="U_ALICE",
+                    ),
                     message_ts=event.message_ts,
-                    work_identity=event.event_id,
                     context_cursor=event.message_ts,
                     prompt={},
                 )
@@ -109,7 +111,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
         def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
-            self.event_id = _turn(context).event_id
+            self.event_id = _turn(context).subject.event_id
 
         async def run(self):
             ran.append(self.event_id)
@@ -156,11 +158,14 @@ async def test_dispatcher_runs_workflow_and_clears_pending(
     ctx_used, command, _args = ran[0]
     assert command == "workflows/chat_conversation_workflow"
     turn = _turn(ctx_used)
-    assert turn.event_id == "E1"
+    assert turn.subject.event_id == "E1"
     assert turn.attempt == 1
-    assert turn.run_id
+    # The run is the attempt's, and the work the event selection fixed.
+    invocation = ctx_used.shared_state[WORKFLOW_INVOCATION_KEY]
+    assert invocation.run_id
+    assert invocation.work == Work.of_chat(turn.subject)
     assert attempts == [
-        ChatAttempt(run_id=turn.run_id, attempt_count=1, max_attempts=5)
+        ChatAttempt(run_id=invocation.run_id, attempt_count=1, max_attempts=5)
     ]
 
 
@@ -240,7 +245,7 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
         def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
-            self.run_id = _turn(context).run_id
+            self.run_id = context.shared_state[WORKFLOW_INVOCATION_KEY].run_id
 
         async def run(self):
             RunStore().start_record(

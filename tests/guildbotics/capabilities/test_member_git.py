@@ -33,9 +33,11 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github import repository_scope
 from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.runtime.member_invocation import (
+    ChatSubject,
     GuestProcessError,
     GuestResult,
     MemberInvocation,
+    Work,
     member_invocation_scope,
 )
 from tests.git_seed import WorkerGitSeed
@@ -620,24 +622,21 @@ async def test_chat_run_cannot_push_unchecked_work(member):
     RunStore().append_evidence(
         "chat-run",
         "chat_batch",
-        {
-            "person_id": "aiko",
-            "service": "slack",
-            "channel_id": "C1",
-            "thread_ts": "100.1",
-            "self_user_id": "U_BOT",
-            "event_ids": ["E1"],
-        },
+        {"event_ids": ["E1"]},
     )
     ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
     await member.prepare()
     commit_sha = member.stage().index.commit("local commit").hexsha
-    invocation = MemberInvocation(run_id="chat-run", guest=member.guest)
+    invocation = MemberInvocation(
+        run_id="chat-run",
+        work=Work.of_chat(ChatSubject("slack", "C1", "100.1", "E1", "U_BOT")),
+        guest=member.guest,
+    )
     with member_invocation_scope(invocation):
         with pytest.raises(ChatUpdatesRequired):
             await member.service.push(member.clone)
         assert "ticket/1" not in [head.name for head in member.remote().heads]
-        check_chat_updates("aiko", "chat-run")
+        check_chat_updates("aiko")
         await member.service.push(member.clone)
     assert member.remote().commit("ticket/1").hexsha == commit_sha
 

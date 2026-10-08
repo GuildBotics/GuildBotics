@@ -27,7 +27,6 @@ from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers import command_runner, utils, workflow_dispatcher
 from guildbotics.drivers.command_runner import (
-    HostRunLedger,
     PreparedCommand,
     host_command_cwd,
 )
@@ -83,7 +82,7 @@ def commands_in_process(monkeypatch: pytest.MonkeyPatch) -> list[PreparedCommand
             command.cwd,
             path=command.path,
             mounts=everywhere(command.cwd),
-            ledger=HostRunLedger(),
+            ledger=command_runner.run_ledger(command),
         )
         outcome = await runner.run()
         return command_runner._outcome(

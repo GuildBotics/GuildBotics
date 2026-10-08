@@ -33,6 +33,23 @@ def in_a_command(monkeypatch, tmp_path) -> WindowDouble:
     return window
 
 
+@pytest.fixture
+def doing(monkeypatch, in_a_command: WindowDouble):
+    """Make the command's grant hold its turns to the work of ``work_kind``
+    and ``work_identity`` in ``run_id``, as the host settles it."""
+
+    def enter(work_kind: str, work_identity: str, run_id: str = "run-1") -> None:
+        enter_command(
+            monkeypatch,
+            in_a_command,
+            run_id=run_id,
+            work_kind=work_kind,
+            work_identity=work_identity,
+        )
+
+    return enter
+
+
 class _Logger:
     debug = info = warning = error = lambda *args, **kwargs: None
 
@@ -83,7 +100,9 @@ class _Adapter:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_context_is_full_then_incremental_without_duplicates(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -97,6 +116,7 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", "slack:bot:C1:100.1")
     snapshot = [
         {
             "timestamp": "99.1",
@@ -119,9 +139,6 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     ]
     state = {
         "agent_execution_context": {
-            "run_id": "run-1",
-            "work_kind": "chat",
-            "work_identity": "slack:bot:C1:100.1",
             "resume_policy": "auto",
             "context_cursor": "100.1",
             "rebuild_context": json.dumps(snapshot),
@@ -161,7 +178,10 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
 
 @pytest.mark.asyncio
 async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
-    monkeypatch, tmp_path, in_a_command
+    monkeypatch,
+    tmp_path,
+    in_a_command,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -175,15 +195,13 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", "slack:bot:C1:100.1")
     try:
         await brain.run_with_execution_details(
             "first-turn",
             cwd=tmp_path,
             session_state={
                 "agent_execution_context": {
-                    "run_id": "run-1",
-                    "work_kind": "chat",
-                    "work_identity": "slack:bot:C1:100.1",
                     "resume_policy": "auto",
                     "context_cursor": "100.1",
                     "rebuild_context": "[]",
@@ -278,7 +296,9 @@ class _CompactingAdapter(_Adapter):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_persists_cursor_only_after_terminal_success(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -292,11 +312,9 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("ticket", "issue-300")
     state = {
         "agent_execution_context": {
-            "run_id": "run-1",
-            "work_kind": "ticket",
-            "work_identity": "issue-300",
             "resume_policy": "auto",
             "context_cursor": "cursor-1",
         }
@@ -326,7 +344,9 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_remembers_the_sessions_effective_settings(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     """A turn that reports no values retains the last known values in the record."""
     original = cli_agent.person_cli_agent_mapping.copy()
@@ -343,11 +363,9 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("ticket", "issue-363")
     state = {
         "agent_execution_context": {
-            "run_id": "run-1",
-            "work_kind": "ticket",
-            "work_identity": "issue-363",
             "resume_policy": "auto",
         }
     }
@@ -378,7 +396,9 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -397,10 +417,8 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     record.context_cursor = "99.1"
     ConversationStore(tmp_path).save(record)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", "slack:bot:C1:100.1")
     execution_context = {
-        "run_id": "run-1",
-        "work_kind": "chat",
-        "work_identity": "slack:bot:C1:100.1",
         "resume_policy": "auto",
         "context_cursor": "100.1",
         "continuation_input": "continue-only",
@@ -446,7 +464,9 @@ class _CrashedAdapter(_Adapter):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_failure_carries_what_the_tool_said_last(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -459,15 +479,13 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("ticket", "issue-300")
     try:
         result = await brain.run_with_execution_details(
             "hello",
             cwd=tmp_path,
             session_state={
                 "agent_execution_context": {
-                    "run_id": "run-1",
-                    "work_kind": "ticket",
-                    "work_identity": "issue-300",
                     "resume_policy": "auto",
                     "context_cursor": "cursor-1",
                 }
@@ -488,7 +506,9 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
-async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) -> None:
+async def test_native_brain_rotates_after_cancelled_turn(
+    monkeypatch, tmp_path, doing
+) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["aiko"] = {
@@ -500,6 +520,7 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("ticket", "issue-300")
     try:
         with pytest.raises(asyncio.CancelledError):
             await brain.run_with_execution_details(
@@ -507,9 +528,6 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
                 cwd=tmp_path,
                 session_state={
                     "agent_execution_context": {
-                        "run_id": "run-1",
-                        "work_kind": "ticket",
-                        "work_identity": "issue-300",
                         "resume_policy": "auto",
                         "context_cursor": "cursor-1",
                     }
@@ -528,7 +546,10 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
 
 @pytest.mark.asyncio
 async def test_native_authentication_notification_identifies_member_and_cli(
-    monkeypatch, tmp_path, in_a_command
+    monkeypatch,
+    tmp_path,
+    in_a_command,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -541,6 +562,7 @@ async def test_native_authentication_notification_identifies_member_and_cli(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("ticket", "issue-300")
     try:
         with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
             await brain.run(
@@ -548,9 +570,6 @@ async def test_native_authentication_notification_identifies_member_and_cli(
                 cwd=tmp_path,
                 session_state={
                     "agent_execution_context": {
-                        "run_id": "run-1",
-                        "work_kind": "ticket",
-                        "work_identity": "issue-300",
                         "resume_policy": "fresh",
                     }
                 },
@@ -569,7 +588,9 @@ async def test_native_authentication_notification_identifies_member_and_cli(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_rebuilds_chat_after_context_compaction(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
+    doing,
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -583,11 +604,9 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", "slack:bot:C1:100.1")
     state = {
         "agent_execution_context": {
-            "run_id": "run-1",
-            "work_kind": "chat",
-            "work_identity": "slack:bot:C1:100.1",
             "resume_policy": "auto",
             "context_cursor": "100.1",
             "rebuild_context": json.dumps(
@@ -741,16 +760,20 @@ def _seed_chat_record(
 
 
 async def _run_chat_turn(
-    brain, tmp_path, *, cursor: str, run_id: str = "run-A", event_id: str = "EA"
+    brain,
+    tmp_path,
+    doing,
+    *,
+    cursor: str,
+    run_id: str = "run-A",
+    event_id: str = "EA",
 ):
+    doing("chat", _CHAT_IDENTITY, run_id)
     return await brain.run_with_execution_details(
         "retry-turn",
         cwd=tmp_path,
         session_state={
             "agent_execution_context": {
-                "run_id": run_id,
-                "work_kind": "chat",
-                "work_identity": _CHAT_IDENTITY,
                 "resume_policy": "auto",
                 "context_cursor": cursor,
                 "event_id": event_id,
@@ -765,7 +788,11 @@ async def _run_chat_turn(
 
 @pytest.mark.asyncio
 async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
-    monkeypatch, tmp_path, native_aiko, in_a_command
+    monkeypatch,
+    tmp_path,
+    native_aiko,
+    in_a_command,
+    doing,
 ) -> None:
     adapter = _Adapter()
 
@@ -778,7 +805,7 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
     )
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
 
     # The overtaken event is re-fed with full context on a fresh session; the
     # generic continuation prompt (which would let the agent mistake run-B's
@@ -808,7 +835,11 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
 
 @pytest.mark.asyncio
 async def test_native_chat_same_cursor_same_run_event_uses_continuation(
-    monkeypatch, tmp_path, native_aiko, in_a_command
+    monkeypatch,
+    tmp_path,
+    native_aiko,
+    in_a_command,
+    doing,
 ) -> None:
     adapter = _Adapter()
 
@@ -819,7 +850,7 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
     _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
 
     assert result.returncode == 0
     assert 'mode="continuation"' in adapter.prompts[0]
@@ -831,7 +862,11 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
 
 @pytest.mark.asyncio
 async def test_native_chat_same_cursor_different_run_is_not_continuation(
-    monkeypatch, tmp_path, native_aiko, in_a_command
+    monkeypatch,
+    tmp_path,
+    native_aiko,
+    in_a_command,
+    doing,
 ) -> None:
     adapter = _Adapter()
 
@@ -842,7 +877,7 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
     _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
 
     assert result.returncode == 0
     assert 'mode="full"' in adapter.prompts[0]
@@ -855,7 +890,10 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_legacy_record_without_identity_rotates_to_full_context(
-    monkeypatch, tmp_path, native_aiko
+    monkeypatch,
+    tmp_path,
+    native_aiko,
+    doing,
 ) -> None:
     adapter = _Adapter()
 
@@ -866,7 +904,7 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
     key = _seed_chat_record(tmp_path, cursor="100.1")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
 
     # A record predating run/event identity cannot prove the session targeted
     # this run, so it is rotated instead of continued.
@@ -883,6 +921,7 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
 async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     monkeypatch,
     tmp_path,
+    doing,
 ):
     monkeypatch.setitem(
         cli_agent.person_cli_agent_mapping,
@@ -898,11 +937,9 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", "slack:bot:C1:100.1", "batch-1")
     configured = {
-        "run_id": "batch-1",
         "resume_policy": "auto",
-        "work_kind": "chat",
-        "work_identity": "slack:bot:C1:100.1",
         "context_cursor": "100.1",
         "event_id": "E1",
         "rebuild_context": "[]",
@@ -913,9 +950,9 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
         cwd=tmp_path,
         session_state={"agent_execution_context": configured},
     )
+    doing("chat", "slack:bot:C1:100.1", "batch-2")
     configured.update(
         {
-            "run_id": "batch-2",
             "context_cursor": "105.1",
             "event_id": "E3",
             "rebuild_context": json.dumps(
@@ -979,17 +1016,27 @@ async def test_a_turn_runs_only_inside_a_command(tmp_path, native_aiko) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_turn_works_for_the_commands_run_unless_its_workflow_names_one(
+async def test_a_turn_works_for_the_commands_run_and_work_whatever_it_is_told(
     monkeypatch, tmp_path, in_a_command, native_aiko
 ) -> None:
-    """The host holds every turn of a command to the command's run: a turn
-    the command asks for without a workflow run of its own works for it, and
-    its answer points at the command's trace."""
+    """The host holds every turn of a command to the command's run and work:
+    what the command's code passes cannot name another run or another work's
+    conversation, and the turn's answer points at the command's trace."""
     adapter = _Adapter()
     monkeypatch.setattr(cli_agent, "create_native_adapter", lambda _name: adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    await brain.run_with_execution_details("go", cwd=tmp_path)
+    await brain.run_with_execution_details(
+        "go",
+        cwd=tmp_path,
+        session_state={
+            "agent_execution_context": {
+                "run_id": "run-other",
+                "work_kind": "ticket",
+                "work_identity": "https://example.test/other",
+            }
+        },
+    )
 
     (context,) = adapter.contexts
     assert context.run_id == "command-run"

@@ -41,17 +41,6 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "Native agent runtime",
-        [
-            (
-                "guildbotics member agent conversation reset --person <person> "
-                "--adapter codex|claude|grok --work-kind ticket|chat|manual "
-                "--work-identity <stable-id>",
-                "Rotate one persisted provider session while keeping its logical work identity.",
-            ),
-        ],
-    ),
-    (
         "Git — the member commands only add the commit identity and credential; "
         "stage and branch with plain git yourself",
         [
@@ -301,20 +290,19 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Run completion — workflow runs only",
         [
             (
-                "guildbotics member chat noop --person <person> --service slack "
-                "--channel-id <id> --thread-ts <ts> --event-id <id> --content-file <file>",
-                "Record a deliberate no-op for a chat event.",
+                "guildbotics member chat noop --person <person> --content-file <file>",
+                "Record a deliberate no-op for the chat run's event.",
             ),
             (
-                "guildbotics member chat complete --person <person> --service slack "
-                "--channel-id <id> --thread-ts <ts> --event-id <id> --status done|asking|blocked --content-file <file>",
-                "Finish a chat workflow run with evidence.",
-            ),
-            (
-                "guildbotics member task complete --person <person> --ticket-url <url> "
+                "guildbotics member chat complete --person <person> "
                 "--status done|asking|blocked --content-file <file>",
-                "Finish a ticket workflow run with evidence, revalidating affected "
-                "PR readiness before accepting done.",
+                "Finish the chat workflow run on its event with evidence.",
+            ),
+            (
+                "guildbotics member task complete --person <person> "
+                "--status done|asking|blocked --content-file <file>",
+                "Finish the ticket workflow run on its ticket with evidence, "
+                "revalidating affected PR readiness before accepting done.",
             ),
             (
                 "guildbotics member task status --person <person>",

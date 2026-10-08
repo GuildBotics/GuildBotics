@@ -64,11 +64,7 @@ async def _run(
     tmp_path: Path, command: str, brain: ScriptedAgent, message: dict[str, Any]
 ) -> Any:
     prepared = prepare_command(
-        _context(brain, message),
-        command,
-        ["conversation_id=conv-1"],
-        "bot",
-        tmp_path / "work",
+        _context(brain, message), command, [], "bot", tmp_path / "work"
     )
     # The Desktop reads the result as the type the assistant answers with.
     command = replace(prepared, result_type=brain.response_class)
@@ -98,12 +94,9 @@ async def test_troubleshooting_is_one_read_only_turn_that_inspects_the_workspace
     (turn,) = brain.turns
     # The question and where to look reach the agent as the caller sent them.
     assert json.loads(turn["message"]) == message
-    # Every turn of the conversation resumes the provider's own session.
-    assert turn["execution"] == {
-        "work_kind": "troubleshooting",
-        "work_identity": "conv-1",
-        "resume_policy": "auto",
-    }
+    # Every turn of the conversation resumes the provider's own session; which
+    # conversation it is, the host's grant says, not the command.
+    assert turn["execution"] == {"resume_policy": "auto"}
     assert turn["cwd"] == tmp_path / "work"
     # It changes nothing, and reads the recorded runs and what they ran with.
     assert ran[-1].access == CommandAccess(
@@ -174,11 +167,7 @@ async def test_authoring_sends_its_scope_in_one_read_only_turn(
             "modify_platform_code": False,
         },
     }
-    assert turn["execution"] == {
-        "work_kind": "command_authoring",
-        "work_identity": "conv-1",
-        "resume_policy": "auto",
-    }
+    assert turn["execution"] == {"resume_policy": "auto"}
     assert turn["cwd"] == tmp_path / "work"
     assert ran[-1].access == CommandAccess(read_only=True)
 

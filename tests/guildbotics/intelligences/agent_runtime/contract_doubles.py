@@ -15,6 +15,7 @@ from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import environment
 from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.intelligences.agent_runtime.member_broker import HostCalls
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 
@@ -42,7 +43,10 @@ def command_at(
         inputs=inputs,
         host=host
         or HostWindow(
-            person_id, "turn", "", workspace_root=workspace_root, ledger=Mock()
+            person_id,
+            Work("manual", "turn"),
+            workspace_root=workspace_root,
+            ledger=Mock(run_id="turn"),
         ),
     )
 

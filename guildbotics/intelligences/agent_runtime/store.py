@@ -63,7 +63,7 @@ class ConversationStore:
                 )
             if record is None:
                 return self._new_record(key, model=model)
-            if policy in {ResumePolicy.FRESH, ResumePolicy.RESET}:
+            if policy is ResumePolicy.FRESH:
                 record.rotate(policy.value)
             elif policy is ResumePolicy.AUTO:
                 reason = self.rotation_reason(record)

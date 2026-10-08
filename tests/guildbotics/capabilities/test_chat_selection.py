@@ -37,6 +37,12 @@ from guildbotics.intelligences.brains.cli_agent import (
 from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.observability import trace_scope
 from guildbotics.runtime.event_listener import IncomingChatEvent
+from guildbotics.runtime.member_invocation import (
+    ChatSubject,
+    MemberInvocation,
+    Work,
+    member_invocation_scope,
+)
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     ChatTurn,
@@ -181,12 +187,26 @@ class FakeInvokeContext(types.SimpleNamespace):
                     },
                 )
 
+            invocation = self.shared_state[WORKFLOW_INVOCATION_KEY]
             return await run_agent_turn(
                 invoke=_turn,
                 execution_context=execution_context,
-                ledger=HostRunLedger(),
+                ledger=HostRunLedger(invocation.run_id, invocation.work),
             )
         return await self._invoke_once(name, **kwargs)
+
+    @property
+    def run_id(self) -> str:
+        """The run the host started the workflow for."""
+        return self.shared_state[WORKFLOW_INVOCATION_KEY].run_id
+
+    def as_member(self):
+        """Run what follows as the turn's member commands do: under the
+        invocation of the workflow run's work."""
+        invocation = self.shared_state[WORKFLOW_INVOCATION_KEY]
+        return member_invocation_scope(
+            MemberInvocation(run_id=invocation.run_id, work=invocation.work)
+        )
 
     async def _invoke_once(self, name: str, /, **kwargs):
         self.invocations.append((name, kwargs))
@@ -222,7 +242,7 @@ class FakeInvokeContext(types.SimpleNamespace):
         ):
             # This attempt records nothing, so the completion gate fails.
             return {"status": "working", "message": "still working"}
-        run_id = kwargs["agent_execution_context"]["run_id"]
+        run_id = self.run_id
         store = RunStore()
         if self.action == "reply":
             store.append_evidence(
@@ -353,6 +373,8 @@ async def _dispatch(ctx, *, chat_service, state_store) -> None:
             source="event_queue",
             trigger_type="chat",
             payload=turn.model_dump(),
+            run_id=attempt.run_id,
+            work=Work.of_chat(turn.subject),
         )
         await chat_conversation_workflow.main(ctx)
 
@@ -377,9 +399,12 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     assert kwargs["service_name"] == "slack"
     assert kwargs["channel_id"] == "C1"
     execution_context = kwargs["agent_execution_context"]
-    assert execution_context["run_id"] == kwargs["agent_execution_context"]["run_id"]
-    assert execution_context["work_kind"] == "chat"
-    assert execution_context["work_identity"] == "slack:U_ALICE:C1:100.1"
+    # The run and the work are the host's, fixed when it selected the event.
+    assert ctx.shared_state[WORKFLOW_INVOCATION_KEY].work == Work.of_chat(
+        ChatSubject("slack", "C1", "100.1", "E1", "U_ALICE")
+    )
+    assert "run_id" not in execution_context
+    assert "work_identity" not in execution_context
     assert execution_context["context_cursor"] == "100.1"
     assert execution_context["event_id"] == "E1"
     assert execution_context["resume_policy"] == "auto"
@@ -388,13 +413,10 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     # completion for this one.
     assert execution_context["continuation_input"] == t(
         "commands.workflows.common.agent_chat_continuation",
-        run_id=kwargs["agent_execution_context"]["run_id"],
+        run_id=ctx.run_id,
         event_id="E1",
     )
-    assert (
-        kwargs["agent_execution_context"]["run_id"]
-        in execution_context["continuation_input"]
-    )
+    assert ctx.run_id in execution_context["continuation_input"]
     assert "E1" in execution_context["continuation_input"]
     assert kwargs["cwd"].name == "alice"
     assert kwargs["handoff_candidates"] == "[]"
@@ -488,7 +510,10 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
     second_context = _agent_invocations(second)[0][1]["agent_execution_context"]
     assert _agent_invocations(first)[0][1]["effort"] == "high"
     assert _agent_invocations(second)[0][1]["effort"] == "high"
-    assert first_context["work_identity"] == second_context["work_identity"]
+    assert (
+        first.shared_state[WORKFLOW_INVOCATION_KEY].work.identity
+        == second.shared_state[WORKFLOW_INVOCATION_KEY].work.identity
+    )
     assert first_context["context_cursor"] == "100.1"
     assert second_context["context_cursor"] == "101.1"
     assert second_context["rebuild_context_complete"] is True
@@ -1147,13 +1172,10 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
         if name == "functions/handle_chat_event"
     ]
     assert len(handle_calls) == 2
-    # All attempts share one run id and the same provider-neutral conversation.
-    run_ids = {kwargs["agent_execution_context"]["run_id"] for kwargs in handle_calls}
-    assert len(run_ids) == 1
-    conversation_keys = {
-        kwargs["agent_execution_context"]["work_identity"] for kwargs in handle_calls
-    }
-    assert conversation_keys == {"slack:U_ALICE:C1:100.1"}
+    # All attempts are turns of one run doing one work: one conversation.
+    assert ctx.shared_state[WORKFLOW_INVOCATION_KEY].work.identity == (
+        "slack:U_ALICE:C1:100.1"
+    )
     assert [call["agent_execution_context"]["attempt"] for call in handle_calls] == [
         3,
         4,
@@ -1375,15 +1397,6 @@ async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
     ]
     # Stops as soon as a turn records a terminal completion: no extra retries.
     assert len(handle_calls) == 2
-    # Both attempts reuse the same run id and conversation key.
-    assert (
-        handle_calls[0]["agent_execution_context"]["run_id"]
-        == handle_calls[1]["agent_execution_context"]["run_id"]
-    )
-    assert (
-        handle_calls[0]["agent_execution_context"]["work_identity"]
-        == handle_calls[1]["agent_execution_context"]["work_identity"]
-    )
     assert [call["agent_execution_context"]["attempt"] for call in handle_calls] == [
         1,
         2,
@@ -1881,14 +1894,13 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
     async def invoke(name, **kwargs):
         if name == "functions/handle_chat_event":
             store.upsert_pending_event("slack", "alice", "C1", _batch_event(5))
-            result = check_chat_updates(
-                "alice", kwargs["agent_execution_context"]["run_id"]
-            )
+            with ctx.as_member():
+                result = check_chat_updates("alice")
             assert [item["event_id"] for item in result["messages"]] == ["E5"]
             assert not store.is_processed_event("slack", "alice", "C1", "E5")
             if secondary:
                 RunStore().append_evidence(
-                    kwargs["agent_execution_context"]["run_id"],
+                    ctx.run_id,
                     action,
                     {"published": True},
                 )
@@ -1897,7 +1909,7 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
             if action == "blocked":
                 ChatReceiveStatus().save("slack", "alice", "C1", state="unavailable")
                 RunStore().complete_run(
-                    kwargs["agent_execution_context"]["run_id"],
+                    ctx.run_id,
                     "blocked",
                     "Reception stopped",
                     subject_type="chat",

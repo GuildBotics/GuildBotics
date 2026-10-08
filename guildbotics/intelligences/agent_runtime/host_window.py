@@ -6,12 +6,15 @@ its microVM with it (:meth:`MemberCapabilityBroker.serve`), each in the
 command's own context: its trace, its execution lease, the running command.
 The grant holds for the whole run, whether or not the run has a workflow run
 of its own, and what it covers is settled by the host, never by the caller:
-the member it runs as, the run it records to, and where the command works.
+the member it runs as, the run it records to, the work it does, and where the
+command works.
 
 Everything a call carries was written inside the microVM, where the agent's
-code runs beside the command's, so it is read as the agent's: the run it
-names must be the grant's, the conversation the member's, and a path is
-taken back to the host only as far as what the microVM mounted.
+code runs beside the command's, so it is read as the agent's. What the grant
+settles, no call names: a call acts on the grant's run and work. A
+conversation a call carries must be the one of the grant's work with a tool
+the command runs, and a path is taken back to the host only as far as what
+the microVM mounted.
 """
 
 from __future__ import annotations
@@ -82,6 +85,7 @@ from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
 )
 from guildbotics.observability.session_transcripts import recorded_stderr
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.utils.async_utils import to_thread
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
@@ -90,8 +94,6 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.log_utils import get_logger
 
-#: The kinds of work only a workflow run of that kind does.
-_WORKFLOW_KINDS = frozenset({"ticket", "chat"})
 #: What the command's environment may ask for.
 _CALLS = frozenset(
     {
@@ -117,26 +119,23 @@ class HostWindow:
 
     Args:
         person_id: The member the command runs as.
-        run_id: The run the command records to: its workflow run's, or one
-            of its own.
-        work_kind: The kind of work its workflow run does (``ticket`` or
-            ``chat``), or empty for a command that is no workflow run.
+        work: The work the command does.
         workspace_root: The workspace the command runs in.
-        ledger: The host's run record.
+        ledger: The host's record of the run the command records to: its
+            workflow run's, or one of its own.
     """
 
     def __init__(
         self,
         person_id: str,
-        run_id: str,
-        work_kind: str,
+        work: Work,
         *,
         workspace_root: Path,
         ledger: RunLedger,
     ) -> None:
         self._person_id = person_id
-        self._run_id = run_id
-        self._work_kind = work_kind
+        self._run_id = ledger.run_id
+        self._work = work
         self._workspace_root = workspace_root
         self._ledger = ledger
         self._conversations = ConversationStore(workspace_root)
@@ -171,7 +170,8 @@ class HostWindow:
         facts = CommandFacts(
             person_id=self._person_id,
             run_id=self._run_id,
-            work_kind=self._work_kind,
+            work_kind=self._work.kind,
+            work_identity=self._work.identity,
             trace_id=str(correlation_fields().get("trace_id") or ""),
             access=access,
             inspected=inspected_directories(access.inspects, self._workspace_root),
@@ -189,16 +189,11 @@ class HostWindow:
 
     @validate_call
     async def begin_turn(
-        self,
-        tool: str,
-        cwd: str,
-        run_id: str,
-        work_kind: str,
-        work_identity: str,
-        participant_labels: str = "",
+        self, tool: str, cwd: str, participant_labels: str = ""
     ) -> dict[str, Any]:
-        """Start a turn of ``tool`` in the command's microVM, working in
-        ``cwd`` as the microVM spells it, and lend it its login.
+        """Start a turn of ``tool`` in the command's microVM, doing the
+        grant's work and working in ``cwd`` as the microVM spells it, and
+        lend it its login.
 
         The turn holds what a turn started on the host holds: the command's
         execution lease, bound to its run while it lasts, and the member
@@ -206,7 +201,6 @@ class HostWindow:
         """
         if self._turning:
             raise HostCallError("refused", "A turn of this command is running.")
-        self._check_run(run_id, work_kind)
         try:
             where = host_path(cwd)
         except AgentEnvironmentSpecError as exc:
@@ -214,24 +208,23 @@ class HostWindow:
         lease = command_lease()
         context = AgentExecutionContext(
             person_id=self._person_id,
-            run_id=run_id,
+            run_id=self._run_id,
             cwd=where,
-            conversation_key=ConversationKey(
-                self._person_id, tool, work_kind, work_identity
-            ),
+            conversation_key=self._conversation(tool),
             lease=lease,
             participant_labels=participant_labels,
             trace_id=str(correlation_fields().get("trace_id") or ""),
+            work=self._work,
         )
         # Nothing above waits, so no other turn starts in between.
         self._turning = True
         try:
             if lease is not None:
-                lease.bind_run_id(run_id)
+                lease.bind_run_id(self._run_id)
             turn = await start_turn_environment(context, tool)
         except BaseException:
             if lease is not None:
-                lease.unbind_run_id(run_id)
+                lease.unbind_run_id(self._run_id)
             self._turning = False
             raise
         self._turn = (context, turn)
@@ -291,31 +284,23 @@ class HostWindow:
         return context
 
     @validate_call
-    async def require_completion(self, run_id: str) -> None:
-        self._check_run(run_id)
-        await asyncio.to_thread(self._ledger.require_completion, run_id)
+    async def require_completion(self) -> None:
+        await asyncio.to_thread(self._ledger.require_completion)
 
     @validate_call
-    async def evidence(self, run_id: str) -> list[dict[str, Any]]:
-        self._check_run(run_id)
-        return await asyncio.to_thread(self._ledger.evidence, run_id)
+    async def evidence(self) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._ledger.evidence)
 
     @validate_call
-    async def record_completed(self, run_id: str, attempt: int) -> None:
-        self._check_run(run_id)
-        await to_thread(self._ledger.record_completed, run_id, attempt)
+    async def record_completed(self, attempt: int) -> None:
+        await to_thread(self._ledger.record_completed, attempt)
 
     @validate_call
     async def record_completion_missing(
-        self, run_id: str, attempt: int, max_attempts: int, error: str
+        self, attempt: int, max_attempts: int, error: str
     ) -> None:
-        self._check_run(run_id)
         await to_thread(
-            self._ledger.record_completion_missing,
-            run_id,
-            attempt,
-            max_attempts,
-            error,
+            self._ledger.record_completion_missing, attempt, max_attempts, error
         )
 
     @validate_call
@@ -376,8 +361,8 @@ class HostWindow:
             self._person_id,
             arguments,
             member_invocation(
-                self._work_kind,
                 self._run_id,
+                self._work,
                 str(correlation_fields().get("trace_id") or ""),
                 command_lease(),
             ),
@@ -488,18 +473,6 @@ class HostWindow:
             ConversationRecord(key=entry.conversation, generation=entry.generation),
         )
 
-    def _check_run(self, run_id: str, work_kind: str | None = None) -> None:
-        """Refuse a run other than the grant's, or work of a kind only
-        another run does."""
-        if run_id != self._run_id:
-            raise HostCallError("refused", "The run is not this command's.")
-        if work_kind is not None and (
-            work_kind != self._work_kind
-            if self._work_kind
-            else work_kind in _WORKFLOW_KINDS
-        ):
-            raise HostCallError("refused", "The work is not this command's.")
-
     def _confinement(self, details: Mapping[str, Any]) -> dict[str, Any]:
         """An event's details, with where its turn works replaced by what the
         environment confines it to there, whatever provider runs it.
@@ -523,13 +496,18 @@ class HostWindow:
         if tool not in running_command().tools:
             raise HostCallError("refused", "The command does not run that tool.")
 
+    def _conversation(self, tool: str) -> ConversationKey:
+        """The member's conversation of the grant's work with ``tool``."""
+        return ConversationKey(
+            self._person_id, tool, self._work.kind, self._work.identity
+        )
+
     def _check_conversation(self, key: ConversationKey) -> None:
-        """Refuse a conversation not of the member's work of the grant's run
+        """Refuse a conversation other than the member's of the grant's work
         with a tool the command runs."""
-        if key.person_id != self._person_id:
-            raise HostCallError("refused", "The conversation is another member's.")
         self._check_tool(key.adapter)
-        self._check_run(self._run_id, key.work_kind)
+        if key != self._conversation(key.adapter):
+            raise HostCallError("refused", "The conversation is not this work's.")
 
 
 def _inference_failed(exc: Exception) -> HostCallError:

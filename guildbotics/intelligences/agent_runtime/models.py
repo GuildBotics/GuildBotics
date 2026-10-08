@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
 
@@ -15,7 +16,6 @@ class ResumePolicy(StrEnum):
     FRESH = "fresh"
     RESUME = "resume"
     AUTO = "auto"
-    RESET = "reset"
 
 
 class AgentEventKind(StrEnum):
@@ -115,6 +115,9 @@ class AgentExecutionContext:
     #: the execution that asked for it.
     trace_id: str = ""
     login: TurnLogin = field(default_factory=TurnLogin)
+    #: The work the host's grant holds the turn to, which the member commands
+    #: it asks for act on; only the host, which settles it, has it.
+    work: Work | None = None
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:

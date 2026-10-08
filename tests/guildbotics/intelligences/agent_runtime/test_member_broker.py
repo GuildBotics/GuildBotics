@@ -31,7 +31,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
 )
 from guildbotics.capabilities.member_reference import capability_reference_text
-from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.member_invocation import ChatSubject, MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.loopback_server import LoopbackServer
 
@@ -39,15 +39,18 @@ from guildbotics.utils.loopback_server import LoopbackServer
 _MEMBER_CLI = importlib.import_module("guildbotics.cli.member")
 
 
-def _context(tmp_path: Path, *, work_kind: str = "ticket") -> AgentExecutionContext:
+def _context(
+    tmp_path: Path, *, work: Work = Work.of_ticket("https://example.test/1")
+) -> AgentExecutionContext:
     return AgentExecutionContext(
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path / "data" / "workspaces" / "aiko",
-        conversation_key=ConversationKey("aiko", "grok", work_kind, "work-1"),
+        conversation_key=ConversationKey("aiko", "grok", work.kind, work.identity),
         lease=PersonExecutionLease("aiko", tmp_path),
         participant_labels='{"U1":"aiko"}',
         trace_id="trace-parent",
+        work=work,
     )
 
 
@@ -69,11 +72,14 @@ def _can_bind_localhost() -> bool:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("work_kind", "run_id", "task_run_id"),
-    [("ticket", "", "run-1"), ("chat", "run-1", "")],
+    ("work", "run_id", "task_run_id"),
+    [
+        (Work.of_ticket("https://example.test/1"), "", "run-1"),
+        (Work.of_chat(ChatSubject("slack", "C1", "1.0", "C1:1.1", "U1")), "run-1", ""),
+    ],
 )
 async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
-    monkeypatch, tmp_path, work_kind: str, run_id: str, task_run_id: str
+    monkeypatch, tmp_path, work: Work, run_id: str, task_run_id: str
 ) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -90,7 +96,7 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
         return 3, "out", "err"
 
     monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
-    context = _context(tmp_path, work_kind=work_kind)
+    context = _context(tmp_path, work=work)
     broker = _active_broker(context)
 
     result = await broker.execute(
@@ -103,6 +109,7 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
             "invocation": MemberInvocation(
                 run_id=run_id,
                 task_run_id=task_run_id,
+                work=work,
                 participant_labels='{"U1":"aiko"}',
                 trace_id="trace-parent",
                 lease=context.lease,

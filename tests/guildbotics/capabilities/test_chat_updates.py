@@ -17,7 +17,9 @@ from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.runtime.member_invocation import (
+    ChatSubject,
     MemberInvocation,
+    Work,
     member_invocation_scope,
 )
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
@@ -27,21 +29,21 @@ from tests.guildbotics.capabilities.test_member_github import (
 )
 
 
+_SOURCE = ChatSubject(
+    service="slack",
+    channel_id="C1",
+    thread_ts="100.1",
+    event_id="E1",
+    self_user_id="U_BOT",
+)
+
+
 @pytest.fixture
 def chat_run():
-    with member_invocation_scope(MemberInvocation(run_id="chat-run")):
-        RunStore().append_evidence(
-            "chat-run",
-            "chat_batch",
-            {
-                "person_id": "aiko",
-                "service": "slack",
-                "channel_id": "C1",
-                "thread_ts": "100.1",
-                "self_user_id": "U_BOT",
-                "event_ids": ["E1"],
-            },
-        )
+    with member_invocation_scope(
+        MemberInvocation(run_id="chat-run", work=Work.of_chat(_SOURCE))
+    ):
+        RunStore().append_evidence("chat-run", "chat_batch", {"event_ids": ["E1"]})
         ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
         yield FileConversationStateStore()
 
@@ -67,13 +69,13 @@ def test_check_delivers_all_new_input_without_consuming_queue(chat_run):
     queue(chat_run, event(3))
     with pytest.raises(ChatUpdatesRequired, match="chat updates"):
         ensure_chat_current("aiko")
-    result = check_chat_updates("aiko", "chat-run")
+    result = check_chat_updates("aiko")
     assert result["status"] == "new_messages"
     assert [item["event_id"] for item in result["messages"]] == ["E3", "E5"]
     assert len(chat_run.load_pending_events("slack", "aiko", "C1")) == 2
     assert not chat_run.is_processed_event("slack", "aiko", "C1", "E3")
     assert chat_batch_event_ids(RunStore().evidence("chat-run")) == ["E1", "E3", "E5"]
-    assert check_chat_updates("aiko", "chat-run")["status"] == "up_to_date"
+    assert check_chat_updates("aiko")["status"] == "up_to_date"
     ensure_chat_current("aiko")
     queue(chat_run, event(6))
     with pytest.raises(ChatUpdatesRequired, match="chat updates"):
@@ -90,7 +92,7 @@ def test_only_source_thread_external_unprocessed_input_is_new(chat_run):
     ):
         queue(chat_run, message)
     chat_run.mark_processed_event("slack", "aiko", "C1", "E5")
-    assert check_chat_updates("aiko", "chat-run")["messages"] == []
+    assert check_chat_updates("aiko")["messages"] == []
 
 
 @pytest.mark.parametrize("state", ["missing", "disconnected", "stale", "malformed"])
@@ -106,23 +108,45 @@ def test_unavailable_is_never_no_new_messages(chat_run, monkeypatch, state):
     else:
         now = json.loads(path.read_text())["checked_at"]
         monkeypatch.setattr(chat_receive_status.time, "time", lambda: now + 16)
-    assert check_chat_updates("aiko", "chat-run")["status"] == "unavailable"
+    assert check_chat_updates("aiko")["status"] == "unavailable"
     assert len(RunStore().evidence("chat-run")) == 1
     with pytest.raises(ChatUpdatesRequired):
         ensure_chat_current("aiko")
 
 
-def test_member_must_match_the_runs_input(chat_run):
-    with pytest.raises(ChatUpdatesRequired):
-        check_chat_updates("other", "chat-run")
+def test_the_source_thread_is_the_runs_work_not_what_its_record_says(chat_run):
+    """Whatever the run's record names, the thread checked is the one the
+    host settled as the run's work."""
+    RunStore().append_evidence(
+        "chat-run",
+        "chat_batch",
+        {"event_ids": ["E1"], "channel_id": "C2", "thread_ts": "other"},
+    )
+    queue(chat_run, event(3))
+    queue(chat_run, replace(event(4), thread_ts="other"))
+
+    result = check_chat_updates("aiko")
+
+    assert (result["channel_id"], result["thread_ts"]) == ("C1", "100.1")
+    assert [item["event_id"] for item in result["messages"]] == ["E3"]
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        MemberInvocation(),
+        MemberInvocation(task_run_id="ticket-run", work=Work.of_ticket("https://x")),
+    ],
+)
+def test_only_a_chat_run_has_updates_to_check(invocation):
+    with member_invocation_scope(invocation):
+        with pytest.raises(ChatUpdatesRequired):
+            check_chat_updates("aiko")
 
 
 def test_new_batch_resets_checked_membership(chat_run):
-    check_chat_updates("aiko", "chat-run")
-    source = RunStore().evidence("chat-run")[0]["payload"]
-    RunStore().append_evidence(
-        "chat-run", "chat_batch", {**source, "event_ids": ["E7"]}
-    )
+    check_chat_updates("aiko")
+    RunStore().append_evidence("chat-run", "chat_batch", {"event_ids": ["E7"]})
     assert chat_batch_event_ids(RunStore().evidence("chat-run")) == ["E7"]
     with pytest.raises(ChatUpdatesRequired):
         ensure_chat_current("aiko")
@@ -146,11 +170,11 @@ async def test_chat_write_checks_source_even_for_another_destination(chat_run, a
     with pytest.raises(ChatUpdatesRequired):
         await publish()
     assert not service.chat_service.posts and not service.chat_service.reactions
-    check_chat_updates("aiko", "chat-run")
+    check_chat_updates("aiko")
     queue(chat_run, event(3))
     with pytest.raises(ChatUpdatesRequired):
         await publish()
-    check_chat_updates("aiko", "chat-run")
+    check_chat_updates("aiko")
     await publish()
     assert len(service.chat_service.posts) + len(service.chat_service.reactions) == 1
 
@@ -165,7 +189,7 @@ async def test_github_comment_checks_original_chat(chat_run):
         await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
     # A refused write reaches GitHub for nothing, not even to read the issue.
     assert not client.posts and not client.gets
-    check_chat_updates("aiko", "chat-run")
+    check_chat_updates("aiko")
     await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
     assert len(client.posts) == 1
 
@@ -187,7 +211,7 @@ def test_pending_reads_the_processed_cursor_once(chat_run, monkeypatch):
         return original(store, *scope)
 
     monkeypatch.setattr(FileConversationStateStore, "load_channel_cursor", load)
-    result = check_chat_updates("aiko", "chat-run")
+    result = check_chat_updates("aiko")
     assert len(result["messages"]) == 20
     assert reads == [("slack", "aiko", "C1")]
 

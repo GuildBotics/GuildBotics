@@ -50,16 +50,13 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
-| [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
-| [`guildbotics member agent conversation`](#guildbotics-member-agent-conversation) | Manage persisted native agent conversations. |
-| [`guildbotics member agent conversation reset`](#guildbotics-member-agent-conversation-reset) | Reset one exact native provider session without deleting history. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
-| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish a chat workflow run with evidence. |
+| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
 | [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
 | [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect Slack channel or thread messages for interactive decisions. |
 | [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel) | Read recent channel messages. |
 | [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread) | Read a thread before replying or reacting. |
-| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for a chat event. |
+| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
 | [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
 | [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
 | [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add) | Add a semantic reaction. |
@@ -101,7 +98,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
 | [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
@@ -647,7 +644,6 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member agent`](#guildbotics-member-agent) | Manage native agent runtime state. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
@@ -656,55 +652,6 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-
-## `guildbotics member agent`
-
-Manage native agent runtime state.
-
-```text
-guildbotics member agent [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member agent conversation`](#guildbotics-member-agent-conversation) | Manage persisted native agent conversations. |
-
-## `guildbotics member agent conversation`
-
-Manage persisted native agent conversations.
-
-```text
-guildbotics member agent conversation [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member agent conversation reset`](#guildbotics-member-agent-conversation-reset) | Reset one exact native provider session without deleting history. |
-
-## `guildbotics member agent conversation reset`
-
-Reset one exact native provider session without deleting history.
-
-```text
-guildbotics member agent conversation reset [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--adapter [codex\|claude\|grok]` | Native provider adapter whose exact session should be reset. [required] |
-| `--work-kind [ticket\|chat\|manual]` | Kind of logical work owning the conversation. [required] |
-| `--work-identity TEXT` | Stable ticket URL, chat thread identity, or manual work identity. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
 
 ## `guildbotics member chat`
 
@@ -720,10 +667,10 @@ guildbotics member chat [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish a chat workflow run with evidence. |
+| [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
 | [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
 | [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect Slack channel or thread messages for interactive decisions. |
-| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for a chat event. |
+| [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
 | [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
 | [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
 | [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
@@ -732,7 +679,7 @@ guildbotics member chat [OPTIONS] COMMAND [ARGS]...
 
 ## `guildbotics member chat complete`
 
-Finish a chat workflow run with evidence.
+Finish the chat workflow run on its event with evidence.
 
 ```text
 guildbotics member chat complete [OPTIONS]
@@ -741,10 +688,6 @@ guildbotics member chat complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
-| `--channel-id TEXT` | Channel id of the triggering event. [required] |
-| `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
-| `--event-id TEXT` | Event id of the chat trigger. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
@@ -825,7 +768,7 @@ guildbotics member chat inspect thread [OPTIONS]
 
 ## `guildbotics member chat noop`
 
-Record a deliberate no-op for a chat event.
+Record a deliberate no-op for the chat run's event.
 
 ```text
 guildbotics member chat noop [OPTIONS]
@@ -834,10 +777,6 @@ guildbotics member chat noop [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
-| `--channel-id TEXT` | Channel id of the triggering event. [required] |
-| `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
-| `--event-id TEXT` | Event id of the chat trigger. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1608,12 +1547,12 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 
 ## `guildbotics member task complete`
 
-Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done.
+Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1622,7 +1561,6 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--ticket-url TEXT` | Ticket URL the completed run worked on. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |

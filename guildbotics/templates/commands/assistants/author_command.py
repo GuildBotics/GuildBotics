@@ -14,7 +14,7 @@ COMMAND_METADATA = {
 }
 
 
-async def main(context: Any, *, conversation_id: str) -> CommandAuthoringResult:
+async def main(context: Any) -> CommandAuthoringResult:
     """Answer one command-authoring request, or propose reviewed changes.
 
     The message is one JSON object: ``mode``, the current ``command`` and
@@ -30,8 +30,6 @@ async def main(context: Any, *, conversation_id: str) -> CommandAuthoringResult:
             "functions/author_command",
             message=json.dumps(payload, ensure_ascii=False),
             agent_execution_context={
-                "work_kind": "command_authoring",
-                "work_identity": conversation_id,
                 "resume_policy": "auto",
             },
         )

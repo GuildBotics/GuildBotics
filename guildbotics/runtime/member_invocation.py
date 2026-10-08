@@ -86,17 +86,74 @@ class CommandGuest(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class ChatSubject:
+    """The chat event a chat workflow run answers, in its source thread."""
+
+    service: str
+    channel_id: str
+    thread_ts: str
+    event_id: str
+    #: The member's own user on the service, whose messages are no input.
+    self_user_id: str
+
+    @property
+    def subject_id(self) -> str:
+        """The event as a run's completion names its subject."""
+        return f"{self.service}:{self.channel_id}:{self.thread_ts}:{self.event_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class Work:
+    """The work a command run does, settled by the host that starts the run.
+
+    ``kind`` and ``identity`` key the member's conversation with each AI CLI
+    tool; a ticket is identified by its URL, which is also its subject.
+    ``chat`` is the subject of a chat workflow run. Nothing the run passes
+    changes any of it.
+    """
+
+    kind: str
+    identity: str
+    chat: ChatSubject | None = None
+
+    @classmethod
+    def of_ticket(cls, url: str) -> Work:
+        """The work of a ticket workflow run on the ticket at ``url``."""
+        return cls("ticket", url)
+
+    @classmethod
+    def of_chat(cls, subject: ChatSubject) -> Work:
+        """The work of a chat workflow run on ``subject``: the conversation of
+        its whole thread."""
+        return cls(
+            "chat",
+            ":".join(
+                (
+                    subject.service,
+                    subject.self_user_id,
+                    subject.channel_id,
+                    subject.thread_ts,
+                )
+            ),
+            subject,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MemberInvocation:
     """Execution metadata shared by one member command invocation.
 
-    ``lease`` is the execution lease of the turn that asked for the command:
-    holding it is what lets a workflow's member command write as that person.
-    ``guest`` is the environment of the command that turn belongs to; outside
-    a command there is none.
+    ``work`` is the work of the run that asked for the command, as its host
+    settled it: the subject the command completes or checks is its, never
+    one the command is told. ``lease`` is the execution lease of the turn that
+    asked for the command: holding it is what lets a workflow's member command
+    write as that person. ``guest`` is the environment of the command that
+    turn belongs to; outside a command there is none.
     """
 
     run_id: str = ""
     task_run_id: str = ""
+    work: Work | None = None
     participant_labels: str = ""
     trace_id: str = ""
     lease: PersonExecutionLease | None = None

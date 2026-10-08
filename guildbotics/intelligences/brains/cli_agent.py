@@ -344,8 +344,6 @@ def _thread_messages_before_current(context: dict[str, Any]) -> list[dict[str, A
 def _thread_context_input(
     input: str, context: dict[str, Any], *, mode: str, after_cursor: str = ""
 ) -> str:
-    if str(context.get("work_kind") or "") != "chat":
-        return input
     if mode in {"full", "incremental"}:
         messages = _thread_messages_before_current(context)
         if mode == "incremental":
@@ -367,8 +365,7 @@ def _thread_context_input(
 
 
 def _continuation_input(input: str, context: dict[str, Any]) -> str:
-    continuation = str(context.get("continuation_input") or "").strip() or input
-    return _thread_context_input(continuation, context, mode="continuation")
+    return str(context.get("continuation_input") or "").strip() or input
 
 
 def _continuation_identity_matches(
@@ -441,7 +438,9 @@ def _native_turn_input(
             return input
         relation = _cursor_relation(context.context_cursor, conversation.context_cursor)
         if relation == "equal":
-            return _continuation_input(input, configured)
+            return _thread_context_input(
+                _continuation_input(input, configured), configured, mode="continuation"
+            )
         return _thread_context_input(
             input,
             configured,
@@ -753,19 +752,17 @@ class CliAgentBrain(Brain):
         records: _TurnRecords,
         model: str,
     ) -> CliAgentExecutionResult:
-        """Run the turn for the command's run, or the workflow run's work the
-        call names: the host's grant holds every turn of the command to its
-        run, and gives it the execution lease the run holds."""
+        """Run the turn for the command's run and work, which the host's grant
+        holds every turn of the command to, and which give it the execution
+        lease the run holds and its conversation."""
         facts = CommandFacts.read(os.environ)
         configured = _agent_execution_context(kwargs)
         adapter_name = self.executable_info.adapter
-        run_id = str(configured.get("run_id") or facts.run_id)
-        work_kind = str(configured.get("work_kind") or facts.work_kind or "manual")
         key = ConversationKey(
             person_id=self.person_id,
             adapter=adapter_name,
-            work_kind=work_kind,
-            work_identity=str(configured.get("work_identity") or run_id),
+            work_kind=facts.work_kind,
+            work_identity=facts.work_identity,
         )
         try:
             policy = ResumePolicy(str(configured.get("resume_policy") or "fresh"))
@@ -773,7 +770,7 @@ class CliAgentBrain(Brain):
             policy = ResumePolicy.FRESH
         context = AgentExecutionContext(
             person_id=self.person_id,
-            run_id=run_id,
+            run_id=facts.run_id,
             cwd=Path(cwd),
             conversation_key=key,
             trace_id=facts.trace_id,

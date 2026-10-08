@@ -13,7 +13,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Sequence
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -55,6 +55,7 @@ from guildbotics.intelligences.brains.cli_agent import (
 from guildbotics.observability import current_trace
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WORKFLOW_INVOCATION_KEY,
@@ -73,6 +74,7 @@ __all__ = [
     "prepare_host_command",
     "run_command",
     "run_in_environment",
+    "run_ledger",
     "run_main_command",
 ]
 
@@ -86,7 +88,8 @@ class PreparedCommand:
     command's file, and ``access`` what it declares. ``result_type`` is what
     the caller reads the main command's own result as, if it reads one.
     ``inputs`` is the directory of the files the Desktop handed over for the
-    command, which its microVM reads.
+    command, which its microVM reads. ``work`` is the work the caller runs it
+    for, when it names one; a workflow run's is its invocation's.
     """
 
     context: Context
@@ -97,39 +100,73 @@ class PreparedCommand:
     access: CommandAccess
     result_type: type[BaseModel] | None = None
     inputs: Path | None = None
+    work: Work | None = None
 
 
 class HostRunLedger:
-    """The host's run record, read and reported to by completion-managed turns.
+    """The host's record of one command run, read and reported to by its
+    completion-managed turns (a ``RunLedger``).
 
-    Where the record lives is settled once, from this host's own workspace, so
-    nothing a turn passes decides which record the host reads. It is settled
-    on first use: a command that never drives such a turn needs no workspace.
+    Which run it is and where its record lives are settled by this host, so
+    nothing a turn passes decides which record the host reads. The store is
+    opened on first use: a command that never drives such a turn needs no
+    workspace.
     """
+
+    def __init__(self, run_id: str, work: Work) -> None:
+        self.run_id = run_id
+        self.work = work
+
+    @property
+    def work_kind(self) -> str:
+        """The kind of work the run does."""
+        return self.work.kind
 
     @cached_property
     def _store(self) -> RunStore:
         return RunStore()
 
-    def require_completion(self, run_id: str) -> None:
+    def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
-        self._store.status(run_id)
+        self._store.status(self.run_id)
 
-    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+    def evidence(self) -> list[dict[str, Any]]:
         """Return the evidence the run has recorded so far."""
-        return self._store.evidence(run_id)
+        return self._store.evidence(self.run_id)
 
-    def record_completed(self, run_id: str, attempt: int) -> None:
+    def record_completed(self, attempt: int) -> None:
         """Record that the run's completion was found after an attempt."""
-        record_workflow_completed(run_id=run_id, attempt=attempt)
+        record_workflow_completed(run_id=self.run_id, attempt=attempt)
 
     def record_completion_missing(
-        self, run_id: str, attempt: int, max_attempts: int, error: str
+        self, attempt: int, max_attempts: int, error: str
     ) -> None:
         """Record an attempt that ended without the run's completion."""
         record_workflow_completion_missing(
-            run_id=run_id, attempt=attempt, max_attempts=max_attempts, error=error
+            run_id=self.run_id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            error=error,
         )
+
+
+def run_ledger(command: PreparedCommand) -> HostRunLedger:
+    """The record of the run ``command`` starts, and the work it does: its
+    workflow run's, as the host selected it; else its own run, doing the work
+    the caller named or else manual work."""
+    invocation: WorkflowInvocation | None = command.context.shared_state.get(
+        WORKFLOW_INVOCATION_KEY
+    )
+    trace = current_trace()
+    run_id = (invocation.run_id if invocation is not None else "") or (
+        trace.trace_id if trace is not None else uuid4().hex
+    )
+    work = (
+        (invocation.work if invocation is not None else None)
+        or command.work
+        or Work("manual", run_id)
+    )
+    return HostRunLedger(run_id, work)
 
 
 def host_command_cwd() -> Path:
@@ -296,8 +333,9 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     discarded when the run ends, however it ends. The machine is kept out of
     idle sleep for as long as it runs, since sleep would stop its microVM.
     What its microVM asks of the host is answered under the run's grant: the
-    member it runs as, and the run it records to -- its workflow run's, or
-    else one of its own.
+    member it runs as, the run it records to -- its workflow run's, or else
+    one of its own -- and the work it does: its workflow run's, the one the
+    caller named, or else the run's own manual work.
     What it returns is read as the host reads anything from it: its result
     only as the type the caller asked for.
 
@@ -327,21 +365,12 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     invocation: WorkflowInvocation | None = context.shared_state.get(
         WORKFLOW_INVOCATION_KEY
     )
-    workflow = (
-        invocation
-        if invocation is not None and invocation.trigger_type in {"ticket", "chat"}
-        else None
-    )
-    trace = current_trace()
-    run_id = (str(workflow.payload.get("run_id") or "") if workflow else "") or (
-        trace.trace_id if trace is not None else uuid4().hex
-    )
+    ledger = run_ledger(command)
     window = HostWindow(
         person_id,
-        run_id,
-        workflow.trigger_type if workflow else "",
+        ledger.work,
         workspace_root=workspace_root,
-        ledger=HostRunLedger(),
+        ledger=ledger,
     )
     request = CommandRequest(
         path=command_path(command.path),
@@ -349,7 +378,7 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
         args=command.args,
         cwd=guest_path(command.cwd),
         pipe=context.pipe,
-        invocation=asdict(invocation) if invocation is not None else None,
+        invocation=invocation,
         wants_result=command.result_type is not None,
     )
     try:

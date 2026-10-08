@@ -31,6 +31,7 @@ from guildbotics.integrations.workflow_status_comment import (
 )
 from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WorkflowInvocation,
@@ -125,9 +126,9 @@ class TicketSelector:
                 return await run_workflow(
                     replace(
                         invocation,
+                        run_id=run_id,
                         payload={
                             **invocation.payload,
-                            "run_id": run_id,
                             "max_completion_attempts": _max_agent_attempts(),
                         },
                     )
@@ -212,6 +213,7 @@ class TicketSelector:
             trigger_type="ticket",
             payload=payload,
             idempotency_key=idempotency_key,
+            work=Work.of_ticket(ticket_url),
         )
 
 

@@ -85,12 +85,14 @@ def enter_command(
     *,
     person_id: str = "aiko",
     run_id: str = "command-run",
-    work_kind: str = "",
+    work_kind: str = "manual",
+    work_identity: str = "",
     trace_id: str = "command-trace",
 ) -> None:
     """Run what follows as code inside a command's environment: the command
-    is ``run_id`` of ``person_id``, and its window to the host is
-    ``window``."""
+    is ``run_id`` of ``person_id``, doing the work of ``work_kind`` and
+    ``work_identity`` (the run's own by default), and its window to the host
+    is ``window``."""
     monkeypatch.setattr(turn, "command_window", lambda: window)
     monkeypatch.setenv(
         COMMAND_ENV,
@@ -98,6 +100,7 @@ def enter_command(
             person_id=person_id,
             run_id=run_id,
             work_kind=work_kind,
+            work_identity=work_identity or run_id,
             trace_id=trace_id,
             access=CommandAccess(),
         ).dump(),

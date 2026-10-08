@@ -12,6 +12,7 @@ from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
 )
 from guildbotics.observability import current_trace, trace_scope
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
@@ -101,6 +102,7 @@ def _invocation(task: Task, source: str = "routine") -> WorkflowInvocation:
             "pull_request_url": "",
             "trigger_reason": "",
         },
+        work=Work.of_ticket(ISSUE_URL),
     )
 
 
@@ -163,8 +165,10 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
     assert manager.moved == [("1", Task.IN_PROGRESS)]
     assert manager.comments == []
     invocation, attributes = seen[0]
-    # The run is its trace, and the host decides the completion budget.
-    assert invocation.payload["run_id"] == "trace-7"
+    # The run is its trace, the work the ticket the host selected, and the
+    # host decides the completion budget.
+    assert invocation.run_id == "trace-7"
+    assert invocation.work == Work.of_ticket(ISSUE_URL)
     assert invocation.payload["max_completion_attempts"] == 3
     assert invocation.payload["ticket_url"] == ISSUE_URL
     # A route whose trace opened before selection still names the ticket.
@@ -180,17 +184,17 @@ async def test_run_outside_a_trace_stands_alone_with_the_default_budget(
 ):
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", raw)
     manager = _TicketManager()
-    payloads: list[dict] = []
+    invocations: list[WorkflowInvocation] = []
 
     async def run_workflow(invocation: WorkflowInvocation) -> None:
-        payloads.append(invocation.payload)
+        invocations.append(invocation)
 
     await TicketSelector(_Context(manager)).run(  # type: ignore[arg-type]
         _Person(), _invocation(_task(Task.IN_PROGRESS)), run_workflow
     )
 
-    assert payloads[0]["run_id"]
-    assert payloads[0]["max_completion_attempts"] == expected
+    assert invocations[0].run_id
+    assert invocations[0].payload["max_completion_attempts"] == expected
     # Only a ticket that is ready moves to the working lane.
     assert manager.moved == []
 
@@ -336,6 +340,8 @@ async def test_run_next_runs_the_first_ticket_in_patrol_order():
     [invocation] = seen
     assert invocation.source == "manual"
     assert invocation.payload["task"]["id"] == "1"
+    # The work is fixed when the ticket is selected: its URL, its subject.
+    assert invocation.work == Work.of_ticket(invocation.payload["ticket_url"])
     assert manager.moved == [("1", Task.IN_PROGRESS)]
 
 

@@ -83,9 +83,9 @@ A publication command rejects unchecked input, newly arrived messages, or unavai
 9. If a text reply is appropriate, run `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-file <file>` and pass the entire body through the temporary-file contract from the member capabilities.
 10. Use `guildbotics member chat post` only when a normal channel post is actually required. Normal incoming thread responses should be replies.
 11. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support`.
-12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
+12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
 13. If more information is needed, post the question as a reply in this thread first, then complete the run with status `asking`.
 14. If autonomous workflow policy should change, propose it in a Slack reply/post; do not update policy directly.
-15. Finish by running `guildbotics member chat complete --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --event-id {event_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
+15. Finish by running `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
 16. Return only one AgentResponse JSON object, for example `{"status":"done","message":"Posted a Slack thread reply."}` / `{"status":"done","message":"Recorded that no response was needed."}` / `{"status":"asking","message":"Posted a follow-up question in Slack."}`.
 </instructions>

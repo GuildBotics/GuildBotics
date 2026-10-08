@@ -120,19 +120,22 @@ from guildbotics.commands.runner import CommandRunner
 calls = []
 
 class Ledger:
-    def require_completion(self, run_id):
+    run_id = "run-1"
+    work_kind = "chat"
+
+    def require_completion(self):
         calls.append("require_completion")
         if calls.count("require_completion") == 1:
             raise RuntimeError("not completed")
 
-    def evidence(self, run_id):
+    def evidence(self):
         calls.append("evidence")
         return []
 
-    def record_completed(self, run_id, attempt):
+    def record_completed(self, attempt):
         calls.append("record_completed")
 
-    def record_completion_missing(self, run_id, attempt, max_attempts, error):
+    def record_completion_missing(self, attempt, max_attempts, error):
         calls.append("record_completion_missing")
 
 async def invoke_once(name, args, kwargs, cwd):
@@ -144,11 +147,7 @@ runner._invoke_once = invoke_once
 result = asyncio.run(
     runner._invoke(
         "functions/handle_chat_event",
-        agent_execution_context={
-            "run_id": "run-1",
-            "work_kind": "chat",
-            "max_completion_attempts": 2,
-        },
+        agent_execution_context={"max_completion_attempts": 2},
     )
 )
 print(json.dumps({"result": result, "calls": calls, "loaded": sorted(sys.modules)}))

@@ -135,7 +135,7 @@ def test_auto_rotation_clears_provider_state(
     assert rotated.context_cursor == ""
 
 
-def test_settings_change_keeps_session_and_explicit_reset_rotates(tmp_path) -> None:
+def test_settings_change_keeps_session_and_a_fresh_start_rotates(tmp_path) -> None:
     store = ConversationStore(tmp_path)
     record = store.resolve(_key(), ResumePolicy.AUTO, model="old")
     record.provider_session_id = "thread-1"
@@ -147,13 +147,13 @@ def test_settings_change_keeps_session_and_explicit_reset_rotates(tmp_path) -> N
     assert changed.model == "new"
     store.save(changed)
 
-    reset = store.resolve(_key(), ResumePolicy.RESET, model="new")
-    store.save(reset)
+    fresh = store.resolve(_key(), ResumePolicy.FRESH, model="new")
+    store.save(fresh)
     loaded = store.load(_key())
 
     assert loaded is not None
     assert loaded.generation == 1
-    assert loaded.rotation_reason == "reset"
+    assert loaded.rotation_reason == "fresh"
     payload = json.loads(
         next(
             (
@@ -205,7 +205,7 @@ def test_rotation_clears_last_run_and_event_identity(tmp_path) -> None:
     record.last_event_id = "EA"
     store.save(record)
 
-    rotated = store.resolve(_key(), ResumePolicy.RESET)
+    rotated = store.resolve(_key(), ResumePolicy.FRESH)
 
     assert rotated.last_run_id == ""
     assert rotated.last_event_id == ""

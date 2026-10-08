@@ -53,7 +53,6 @@ class _Context:
                     "ticket_url": pull_request_url or ISSUE_URL,
                     "pull_request_url": pull_request_url,
                     "trigger_reason": trigger_reason,
-                    "run_id": "trace-7",
                     "max_completion_attempts": 3,
                 },
             )
@@ -74,10 +73,8 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
     assert response is context.response
     [(command_name, kwargs)] = context.invocations
     assert command_name == "functions/handle_github_ticket"
+    # The run and the work are the host's: the turn takes them from its grant.
     assert kwargs["agent_execution_context"] == {
-        "run_id": "trace-7",
-        "work_kind": "ticket",
-        "work_identity": ISSUE_URL,
         "resume_policy": "fresh",
         "attempt": 1,
         "max_completion_attempts": 3,

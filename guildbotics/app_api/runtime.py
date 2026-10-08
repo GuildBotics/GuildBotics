@@ -202,6 +202,7 @@ from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.member_context import resolve_person
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.service_lock import (
     ServiceLockUnavailableError,
     service_keeps_awake,
@@ -289,6 +290,9 @@ class _Execution:
     attributes: Mapping[str, str] | None = None
     #: The result the command must return, when the caller reads it.
     result_type: type[BaseModel] | None = None
+    #: The work the run does, when the Desktop names it: an assistant's
+    #: conversation, whose session each of its runs resumes.
+    work: Work | None = None
 
     def failure(self, exc: CommandError | CliAgentExecutionError) -> AppApiError:
         """The App API error a failed run becomes.
@@ -601,7 +605,6 @@ class AppRuntime:
             _Execution(
                 command="assistants/author_command",
                 label=f"author:{request.command or 'new-command'}",
-                args=[f"conversation_id={request.conversation_id}"],
                 cwd=partial(_assistant_cwd, "command-authoring"),
                 failure_code="command_authoring_failed",
                 failure_status=502,
@@ -609,6 +612,7 @@ class AppRuntime:
                     "command_authoring.conversation_id": request.conversation_id
                 },
                 result_type=CommandAuthoringResult,
+                work=Work("command_authoring", request.conversation_id),
             ),
             person=request.person,
             message=message,
@@ -961,6 +965,7 @@ class AppRuntime:
                     ),
                     result_type=execution.result_type,
                     inputs=self.command_inputs(),
+                    work=execution.work,
                 )
             except CommandError as exc:
                 raise execution.failure(exc) from exc
@@ -1500,12 +1505,12 @@ class AppRuntime:
             _Execution(
                 command="assistants/troubleshoot",
                 label=f"troubleshoot:{focus.trace_id or focus.view}",
-                args=[f"conversation_id={request.conversation_id}"],
                 cwd=partial(_assistant_cwd, "troubleshooting"),
                 failure_code="troubleshooting_failed",
                 failure_status=502,
                 attributes={"troubleshooting.conversation_id": request.conversation_id},
                 result_type=TroubleshootingResult,
+                work=Work("troubleshooting", request.conversation_id),
             ),
             person=request.person,
             message=message,

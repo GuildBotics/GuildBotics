@@ -859,7 +859,7 @@ guildbotics run summarize file=README.md effort=high
 
 `default` と未指定はどちらも「介入しない」を意味します。LLM API 経路では毎回モデルを生成し直すため、これはモデル既定値での実行と同じです。
 
-一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。model や effort を変更しても provider のセッションは維持され、Claude と Grok は次の turn で新しい設定を渡します。再開時に設定を消した場合、Claude は最後に記録した値を送り直し、Grok は provider のセッションに保存された値を維持します。設定を消すだけでは provider の既定値に戻りません。会話を明示的にリセットすると、設定で指定した値がない限り、新しいセッションは provider の既定値で始まります。
+一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。model や effort を変更しても provider のセッションは維持され、Claude と Grok は次の turn で新しい設定を渡します。再開時に設定を消した場合、Claude は最後に記録した値を送り直し、Grok は provider のセッションに保存された値を維持します。設定を消すだけでは provider の既定値に戻りません。会話が新しいセッションに切り替わると、設定で指定した値がない限り、新しいセッションは provider の既定値で始まります。
 
 ### 9.3. モデル定義 YAML の schema
 

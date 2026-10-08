@@ -80,6 +80,7 @@ from guildbotics.intelligences.brains.inference_host import DirectInference
 from guildbotics.intelligences.brains.jev import JevBrain
 from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import SpanContext, diagnostics_events, trace_scope
+from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
@@ -99,6 +100,7 @@ from tests.guildbotics.intelligences.agent_runtime.test_environment import (
 from tests.guildbotics.intelligences.brains.test_inference import _Model
 
 _RUN = "run-1"
+_WORK = Work("manual", "work-1")
 
 
 @pytest.fixture(autouse=True)
@@ -125,25 +127,25 @@ class _Ledger:
 
     completed: bool = True
     calls: list[tuple[str, tuple[Any, ...]]] = field(default_factory=list)
+    run_id: str = _RUN
+    work_kind: str = "ticket"
 
-    def require_completion(self, run_id: str) -> None:
-        self.calls.append(("require_completion", (run_id,)))
+    def require_completion(self) -> None:
+        self.calls.append(("require_completion", ()))
         if not self.completed:
-            raise RuntimeError(f"Task run '{run_id}' is not completed.")
+            raise RuntimeError(f"Task run '{self.run_id}' is not completed.")
 
-    def evidence(self, run_id: str) -> list[dict[str, Any]]:
-        self.calls.append(("evidence", (run_id,)))
+    def evidence(self) -> list[dict[str, Any]]:
+        self.calls.append(("evidence", ()))
         return [{"evidence_type": "pr_comment", "url": "https://example.test/1"}]
 
-    def record_completed(self, run_id: str, attempt: int) -> None:
-        self.calls.append(("record_completed", (run_id, attempt)))
+    def record_completed(self, attempt: int) -> None:
+        self.calls.append(("record_completed", (attempt,)))
 
     def record_completion_missing(
-        self, run_id: str, attempt: int, max_attempts: int, error: str
+        self, attempt: int, max_attempts: int, error: str
     ) -> None:
-        self.calls.append(
-            ("record_completion_missing", (run_id, attempt, max_attempts, error))
-        )
+        self.calls.append(("record_completion_missing", (attempt, max_attempts, error)))
 
 
 @dataclass
@@ -160,22 +162,21 @@ async def _command(
     monkeypatch,
     tmp_path,
     *tools: str,
-    work_kind: str = "",
+    work: Work = _WORK,
     access: CommandAccess = CommandAccess(),
     logins: tuple[str, ...] = (),
 ) -> AsyncIterator[_Command]:
     """A command of aiko in ``repository`` of the test's workspace, running
-    ``tools`` (Claude Code by default), for the run ``run-1``, in a trace of
+    ``tools`` (Claude Code by default), for the run ``run-1`` doing ``work``
+    (work ``work-1`` by default), in a trace of
     the scheduler's, on a device where ``logins`` (the tools by default) are
     logged in: its window, and the client its microVM reaches it with."""
     tools = tools or ("claude",)
     _device(monkeypatch, tmp_path, *(logins or tools))
-    ledger = _Ledger()
+    ledger = _Ledger(work_kind=work.kind)
     repository = get_workspace_root() / "repository"
     repository.mkdir()
-    grant = HostWindow(
-        "aiko", _RUN, work_kind, workspace_root=get_workspace_root(), ledger=ledger
-    )
+    grant = HostWindow("aiko", work, workspace_root=get_workspace_root(), ledger=ledger)
     with trace_scope(
         "scheduler", person_id="aiko", attributes={"service_run_id": "svc-1"}
     ) as trace:
@@ -190,17 +191,26 @@ async def _command(
             )
 
 
-def _key(work_kind: str = "manual", person_id: str = "aiko") -> ConversationKey:
-    return ConversationKey(person_id, "claude", work_kind, "work-1")
+def _facts() -> CommandFacts:
+    """What the command's microVM is told it is."""
+    return CommandFacts(
+        person_id="aiko",
+        run_id=_RUN,
+        work_kind=_WORK.kind,
+        work_identity=_WORK.identity,
+        trace_id="",
+        access=CommandAccess(),
+    )
+
+
+def _key(
+    work_kind: str = "manual", person_id: str = "aiko", work_identity: str = "work-1"
+) -> ConversationKey:
+    return ConversationKey(person_id, "claude", work_kind, work_identity)
 
 
 async def _begin(command: _Command, tool: str = "claude", **overrides: Any):
-    arguments: dict[str, Any] = {
-        "cwd": guest_path(command.repository),
-        "run_id": _RUN,
-        "conversation": ConversationKey("aiko", tool, "manual", "work-1"),
-        **overrides,
-    }
+    arguments: dict[str, Any] = {"cwd": guest_path(command.repository), **overrides}
     return await command.client.begin_turn(tool, arguments.pop("cwd"), **arguments)
 
 
@@ -343,25 +353,23 @@ async def test_the_run_record_is_read_and_reported_to_through_the_window(
     tmp_path, monkeypatch
 ):
     async with _command(monkeypatch, tmp_path) as command:
-        ledger = ClientRunLedger(command.client)
-        await asyncio.to_thread(ledger.require_completion, _RUN)
-        evidence = await asyncio.to_thread(ledger.evidence, _RUN)
-        await asyncio.to_thread(ledger.record_completed, _RUN, 2)
-        await asyncio.to_thread(
-            ledger.record_completion_missing, _RUN, 1, 3, "not completed"
-        )
+        ledger = ClientRunLedger(command.client, _facts())
+        await asyncio.to_thread(ledger.require_completion)
+        evidence = await asyncio.to_thread(ledger.evidence)
+        await asyncio.to_thread(ledger.record_completed, 2)
+        await asyncio.to_thread(ledger.record_completion_missing, 1, 3, "not completed")
         command.ledger.completed = False
         with pytest.raises(HostCallError) as missing:
-            await asyncio.to_thread(ledger.require_completion, _RUN)
+            await asyncio.to_thread(ledger.require_completion)
 
     assert evidence == [
         {"evidence_type": "pr_comment", "url": "https://example.test/1"}
     ]
     assert command.ledger.calls[:4] == [
-        ("require_completion", (_RUN,)),
-        ("evidence", (_RUN,)),
-        ("record_completed", (_RUN, 2)),
-        ("record_completion_missing", (_RUN, 1, 3, "not completed")),
+        ("require_completion", ()),
+        ("evidence", ()),
+        ("record_completed", (2,)),
+        ("record_completion_missing", (1, 3, "not completed")),
     ]
     # What the turn's loop records as the attempt's error.
     assert str(missing.value) == f"Task run '{_RUN}' is not completed."
@@ -512,7 +520,7 @@ async def test_the_grant_ends_with_the_command(tmp_path, monkeypatch):
 
 
 _OTHERS = {
-    "another run's record": ("evidence", {"run_id": "run-2"}),
+    "naming the run of a record": ("evidence", {"run_id": "run-2"}),
     "another member's conversation": (
         "resolve",
         {"key": asdict(_key(person_id="yuki")), "policy": "auto"},
@@ -524,13 +532,41 @@ _OTHERS = {
             "policy": "auto",
         },
     ),
-    "a workflow's work in a command of none": (
+    "another kind of work's conversation": (
         "resolve",
         {"key": asdict(_key("ticket")), "policy": "auto"},
     ),
-    "another run's completion": ("record_completed", {"run_id": "run-2", "attempt": 1}),
-    "another run's completion check": ("require_completion", {"run_id": "run-2"}),
-    "another run's missing completion": (
+    "another work's conversation": (
+        "resolve",
+        {"key": asdict(_key(work_identity="work-2")), "policy": "auto"},
+    ),
+    "saving another work's conversation": (
+        "save",
+        {"record": {"key": asdict(_key(work_identity="work-2"))}},
+    ),
+    "marking another work's conversation": (
+        "mark_unhealthy",
+        {"record": {"key": asdict(_key(work_identity="work-2"))}, "reason": "r"},
+    ),
+    "an event of another work": (
+        "record",
+        {
+            "entries": [
+                EventEntry(
+                    span=None,
+                    conversation=_key(work_identity="work-2"),
+                    generation=0,
+                    event=AgentEvent(AgentEventKind.TURN, "started"),
+                ).model_dump(mode="json")
+            ]
+        },
+    ),
+    "naming the run of a completion": (
+        "record_completed",
+        {"run_id": "run-2", "attempt": 1},
+    ),
+    "naming the run of a completion check": ("require_completion", {"run_id": "run-2"}),
+    "naming the run of a missing completion": (
         "record_completion_missing",
         {"run_id": "run-2", "attempt": 1, "max_attempts": 2, "error": "e"},
     ),
@@ -542,12 +578,11 @@ _OTHERS = {
         "mark_unhealthy",
         {"record": {"key": asdict(_key(person_id="yuki"))}, "reason": "r"},
     ),
-    "a turn of another run": (
+    "naming the work of a turn": (
         "begin_turn",
         {
             "tool": "claude",
             "cwd": "/",
-            "run_id": "run-2",
             "work_kind": "manual",
             "work_identity": "w",
         },
@@ -633,28 +668,28 @@ async def test_the_grant_covers_its_own_member_run_and_calls_only(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("grant", "turn", "allowed"),
+    "work",
     [
-        ("ticket", "ticket", True),
-        ("ticket", "chat", False),
-        ("ticket", "manual", False),
-        ("", "troubleshooting", True),
-        ("", "chat", False),
+        Work.of_ticket("https://github.com/o/r/issues/1"),
+        Work.of_chat(ChatSubject("slack", "C1", "1.0", "C1:1.1", "U1")),
+        Work("troubleshooting", "conversation-1"),
+        _WORK,
     ],
 )
-async def test_a_turn_does_the_work_of_the_grants_run(
-    tmp_path, monkeypatch, grant, turn, allowed
-):
-    """A workflow run's turns do its kind of work; a command that is no
-    workflow run does none of a workflow's."""
-    async with _command(monkeypatch, tmp_path, work_kind=grant) as command:
-        conversation = ConversationKey("aiko", "claude", turn, "work-1")
-        if allowed:
-            started = await _begin(command, conversation=conversation)
-            await command.client.end_turn(started.turn_grant)
-        else:
-            with pytest.raises(HostCallError):
-                await _begin(command, conversation=conversation)
+async def test_a_turn_does_the_grants_work(tmp_path, monkeypatch, work):
+    """A turn names no work: it holds the member's conversation of the
+    grant's work with its tool, and the member commands it asks for act on
+    that work."""
+    async with _command(monkeypatch, tmp_path, work=work) as command:
+        started = await _begin(command)
+        context = environment.running_command()._broker._context
+        await command.client.end_turn(started.turn_grant)
+
+    assert context is not None
+    assert context.conversation_key == ConversationKey(
+        "aiko", "claude", work.kind, work.identity
+    )
+    assert (context.run_id, context.work) == (_RUN, work)
 
 
 @pytest.mark.asyncio
@@ -688,7 +723,8 @@ async def test_the_microvm_is_told_the_command_and_its_window(tmp_path, monkeypa
     assert facts == CommandFacts(
         person_id="aiko",
         run_id=_RUN,
-        work_kind="",
+        work_kind=_WORK.kind,
+        work_identity=_WORK.identity,
         trace_id=command.trace_id,
         access=access,
         inspected=environment.inspected_directories(
@@ -1677,12 +1713,12 @@ async def test_host_state_writes_finish_before_cancellation_returns(
             "record_completed": (
                 command.ledger,
                 "record_completed",
-                {"run_id": _RUN, "attempt": 1},
+                {"attempt": 1},
             ),
             "record_completion_missing": (
                 command.ledger,
                 "record_completion_missing",
-                {"run_id": _RUN, "attempt": 1, "max_attempts": 3, "error": "missing"},
+                {"attempt": 1, "max_attempts": 3, "error": "missing"},
             ),
             "record": (command.grant, "_write", {"entries": []}),
             "close": (command.grant._conversations, "mark_unhealthy", {}),
