@@ -6,7 +6,7 @@ The gap analysis references ``MemberTaskSchedule`` and
 described behaviors (five-field cron validation, blank-schedule exclusion and
 optional secret empty-string handling) are implemented by
 ``PersonTaskScheduleInput`` and the project/person update inputs in
-``guildbotics.editions.simple.setup_service``, so they are exercised here.
+``guildbotics.setup.setup_service``, so they are exercised here.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from guildbotics.app_api.models import (
     RuntimeUnitStatus,
     SchedulerStartRequest,
 )
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     PersonTaskScheduleInput,
     ProjectUpdateInput,
 )

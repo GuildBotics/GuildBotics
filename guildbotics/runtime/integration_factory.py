@@ -2,9 +2,9 @@ from abc import ABC, abstractmethod
 from logging import Logger
 
 from guildbotics.entities import Person, Team
-from guildbotics.integrations.chat_service import ChatService
-from guildbotics.integrations.code_hosting_service import CodeHostingService
-from guildbotics.integrations.ticket_manager import TicketManager
+from guildbotics.runtime.chat_service import ChatService
+from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.ticket_manager import TicketManager
 
 
 class IntegrationFactory(ABC):

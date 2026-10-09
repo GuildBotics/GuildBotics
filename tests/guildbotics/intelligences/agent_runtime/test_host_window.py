@@ -24,10 +24,10 @@ import pytest
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatPostResult, ChatServiceError
-from guildbotics.integrations.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.chat_service import ChatPostResult, ChatServiceError
+from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.window import (
     MemberCommandError,
     WindowChatService,
@@ -1007,7 +1007,7 @@ async def test_a_brain_in_the_environment_has_the_host_ask_its_model(
     async with _command(monkeypatch, tmp_path) as command:
         in_the_environment(environment.running_command().endpoint)
         assert not isinstance(inference(), DirectInference)
-        brain = SimpleBrainFactory().create_brain(
+        brain = ConfiguredBrainFactory().create_brain(
             "aiko",
             "functions/answer",
             "en",
@@ -1064,7 +1064,7 @@ async def test_what_a_template_names_to_load_never_reaches_the_host(
     _Model(monkeypatch, "{}", person_id="aiko")
     async with _command(monkeypatch, tmp_path):
         in_the_environment(environment.running_command().endpoint)
-        brain = SimpleBrainFactory().create_brain(
+        brain = ConfiguredBrainFactory().create_brain(
             "aiko",
             "functions/answer",
             "en",
@@ -1128,7 +1128,7 @@ async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
     _Model(monkeypatch, RuntimeError("401 key sk-secret"), person_id="aiko")
     async with _command(monkeypatch, tmp_path):
         in_the_environment(environment.running_command().endpoint)
-        brain = SimpleBrainFactory().create_brain(
+        brain = ConfiguredBrainFactory().create_brain(
             "aiko", "functions/reply", "en", logging.getLogger("test"), {"body": "Hi."}
         )
         with pytest.raises(CommandError) as failed:
@@ -1277,14 +1277,14 @@ async def test_read_only_repository_read_uses_the_member_grant(
     tmp_path, monkeypatch, chat
 ):
     from guildbotics.cli import member as member_cli
-    from guildbotics.editions.simple.simple_integration_factory import (
-        SimpleIntegrationFactory,
+    from guildbotics.integrations.factory import (
+        ServiceIntegrationFactory,
     )
     from guildbotics.integrations.github import pull_requests as provider
 
     context, person = member_cli.resolve_member_context("aiko")
     context.person = person
-    context.integration_factory = SimpleIntegrationFactory()
+    context.integration_factory = ServiceIntegrationFactory()
     context.team.project.services["code_hosting_service"] = {"name": "github"}
 
     requests = []

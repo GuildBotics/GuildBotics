@@ -13,7 +13,7 @@ import httpx
 import pytest
 from agno.run.base import RunStatus
 
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences import functions
 from guildbotics.intelligences.brains import (
     agno_agent,
@@ -146,7 +146,7 @@ class _Context(FakeContext):
     language_name = "English"
 
     def get_brain(self, name: str, config: Any, class_resolver: Any) -> Any:
-        return SimpleBrainFactory().create_brain(
+        return ConfiguredBrainFactory().create_brain(
             self.person.person_id, name, "en", self.logger, config, class_resolver
         )
 

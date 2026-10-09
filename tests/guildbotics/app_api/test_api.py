@@ -51,14 +51,14 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_environment.spec import guest_path
@@ -697,7 +697,7 @@ def test_app_runtime_command_options_describe_workspace_commands(
     command_file.write_text(
         "\n".join(
             [
-                "from guildbotics.integrations.ticket_manager import TicketManager",
+                "from guildbotics.runtime.ticket_manager import TicketManager",
                 "",
                 "async def main(context, title, *, dry_run='False'):",
                 '    """Run a demo workflow."""',
@@ -1986,13 +1986,12 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
 def test_app_runtime_reports_missing_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    class MissingConfigEdition:
-        def get_context(self, message: str = ""):
-            raise FileNotFoundError(2, "No such file", "project.yml")
+    def create_context(message: str = ""):
+        raise FileNotFoundError(2, "No such file", "project.yml")
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: MissingConfigEdition(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
     config_dir = tmp_path / ".guildbotics/config"
     project_file = config_dir / "team/project.yml"
@@ -2013,10 +2012,9 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
     class ContextStub:
         team = Team(project=Project(name="Project", language="ja"), members=[])
 
-    class EditionStub:
-        def get_context(self, message: str = "") -> object:
-            assert os.environ["OPENAI_API_KEY"] == "new-key"
-            return ContextStub()
+    def create_context(message: str = "") -> object:
+        assert os.environ["OPENAI_API_KEY"] == "new-key"
+        return ContextStub()
 
     monkeypatch.chdir(tmp_path)
     # Ensure the key is absent so the workspace secret store is the source:
@@ -2029,8 +2027,8 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
         "OPENAI_API_KEY", "new-key"
     )
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: EditionStub(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
 
     runtime = AppRuntime(EventBus())
@@ -2054,12 +2052,8 @@ def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) ->
 
 
 def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
-    class EditionStub:
-        def get_context(self, message: str = "") -> object:
-            return object()
-
-        def get_default_routines(self) -> list[str]:
-            return ["routine"]
+    def create_context(message: str = "") -> object:
+        return object()
 
     default_stop_timeout = 10.0
     started = threading.Event()
@@ -2097,8 +2091,8 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
             release.set()
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: EditionStub(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",
@@ -2140,12 +2134,8 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
 
 def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None:
-    class EditionStub:
-        def get_context(self, message: str = "") -> object:
-            return object()
-
-        def get_default_routines(self) -> list[str]:
-            return ["routine"]
+    def create_context(message: str = "") -> object:
+        return object()
 
     started = threading.Event()
     release = threading.Event()
@@ -2172,8 +2162,8 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
             self.shutdown_timeout = timeout
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: EditionStub(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",
@@ -2205,12 +2195,8 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
 
 
 def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
-    class EditionStub:
-        def get_context(self, message: str = "") -> object:
-            return object()
-
-        def get_default_routines(self) -> list[str]:
-            return ["routine"]
+    def create_context(message: str = "") -> object:
+        return object()
 
     class RunningEventListener:
         instances: ClassVar[list["RunningEventListener"]] = []
@@ -2269,8 +2255,8 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             scheduler_release.set()
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: EditionStub(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",
@@ -2318,16 +2304,12 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
 
 
 def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> None:
-    class MissingConfigEdition:
-        def get_context(self, message: str = "") -> object:
-            raise FileNotFoundError(2, "No such file", "project.yml")
-
-        def get_default_routines(self) -> list[str]:
-            return ["routine"]
+    def create_context(message: str = "") -> object:
+        raise FileNotFoundError(2, "No such file", "project.yml")
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: MissingConfigEdition(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
 
     runtime = AppRuntime(EventBus())
@@ -2346,12 +2328,8 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
 
 
 def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) -> None:
-    class EditionStub:
-        def get_context(self, message: str = "") -> object:
-            return object()
-
-        def get_default_routines(self) -> list[str]:
-            return ["routine"]
+    def create_context(message: str = "") -> object:
+        return object()
 
     class StuckEventListener:
         instances: ClassVar[list["StuckEventListener"]] = []
@@ -2401,8 +2379,8 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             scheduler_release.set()
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition",
-        lambda: EditionStub(),
+        "guildbotics.app_api.runtime.create_context",
+        create_context,
     )
     monkeypatch.setattr(
         "guildbotics.app_api.lifecycle.TaskScheduler",

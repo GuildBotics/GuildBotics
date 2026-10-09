@@ -11,9 +11,9 @@ from typing import Any
 from guildbotics.capabilities.chat_batch import chat_batch_event_ids
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     current_member_invocation,

@@ -5,7 +5,7 @@ from pathlib import Path
 from guildbotics.utils.person_id import person_config_directory
 
 # Pure (dependency-light) avatar file helpers. Kept free of FastAPI/httpx so
-# that lower layers such as the edition/setup services can locate avatar files
+# that lower layers such as the setup services can locate avatar files
 # without depending on the App API module.
 
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")

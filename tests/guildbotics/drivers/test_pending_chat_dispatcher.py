@@ -15,7 +15,7 @@ from guildbotics.drivers.execution import (
 )
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,

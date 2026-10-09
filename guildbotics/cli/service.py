@@ -11,10 +11,10 @@ from pathlib import Path
 import click
 
 from guildbotics.cli._options import selected_workspace
+from guildbotics.drivers.context import create_context
 from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
 from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.editions import get_edition
 from guildbotics.observability import new_id
 from guildbotics.observability.diagnostics_events import (
     finish_system_session,
@@ -192,8 +192,6 @@ def _run_cli_background_service_session(
     live_state: LiveStatePort | None = None,
     owner_check: Callable[[], bool | None] | None = None,
 ) -> None:
-    edition = get_edition()
-
     scheduler_sources_enabled = only_target in (None, "scheduler")
     start_events = only_target in (None, "events")
     start_member_worker = scheduler_sources_enabled or start_events
@@ -205,7 +203,7 @@ def _run_cli_background_service_session(
 
     scheduler = (
         TaskScheduler(
-            edition.get_context(),
+            create_context(),
             consecutive_error_limit=max_consecutive_errors,
             scheduled_source_enabled=scheduler_sources_enabled,
             routine_source_enabled=scheduler_sources_enabled,
@@ -215,7 +213,7 @@ def _run_cli_background_service_session(
         if start_member_worker
         else None
     )
-    event_runner = EventListenerRunner(edition.get_context()) if start_events else None
+    event_runner = EventListenerRunner(create_context()) if start_events else None
 
     graceful_stop_started = threading.Event()
 

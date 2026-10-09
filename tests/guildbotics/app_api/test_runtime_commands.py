@@ -513,8 +513,8 @@ def test_command_options_detect_github_and_slack_requirements(
         config_dir / "commands/integrations.py",
         "\n".join(
             [
-                "from guildbotics.integrations.ticket_manager import TicketManager",
-                "from guildbotics.integrations.chat_service import ChatService",
+                "from guildbotics.runtime.ticket_manager import TicketManager",
+                "from guildbotics.runtime.chat_service import ChatService",
                 "",
                 "async def main(context):",
                 "    return ''",
@@ -833,10 +833,10 @@ def test_routine_command_options_localize_builtin_python_metadata(
     )
 
 
-def test_routine_command_options_default_prefers_edition_when_multiple(
+def test_routine_command_options_default_prefers_ticket_workflow_when_multiple(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # With several eligible candidates, the edition's declared default wins.
+    # With several eligible candidates, the ticket workflow wins.
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     _write(
         config_dir / "commands/my_routine.md",
@@ -856,8 +856,7 @@ def test_routine_command_options_default_prefers_edition_when_multiple(
 def test_routine_command_options_default_is_sole_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # With exactly one eligible candidate, it is the default on its own — the
-    # edition's declared default is not consulted.
+    # With exactly one eligible candidate, it is the default on its own.
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     _write(
         config_dir / "commands/workflows/ticket_driven_workflow.md",
@@ -871,14 +870,6 @@ def test_routine_command_options_default_is_sole_candidate(
                 "Body.",
             ]
         ),
-    )
-
-    class EditionStub:
-        def get_default_routines(self) -> list[str]:
-            return ["workflows/some_other_default"]
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition", lambda: EditionStub()
     )
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
@@ -1883,7 +1874,7 @@ def test_run_command_rejects_missing_requirement(
         config_dir / "commands/needs_github.py",
         "\n".join(
             [
-                "from guildbotics.integrations.ticket_manager import TicketManager",
+                "from guildbotics.runtime.ticket_manager import TicketManager",
                 "",
                 "async def main(context):",
                 "    return ''",

@@ -9,7 +9,7 @@ import pytest
 
 from guildbotics.intelligences.brains import inference_host, jev
 from guildbotics.intelligences.brains.inference import JevCall
-from guildbotics.intelligences.brains.brain import (
+from guildbotics.runtime.brain import (
     Brain,
     ExecutionMetadata,
     public_parameters,
@@ -380,6 +380,7 @@ async def test_snapshot_is_full_and_replayable_even_without_transcripts(
         DecisionConfig(),
         person_id="alice",
         logger=logging.getLogger(),
+        brain_factory=SimpleNamespace(),
     )
     paths = list(tmp_path.rglob(f"{record_id}.json"))
     assert len(paths) == 1
@@ -407,6 +408,7 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
         DecisionConfig(),
         person_id="alice",
         logger=logging.getLogger(),
+        brain_factory=SimpleNamespace(),
     )
     assert result.route == "agent"
 
@@ -466,6 +468,7 @@ async def test_recorded_response_effort_is_separate_from_judgment_settings(
         None,
         person_id="alice",
         logger=logging.getLogger(),
+        brain_factory=SimpleNamespace(),
     )
     assert calls == 1
     assert records[0]["selection"]["response_effort"] == "high"

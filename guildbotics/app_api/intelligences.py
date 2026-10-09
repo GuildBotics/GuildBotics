@@ -13,10 +13,6 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.editions.simple.setup_service import (
-    CreatedFile,
-    SetupServiceError,
-)
 from guildbotics.intelligences.agent_environment.contract import (
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
@@ -49,6 +45,10 @@ from guildbotics.intelligences.effort import (
 from guildbotics.intelligences.llm_providers import (
     PROVIDER_DEFAULT_FILENAME,
     provider_of,
+)
+from guildbotics.setup.setup_service import (
+    CreatedFile,
+    SetupServiceError,
 )
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 from guildbotics.utils.person_id import person_config_directory

@@ -366,7 +366,7 @@ The common resources are `issues`, `pull_requests`, `issue_comments`, `issue_tim
 
 Readiness uses the host service’s own requests, so an internal compare response is not subject to the resource-page receive limit. Its returned page remains bounded: failed logs share the space left after JSON-encoded metadata, including escaping. Reduced tails keep `truncated=true` and report their `tail_limit_bytes`. GitHub access failures name the required resource permissions; GraphQL permission and rate-limit errors are reported even when HTTP succeeds.
 
-`integrations/code_hosting_service.py` owns the common service and result types. The host integration factory selects the configured implementation; commands use the same interface through their member grant. Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor (alerts) or `page` number (REST collections) is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
+`runtime/code_hosting_service.py` owns the common service and result types. The host integration factory selects the configured implementation; commands use the same interface through their member grant. Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor (alerts) or `page` number (REST collections) is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
 
 ## 5. Using subcommands
 You can chain multiple subcommands to build a workflow.
@@ -766,7 +766,7 @@ When a chat operation reports an anticipated failure, preserve its reason so the
 
 ```python
 from guildbotics.commands.errors import CommandError
-from guildbotics.integrations.chat_service import ChatServiceError
+from guildbotics.runtime.chat_service import ChatServiceError
 
 
 async def main(context, channel_id):
@@ -785,7 +785,7 @@ API-key inference failures show the exception type and the reported status when 
 
 A command can declare itself as a candidate for a member's routine (patrol) execution. Routine candidates are the commands offered in the member's patrol settings, and the scheduler runs the selected ones periodically.
 
-Declare it in the command's own metadata, so adding a routine never requires editing an edition-side list:
+Declare it in the command's own metadata, so adding a routine never requires editing a list elsewhere:
 
 - Markdown / YAML commands: add `routine: true` to the YAML front matter.
 - Python commands: add `"routine": True` to the module-level `COMMAND_METADATA` mapping.

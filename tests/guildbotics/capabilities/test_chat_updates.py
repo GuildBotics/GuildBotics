@@ -14,7 +14,7 @@ from guildbotics.capabilities.chat_updates import (
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations import chat_receive_status
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.runtime.member_invocation import (
     ChatSubject,

@@ -41,7 +41,6 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_notice_text,
 )
 from guildbotics.entities.message import Message
-from guildbotics.integrations.chat_service import ChatEvent, ChatService
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ThreadContextUnavailableError,
@@ -60,6 +59,7 @@ from guildbotics.integrations.file_chat_state_store import FileConversationState
 from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.effort import promote_effort
+from guildbotics.runtime.chat_service import ChatEvent, ChatService
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     ChatSubject,

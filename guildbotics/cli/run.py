@@ -18,9 +18,9 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
+from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import TaskRunCoordinator, WorkRejectedError
 from guildbotics.drivers.utils import command_boundary
-from guildbotics.editions import get_edition
 from guildbotics.observability import trace_scope
 from guildbotics.utils.env_loader import load_guildbotics_env
 
@@ -89,8 +89,7 @@ async def _run_custom_command(
     Desktop opens for one: a trace, the task-run record and, unless the
     command declares itself read-only, the member's execution lease."""
     command_name, inline_person = _parse_command_spec(command_spec)
-    edition = get_edition()
-    context = edition.get_context(message)
+    context = create_context(message)
     identifier = person_option or inline_person
 
     try:

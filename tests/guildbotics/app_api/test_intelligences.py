@@ -17,8 +17,8 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.editions.simple import simple_brain_factory
-from guildbotics.editions.simple.setup_service import SetupServiceError
+from guildbotics.intelligences.brains import factory as brain_factory_module
+from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
@@ -116,7 +116,7 @@ def _write_team_config(config_dir: Path) -> None:
 
 @pytest.fixture(autouse=True)
 def _clear_caches() -> None:
-    simple_brain_factory.person_brain_mapping.clear()
+    brain_factory_module.person_brain_mapping.clear()
     agno_agent.person_model_mapping.clear()
     cli_agent.person_cli_agent_mapping.clear()
 

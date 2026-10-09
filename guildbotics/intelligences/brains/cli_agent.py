@@ -37,11 +37,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.turn import turn_window
-from guildbotics.intelligences.brains.brain import (
-    Brain,
-    ExecutionMetadata,
-    public_parameters,
-)
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
@@ -52,6 +47,11 @@ from guildbotics.intelligences.effort import (
     validate_effort_overlay,
 )
 from guildbotics.observability import current_span, span_scope
+from guildbotics.runtime.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.utils.fileio import (
     get_person_config_path,
     load_person_slot_mapping,
@@ -114,7 +114,7 @@ class ExecutableInfo:
 
 
 #: Overrides keyed by person id. Production code does not write this dict.
-#: See ``simple_brain_factory.person_brain_mapping`` for why.
+#: See ``factory.person_brain_mapping`` for why.
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
 
 #: The one effort-mapping key the core gives a name of its own for diagnostics.

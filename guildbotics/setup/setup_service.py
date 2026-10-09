@@ -12,7 +12,6 @@ import requests  # type: ignore
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from yaml import YAMLError
 
-from guildbotics.editions.simple.simple_edition import DEFAULT_ROUTINE_COMMAND
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     validate_workspace_location,
@@ -21,6 +20,7 @@ from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
 )
+from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
@@ -1240,7 +1240,7 @@ class SimplePersonSetupService:
             and not routine_commands
             and self._should_seed_default_routine(config)
         ):
-            routine_commands = [DEFAULT_ROUTINE_COMMAND]
+            routine_commands = [TICKET_WORKFLOW_COMMAND]
         if routine_commands:
             person_config["routine_commands"] = routine_commands
         task_schedules = (

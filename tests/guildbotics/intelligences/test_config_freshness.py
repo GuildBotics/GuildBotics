@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.editions.simple.simple_brain_factory import (
-    SimpleBrainFactory,
+from guildbotics.intelligences.brains.factory import (
+    ConfiguredBrainFactory,
     person_brain_mapping,
 )
 from guildbotics.intelligences.brains.agno_agent import (
@@ -93,7 +93,7 @@ def _cli_model() -> str:
 
 
 def _brain_slot() -> str:
-    brain = SimpleBrainFactory().create_brain(
+    brain = ConfiguredBrainFactory().create_brain(
         _PERSON,
         "reply",
         "en",

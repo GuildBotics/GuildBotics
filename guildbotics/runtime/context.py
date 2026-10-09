@@ -1,19 +1,18 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from logging import Logger
 from typing import Any
 
 from pydantic import BaseModel
 
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatService
-from guildbotics.integrations.code_hosting_service import CodeHostingService
-from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
+from guildbotics.runtime.chat_service import ChatService
+from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
-from guildbotics.runtime.loader_factory import LoaderFactory
+from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.log_utils import get_logger
@@ -26,30 +25,29 @@ class Context:
 
     def __init__(
         self,
-        loader_factory: LoaderFactory,
         integration_factory: IntegrationFactory,
         brain_factory: BrainFactory,
-        logger: Logger,
-        person: Person,
-        message: str,
+        person: Person | None = None,
+        message: str = "",
     ):
         """
-        Initialize the WorkflowContext with a team, loader factory, and integration factory.
+        Initialize the context with the team the workspace's configuration
+        holds, read anew for every context.
         Args:
-            loader_factory (LoaderFactory): Factory for creating loaders.
             integration_factory (IntegrationFactory): Factory for creating integrations.
             brain_factory (BrainFactory): Factory for creating brains.
-            logger (Logger): Logger instance for logging messages.
-            person (Person): The current person in the context.
+            person (Person | None): The current person in the context; a
+                placeholder until :meth:`clone_for` names one.
             message (str): The message or prompt associated with the context.
         """
-        self.loader_factory = loader_factory
         self.integration_factory = integration_factory
         self.brain_factory = brain_factory
-        self.logger = logger
-        self.team = loader_factory.create_team_loader().load()
+        self.logger = get_logger()
+        self.team = YamlTeamLoader().load()
         set_language(self.team.project.get_language_code())
-        self.person = person
+        self.person = person or Person(
+            person_id="default_person", name="Default Person"
+        )
         self.ticket_manager: TicketManager | None = None
         self.chat_service: ChatService | None = None
         self.code_hosting_service: CodeHostingService | None = None
@@ -65,32 +63,6 @@ class Context:
     def language_name(self) -> str:
         return self.team.project.get_language_name()
 
-    @classmethod
-    def get_default(
-        cls,
-        loader_factory: LoaderFactory,
-        integration_factory: IntegrationFactory,
-        brain_factory: BrainFactory,
-        message: str,
-    ) -> "Context":
-        """
-        Get the default context for the application.
-        Args:
-            loader_factory (LoaderFactory): Factory for creating loaders.
-            integration_factory (IntegrationFactory): Factory for creating integrations.
-            brain_factory (BrainFactory): Factory for creating brains.
-        Returns:
-            Context: An instance of the default context.
-        """
-        return cls(
-            loader_factory,
-            integration_factory,
-            brain_factory,
-            get_logger(),
-            Person(person_id="default_person", name="Default Person"),
-            message,
-        )
-
     def clone_for(self, person: Person) -> "Context":
         """
         Create a new context for a specific person.
@@ -99,14 +71,7 @@ class Context:
         Returns:
             Context: A new context instance for the specified person.
         """
-        return Context(
-            self.loader_factory,
-            self.integration_factory,
-            self.brain_factory,
-            get_logger(),
-            person,
-            self.pipe,
-        )
+        return Context(self.integration_factory, self.brain_factory, person, self.pipe)
 
     def get_brain(
         self, name: str, config: dict | None, class_resolver: ClassResolver | None

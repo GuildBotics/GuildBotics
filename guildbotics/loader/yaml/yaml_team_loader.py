@@ -3,7 +3,6 @@ from pathlib import Path
 from yaml import YAMLError
 
 from guildbotics.entities import Person, Project, Team
-from guildbotics.loader import TeamLoader
 from guildbotics.loader.yaml.yaml_role_loader import YamlRoleLoader
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 from guildbotics.utils.i18n_tool import t
@@ -15,7 +14,7 @@ from guildbotics.utils.person_id import (
 )
 
 
-class YamlTeamLoader(TeamLoader):
+class YamlTeamLoader:
     def __init__(self, dir: str | None = None):
         """
         Initialize the YamlTeamLoader with a directory path.
@@ -23,7 +22,6 @@ class YamlTeamLoader(TeamLoader):
             dir (str | None): The directory path where team YAML files are stored.
             If None, defaults to the storage path for teams.
         """
-        super().__init__()
         self.dir = get_config_path("team") if dir is None else Path(dir)
 
     def load(self) -> Team:

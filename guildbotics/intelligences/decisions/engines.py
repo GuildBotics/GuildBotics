@@ -9,7 +9,6 @@ from typing import Any
 
 import httpx
 
-from guildbotics.editions import get_edition
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.decisions.models import (
     DecisionConfig,
@@ -34,7 +33,7 @@ async def evaluate(
     *,
     person_id: str,
     logger: Logger,
-    brain_factory: BrainFactory | None = None,
+    brain_factory: BrainFactory,
     on_resolved: Callable[[dict[str, Any]], None] | None = None,
 ) -> Evaluation:
     """One invocation; any execution or answer failure delegates to the agent."""
@@ -42,8 +41,7 @@ async def evaluate(
     brain = None
     result = Evaluation()
     try:
-        factory = brain_factory or get_edition().get_context().brain_factory
-        brain = factory.create_brain(
+        brain = brain_factory.create_brain(
             person_id,
             "chat_decision",
             "",

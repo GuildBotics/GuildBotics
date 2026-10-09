@@ -11,11 +11,11 @@ import pytest
 
 import guildbotics
 from guildbotics.capabilities.member_repository import read_repository
-from guildbotics.editions.simple.simple_integration_factory import (
-    SimpleIntegrationFactory,
+from guildbotics.integrations.factory import (
+    ServiceIntegrationFactory,
 )
 from guildbotics.entities.team import Person, Project, Service, Team
-from guildbotics.integrations.code_hosting_service import (
+from guildbotics.runtime.code_hosting_service import (
     CodeHostingService,
     DependencyAlert,
     RepositoryReadError,
@@ -44,7 +44,7 @@ def team(name="github"):
 @pytest.mark.parametrize("name", ["", "gitlab", "unsupported"])
 def test_unsupported_hosting_never_uses_ticket_provider(name):
     with pytest.raises(RepositoryReadError):
-        SimpleIntegrationFactory().create_code_hosting_service(
+        ServiceIntegrationFactory().create_code_hosting_service(
             logging.getLogger(), Person(person_id="aiko", name="Aiko"), team(name)
         )
 
@@ -96,7 +96,7 @@ def adapter(monkeypatch):
     monkeypatch.setattr(
         "guildbotics.integrations.github.pull_requests.create_github_client", client
     )
-    service = SimpleIntegrationFactory().create_code_hosting_service(
+    service = ServiceIntegrationFactory().create_code_hosting_service(
         logging.getLogger(), Person(person_id="aiko", name="Aiko"), team()
     )
     return service, body, requests, clients, identities
@@ -264,7 +264,7 @@ async def test_capability_and_window_use_configured_service_and_close_it(fail):
 def test_repository_consumers_cannot_import_provider_modules():
     root = Path(guildbotics.__file__).parent
     consumers = {
-        "integrations/code_hosting_service.py",
+        "runtime/code_hosting_service.py",
         "integrations/window.py",
         "runtime/context.py",
         "runtime/integration_factory.py",

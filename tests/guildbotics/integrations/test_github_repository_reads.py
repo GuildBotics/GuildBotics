@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 
 from guildbotics.entities import Person, Project, Team
-from guildbotics.integrations.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
@@ -56,7 +56,7 @@ def readiness_payloads():
 @pytest.mark.parametrize("large_path", [*readiness_payloads(), "actions/jobs/1/logs"])
 async def test_readiness_uses_host_transport_for_all_internal_reads(reader, large_path):
     from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
-    from guildbotics.integrations.code_hosting_service import MAX_PAGE_BYTES
+    from guildbotics.runtime.code_hosting_service import MAX_PAGE_BYTES
 
     service, state, requests = reader
     payloads = readiness_payloads()
@@ -169,7 +169,7 @@ async def test_graphql_errors_are_safe_resource_diagnostics(
 @pytest.mark.parametrize("state", ["open", "closed"])
 def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
     from guildbotics.integrations.github.pull_requests import _fit_log_tails
-    from guildbotics.integrations.code_hosting_service import (
+    from guildbotics.runtime.code_hosting_service import (
         MAX_PAGE_BYTES,
         RepositoryReadPage,
     )

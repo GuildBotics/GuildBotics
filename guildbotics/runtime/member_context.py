@@ -7,18 +7,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.editions import get_edition
 from guildbotics.entities.team import Person, Team
-from guildbotics.runtime.context import Context
-
-
-def resolve_member_context(person_identifier: str) -> tuple[Context, Person]:
-    """Resolve a GuildBotics context and explicit member by id or name."""
-    base_context = get_edition().get_context()
-    person = ensure_execution_subject(
-        resolve_person(base_context.team, person_identifier)
-    )
-    return base_context.clone_for(person), person
 
 
 def ensure_execution_subject(person: Person) -> Person:

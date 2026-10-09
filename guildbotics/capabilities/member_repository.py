@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from guildbotics.capabilities.member_activity_events import record_member_work_target
-from guildbotics.integrations.code_hosting_service import (
+from guildbotics.runtime.code_hosting_service import (
     MAX_PAGE_BYTES,
     RepositoryReadError,
 )

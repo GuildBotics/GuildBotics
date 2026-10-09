@@ -4305,7 +4305,7 @@ describe("PatrolSettingsEditor", () => {
     const user = userEvent.setup();
     await openPatrolTab(user);
 
-    // Enabling the override seeds the edition default routine; the selected
+    // Enabling the override seeds the default routine; the selected
     // value renders with the routine catalog's label rather than the plain
     // /commands/options entry, proving the routine selector reads its own
     // catalog.

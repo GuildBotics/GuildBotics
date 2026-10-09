@@ -7,7 +7,7 @@ comment (:mod:`~guildbotics.integrations.workflow_status_comment`).
 
 from __future__ import annotations
 
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 
 WORKFLOW_STATUS_EVENT_TYPE = "guildbotics.workflow_status"
 WORKFLOW_STATUS_KIND = "workflow_error"

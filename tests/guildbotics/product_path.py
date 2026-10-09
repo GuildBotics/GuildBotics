@@ -14,14 +14,14 @@ from pathlib import Path
 from guildbotics.commands.metadata import CommandAccess, command_access
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import PreparedCommand, run_in_environment
-from guildbotics.editions import get_edition
+from guildbotics.drivers.context import create_context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 
 
 def workspace_member(person_id: str | None = None) -> str:
     """The workspace's member a command runs as: ``person_id``, or the
     team's default."""
-    team = get_edition().get_context().team
+    team = create_context().team
     person = resolve_person(team, person_id, allow_default=True)
     return ensure_execution_subject(person).person_id
 
@@ -45,7 +45,7 @@ async def run_file(
         person_id: The member it runs as; the team's default by default.
         access: What it declares, instead of what its file does.
     """
-    context = get_edition().get_context(message)
+    context = create_context(message)
     member = next(
         m for m in context.team.members if m.person_id == workspace_member(person_id)
     )

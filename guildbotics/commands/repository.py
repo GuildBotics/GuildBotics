@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.integrations.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 

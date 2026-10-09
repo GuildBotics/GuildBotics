@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from logging import Logger
 
-from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.runtime.brain import Brain
 from guildbotics.utils.import_utils import ClassResolver
 
 

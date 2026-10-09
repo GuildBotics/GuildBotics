@@ -4,14 +4,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from guildbotics.editions.simple import github_app_setup
-from guildbotics.editions.simple.github_app_setup import (
+from guildbotics.setup import github_app
+from guildbotics.setup.github_app import (
     GitHubAppRegistrationService,
     STATUS_CONVERTED,
     STATUS_INSTALLED,
     STATUS_PENDING,
 )
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SetupServiceError,
     SimplePersonSetupService,
@@ -45,12 +45,8 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             AppInstallation(installation_id=86632391, account_login="b"),
         ]
 
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "convert_manifest_code", fake_convert
-    )
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "list_app_installations", fake_list
-    )
+    monkeypatch.setattr(github_app.app_manifest, "convert_manifest_code", fake_convert)
+    monkeypatch.setattr(github_app.app_manifest, "list_app_installations", fake_list)
     monkeypatch.setattr(
         SimplePersonSetupService,
         "resolve_github_user",
@@ -102,7 +98,7 @@ def test_get_unknown_state_raises(tmp_path: Path) -> None:
 def test_expired_registration_is_purged(tmp_path: Path) -> None:
     service = GitHubAppRegistrationService()
     registration = _start(service, tmp_path)
-    registration.created_at -= github_app_setup.REGISTRATION_TTL_SECONDS + 1
+    registration.created_at -= github_app.REGISTRATION_TTL_SECONDS + 1
     with pytest.raises(SetupServiceError):
         service.get(registration.state)
 
@@ -158,9 +154,7 @@ async def test_complete_is_idempotent_after_conversion(
     async def fail_convert(code: str, *, transport=None):
         raise AssertionError("conversion must not run twice")
 
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "convert_manifest_code", fail_convert
-    )
+    monkeypatch.setattr(github_app.app_manifest, "convert_manifest_code", fail_convert)
     completed = await service.complete(registration.state, "tmp-code")
     assert completed.status == STATUS_CONVERTED
 
@@ -251,7 +245,7 @@ async def test_claim_refuses_an_expired_registration(
     service: GitHubAppRegistrationService, tmp_path: Path
 ) -> None:
     installed = await _install(service, tmp_path)
-    installed.created_at -= github_app_setup.REGISTRATION_TTL_SECONDS + 1
+    installed.created_at -= github_app.REGISTRATION_TTL_SECONDS + 1
 
     with pytest.raises(SetupServiceError) as exc_info:
         service.claim(installed.state, "alice")
@@ -270,9 +264,7 @@ async def test_check_installation_surfaces_transient_errors(
     async def failing_list(app_id: str, pem: bytes, *, transport=None):
         raise httpx.ConnectError("boom")
 
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "list_app_installations", failing_list
-    )
+    monkeypatch.setattr(github_app.app_manifest, "list_app_installations", failing_list)
     checked = await service.check_installation(registration.state)
     assert checked.status == STATUS_CONVERTED
     assert "boom" in checked.installation_check_error

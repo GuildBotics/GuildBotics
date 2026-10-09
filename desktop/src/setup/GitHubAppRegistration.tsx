@@ -21,7 +21,7 @@ import { openExternal } from "../openExternal";
 
 const POLL_INTERVAL_MS = 3000;
 
-// Mirrors GITHUB_APP_NAME_MAX_LENGTH in editions/simple/github_app_setup.py.
+// Mirrors GITHUB_APP_NAME_MAX_LENGTH in setup/github_app.py.
 const APP_NAME_MAX_LENGTH = 34;
 
 /** Suggest an app name that is unlikely to collide and short enough to submit.

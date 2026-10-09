@@ -9,7 +9,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
@@ -20,6 +19,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.intelligences.effort import normalize_effort
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (

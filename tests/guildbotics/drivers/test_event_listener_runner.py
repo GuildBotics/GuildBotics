@@ -16,7 +16,7 @@ from guildbotics.drivers.event_listener_runner import (
     SlackConnectionKey,
 )
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import (
+from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
     ChatIdentity,
@@ -34,9 +34,9 @@ from guildbotics.runtime.event_listener import (
 )
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
+from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
-    DummyLoaderFactory,
     _make_team,
 )
 
@@ -242,7 +242,7 @@ class _BackfillContext(_FakeContext):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("commands_in_process")
+@pytest.mark.usefixtures("commands_in_process", "configured_team")
 async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
     monkeypatch, tmp_path
 ):
@@ -266,13 +266,8 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
     team = _make_team(language="en")
     person = Person(person_id="alice", name="Alice", is_active=True)
     team.members = [person]
-    context = Context(
-        loader_factory=DummyLoaderFactory(team),
-        integration_factory=_WorkflowIntegrationFactory(chat_service),
-        brain_factory=DummyBrainFactory(),
-        logger=logging.getLogger("test-event-runner"),
-        person=person,
-        message="",
+    context = make_context(
+        team, _WorkflowIntegrationFactory(chat_service), DummyBrainFactory(), "", person
     )
 
     # Fake the agent invocation at the CommandRunner boundary: record a reply

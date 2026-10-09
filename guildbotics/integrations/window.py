@@ -14,21 +14,21 @@ from logging import Logger
 from typing import Any
 
 from guildbotics.entities import Person, Team
-from guildbotics.integrations.chat_service import (
+from guildbotics.intelligences.agent_runtime.host_client import HostClient
+from guildbotics.runtime.chat_service import (
     ChatEventPage,
     ChatIdentity,
     ChatPostResult,
     ChatService,
     ChatServiceError,
 )
-from guildbotics.integrations.code_hosting_service import (
+from guildbotics.runtime.code_hosting_service import (
     CodeHostingService,
     RepositoryReadError,
     RepositoryReadPage,
 )
-from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.agent_runtime.host_client import HostClient
 from guildbotics.runtime.integration_factory import IntegrationFactory
+from guildbotics.runtime.ticket_manager import TicketManager
 
 
 class MemberCommandError(RuntimeError):

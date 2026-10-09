@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.integrations.window import WindowChatService
+from guildbotics.drivers.context import create_context
+from guildbotics.integrations.window import WindowChatService, WindowIntegrationFactory
 from guildbotics.intelligences.agent_runtime.host_client import (
     COMMAND_ENV,
     HOST_TOKEN_ENV,
@@ -94,6 +95,32 @@ async def test_child_resolves_inside_existing_environment_and_uses_its_member(
     assert reply.result["person"] == "aiko"
     assert reply.result["services"] == "WindowChatService"
     assert facts.access.read_only
+
+
+_FACTORIES = """
+def main(context):
+    return [type(context.brain_factory).__name__, type(context.integration_factory).__name__]
+"""
+
+
+@pytest.mark.asyncio
+async def test_the_context_has_the_hosts_brains_and_the_windows_integrations(
+    config_dir, tmp_path
+):
+    path = config_dir / "commands" / "probe.py"
+    path.write_text(_FACTORIES, encoding="utf-8")
+
+    reply = await command_entry.run(
+        _request(path, tmp_path, wants_result=True),
+        _facts(tmp_path),
+        HostClient("http://window.test/host", "token"),
+    )
+
+    assert reply.failure is None
+    assert reply.result == [
+        type(create_context().brain_factory).__name__,
+        WindowIntegrationFactory.__name__,
+    ]
 
 
 @pytest.mark.asyncio

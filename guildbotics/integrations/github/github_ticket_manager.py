@@ -36,12 +36,12 @@ from guildbotics.integrations.github.repository_scope import (
     UPDATE_PROJECT_ITEM_STATUS,
     configured_owner,
 )
-from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     render_workflow_status_comment,
     suppresses_ticket_selection,
 )
+from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400

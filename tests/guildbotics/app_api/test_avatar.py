@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.editions.simple.setup_service import PersonConfigSnapshot
+from guildbotics.setup.setup_service import PersonConfigSnapshot
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -161,9 +161,7 @@ def test_post_avatar_upload_rejects_large_file(client: TestClient) -> None:
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_github(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -219,9 +217,7 @@ def test_import_avatar_from_github(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_github_error_message_is_stable(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -249,9 +245,7 @@ def test_import_avatar_from_github_error_message_is_stable(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_slack(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -310,9 +304,7 @@ def test_import_avatar_from_slack(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_slack_missing_scope(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -347,9 +339,7 @@ def test_import_avatar_from_slack_missing_scope(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_slack_agent_no_user_id(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -426,9 +416,7 @@ def test_import_avatar_from_slack_agent_no_user_id(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_slack_human_token_fallback(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -485,9 +473,7 @@ def test_import_avatar_from_slack_human_token_fallback(
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_import_avatar_from_slack_env_var_wins_over_keychain(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,
@@ -546,9 +532,7 @@ def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
 
 
 @patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch(
-    "guildbotics.editions.simple.setup_service.SimplePersonSetupService.read_person_config"
-)
+@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
 def test_an_imported_avatar_is_refused_when_it_is_too_large(
     mock_read_config: MagicMock,
     mock_async_client_cls: MagicMock,

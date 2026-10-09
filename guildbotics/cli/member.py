@@ -65,7 +65,7 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
-from guildbotics.integrations.code_hosting_service import RepositoryReadError
+from guildbotics.drivers.context import resolve_member_context
 from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.observability import join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -76,7 +76,7 @@ from guildbotics.observability.interactive_sessions import (
     interactive_host,
     interactive_thread_key,
 )
-from guildbotics.runtime.member_context import resolve_member_context
+from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,

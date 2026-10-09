@@ -6,9 +6,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.runtime import BrainFactory
+from guildbotics.runtime.brain import Brain
 from guildbotics.utils.fileio import (
     get_person_config_path,
     load_markdown_with_frontmatter,
@@ -62,7 +62,10 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
     return brain_mapping
 
 
-class SimpleBrainFactory(BrainFactory):
+class ConfiguredBrainFactory(BrainFactory):
+    """Creates the brain a member's ``brain_mapping.yml`` slot names, on the
+    host and in a command's isolated environment alike."""
+
     def create_brain(
         self,
         person_id: str,

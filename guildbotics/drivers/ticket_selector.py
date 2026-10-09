@@ -24,13 +24,13 @@ from guildbotics.capabilities.workflow_rate_limits import (
 )
 from guildbotics.entities import Person, Task
 from guildbotics.integrations.chat_workflow_status import workflow_status_fields
-from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
 )
 from guildbotics.observability import require_trace, set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WorkflowInvocation,

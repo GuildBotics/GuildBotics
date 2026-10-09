@@ -4,6 +4,7 @@ This suite verifies:
 - `get_ticket_manager` caching behavior.
 - `clone_for` independence for person and cache.
 - `get_brain` delegates to the provided `BrainFactory` with language code.
+- every context, a clone included, reads the team anew.
 """
 
 from __future__ import annotations
@@ -14,41 +15,16 @@ from typing import Any
 import pytest
 
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.chat_service import ChatIdentity
-from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.intelligences.brains.brain import Brain
-from guildbotics.loader.team_loader import TeamLoader
+from guildbotics.runtime.chat_service import ChatIdentity
+from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.integration_factory import IntegrationFactory
-from guildbotics.runtime.loader_factory import LoaderFactory
 from guildbotics.utils.import_utils import ClassResolver
+from tests.guildbotics.runtime.configured_team import CONFIGURED_TEAM, make_context
 
 # ---- Test doubles ---------------------------------------------------------------------------
-
-
-class DummyTeamLoader(TeamLoader):
-    """Simple TeamLoader stub returning a provided Team instance."""
-
-    def __init__(self, team: Team):
-        self._team = team
-
-    def load(self) -> Team:
-        """Return the configured Team instance."""
-        return self._team
-
-
-class DummyLoaderFactory(LoaderFactory):
-    """LoaderFactory stub returning the provided Team via DummyTeamLoader."""
-
-    def __init__(self, team: Team):
-        self._team = team
-        self.create_team_loader_calls = 0
-
-    def create_team_loader(self) -> TeamLoader:
-        """Return a TeamLoader that loads the configured Team."""
-        self.create_team_loader_calls += 1
-        return DummyTeamLoader(self._team)
 
 
 class DummyTicketManager(TicketManager):
@@ -149,24 +125,19 @@ def _make_team(language: str = "en") -> Team:
 
 # ---- Tests -----------------------------------------------------------------------------------
 
+pytestmark = pytest.mark.usefixtures("configured_team")
+
 
 def test_get_ticket_manager_is_cached(monkeypatch):
     """Context.get_ticket_manager returns a cached instance and uses factory once."""
     team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
 
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        message="Initial message",
+    ctx = make_context(
+        team, integration_factory, brain_factory, "Initial message", person
     )
 
     tm1 = ctx.get_ticket_manager()
@@ -179,21 +150,14 @@ def test_get_ticket_manager_is_cached(monkeypatch):
 def test_clone_for_independence_person_and_cache():
     """clone_for yields a new Context with independent caches and person."""
     team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
 
     person1 = Person(person_id="p1", name="A")
     person2 = Person(person_id="p2", name="B")
 
-    ctx1 = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person1,
-        message="Initial message",
+    ctx1 = make_context(
+        team, integration_factory, brain_factory, "Initial message", person1
     )
 
     # Prime cache in original context to ensure clone has its own cache
@@ -213,19 +177,12 @@ def test_clone_for_independence_person_and_cache():
 @pytest.mark.asyncio
 async def test_context_aclose_closes_cached_chat_resources():
     team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        message="Initial message",
+    ctx = make_context(
+        team, integration_factory, brain_factory, "Initial message", person
     )
 
     chat_service = ctx.get_chat_service()
@@ -248,20 +205,13 @@ def test_get_brain_delegates_to_factory_with_language():
     """get_brain delegates to factory and passes derived language code."""
     # Project language code 'ja' should be passed through to BrainFactory
     team = _make_team(language="ja")
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
 
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        message="Initial message",
+    ctx = make_context(
+        team, integration_factory, brain_factory, "Initial message", person
     )
 
     brain = ctx.get_brain("planner", None, None)
@@ -274,4 +224,20 @@ def test_get_brain_delegates_to_factory_with_language():
     assert person_id == "p1"
     assert name == "planner"
     assert lang == "ja"
-    assert lg is logger
+    assert lg is ctx.logger
+
+
+def test_every_context_reads_the_team_anew():
+    """A clone reads the team again: its team is the configuration as it is
+    when the clone is made."""
+    ctx = make_context(
+        _make_team(language="en"), DummyIntegrationFactory(), DummyBrainFactory()
+    )
+    edited = _make_team(language="ja")
+    CONFIGURED_TEAM.team = edited
+
+    clone = ctx.clone_for(Person(person_id="p1", name="Tester"))
+
+    assert CONFIGURED_TEAM.loads == 2
+    assert clone.team is edited
+    assert clone.language_code == "ja"

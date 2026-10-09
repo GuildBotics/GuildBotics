@@ -4,9 +4,9 @@ import logging
 
 import pytest
 
-from guildbotics.editions.simple import simple_brain_factory
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
-from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.intelligences.brains import factory as brain_factory_module
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
+from guildbotics.runtime.brain import Brain
 from guildbotics.intelligences.effort import EffortError
 
 
@@ -24,17 +24,17 @@ class RecordingBrain(Brain):
 @pytest.fixture
 def _brain_mapping(monkeypatch):
     mapping = {
-        "default": simple_brain_factory.BrainConfig(
+        "default": brain_factory_module.BrainConfig(
             type=RecordingBrain, args={"model": "default"}
         )
     }
     monkeypatch.setattr(
-        simple_brain_factory, "get_brain_mapping", lambda person_id: mapping
+        brain_factory_module, "get_brain_mapping", lambda person_id: mapping
     )
 
 
 def _create(config: dict) -> RecordingBrain:
-    brain = SimpleBrainFactory().create_brain(
+    brain = ConfiguredBrainFactory().create_brain(
         "p1", "functions/reply", "en", logging.getLogger("test"), config=config
     )
     assert isinstance(brain, RecordingBrain)

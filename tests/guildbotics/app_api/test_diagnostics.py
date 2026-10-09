@@ -20,7 +20,7 @@ from guildbotics.entities.team import (
     Role,
     Team,
 )
-from guildbotics.integrations.chat_service import ChatIdentity
+from guildbotics.runtime.chat_service import ChatIdentity
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentBrain,
     CliAgentExecutionError,
@@ -461,7 +461,7 @@ async def test_llm_live_call_asks_the_members_model_through_its_brain(
 ) -> None:
     """The check is the brain's own ``run()``: the model of the member's slot
     is asked, on the host."""
-    from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+    from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
     from tests.guildbotics.intelligences.brains.test_inference import _Model
 
     _patch_provider(monkeypatch, "openai")
@@ -476,7 +476,7 @@ async def test_llm_live_call_asks_the_members_model_through_its_brain(
     def get_brain(self: _StubContext, name: str, config: Any, extra: Any) -> Any:
         if name != "functions/talk_as":
             return stub
-        return SimpleBrainFactory().create_brain(
+        return ConfiguredBrainFactory().create_brain(
             self.person.person_id, name, "en", self.logger, config, extra
         )
 

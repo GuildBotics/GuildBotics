@@ -16,7 +16,7 @@ from guildbotics.app_api.api import TOKEN_HEADER, create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.drivers import command_runner
-from guildbotics.editions.simple.simple_brain_factory import (
+from guildbotics.intelligences.brains.factory import (
     BrainConfig,
     person_brain_mapping,
 )

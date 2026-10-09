@@ -142,7 +142,7 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "endpoint",
     ): "paginated: this is the shared page request for every REST collection",
     (
-        "guildbotics/editions/simple/setup_service.py",
+        "guildbotics/setup/setup_service.py",
         "resolve_github_user",
         "requests.get",
         "f'https://api.github.com/users/{api_username}'",
