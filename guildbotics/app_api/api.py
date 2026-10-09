@@ -181,7 +181,12 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.local_api import PROOF_PATH, TOKEN_HEADER, local_api_proof
+from guildbotics.utils.local_api import (
+    PROOF_PATH,
+    TOKEN_HEADER,
+    TOKEN_SUBPROTOCOL,
+    local_api_proof,
+)
 from guildbotics.utils.person_id import (
     MemberConfigError,
     MemberDirectoryName,
@@ -1953,12 +1958,8 @@ def create_app(
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.websocket("/events")
-    async def events(websocket: WebSocket, token_query: str = Query(alias="token")):
-        await _stream(websocket, token_query, token, bus.subscribe_events)
-
-    @app.websocket("/logs")
-    async def logs(websocket: WebSocket, token_query: str = Query(alias="token")):
-        await _stream(websocket, token_query, token, bus.subscribe_logs)
+    async def events(websocket: WebSocket):
+        await _stream(websocket, token, bus)
 
     return app
 
@@ -2075,18 +2076,16 @@ def _error_response(
     )
 
 
-async def _stream(
-    websocket: WebSocket,
-    provided_token: str,
-    expected_token: str,
-    subscribe,
-) -> None:
-    if provided_token != expected_token:
+async def _stream(websocket: WebSocket, token: str, bus: EventBus) -> None:
+    # The token travels as the second offered subprotocol, never in the URL:
+    # uvicorn logs every handshake with its path and query. Selecting the fixed
+    # name keeps the token out of the response.
+    if websocket.scope.get("subprotocols") != [TOKEN_SUBPROTOCOL, token]:
         await websocket.close(code=1008)
         return
 
-    await websocket.accept()
-    queue = subscribe()
+    await websocket.accept(subprotocol=TOKEN_SUBPROTOCOL)
+    queue = bus.subscribe_events()
 
     async def send() -> None:
         while True:

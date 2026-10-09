@@ -34,7 +34,7 @@
 
 - インストール後 CLI: `guildbotics` (`pyproject.toml` の `project.scripts`)
 - モジュール側: `guildbotics/cli/__init__.py`
-- Desktop 向け Local API: `python -m guildbotics.app_api`（FastAPI。`/local-api/proof` 以外の全リクエストに `X-GuildBotics-Session-Token` ヘッダが必要、`/health` で疎通確認。bind したポートを stdout の 1 行（`server.PORT_NOTICE_PREFIX`）で起動元へ通知する。token の経路の母集団は `tests/guildbotics/test_local_api_boundary.py`）
+- Desktop 向け Local API: `python -m guildbotics.app_api`（FastAPI。`/local-api/proof` 以外の全リクエストに `X-GuildBotics-Session-Token` ヘッダが必要（WebSocket の `/events` はヘッダを付けられず、uvicorn がハンドシェイクの URL をログに書くので、`Sec-WebSocket-Protocol` で `guildbotics.session` の次に token を渡す）、`/health` で疎通確認。bind したポートを stdout の 1 行（`server.PORT_NOTICE_PREFIX`）で起動元へ通知する。token の経路の母集団は `tests/guildbotics/test_local_api_boundary.py`）
 
 ### パッケージ全体マップ
 

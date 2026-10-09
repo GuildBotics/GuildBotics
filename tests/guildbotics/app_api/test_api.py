@@ -72,6 +72,7 @@ from guildbotics.runtime.relay_runtime import RelayRuntime
 from guildbotics.runtime import service_lock as service_lock_module
 from guildbotics.runtime.service_lock import ServiceLock
 from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
 
 HTTP_OK = 200
 HTTP_ACCEPTED = 202
@@ -1284,7 +1285,9 @@ def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
 
     with (
         TestClient(app) as client,
-        client.websocket_connect("/events?token=secret") as websocket,
+        client.websocket_connect(
+            "/events", subprotocols=[TOKEN_SUBPROTOCOL, "secret"]
+        ) as websocket,
     ):
         event = websocket.receive_json()
 

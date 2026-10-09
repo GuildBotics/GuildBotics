@@ -1047,7 +1047,11 @@ a monorepo on purpose.
 - **Local API boundary**: the GUI never reimplements the Python engine. It launches the
   bundled backend (`python -m guildbotics.app_api`, FastAPI) and talks to it on
   `127.0.0.1` via REST + WebSocket. Every request requires the per-process
-  `X-GuildBotics-Session-Token`; `/health` is the liveness probe. The launcher mints
+  `X-GuildBotics-Session-Token`; `/health` is the liveness probe. A browser
+  WebSocket cannot set that header, and uvicorn logs every handshake's path and
+  query, so `/events` takes the token as the second offered subprotocol after
+  `guildbotics.session`, which the server selects; the token is never in a URL the
+  server logs or echoed back. The launcher mints
   that token and hands it over through `GUILDBOTICS_APP_API_TOKEN` — never argv, which
   `ps` exposes to every other user on the host — and the server refuses to start
   without it, consuming the variable on startup so the AI CLI agents it spawns from a

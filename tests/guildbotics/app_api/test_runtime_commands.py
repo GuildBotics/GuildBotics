@@ -20,6 +20,7 @@ import contextvars
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1202,14 +1203,15 @@ async def test_logs_during_run_command_carry_the_trace_id(
     # Logs emitted while a manual command runs flow through the single log path
     # (EventBusLogHandler) and carry the run's trace id — replacing the old
     # duplicate command.log events.
-    event_bus = EventBus()
+    records: list[dict[str, Any]] = []
+    store = SimpleNamespace(record=records.append)
+    event_bus = EventBus(store=store)
     runtime = AppRuntime(event_bus)
     guildbotics_logger = logging.getLogger("guildbotics")
     guildbotics_logger.setLevel(logging.INFO)
     log_handler = EventBusLogHandler(event_bus)
     log_handler.setFormatter(logging.Formatter("%(message)s"))
     guildbotics_logger.addHandler(log_handler)
-    log_sub = event_bus.subscribe_logs()
 
     async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         guildbotics_logger.info("progress message")
@@ -1222,12 +1224,10 @@ async def test_logs_during_run_command_carry_the_trace_id(
 
     try:
         response = await runtime.run_command(CommandRunRequest(command="demo"))
-        item = await asyncio.wait_for(log_sub.get(), timeout=2.0)
     finally:
         guildbotics_logger.removeHandler(log_handler)
-        log_sub.close()
 
-    assert item["kind"] == "log"
+    [item] = [item for item in records if item["kind"] == "log"]
     assert item["message"] == "progress message"
     assert item["trace_id"] == response.trace_id
     # No command.log events are produced anymore; only state-change events.

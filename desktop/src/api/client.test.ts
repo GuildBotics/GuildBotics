@@ -770,14 +770,16 @@ type SocketHandlers = {
 class MockWebSocket implements SocketHandlers {
   static instances: MockWebSocket[] = [];
   url: string;
+  protocols: string[];
   close = vi.fn();
   onopen?: () => void;
   onmessage?: (event: { data: string }) => void;
   onerror?: () => void;
   onclose?: () => void;
 
-  constructor(url: string) {
+  constructor(url: string, protocols: string[]) {
     this.url = url;
+    this.protocols = protocols;
     MockWebSocket.instances.push(this);
   }
 }
@@ -788,7 +790,7 @@ describe("websocket subscriptions", () => {
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
   });
 
-  it("connects to /events with the token and drives status transitions", () => {
+  it("connects to /events with the token as a subprotocol and drives status transitions", () => {
     configureApi("ws-token", "http://127.0.0.1:8765");
     const events: RuntimeEvent[] = [];
     const statuses: StreamStatus[] = [];
@@ -799,7 +801,9 @@ describe("websocket subscriptions", () => {
     );
 
     const socket = MockWebSocket.instances[0];
-    expect(socket.url).toBe("ws://127.0.0.1:8765/events?token=ws-token");
+    // The URL is logged by the server on every handshake, so the token stays out of it.
+    expect(socket.url).toBe("ws://127.0.0.1:8765/events");
+    expect(socket.protocols).toEqual(["guildbotics.session", "ws-token"]);
     expect(statuses).toEqual(["connecting"]);
 
     socket.onopen?.();
@@ -846,12 +850,12 @@ describe("websocketBase protocol conversion", () => {
   it("converts http:// to ws://", () => {
     configureApi("t", "http://localhost:1234");
     subscribeEvents(() => undefined);
-    expect(MockWebSocket.instances[0].url).toBe("ws://localhost:1234/events?token=t");
+    expect(MockWebSocket.instances[0].url).toBe("ws://localhost:1234/events");
   });
 
   it("converts https:// to wss:// and strips the trailing slash", () => {
     configureApi("t", "https://api.example.com");
     subscribeEvents(() => undefined);
-    expect(MockWebSocket.instances[0].url).toBe("wss://api.example.com/events?token=t");
+    expect(MockWebSocket.instances[0].url).toBe("wss://api.example.com/events");
   });
 });

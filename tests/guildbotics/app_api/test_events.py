@@ -17,6 +17,16 @@ from guildbotics.observability import trace_scope
 EXPECTED_HISTORY_LEN = 3
 
 
+class _Records:
+    """The diagnostics store the bus hands each item to."""
+
+    def __init__(self) -> None:
+        self.items: list[dict[str, object]] = []
+
+    def record(self, item: dict[str, object]) -> None:
+        self.items.append(item)
+
+
 async def _get_with_timeout(subscription, timeout: float = 2.0) -> dict[str, object]:
     return await asyncio.wait_for(subscription.get(), timeout=timeout)
 
@@ -64,31 +74,29 @@ async def test_no_publish_to_subscriber_after_close() -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_and_log_history_are_separate() -> None:
-    bus = EventBus()
+async def test_logs_are_recorded_but_not_streamed() -> None:
+    records = _Records()
+    bus = EventBus(store=records)
     bus.publish_event("command.started", {"command": "hello"})
     bus.publish_log("INFO", "log line")
 
     event_sub = bus.subscribe_events()
-    log_sub = bus.subscribe_logs()
     try:
         event_item = await _get_with_timeout(event_sub)
-        log_item = await _get_with_timeout(log_sub)
-
-        # Event subscriber must not see the log entry and vice versa.
+        # The event subscriber must not see the log entry.
         with pytest.raises(asyncio.TimeoutError):
             await _get_with_timeout(event_sub, timeout=0.2)
-        with pytest.raises(asyncio.TimeoutError):
-            await _get_with_timeout(log_sub, timeout=0.2)
     finally:
         event_sub.close()
-        log_sub.close()
 
+    assert bus.snapshot_events() == [event_item]
     assert event_item["type"] == "command.started"
     assert "level" not in event_item
-    assert log_item["level"] == "INFO"
-    assert log_item["message"] == "log line"
-    assert "type" not in log_item
+    event_record, log_record = records.items
+    assert event_record == event_item
+    assert log_record["level"] == "INFO"
+    assert log_record["message"] == "log line"
+    assert "type" not in log_record
 
 
 @pytest.mark.asyncio
@@ -170,8 +178,8 @@ async def test_background_thread_publish_reaches_async_subscriber() -> None:
 
 @pytest.mark.asyncio
 async def test_event_bus_log_handler_publishes_formatted_log() -> None:
-    bus = EventBus()
-    log_sub = bus.subscribe_logs()
+    records = _Records()
+    bus = EventBus(store=records)
     event_sub = bus.subscribe_events()
 
     logger = logging.getLogger("test_event_bus_log_handler")
@@ -183,15 +191,15 @@ async def test_event_bus_log_handler_publishes_formatted_log() -> None:
 
     try:
         logger.warning("disk almost full")
-        item = await _get_with_timeout(log_sub)
 
         # A plain log handler must not emit on the event channel.
         with pytest.raises(asyncio.TimeoutError):
             await _get_with_timeout(event_sub, timeout=0.2)
     finally:
         logger.removeHandler(handler)
-        log_sub.close()
         event_sub.close()
+
+    [item] = records.items
 
     assert item["kind"] == "log"
     assert item["level"] == "WARNING"
@@ -199,10 +207,9 @@ async def test_event_bus_log_handler_publishes_formatted_log() -> None:
     assert item["trace_id"] is None
 
 
-@pytest.mark.asyncio
-async def test_log_handler_attaches_current_trace_to_log_records() -> None:
-    bus = EventBus()
-    log_sub = bus.subscribe_logs()
+def test_log_handler_attaches_current_trace_to_log_records() -> None:
+    records = _Records()
+    bus = EventBus(store=records)
 
     logger = logging.getLogger("test_log_handler_trace")
     logger.setLevel(logging.INFO)
@@ -214,10 +221,10 @@ async def test_log_handler_attaches_current_trace_to_log_records() -> None:
     try:
         with trace_scope("manual", trace_id="trace-42"):
             logger.error("command failed")
-        item = await _get_with_timeout(log_sub)
     finally:
         logger.removeHandler(handler)
-        log_sub.close()
+
+    [item] = records.items
 
     # Logs emitted within a trace carry that trace id (the single log path that
     # replaced the old command.log events).
