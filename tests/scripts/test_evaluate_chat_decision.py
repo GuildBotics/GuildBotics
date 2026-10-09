@@ -15,6 +15,7 @@ from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 from guildbotics.runtime.brain import Brain
 from guildbotics.utils.fileio import GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT
 from tests.scripts.conftest import SCRIPTS_DIR
+from tests.guildbotics.slot_mappings import use_brain_slots
 
 
 class ReplayBrain(Brain):
@@ -50,8 +51,8 @@ async def test_a_case_set_is_judged_by_the_members_configured_brain(
     # Selecting the workspace sets these; setting them first restores them.
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace))
     monkeypatch.setenv(GUILDBOTICS_CONFIG_DIR, str(workspace / ".guildbotics/config"))
-    monkeypatch.setitem(
-        factory.person_brain_mapping,
+    use_brain_slots(
+        monkeypatch,
         "alice",
         {"chat_decision": factory.BrainConfig(type=ReplayBrain)},
     )

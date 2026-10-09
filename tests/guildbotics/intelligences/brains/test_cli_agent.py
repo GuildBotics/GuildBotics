@@ -14,6 +14,7 @@ from tests.guildbotics.intelligences.agent_runtime.window_doubles import (
     WindowDouble,
     enter_command,
 )
+from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 
 @pytest.fixture(autouse=True)
@@ -64,8 +65,8 @@ def _native_brain(monkeypatch, result: cli_agent.CliAgentExecutionResult, **kwar
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
     )
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "p1",
         {"default": cli_agent.ExecutableInfo(adapter="claude", **kwargs)},
     )
@@ -88,7 +89,6 @@ def _read_only_state(tmp_path) -> dict:
 def test_cli_agent_mapping_selects_the_tools_adapter(
     monkeypatch, mapping_value, adapter
 ) -> None:
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -98,12 +98,10 @@ def test_cli_agent_mapping_selects_the_tools_adapter(
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 
     assert resolved["default"].adapter == adapter
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 def test_cli_agent_mapping_rejects_a_tool_outside_the_catalog(monkeypatch) -> None:
     """A mapping no adapter can run fails at load, naming the slot."""
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -431,8 +429,8 @@ async def test_a_failed_turn_records_a_failed_span_without_effective_values(
         raise RuntimeError("provider is unreachable")
 
     monkeypatch.setattr(cli_agent.CliAgentBrain, "_execute_native_turn", failing_turn)
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "p1",
         {"default": cli_agent.ExecutableInfo(adapter="claude")},
     )
@@ -643,7 +641,6 @@ def test_a_tool_reads_its_own_definition(monkeypatch, tmp_path) -> None:
         tmp_path, "cli_agents/codex/default.yml", "effort:\n  high:\n    effort: high\n"
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -654,7 +651,6 @@ def test_a_tool_reads_its_own_definition(monkeypatch, tmp_path) -> None:
 
     assert resolved["default"].adapter == "codex"
     assert resolved["default"].effort == {"high": {"effort": "high"}}
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 def test_two_slots_on_one_tool_keep_their_own_settings(monkeypatch, tmp_path) -> None:
@@ -674,7 +670,6 @@ def test_two_slots_on_one_tool_keep_their_own_settings(monkeypatch, tmp_path) ->
         "effort:\n  high:\n    model: cheap\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -690,7 +685,6 @@ def test_two_slots_on_one_tool_keep_their_own_settings(monkeypatch, tmp_path) ->
     assert resolved["reviewer"].effort == {"high": {"model": "cheap"}}
     # Both still run on the same adapter.
     assert {info.adapter for info in resolved.values()} == {"codex"}
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 def test_a_slot_inherits_the_keys_it_does_not_state(monkeypatch, tmp_path) -> None:
@@ -705,7 +699,6 @@ def test_a_slot_inherits_the_keys_it_does_not_state(monkeypatch, tmp_path) -> No
         "effort:\n  high:\n    effort: max\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -718,7 +711,6 @@ def test_a_slot_inherits_the_keys_it_does_not_state(monkeypatch, tmp_path) -> No
     assert resolved["writer"].effort == {"high": {"effort": "max"}}
     assert resolved["writer"].parameters == {"model": "steady"}
     assert resolved["writer"].adapter == "codex"
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 @pytest.mark.asyncio
@@ -733,8 +725,8 @@ async def test_runtime_effort_reaches_the_adapter_settings(monkeypatch, tmp_path
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
     )
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "p1",
         {
             "default": cli_agent.ExecutableInfo(
@@ -768,8 +760,8 @@ async def test_frontmatter_effort_reaches_the_adapter_settings(monkeypatch, tmp_
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
     )
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "p1",
         {
             "default": cli_agent.ExecutableInfo(
@@ -818,22 +810,18 @@ def test_a_tools_own_settings_apply_whatever_effort_was_asked_for(
         "parameters:\n  model: steady\neffort:\n  high:\n    model: stronger\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
         lambda *_args: {"default": "cli_agents/codex/default.yml"},
     )
-    try:
-        brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
-        models = {
-            requested: brain._resolve_provider_effort(
-                {"session_state": {"effort": requested} if requested else {}}
-            ).model
-            for requested in ("high", "default", "")
-        }
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
+    brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
+    models = {
+        requested: brain._resolve_provider_effort(
+            {"session_state": {"effort": requested} if requested else {}}
+        ).model
+        for requested in ("high", "default", "")
+    }
 
     assert models == {"high": "stronger", "default": "steady", "": "steady"}
 
@@ -851,18 +839,14 @@ def test_diagnostics_reflect_the_level_not_the_baseline(monkeypatch, tmp_path) -
         "parameters:\n  model: steady\neffort:\n  low:\n    effort: low\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
         lambda *_args: {"default": "cli_agents/codex/default.yml"},
     )
-    try:
-        brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
-        unmapped = brain._resolve_provider_effort({"session_state": {"effort": "high"}})
-        mapped = brain._resolve_provider_effort({"session_state": {"effort": "low"}})
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
+    brain = cli_agent.CliAgentBrain("aiko", "x", logger=_stub_logger())
+    unmapped = brain._resolve_provider_effort({"session_state": {"effort": "high"}})
+    mapped = brain._resolve_provider_effort({"session_state": {"effort": "low"}})
 
     unmapped_payload = unmapped.diagnostics()
     assert unmapped_payload["unsupported"] is True
@@ -885,7 +869,6 @@ def test_a_tool_definition_network_block_is_ignored(monkeypatch, tmp_path) -> No
         "  allow_local_network: false\n",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
@@ -895,7 +878,6 @@ def test_a_tool_definition_network_block_is_ignored(monkeypatch, tmp_path) -> No
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 
     assert resolved["writer"] == cli_agent.ExecutableInfo(adapter="codex")
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 @pytest.mark.asyncio
@@ -1040,8 +1022,8 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     )
 
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "judge",
         {"default": cli_agent.ExecutableInfo(adapter="copilot")},
     )

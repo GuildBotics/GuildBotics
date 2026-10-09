@@ -113,10 +113,6 @@ class ExecutableInfo:
     parameters: dict = field(default_factory=dict)
 
 
-#: Overrides keyed by person id. Production code does not write this dict.
-#: See ``factory.person_brain_mapping`` for why.
-person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
-
 #: The one effort-mapping key the core gives a name of its own for diagnostics.
 #: Everything else is passed through to the adapter, which owns the provider vocabulary.
 EFFORT_MODEL_KEY = "model"
@@ -508,9 +504,8 @@ def _login_refused(
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     """Return the person's AI CLI slots, read from configuration each call.
 
-    An entry in :data:`person_cli_agent_mapping` is an override and wins over
-    the files. Otherwise the mapping is loaded and not stored, so the next
-    brain sees a file that changed after the previous brain was built.
+    The mapping is loaded and not stored, so the next brain sees a file that
+    changed after the previous brain was built.
 
     Args:
         person_id (str): The person whose ``cli_agent_mapping.yml`` to read.
@@ -518,10 +513,6 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     Returns:
         dict[str, ExecutableInfo]: Slot name to the tool and its settings.
     """
-    override = person_cli_agent_mapping.get(person_id)
-    if override is not None:
-        return override
-
     from guildbotics.intelligences.cli_agents import require_cli_agent_path
 
     mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")

@@ -28,19 +28,13 @@ class BrainConfig(BaseModel):
     )
 
 
-#: Overrides keyed by person id. Production code does not write this dict;
-#: only tests inject entries, and a production write brings #587 back.
-#: Remembering the first load served stale settings after a hand edit, a sync,
-#: a workspace switch, or any write that did not go through the settings
-#: screen. Re-reading the mapping is cheap enough to do on every brain.
-person_brain_mapping: dict[str, dict[str, BrainConfig]] = {}
-
-
 def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
     """Return the person's brain slots, read from configuration each call.
 
-    An entry in :data:`person_brain_mapping` is an override and wins over the
-    files. Otherwise the mapping is loaded and not stored.
+    The mapping is loaded and not stored: remembering the first load served
+    stale settings after a hand edit, a sync, a workspace switch, or any write
+    that did not go through the settings screen (#587). Re-reading it is cheap
+    enough to do on every brain.
 
     Args:
         person_id (str): The person whose ``brain_mapping.yml`` to read.
@@ -48,10 +42,6 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
     Returns:
         dict[str, BrainConfig]: Slot name to the brain class and its arguments.
     """
-    override = person_brain_mapping.get(person_id)
-    if override is not None:
-        return override
-
     mapping = load_person_slot_mapping(person_id, "intelligences/brain_mapping.yml")
     brain_mapping = {}
     for name, config in mapping.items():

@@ -11,23 +11,26 @@ from pydantic import BaseModel, ValidationError
 
 from guildbotics.intelligences.brains import agno_agent, inference_host
 from guildbotics.intelligences.brains import span_summary
+from tests.guildbotics.slot_mappings import use_model_slots
 
 
 @pytest.mark.asyncio
 async def test_agno_agent_records_request_response_and_span(
     monkeypatch, tmp_path: Path
 ) -> None:
-    original = agno_agent.person_model_mapping.copy()
     io_records: list[tuple[str, dict]] = []
     span_records: list[dict] = []
-    agno_agent.person_model_mapping.clear()
-    agno_agent.person_model_mapping["p1"] = {
-        "default": agno_agent.ModelConfig(
-            name="models/test.yml",
-            model_class="tests.FakeModel",
-            parameters={"id": "test-model-5"},
-        )
-    }
+    use_model_slots(
+        monkeypatch,
+        "p1",
+        {
+            "default": agno_agent.ModelConfig(
+                name="models/test.yml",
+                model_class="tests.FakeModel",
+                parameters={"id": "test-model-5"},
+            )
+        },
+    )
 
     class FakeResponse:
         content = "reply"
@@ -58,17 +61,13 @@ async def test_agno_agent_records_request_response_and_span(
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
-    try:
-        brain = agno_agent.AgnoAgentDefaultBrain(
-            "p1",
-            "functions/reply",
-            logger=logging.getLogger("test"),
-            description="System prompt",
-        )
-        output = await brain.run("hello", session_state={"topic": "style"})
-    finally:
-        agno_agent.person_model_mapping.clear()
-        agno_agent.person_model_mapping.update(original)
+    brain = agno_agent.AgnoAgentDefaultBrain(
+        "p1",
+        "functions/reply",
+        logger=logging.getLogger("test"),
+        description="System prompt",
+    )
+    output = await brain.run("hello", session_state={"topic": "style"})
 
     assert output == "reply"
     assert [record[0] for record in io_records] == ["llm.request", "llm.response"]
@@ -111,9 +110,7 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
         async def arun(self, message: str):
             return SimpleNamespace(content="reply", status=RunStatus.completed)
 
-    original = agno_agent.person_model_mapping.copy()
-    agno_agent.person_model_mapping.clear()
-    agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
+    use_model_slots(monkeypatch, "p1", {"default": _model_config()})
     monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
     monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -123,18 +120,14 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
-    try:
-        brain = agno_agent.AgnoAgentDefaultBrain(
-            "p1",
-            "functions/reply",
-            logger=logging.getLogger("test"),
-            description="System prompt",
-            response_class=Reply,
-        )
-        await brain.run("hello", session_state={"topic": "style"})
-    finally:
-        agno_agent.person_model_mapping.clear()
-        agno_agent.person_model_mapping.update(original)
+    brain = agno_agent.AgnoAgentDefaultBrain(
+        "p1",
+        "functions/reply",
+        logger=logging.getLogger("test"),
+        description="System prompt",
+        response_class=Reply,
+    )
+    await brain.run("hello", session_state={"topic": "style"})
 
     # The structured-output model reaches agno under its own parameter name,
     # showing the provider the schema the brain's class has.
@@ -168,9 +161,7 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
         async def arun(self, message: str):
             return SimpleNamespace(content="reply", status=RunStatus.completed)
 
-    original = agno_agent.person_model_mapping.copy()
-    agno_agent.person_model_mapping.clear()
-    agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
+    use_model_slots(monkeypatch, "p1", {"default": _model_config()})
     monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
     monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -180,16 +171,10 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
     )
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
-    try:
-        brain = agno_agent.AgnoAgentDefaultBrain(
-            "p1", "functions/reply", logger=logging.getLogger("test")
-        )
-        await brain.run(
-            "hello", session_state={"context": Uncopyable(), "topic": "style"}
-        )
-    finally:
-        agno_agent.person_model_mapping.clear()
-        agno_agent.person_model_mapping.update(original)
+    brain = agno_agent.AgnoAgentDefaultBrain(
+        "p1", "functions/reply", logger=logging.getLogger("test")
+    )
+    await brain.run("hello", session_state={"context": Uncopyable(), "topic": "style"})
 
     assert captured["session_state"] == {"topic": "style"}
     # What agno receives has to survive the copy it makes on every run.
@@ -221,11 +206,9 @@ async def _run_with_effort(
     Callers that care about the span summary pass ``span_records`` to collect
     the arguments every ``record_span_summary`` call was made with.
     """
-    original = agno_agent.person_model_mapping.copy()
     io_records: list[tuple[str, dict]] = []
     captured: dict = {}
-    agno_agent.person_model_mapping.clear()
-    agno_agent.person_model_mapping["p1"] = {"default": model_config}
+    use_model_slots(monkeypatch, "p1", {"default": model_config})
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -251,17 +234,13 @@ async def _run_with_effort(
     monkeypatch.setattr(inference_host, "instantiate_class", fake_instantiate)
     monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
-    try:
-        brain = agno_agent.AgnoAgentDefaultBrain(
-            "p1",
-            "functions/reply",
-            logger=logging.getLogger("test"),
-            effort=frontmatter_effort,
-        )
-        await brain.run("hello", session_state=session_state or {})
-    finally:
-        agno_agent.person_model_mapping.clear()
-        agno_agent.person_model_mapping.update(original)
+    brain = agno_agent.AgnoAgentDefaultBrain(
+        "p1",
+        "functions/reply",
+        logger=logging.getLogger("test"),
+        effort=frontmatter_effort,
+    )
+    await brain.run("hello", session_state=session_state or {})
     return captured, io_records
 
 
@@ -441,11 +420,7 @@ def test_a_slot_inherits_its_providers_effort_when_it_states_none(
         encoding="utf-8",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / ".guildbotics/config"))
-    agno_agent.person_model_mapping.clear()
-    try:
-        mapping = agno_agent.get_model_mapping("alice")
-    finally:
-        agno_agent.person_model_mapping.clear()
+    mapping = agno_agent.get_model_mapping("alice")
 
     assert mapping["writer"].effort == {"high": {"reasoning_effort": "high"}}
 
@@ -472,11 +447,7 @@ def test_an_explicit_empty_effort_is_not_refilled_by_the_provider(
         encoding="utf-8",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / ".guildbotics/config"))
-    agno_agent.person_model_mapping.clear()
-    try:
-        mapping = agno_agent.get_model_mapping("alice")
-    finally:
-        agno_agent.person_model_mapping.clear()
+    mapping = agno_agent.get_model_mapping("alice")
 
     assert mapping["writer"].effort == {}
 
@@ -500,11 +471,7 @@ def test_a_definition_saved_before_effort_existed_still_inherits(
         encoding="utf-8",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / ".guildbotics/config"))
-    agno_agent.person_model_mapping.clear()
-    try:
-        mapping = agno_agent.get_model_mapping("alice")
-    finally:
-        agno_agent.person_model_mapping.clear()
+    mapping = agno_agent.get_model_mapping("alice")
 
     assert mapping["default"].effort == {
         "low": {"reasoning_effort": "low"},

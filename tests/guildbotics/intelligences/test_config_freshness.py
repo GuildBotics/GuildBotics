@@ -14,30 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.intelligences.brains.factory import (
-    ConfiguredBrainFactory,
-    person_brain_mapping,
-)
-from guildbotics.intelligences.brains.agno_agent import (
-    AgnoAgentDefaultBrain,
-    person_model_mapping,
-)
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentBrain,
-    person_cli_agent_mapping,
-)
+from guildbotics.intelligences.brains.agno_agent import AgnoAgentDefaultBrain
+from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 
 _PERSON = "kenji"
 _MODEL_CLASS = "agno.models.openai.OpenAIChat"
 _BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
-
-
-@pytest.fixture(autouse=True)
-def _no_mapping_override() -> None:
-    person_brain_mapping.clear()
-    person_model_mapping.clear()
-    person_cli_agent_mapping.clear()
 
 
 def _use(monkeypatch: pytest.MonkeyPatch, config_dir: Path) -> None:
@@ -104,12 +88,6 @@ def _brain_slot() -> str:
     return brain.model_slot
 
 
-def _assert_nothing_was_remembered() -> None:
-    assert person_model_mapping == {}
-    assert person_cli_agent_mapping == {}
-    assert person_brain_mapping == {}
-
-
 def test_replacing_files_is_visible_to_the_next_brain(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -131,7 +109,6 @@ def test_replacing_files_is_visible_to_the_next_brain(
         "cli-new",
         "writer",
     )
-    _assert_nothing_was_remembered()
 
 
 def test_switching_workspace_uses_that_workspaces_files(
@@ -156,7 +133,6 @@ def test_switching_workspace_uses_that_workspaces_files(
         "cli-two",
         "writer",
     )
-    _assert_nothing_was_remembered()
 
 
 def test_a_member_file_added_after_the_first_brain_is_used(
@@ -173,7 +149,6 @@ def test_a_member_file_added_after_the_first_brain_is_used(
     )
 
     assert _model_id() == "member-model"
-    _assert_nothing_was_remembered()
 
 
 def test_removing_the_workspace_model_falls_back_to_the_template(
@@ -192,4 +167,3 @@ def test_removing_the_workspace_model_falls_back_to_the_template(
         get_template_path() / "intelligences/models/openai/default.yml"
     )
     assert _model_id() == template["parameters"]["id"]
-    _assert_nothing_was_remembered()

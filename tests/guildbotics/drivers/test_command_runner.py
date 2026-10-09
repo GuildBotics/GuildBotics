@@ -27,6 +27,7 @@ from guildbotics.intelligences.brains.cli_agent import (
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 from tests.guildbotics.command_environment_doubles import machinery
+from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 #: Each test starts its command the way a host entry does: inside its trace.
 pytestmark = pytest.mark.usefixtures("in_trace")
@@ -418,8 +419,8 @@ async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured
     to what the command declares."""
     from guildbotics.intelligences.brains import cli_agent
 
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "aiko",
         {
             "default": cli_agent.ExecutableInfo(adapter="claude"),

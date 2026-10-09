@@ -19,7 +19,6 @@ from guildbotics.drivers.context import resolve_member_context
 from guildbotics.entities.team import Person, Project, Team
 
 _ROOT = Path(guildbotics.__file__).parent
-_CONTEXT_MODULES = {"guildbotics.runtime", "guildbotics.runtime.context"}
 
 #: Every function that builds a context, by module and qualified name.
 _BUILDERS = {
@@ -28,40 +27,36 @@ _BUILDERS = {
     ("runtime/context.py", "Context.clone_for"),
 }
 
-
-def _context_names(tree: ast.Module, defines_context: bool) -> tuple[set, set]:
-    """The names a module calls ``Context`` by, and the modules it reaches
-    ``Context`` through as an attribute."""
-    names = {"Context"} if defines_context else set()
-    modules = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in _CONTEXT_MODULES:
-            names |= {a.asname or a.name for a in node.names if a.name == "Context"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "guildbotics.runtime":
-            modules |= {a.asname or a.name for a in node.names if a.name == "context"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "guildbotics":
-            modules |= {a.asname or a.name for a in node.names if a.name == "runtime"}
-        elif isinstance(node, ast.Import):
-            modules |= {
-                a.asname or a.name for a in node.names if a.name in _CONTEXT_MODULES
-            }
-    return names, modules
+#: The modules whose ``Context`` is not GuildBotics' (``contextvars.Context``
+#: runs a call in a copy of the context variables).
+_OTHER_CONTEXTS = {"contextvars"}
 
 
-def _builders(path: Path) -> set[tuple[str, str]]:
-    relative = path.relative_to(_ROOT).as_posix()
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    names, modules = _context_names(tree, relative == "runtime/context.py")
-    found: set[tuple[str, str]] = set()
+def _builders(source: str, relative: str) -> set[tuple[str, str]]:
+    """The functions in ``source`` that call or subclass ``Context``.
+
+    A context is told by its name alone, ``Context`` or any name it is
+    imported as, called bare or as any module's attribute, so no form of
+    import hides one. Another class named ``Context`` is counted too, unless
+    it is reached through one of :data:`_OTHER_CONTEXTS`.
+    """
+    tree = ast.parse(source)
+    names = {"Context"} | {
+        alias.asname
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "Context" and alias.asname
+    }
 
     def is_context(node: ast.expr) -> bool:
-        """Whether ``node`` names ``Context``, by a name or a module's
-        attribute (a subclass builds one too)."""
         return (isinstance(node, ast.Name) and node.id in names) or (
             isinstance(node, ast.Attribute)
             and node.attr == "Context"
-            and ast.unparse(node.value) in modules
+            and ast.unparse(node.value) not in _OTHER_CONTEXTS
         )
+
+    found: set[tuple[str, str]] = set()
 
     def visit(node: ast.AST, scope: list[str]) -> None:
         for child in ast.iter_child_nodes(node):
@@ -79,9 +74,38 @@ def _builders(path: Path) -> set[tuple[str, str]]:
 
 
 def test_a_context_is_built_only_by_the_host_builder_and_the_environment_entry():
-    found = set().union(*(_builders(path) for path in _ROOT.rglob("*.py")))
+    found = set().union(
+        *(
+            _builders(
+                path.read_text(encoding="utf-8"), path.relative_to(_ROOT).as_posix()
+            )
+            for path in _ROOT.rglob("*.py")
+        )
+    )
 
     assert found == _BUILDERS
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from guildbotics.runtime import Context\ndef build(): Context(1, 2)",
+        "from guildbotics.runtime.context import Context as C\ndef build(): C(1, 2)",
+        "from guildbotics.runtime import context\ndef build(): context.Context(1, 2)",
+        "from guildbotics.runtime import context as rt\ndef build(): rt.Context(1, 2)",
+        "import guildbotics.runtime.context\n"
+        "def build(): guildbotics.runtime.context.Context(1, 2)",
+        "from guildbotics import runtime\ndef build(): runtime.Context(1, 2)",
+    ],
+)
+def test_a_context_is_found_however_it_is_imported(source):
+    assert _builders(source, "m.py") == {("m.py", "build")}
+
+
+def test_a_subclass_of_context_is_found():
+    source = "from guildbotics.runtime import context\nclass Mine(context.Context): ..."
+
+    assert _builders(source, "m.py") == {("m.py", "Mine")}
 
 
 class FakeContext:
