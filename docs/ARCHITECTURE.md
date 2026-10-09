@@ -600,7 +600,8 @@ the process cwd or a member working clone.
 
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                      |
+| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/service.lock` — state needed _before_ a workspace is chosen                  |
+| Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json`, and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
 | Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
@@ -625,11 +626,62 @@ Invariants:
 One workspace can be shared by several of the user's machines. `config/` and `state/`
 are the shared tree; `local/` never leaves the device it was written on.
 
+**Premise.** One person owns every participating machine and can see, on the machine
+itself, whether a service is running there. The design leans on that instead of
+re-creating it: ownership has no lease and never moves on its own, and there is no
+device PKI, no per-device access list, and no transport but OpenSSH.
+
+**Design principles.**
+
+- **Git is the only store of persistent shared data.** History and shared data live in
+  Git (`config/`, `state/`) and nowhere else. What a running process is doing lives in
+  the hub's relay files (`live/`) and is never committed; which device runs the service
+  lives in `service-owner.json`; diagnostics stay on the device that recorded them;
+  secret values live only in each machine's OS keychain.
+- **The hub holds no source of truth for the shared history beyond its repository.**
+  Every device has a full copy of it, so any one of them can rebuild a lost hub. The
+  owner record and the hub's keychain are not in that history (see rebuilding below).
+- **Nothing runs permanently for synchronization.** On the hub only `sshd` is resident:
+  each `guildbotics hub …` command is started by sshd for one connection and ends with
+  it, so Git synchronization needs no GuildBotics process running there (a macOS hub's
+  secret transfers are the exception: they go through its Desktop, section 9). On a
+  device, the process already doing the work synchronizes itself: the Desktop backend
+  and `guildbotics start` run the queue, publish their live state, and check ownership,
+  while a member CLI command commits and pushes its own write once. Processes are
+  serialized by OS advisory locks rather than by an owner process. A resident
+  coordinator would hold only what connected devices had just sent and the owner
+  record; files on the hub carry the same information with nothing to restore after a
+  restart and no second instance to prevent.
+- **Synchronization never changes where work runs.** A workflow or command runs on the
+  machine that started it; neither the hub nor another machine running the service
+  takes it over.
+- **Only portable values cross machines.** Absolute paths, process state, and anything
+  else decided by the machine stay in `local/`. Shared records derive from
+  `SharedRecord` (`workspace/identity.py`), which rejects unknown fields, so device-local
+  data is kept out by structure rather than by a list of forbidden field names.
+- **Synchronization is opt-in per workspace.** A workspace never connected to a hub runs
+  no queue, publishes no live state, needs no service owner, and behaves as a single
+  machine.
+
+**Identity.** A workspace and a device are each identified by a UUIDv7 minted once
+(`workspace/identity.py`). The workspace ID travels in `state/workspace.json`; the device
+ID stays in `~/.guildbotics/data/device.json`, and its display name (the host name by
+default) and the fingerprint of the SSH key it registered with the hub are published in
+`state/devices/<device_id>.json`. Neither ID depends on a path, so a workspace root
+that was moved or renamed reconnects to the same hub repository, and every cycle checks
+that the local copy and the hub's copy name the same workspace. A hub machine may host
+several workspaces, and each workspace chooses its hub; joining and service ownership
+are per workspace, never per machine.
+
 **Hub.** A machine the user chooses, holding one bare Git repository per workspace under
 `~/.guildbotics/hub` (`guildbotics/hub/host.py`). Every repository is configured
-`receive.denyNonFastForwards` and `receive.denyDeletes` on each access: the automatic
-reconciliation below rests on the hub refusing to rewind, so a repository restored from a
-backup must still refuse a force push. The hub knows nothing about what the records mean,
+`receive.denyNonFastForwards` and `receive.denyDeletes` each time the hub is asked to
+create it (the request is idempotent): the automatic reconciliation below rests on the
+hub refusing to rewind, so a repository restored from a backup must still refuse a force
+push. Its `post-receive` hook only touches the `head-updated` marker; the live watch
+stream reports it and the process watching wakes its queue. That is an accelerator, not a
+dependency: with the notification lost, a device still converges at its next periodic
+cycle. The hub knows nothing about what the records mean,
 and stores no workspace paths — only workspace identifiers.
 
 Operations on a hub are performed by the `guildbotics hub` CLI on the hub machine itself,
@@ -644,11 +696,24 @@ one process's current work. The process that runs the work publishes it through
 process watches the same stream. Heartbeats make delayed and expired states
 observable, while expiry deletes the relay file and the viewer drops its cached
 snapshot. A newer relay `schema_version` is reported as a client-update error;
-it is not silently discarded or partially decoded.
+it is not silently discarded or partially decoded. Each process publishes under an ID
+it draws when it starts, so a Desktop backend and `guildbotics start` on one device do
+not overwrite each other, and the file a restarted process left behind simply expires.
+Whether a device is online is derived from fresh `live/` files; it is not stored.
 
 `service-owner.json` is different: it is one persistent owner device per
-workspace, managed by `hub owner get/claim/transfer`. Starting a service requires
-an owner answer from the Hub and refuses a different owner. The common execution
+workspace, managed by `hub owner get/claim/transfer`. It complements, rather than
+replaces, the machine-wide `run/service.lock`: the lock stops a second service on the
+same machine, the owner record stops one on another machine. A claim creates the file
+exclusively, so two devices claiming at once end with one owner. Starting a service
+first synchronizes to the hub's head, then requires an owner answer from the Hub —
+even when the stored owner is this device — and refuses a different owner. A running
+service is deliberately asymmetric to that: a Hub it cannot reach makes it wait, and
+it stops only when the Hub names another owner. Stopping a service does not release
+ownership; only a transfer moves it. The Desktop's transfer moves ownership to its own
+device only, and then marks the previous owner's `running` records `interrupted` under
+the sync barrier; the hub's own `hub owner transfer` command only rewrites the record.
+The common execution
 boundary checks ownership before accepting service work, before the command
 starts, and when publishing service-derived live state. A lost Hub connection
 does not stop work already in progress, but blocks new service work. An explicit
@@ -698,6 +763,27 @@ time, and the identifier. This is not an error and does not stop the queue. The 
 content stays out of every API: recovery is a manual, source-device-only procedure
 documented in the README.
 
+Each cycle fetches and then fast-forwards when only the hub moved, or pushes when only this
+device did. When both moved, the paths both changed take the hub's version and the local
+commit is set aside as above; this device's other changes are committed again on top of the
+hub's head. No timestamps and no content merges take part. A push that loses the race is
+redone a bounded number of times, and a push whose reply was lost is judged by the hub's
+head after a fetch, so it never produces a second commit. Rejections stay rare because state
+the system writes is one small file per record (events, task runs, memory documents, device
+records), so two devices seldom touch the same path; in practice the rule settles config a
+person edited on two machines.
+
+Some differences are not races to settle but anomalies, and stop the queue instead of
+converging: two devices both creating a path under `state/events/` (immutable records
+whose IDs are never reused), a received file that fails the validation boundary, a hub copy that
+names another workspace or shares no history with this one.
+
+**Hub unreachable.** A device keeps working from its full copy: it reads everything it
+already has, runs the work it is asked to, and commits its changes locally, which the queue
+pushes once the hub answers again. Only what needs the hub is unavailable meanwhile:
+starting a service (below), sending or fetching secret values, seeing other devices'
+current work, and joining or registering.
+
 **Validation boundary** (`workspace/validation.py`). What crosses the boundary is checked
 for three things only: shared root, size limits, decode and syntax; a `schema_version`
 newer than this build understands; and the structure of `config/secrets.yml`. These are
@@ -718,7 +804,18 @@ that keeps secret values out of the history structurally.
 **Joining.** A device with existing content commits it first, then adopts the hub's version
 of any file both hold and sends what only it has. It is not an overwrite, and the commit
 pushed aside is kept. Joining is previewed; registering is not, because a hub with no copy
-of the workspace has nothing to compare against.
+of the workspace has nothing to compare against. Comparing two whole trees is right only
+when the two sides share no history; a device that does share history with the hub
+(`reconnect` in `sync/enrollment.py`) is settled by the ordinary cycle above instead.
+
+**Rebuilding a hub.** Moving a hub and replacing a lost one are the same procedure:
+register one device's copy on the new hub under the same workspace ID, then reconnect the
+other devices, whose differences are settled by the ordinary rules and whose content only
+they had is sent. A rebuilt hub has no owner record, so the first service started
+against it claims ownership; nothing can make two hubs mutually exclusive, so a service
+still running against the old hub is the user's to stop. Secret values are not in the history: a device that
+holds them sends them to the new hub, and a value only the lost hub held has to be issued
+again by its provider. The README gives the connection steps.
 
 **Optimistic locking** (`workspace/config_repository.py`). Config is the shared state a
 person edits by hand, so a screen can be composed against content another machine has since
@@ -833,7 +930,8 @@ and compares against the head that produced.
 member CLI writes use a short-lived queue boundary after the capability completes. If
 another process holds `local/run/sync.lock`, the member command reports `sync: pending`
 and exits successfully; its next invocation or the queue will recover the working-tree
-commit. `sync/activation.py` keeps one queue per process, while
+commit. The one-shot neither fetches nor converges, so a device receives other devices'
+changes only while its Desktop backend or `guildbotics start` is running. `sync/activation.py` keeps one queue per process, while
 `local/run/sync.lock` serializes each cycle, one-shot commit/push, and workspace pause
 across processes. The machine-wide `run/service.lock` is the background-service exclusion,
 not the repository lock.
@@ -889,7 +987,14 @@ classifies every secret store access and member key spelling in the package.
   command run through OpenSSH: no relay file, no Git object, no temporary file.
   Entries are framed as a JSON header line plus the exact bytes it declares, so a
   value crosses a Windows machine unaltered and nothing that reads, logs, or reports
-  a header can carry one.
+  a header can carry one. No encryption is layered on top: OpenSSH already
+  authenticates both ends and encrypts the channel, and every machine needs the same
+  value, so a per-device envelope would add key management without a threat it answers.
+- **Device keys**: each device's SSH key fingerprint is published in
+  `state/devices/<device_id>.json`. Revoking a device is the user removing its line
+  from the hub machine's `authorized_keys`; GuildBotics never edits that file. Values
+  already stored on a lost device cannot be wiped from elsewhere, so they are issued
+  again at their provider.
 - **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
   requests, including those arriving over SSH, use Desktop's discovery record and
   session token, once the Local API proved it holds that token (section 11). `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
@@ -911,7 +1016,11 @@ classifies every secret store access and member key spelling in the package.
   that number names a value every device can obtain, so it is published only after
   the hub holds the value. A send is built on the generation the *hub* reports, and
   the hub refuses one whose base is not what it holds; that single check is what
-  stops two machines that read it at the same moment from both succeeding.
+  stops two machines that read it at the same moment from both succeeding. The hub
+  also requires the candidate to be exactly one past the base, and refuses only a hub
+  that is _ahead_ of the base: a hub that is behind — empty, or restored from an
+  older copy — holds nothing any device can obtain, and refusing it would leave no
+  way to put a value back.
 - **A send that was cut off** between the two writes leaves the hub holding a
   generation the shared history does not name. Nothing on the sending machine
   records that: the comparison of the two authoritative records *is* the record, so

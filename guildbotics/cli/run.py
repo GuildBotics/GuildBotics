@@ -17,8 +17,9 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.drivers.command_runner import run_command
 from guildbotics.editions import get_edition
-from guildbotics.runtime.local_command_executor import LocalCommandExecutor
+from guildbotics.utils.env_loader import load_guildbotics_env
 
 
 @click.command()
@@ -87,7 +88,8 @@ async def _run_custom_command(
     identifier = person_option or inline_person
 
     try:
-        outcome = await LocalCommandExecutor().run(
+        load_guildbotics_env(override=False)
+        outcome = await run_command(
             context,
             command_name=command_name,
             command_args=command_args,

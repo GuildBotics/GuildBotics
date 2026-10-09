@@ -19,6 +19,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import (
     prepare_command,
     run_command,
@@ -40,6 +41,7 @@ from guildbotics.utils.local_api import (
     LocalApiEndpoint,
     local_api_proof,
 )
+from guildbotics.utils.safe_paths import normalize_host_path
 from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
@@ -185,6 +187,60 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
     # Locally, too, the command works where it was started.
     assert calls[-1][1][-1] == Path.cwd()
     assert not any(path == "/commands/run" for path, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "person_args", [["ask@alice"], ["ask@bob", "--person", "alice"]]
+)
+def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
+    tmp_path, monkeypatch, person_args
+):
+    """Without a matching Desktop the command runs in this process, with the
+    secrets published first and without overriding what is already set."""
+    monkeypatch.setattr(run_module, "selected_workspace", lambda: tmp_path)
+    monkeypatch.setattr(run_module, "run_on_desktop", lambda *args: None)
+    context = _get_context()
+    events: list[tuple] = []
+
+    class FakeEdition:
+        def get_context(self, message: str = "") -> Context:
+            events.append(("context", message))
+            return context
+
+    async def run(base, *, command_name, command_args, person_identifier, cwd):
+        events.append(
+            ("run", base, command_name, tuple(command_args), person_identifier, cwd)
+        )
+        return CommandOutcome(result=None, text_output="local output")
+
+    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(
+        run_module,
+        "load_guildbotics_env",
+        lambda **kwargs: events.append(("env", kwargs)),
+    )
+    monkeypatch.setattr(run_module, "run_command", run)
+
+    result = CliRunner().invoke(
+        main,
+        ["run", *person_args, "--cwd", str(tmp_path), "topic=review"],
+        input="review",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "local output\n"
+    assert events == [
+        ("context", "review"),
+        ("env", {"override": False}),
+        (
+            "run",
+            context,
+            "ask",
+            ("topic=review",),
+            "alice",
+            normalize_host_path(tmp_path),
+        ),
+    ]
 
 
 @pytest.mark.parametrize(

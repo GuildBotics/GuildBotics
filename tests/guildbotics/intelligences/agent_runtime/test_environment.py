@@ -1210,7 +1210,7 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
             "_execute_command",
         ): "execution.cwd()",
         ("guildbotics/app_api/diagnostics.py", "_run_cli_agent_check"): "Path(cwd)",
-        ("guildbotics/runtime/local_command_executor.py", "run"): "cwd",
+        ("guildbotics/cli/run.py", "_run_custom_command"): "cwd",
     }
 
 
