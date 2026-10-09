@@ -4,6 +4,8 @@ The host runs every command in a microVM booted for it, where the command
 execution machinery runs it. A test that is about what a command does rather
 than where it runs has the machinery run the very command the host read, in
 this process, with the host's own context: :func:`commands_in_process`.
+A test that starts a run the way a host entry does opens its trace first, as
+every host entry does: :func:`in_trace`.
 :func:`machinery` makes the machinery the way the environment's entry does,
 for a command a test names. A test about what the host does around a
 command it starts on its own has the command run as its own double does:
@@ -13,7 +15,7 @@ command it starts on its own has the command run as its own double does:
 from __future__ import annotations
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,7 @@ from guildbotics.drivers.command_runner import (
     host_command_cwd,
 )
 from guildbotics.intelligences.agent_runtime.host_client import CommandReply
+from guildbotics.observability import TraceContext, trace_scope
 
 
 def everywhere(cwd: Path) -> dict[str, bool]:
@@ -60,6 +63,14 @@ def machinery(
         mounts=everywhere(where),
         ledger=ledger,
     )
+
+
+@pytest.fixture
+def in_trace() -> Iterator[TraceContext]:
+    """Open the trace a host entry opens before it starts a run: a run is
+    its trace, so its id is the run's (``trace``)."""
+    with trace_scope("manual", trace_id="trace") as trace:
+        yield trace
 
 
 @pytest.fixture

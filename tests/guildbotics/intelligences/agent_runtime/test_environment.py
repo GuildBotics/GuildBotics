@@ -1159,7 +1159,6 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
         "guildbotics.drivers.command_runner": {
             "_prepared": 3,
             "prepare_command": 4,
-            "run_command": 4,
         },
     }
     package = Path(guildbotics.__file__).parent
@@ -1198,7 +1197,6 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
             )
 
     assert sites == {
-        ("guildbotics/drivers/command_runner.py", "run_command"): "cwd",
         (
             "guildbotics/drivers/command_runner.py",
             "prepare_host_command",

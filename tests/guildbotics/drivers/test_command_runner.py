@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +27,9 @@ from guildbotics.intelligences.brains.cli_agent import (
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 from tests.guildbotics.command_environment_doubles import machinery
+
+#: Each test starts its command the way a host entry does: inside its trace.
+pytestmark = pytest.mark.usefixtures("in_trace")
 
 
 class DummyCommand:
@@ -532,27 +536,24 @@ _ASSISTANT = Work("troubleshooting", "conversation-1")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("invocation", "named", "traced", "run_id", "work"),
+    ("invocation", "named", "run_id", "work"),
     [
-        (("ticket", "ticket-run", _TICKET), None, True, "ticket-run", _TICKET),
-        (("ticket", "ticket-run", _TICKET), _ASSISTANT, True, "ticket-run", _TICKET),
-        (("scheduled", "", None), None, True, "trace", Work("manual", "trace")),
-        (None, _ASSISTANT, True, "trace", _ASSISTANT),
-        (None, None, True, "trace", Work("manual", "trace")),
-        (None, None, False, None, None),
+        (("ticket", "ticket-run", _TICKET), None, "ticket-run", _TICKET),
+        (("ticket", "ticket-run", _TICKET), _ASSISTANT, "ticket-run", _TICKET),
+        (("scheduled", "", None), None, "trace", Work("manual", "trace")),
+        (None, _ASSISTANT, "trace", _ASSISTANT),
+        (None, None, "trace", Work("manual", "trace")),
     ],
 )
 async def test_the_run_is_granted_for_its_member_run_and_work(
-    monkeypatch, invocation, named, traced, run_id, work
+    monkeypatch, invocation, named, run_id, work
 ):
     """What its microVM asks of the host is answered for the member it runs
-    as, the run it records to -- its workflow run's, or else one of its own:
-    its trace's, or a fresh one outside any -- and the work it does: its
-    workflow run's, else the one its caller named, else its own run's manual
-    work."""
+    as, the run it records to -- its workflow run's, or else its trace's --
+    and the work it does: its workflow run's, else the one its caller named,
+    else its own run's manual work."""
     from guildbotics.drivers.command_runner import run_in_environment
     from guildbotics.intelligences.agent_runtime.host_window import HostWindow
-    from guildbotics.observability import trace_scope
     from guildbotics.runtime.workflow_invocation import (
         WORKFLOW_INVOCATION_KEY,
         WorkflowInvocation,
@@ -570,20 +571,27 @@ async def test_the_run_is_granted_for_its_member_run_and_work(
             run_id=workflow_run,
             work=workflow_work,
         )
-    if traced:
-        with trace_scope("scheduler", trace_id="trace"):
-            await run_in_environment(command)
-    else:
-        await run_in_environment(command)
+    await run_in_environment(command)
 
     [grant] = [opened["host"] for opened in booted.opened]
     assert isinstance(grant, HostWindow)
     assert grant._person_id == "aiko"
-    if run_id is None:
-        assert len(grant._run_id) == 32
-        assert grant._work == Work("manual", grant._run_id)
-    else:
-        assert (grant._run_id, grant._work) == (run_id, work)
+    assert (grant._run_id, grant._work) == (run_id, work)
+
+
+@pytest.mark.asyncio
+async def test_a_run_started_outside_a_trace_is_refused(monkeypatch):
+    """A run is its trace, and every host entry opens one first: a run
+    started outside any has no record to be, so nothing boots for it."""
+    booted = _environment(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="outside a trace"):
+        await asyncio.create_task(
+            command_runner.run_in_environment(_prepared()),
+            context=contextvars.Context(),
+        )
+
+    assert booted.opened == []
 
 
 @pytest.mark.asyncio

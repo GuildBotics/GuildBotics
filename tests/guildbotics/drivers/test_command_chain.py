@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextvars
 import os
 import signal
 import sys
@@ -40,11 +39,9 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.commands.metadata import CommandAccess
-from guildbotics.drivers.command_runner import run_command
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils import child_process
 from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
@@ -763,16 +760,15 @@ async def test_falls_back_to_common_command_when_no_person_specific(config_dir: 
     assert ctx.shared_state["greet"] == "common-greeting"
 
 
-# --- run_command person resolution -----------------------------------------
+# --- member resolution -------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _in_process(commands_in_process) -> None:
-    """The commands the host starts run in this process."""
+def _in_process(commands_in_process, in_trace) -> None:
+    """The commands the host starts run in this process, in its trace."""
 
 
-@pytest.mark.asyncio
-async def test_run_command_requires_person_without_candidates(config_dir: Path):
+def test_prepare_command_requires_person_without_candidates(config_dir: Path):
     """Without a member that can execute commands, selection is required."""
     commands = config_dir / "commands"
     (commands / "noop.py").write_text("def main():\n    return 'x'\n", encoding="utf-8")
@@ -785,35 +781,34 @@ async def test_run_command_requires_person_without_candidates(config_dir: Path):
     ctx = _make_context(team=team)
 
     with pytest.raises(PersonSelectionRequiredError) as excinfo:
-        await run_command(ctx, "noop", [], person_identifier=None, cwd=config_dir)
+        prepare_command(ctx, "noop", [], None, config_dir)
 
     # Sorted labels: a distinct display name gets a "id (name)" label, while a
     # name matching the id (case-insensitively) is shown as the bare id.
     assert excinfo.value.available == ["alice (Alice Anderson)", "bob"]
 
 
-@pytest.mark.asyncio
-async def test_run_command_unknown_person_raises(config_dir: Path):
+def test_prepare_command_unknown_person_raises(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "noop.py").write_text("def main():\n    return 'x'\n", encoding="utf-8")
     ctx = _make_context()
 
     with pytest.raises(PersonNotFoundError) as excinfo:
-        await run_command(ctx, "noop", [], person_identifier="ghost", cwd=config_dir)
+        prepare_command(ctx, "noop", [], "ghost", config_dir)
 
     assert excinfo.value.identifier == "ghost"
 
 
 @pytest.mark.asyncio
-async def test_run_command_selects_single_active_member(config_dir: Path):
+async def test_a_command_runs_as_the_single_active_member(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "whoami.py").write_text(
         "def main(context):\n    return context.person.person_id\n", encoding="utf-8"
     )
     ctx = _make_context()
 
-    outcome = await run_command(
-        ctx, "whoami", [], person_identifier=None, cwd=config_dir
+    outcome = await run_main_command(
+        prepare_command(ctx, "whoami", [], None, config_dir), source="manual"
     )
 
     assert outcome.text_output == "alice"
@@ -823,8 +818,9 @@ async def test_run_command_selects_single_active_member(config_dir: Path):
 
 
 @pytest.mark.asyncio
-async def test_a_read_only_command_runs_while_its_member_is_busy(config_dir: Path):
-    """Only a command that declares itself read-only goes without the lease."""
+async def test_a_command_is_read_with_the_access_it_declares(config_dir: Path):
+    """Only a command that declares itself read-only is read as one; the
+    host entries decide the lease on that reading."""
     commands = config_dir / "commands"
     (commands / "look.py").write_text(
         'COMMAND_METADATA = {"read_only": True}\n\n'
@@ -834,33 +830,19 @@ async def test_a_read_only_command_runs_while_its_member_is_busy(config_dir: Pat
     (commands / "change.py").write_text(
         "def main():\n    return 'changed'\n", encoding="utf-8"
     )
-    # Another run holds the member's lease, in a context of its own.
-    other_run = contextvars.Context()
-    busy = PersonExecutionLease("alice")
-    other_run.run(
-        busy.acquire, source="routine", command="workflows/ticket", work_id="other"
-    )
-    try:
-        outcome = await run_command(
-            _make_context(), "look", [], person_identifier=None, cwd=config_dir
-        )
-        with pytest.raises(CommandError):
-            await run_command(
-                _make_context(), "change", [], person_identifier=None, cwd=config_dir
-            )
-    finally:
-        other_run.run(busy.release)
 
-    assert outcome.text_output == "looked"
+    look = prepare_command(_make_context(), "look", [], None, config_dir)
+    change = prepare_command(_make_context(), "change", [], None, config_dir)
+
+    assert look.access.read_only
+    assert not change.access.read_only
+    assert (await run_main_command(look, source="manual")).text_output == "looked"
 
 
-@pytest.mark.asyncio
-async def test_an_invalid_access_declaration_refuses_the_command(config_dir: Path):
+def test_an_invalid_access_declaration_refuses_the_command(config_dir: Path):
     (config_dir / "commands" / "odd.md").write_text(
         "---\nbrain: none\ninspects: [secrets]\n---\nhello\n", encoding="utf-8"
     )
 
     with pytest.raises(CommandError, match="inspects"):
-        await run_command(
-            _make_context(), "odd", [], person_identifier=None, cwd=config_dir
-        )
+        prepare_command(_make_context(), "odd", [], None, config_dir)

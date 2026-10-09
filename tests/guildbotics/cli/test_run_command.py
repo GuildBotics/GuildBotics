@@ -1,6 +1,5 @@
 import inspect
 import json
-import os
 import sys
 import textwrap
 from pathlib import Path
@@ -11,25 +10,22 @@ import pytest
 from click.testing import CliRunner
 
 import guildbotics.cli.run as run_module
-from guildbotics.cli import desktop_commands, main
+from guildbotics.cli import main
 from guildbotics.cli.run import _parse_command_spec
 from guildbotics.commands.errors import (
-    CommandError,
-    PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.drivers.command_runner import (
-    prepare_command,
-    run_command,
-    run_main_command,
-)
+from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.intelligences.functions import to_text
+from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
@@ -207,10 +203,14 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
             events.append(("context", message))
             return context
 
-    async def run(base, *, command_name, command_args, person_identifier, cwd):
+    def prepare(base, command_name, command_args, person_identifier, cwd):
         events.append(
-            ("run", base, command_name, tuple(command_args), person_identifier, cwd)
+            ("prepare", base, command_name, tuple(command_args), person_identifier, cwd)
         )
+        return prepare_command(base, command_name, command_args, person_identifier, cwd)
+
+    async def run(command, *, source):
+        events.append(("run", command.command_name, source))
         return CommandOutcome(result=None, text_output="local output")
 
     monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
@@ -219,7 +219,8 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
         "load_guildbotics_env",
         lambda **kwargs: events.append(("env", kwargs)),
     )
-    monkeypatch.setattr(run_module, "run_command", run)
+    monkeypatch.setattr(run_module, "prepare_command", prepare)
+    monkeypatch.setattr(run_module, "run_main_command", run)
 
     result = CliRunner().invoke(
         main,
@@ -233,13 +234,14 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
         ("context", "review"),
         ("env", {"override": False}),
         (
-            "run",
+            "prepare",
             context,
             "ask",
             ("topic=review",),
             "alice",
             normalize_host_path(tmp_path),
         ),
+        ("run", "ask", "manual"),
     ]
 
 
@@ -427,8 +429,21 @@ def _context_for_team(team: Team, message: str = "") -> Context:
     )
 
 
+async def _run_locally(
+    monkeypatch, context: Context, command_spec: str, cwd: Path, *args: str
+) -> None:
+    """Run ``command_spec`` the way ``guildbotics run`` does without a Desktop."""
+
+    class FakeEdition:
+        def get_context(self, message: str = "") -> Context:
+            return context
+
+    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
+    await run_module._run_custom_command(command_spec, args, None, context.pipe, cwd)
+
+
 @pytest.mark.asyncio
-async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
+async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
         tmp_path / "commands/solo.md",
@@ -442,14 +457,17 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
         """,
     )
 
-    outcome = await run_command(
-        _get_context("stdin text"), "solo", ["world"], None, tmp_path
+    await _run_locally(
+        monkeypatch, _get_context("stdin text"), "solo", tmp_path, "world"
     )
-    assert outcome.text_output == "Greetings world\nstdin text"
+
+    assert capsys.readouterr().out == "Greetings world\nstdin text\n"
 
 
 @pytest.mark.asyncio
-async def test_run_command_runs_as_configured_default_person(tmp_path, monkeypatch):
+async def test_run_custom_command_runs_as_configured_default_person(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
         tmp_path / "commands/whoami.md",
@@ -467,24 +485,97 @@ async def test_run_command_runs_as_configured_default_person(tmp_path, monkeypat
         default_person_id="akira",
     )
 
-    outcome = await run_command(_context_for_team(team), "whoami", [], None, tmp_path)
-    assert outcome.text_output == "akira"
+    await _run_locally(monkeypatch, _context_for_team(team), "whoami", tmp_path)
+
+    assert capsys.readouterr().out == "akira\n"
 
 
 @pytest.mark.asyncio
-async def test_run_command_releases_person_lease_when_discovery_fails(
-    tmp_path, monkeypatch
+async def test_a_command_that_cannot_be_resolved_holds_no_lease(
+    tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     context = _get_context()
 
-    with pytest.raises(CommandError):
-        await run_command(context, "missing", [], None, tmp_path)
+    with pytest.raises(click.ClickException):
+        await _run_locally(monkeypatch, context, "missing", tmp_path)
+    assert list(RunStore().records()) == []
 
     _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
-    assert (
-        await run_command(context, "solo", [], None, tmp_path)
-    ).text_output == "done"
+    await _run_locally(monkeypatch, context, "solo", tmp_path)
+    assert capsys.readouterr().out == "done\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("read_only", "runs"), [(False, False), (True, True)])
+async def test_a_writing_command_is_refused_while_another_run_holds_the_member(
+    tmp_path, monkeypatch, capsys, read_only: bool, runs: bool
+):
+    """The member's lease is the same one the Desktop and the scheduler take,
+    so a command that can change things waits its turn; one that declares
+    itself read-only changes nothing and runs alongside."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "commands/solo.md",
+        f"---\nbrain: none\nread_only: {str(read_only).lower()}\n---\ndone",
+    )
+    holder = PersonExecutionLease("alice")
+    holder.acquire(source="scheduled", command="workflows/other", work_id="other")
+    try:
+        if runs:
+            await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
+        else:
+            # The refusal names the run that holds the member.
+            with pytest.raises(click.ClickException, match="workflows/other"):
+                await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
+    finally:
+        holder.release()
+
+    assert (capsys.readouterr().out == "done\n") is runs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "status", "boundary"),
+    [
+        ("done", "succeeded", "command.finished"),
+        ("{{ undefined_filter | nope }}", "failed", "command.failed"),
+    ],
+)
+async def test_a_local_run_records_the_run_its_trace_opens(
+    tmp_path, monkeypatch, body: str, status: str, boundary: str
+):
+    """The run is recorded as the Desktop's manual run is: the task run and
+    both ends of the command, all under one trace whose id is the run's."""
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "commands/solo.md",
+        f"---\nbrain: none\ntemplate_engine: jinja2\n---\n{body}",
+    )
+    recorded: list[tuple[str, str]] = []
+
+    def _record(*, event_type: str, **_: object) -> None:
+        trace = current_trace()
+        recorded.append((event_type, trace.trace_id if trace is not None else ""))
+
+    monkeypatch.setattr("guildbotics.drivers.utils.record_correlated_event", _record)
+
+    if status == "succeeded":
+        await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
+    else:
+        with pytest.raises(click.ClickException):
+            await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
+
+    [record] = RunStore().records()
+    assert recorded == [
+        ("command.started", record.run_id),
+        (boundary, record.run_id),
+    ]
+    assert record.status == status
+    assert record.source == "manual"
+    assert record.execution_mode == "user_initiated"
+    assert record.member_id == "alice"
+    assert record.work_kind == "solo"
 
 
 @pytest.mark.asyncio
@@ -519,27 +610,23 @@ async def test_cli_run_rejects_human_member_without_traceback(
 
 
 @pytest.mark.asyncio
-async def test_run_custom_command_rejects_human_member(tmp_path, monkeypatch):
+async def test_a_local_runs_record_keeps_what_its_trace_learned(tmp_path, monkeypatch):
+    """The trace stays open around the whole task run, so what the run's
+    trace learns while it runs -- the ticket the selector took -- is on the
+    run's record when it finishes."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    _write(
-        tmp_path / "commands/solo.md",
-        """
-        ---
-        brain: none
-        ---
-        Greetings
-        """,
-    )
-    human = Person(
-        person_id="aiko",
-        name="Aiko",
-        is_active=False,
-        person_type="human",
-    )
-    context = _context_for_person(human)
+    _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
 
-    with pytest.raises(PersonExecutionNotAllowedError):
-        await run_command(context, "solo", [], "aiko", tmp_path)
+    async def run(command, *, source):
+        set_attributes(**{"github.title": "ログイン修正"})
+        return CommandOutcome(result=None, text_output="")
+
+    monkeypatch.setattr(run_module, "run_main_command", run)
+
+    await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
+
+    [record] = RunStore().records()
+    assert record.attributes["github.title"] == "ログイン修正"
 
 
 @pytest.mark.asyncio
@@ -760,8 +847,8 @@ async def test_a_command_of_no_workflow_run_drives_no_completion(tmp_path, monke
         """,
     )
 
-    with pytest.raises(ValueError, match="work_kind"):
-        await run_command(_get_context(), "driver", [], None, tmp_path)
+    with pytest.raises(click.ClickException, match="work_kind"):
+        await _run_locally(monkeypatch, _get_context(), "driver", tmp_path)
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -52,7 +51,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
     get_cli_agent_mapping,
 )
-from guildbotics.observability import current_trace
+from guildbotics.observability import require_trace
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 from guildbotics.runtime.member_invocation import Work
@@ -72,7 +71,6 @@ __all__ = [
     "host_command_cwd",
     "prepare_command",
     "prepare_host_command",
-    "run_command",
     "run_in_environment",
     "run_ledger",
     "run_main_command",
@@ -152,15 +150,19 @@ class HostRunLedger:
 
 def run_ledger(command: PreparedCommand) -> HostRunLedger:
     """The record of the run ``command`` starts, and the work it does: its
-    workflow run's, as the host selected it; else its own run, doing the work
-    the caller named or else manual work."""
+    workflow run's, as the host selected it; else the run its trace is, doing
+    the work the caller named or else manual work.
+
+    Raises:
+        RuntimeError: If no trace is open: every host entry opens the run's
+            trace before it starts one.
+    """
     invocation: WorkflowInvocation | None = command.context.shared_state.get(
         WORKFLOW_INVOCATION_KEY
     )
-    trace = current_trace()
-    run_id = (invocation.run_id if invocation is not None else "") or (
-        trace.trace_id if trace is not None else uuid4().hex
-    )
+    run_id = (
+        invocation.run_id if invocation is not None else ""
+    ) or require_trace().trace_id
     work = (
         (invocation.work if invocation is not None else None)
         or command.work
@@ -247,51 +249,6 @@ def _prepared(
     )
 
 
-async def run_command(
-    base_context: Context,
-    command_name: str,
-    command_args: Sequence[str],
-    person_identifier: str | None,
-    cwd: Path,
-) -> CommandOutcome:
-    """Execute a command within the given context.
-
-    A command that declares itself read-only takes no execution lease: it can
-    change nothing, so it runs while the member is busy.
-    """
-    from guildbotics.runtime.person_lease import (
-        PersonExecutionLease,
-        PersonLeaseUnavailableError,
-        current_person_lease,
-    )
-
-    command = prepare_command(
-        base_context, command_name, command_args, person_identifier, cwd
-    )
-    person_id = command.context.person.person_id
-    owned_lease = None
-    try:
-        inherited_lease = current_person_lease()
-        if inherited_lease is not None and inherited_lease.person_id != person_id:
-            raise RuntimeError("The active execution lease belongs to another person.")
-        if inherited_lease is None and not command.access.read_only:
-            lease = PersonExecutionLease(person_id)
-            try:
-                lease.acquire(
-                    source="manual", command=command_name, work_id=uuid4().hex
-                )
-            except PersonLeaseUnavailableError as exc:
-                raise CommandError(str(exc)) from exc
-            owned_lease = lease
-        return await run_main_command(command, source="manual")
-    finally:
-        try:
-            await command.context.aclose()
-        finally:
-            if owned_lease is not None:
-                owned_lease.release()
-
-
 async def run_main_command(
     command: PreparedCommand, *, source: WorkflowSource
 ) -> CommandOutcome:
@@ -334,8 +291,8 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     idle sleep for as long as it runs, since sleep would stop its microVM.
     What its microVM asks of the host is answered under the run's grant: the
     member it runs as, the run it records to -- its workflow run's, or else
-    one of its own -- and the work it does: its workflow run's, the one the
-    caller named, or else the run's own manual work.
+    the one its trace is -- and the work it does: its workflow run's, the one
+    the caller named, or else the run's own manual work.
     What it returns is read as the host reads anything from it: its result
     only as the type the caller asked for.
 

@@ -16,7 +16,6 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import replace
 from typing import Any
-from uuid import uuid4
 
 from guildbotics.capabilities.workflow_rate_limits import (
     record_workflow_rate_limited,
@@ -29,7 +28,7 @@ from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
 )
-from guildbotics.observability import current_trace, set_attributes
+from guildbotics.observability import require_trace, set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
@@ -102,7 +101,7 @@ class TicketSelector:
 
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
-        record. Without a trace (a plain CLI run) the run stands alone.
+        record.
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
@@ -115,8 +114,7 @@ class TicketSelector:
         """
         task = Task.model_validate(invocation.payload["task"])
         set_attributes(**task.trace_attributes())
-        trace = current_trace()
-        run_id = trace.trace_id if trace is not None else uuid4().hex
+        run_id = require_trace().trace_id
         context = self._context.clone_for(person)
         try:
             ticket_manager = context.get_ticket_manager()

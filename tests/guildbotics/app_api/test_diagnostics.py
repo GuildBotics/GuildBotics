@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
     ExecutableInfo,
 )
+from guildbotics.runtime.member_context import resolve_person
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 
@@ -76,22 +78,28 @@ def _check_command(monkeypatch: pytest.MonkeyPatch) -> None:
     turn the way a Markdown command does."""
     _CHECK_RUNS.clear()
 
-    async def run_command(
-        context: Any,
-        command: str,
-        args: list[str],
-        *,
-        person_identifier: str | None,
-        cwd: Path,
-    ) -> CommandOutcome:
-        _CHECK_RUNS.append((command, person_identifier, cwd, context.pipe))
+    def prepare_command(
+        context: Any, command: str, args: list[str], person: str | None, cwd: Path
+    ) -> Any:
+        prepared = context.clone_for(resolve_person(context.team, person))
+        prepared.pipe = context.pipe
+        return SimpleNamespace(command_name=command, cwd=cwd, context=prepared)
+
+    async def run_main_command(command: Any, *, source: str) -> CommandOutcome:
+        context = command.context
+        _CHECK_RUNS.append(
+            (command.command_name, context.person.person_id, command.cwd, context.pipe)
+        )
         try:
-            output = await context.brain.run(context.pipe, cwd=cwd)
+            output = await context.brain.run(context.pipe, cwd=command.cwd)
         except Exception as exc:
-            raise CommandError(f"Custom command '{command}' failed: {exc}") from exc
+            raise CommandError(
+                f"Custom command '{command.command_name}' failed: {exc}"
+            ) from exc
         return CommandOutcome(result=output, text_output=output)
 
-    monkeypatch.setattr(diagnostics_module, "run_command", run_command)
+    monkeypatch.setattr(diagnostics_module, "prepare_command", prepare_command)
+    monkeypatch.setattr(diagnostics_module, "run_main_command", run_main_command)
 
 
 class _StubChatService:
@@ -732,7 +740,9 @@ async def test_cli_agent_closes_context_before_removing_temporary_directory(
     checks = await ScenarioDiagnosticsService()._check_cli_agent_brain(context, member)
 
     assert checks[-1].status == "ok"
-    assert events == ["context", "temporary_directory"]
+    # The command's own context, then the check's, both before the directory
+    # the command worked in goes away.
+    assert events == ["context", "context", "temporary_directory"]
 
 
 @pytest.mark.asyncio

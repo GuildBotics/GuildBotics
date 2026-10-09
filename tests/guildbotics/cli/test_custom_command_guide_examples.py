@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.command_runner import run_command
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.conftest import coverage_suspended
@@ -17,7 +17,7 @@ from tests.guildbotics.runtime.test_context import (
 
 
 #: The commands the host starts run in this process.
-pytestmark = pytest.mark.usefixtures("commands_in_process")
+pytestmark = pytest.mark.usefixtures("commands_in_process", "in_trace")
 
 
 def _write(path: Path, content: str) -> None:
@@ -98,7 +98,8 @@ async def test_quickstart_os_ui_language_without_args(
         """,
     )
     ctx = _make_context("こんにちは", language=project_language)
-    out = (await run_command(ctx, "translate", [], None, tmp_path)).text_output
+    command = prepare_command(ctx, "translate", [], None, tmp_path)
+    out = (await run_main_command(command, source="manual")).text_output
     assert f"テキストが{expected}であれば英語に" in out
     assert "こんにちは" in out
 
@@ -566,7 +567,8 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
         Person(person_id="yuki", name="Yuki", is_active=True),
     ]
     base_ctx = _make_context("", members)
-    outcome = await run_command(base_ctx, "whoami", [], "yuki", tmp_path)
+    command = prepare_command(base_ctx, "whoami", [], "yuki", tmp_path)
+    outcome = await run_main_command(command, source="manual")
     out = outcome.text_output
     assert "ID: yuki" in out
 

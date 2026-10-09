@@ -61,6 +61,8 @@ TRACE_ROOTS: dict[tuple[str, str], str] = {
     # The ticket patrol: a dispatched ticket or a failed selection, through
     # ``run_with_logging``; an idle patrol opens no trace at all.
     ("guildbotics/drivers/task_scheduler.py", "_patrol_tickets"): "command.finished",
+    # A command ``guildbotics run`` runs here, through ``command_boundary``.
+    ("guildbotics/cli/run.py", "_run_custom_command"): "command.finished",
     # Interactive member CLI sessions.
     ("guildbotics/cli/member.py", "_run_interactive"): "member.command.finished",
 }
@@ -115,7 +117,7 @@ def test_declared_completion_events_can_end_a_trace() -> None:
 #: root delegates its boundary to one of these, so this is the population that
 #: has to survive a cancelled run.
 COMMAND_BOUNDARIES: set[tuple[str, str]] = {
-    # Chat dispatch and the scheduler's commands, through ``run_with_logging``.
+    # Chat dispatch, the scheduler's commands and ``guildbotics run``.
     ("guildbotics/drivers/utils.py", "command_boundary"),
     # A command the Desktop runs, its assistants' included.
     ("guildbotics/app_api/runtime.py", "_run_command_traced"),
