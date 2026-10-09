@@ -51,11 +51,8 @@ class EventBus:
         *,
         store: DiagnosticsStore | None = None,
     ) -> None:
-        self._history_limit = history_limit
         self._event_history: deque[dict[str, Any]] = deque(maxlen=history_limit)
-        self._log_history: deque[dict[str, Any]] = deque(maxlen=history_limit)
         self._event_subscribers: set[_Subscriber] = set()
-        self._log_subscribers: set[_Subscriber] = set()
         self._lock = threading.Lock()
         self._store = store
 
@@ -75,7 +72,13 @@ class EventBus:
             "payload": payload or {},
             "timestamp": _timestamp(),
         }
-        self._publish(self._event_history, self._event_subscribers, item)
+        with self._lock:
+            self._event_history.append(item)
+            current_subscribers = list(self._event_subscribers)
+        for subscriber in current_subscribers:
+            subscriber.loop.call_soon_threadsafe(subscriber.queue.put_nowait, item)
+        if self._store is not None:
+            self._store.record(item)
 
     def publish_log(self, level: str, message: str) -> None:
         correlation = correlation_fields()
@@ -86,33 +89,17 @@ class EventBus:
             **_correlation_record(correlation),
             "timestamp": _timestamp(),
         }
-        self._publish(self._log_history, self._log_subscribers, item)
+        if self._store is not None:
+            self._store.record(item)
 
     def subscribe_events(self) -> EventSubscription:
         return EventSubscription(
             self._event_subscribers, self._event_history, self._lock
         )
 
-    def subscribe_logs(self) -> EventSubscription:
-        return EventSubscription(self._log_subscribers, self._log_history, self._lock)
-
     def snapshot_events(self) -> list[dict[str, Any]]:
         with self._lock:
             return list(self._event_history)
-
-    def _publish(
-        self,
-        history: deque[dict[str, Any]],
-        subscribers: set[_Subscriber],
-        item: dict[str, Any],
-    ) -> None:
-        with self._lock:
-            history.append(item)
-            current_subscribers = list(subscribers)
-        for subscriber in current_subscribers:
-            subscriber.loop.call_soon_threadsafe(subscriber.queue.put_nowait, item)
-        if self._store is not None:
-            self._store.record(item)
 
 
 class EventBusLogHandler(logging.Handler):

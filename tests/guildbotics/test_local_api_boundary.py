@@ -36,7 +36,12 @@ HOST = REPOSITORY / "desktop" / "src-tauri" / "src"
 #: ``module -> names`` imported from ``guildbotics.utils.local_api``.
 LOCAL_API_IMPORTS = {
     "app_api/server.py": {"LocalApiEndpoint"},
-    "app_api/api.py": {"PROOF_PATH", "TOKEN_HEADER", "local_api_proof"},
+    "app_api/api.py": {
+        "PROOF_PATH",
+        "TOKEN_HEADER",
+        "TOKEN_SUBPROTOCOL",
+        "local_api_proof",
+    },
     "app_api/models.py": {"NONCE_PATTERN"},
     # Proof-gated clients: the token is attached only after the proof.
     "cli/desktop_commands.py": {"connect_local_api"},
@@ -59,7 +64,7 @@ FRONTEND_ROUTES = {
     ("api/client.ts", "memberAvatarUrl"): "URL query, loaded by <img>",
     ("api/client.ts", "startGitHubAppRegistration"): "browser callback destination",
     ("api/client.ts", "uploadFile"): "header",
-    ("api/client.ts", "subscribeEvents"): "URL query, WebSocket",
+    ("api/client.ts", "subscribeEvents"): "WebSocket subprotocol",
     ("api/client.ts", "request"): "header",
     ("api/backend.ts", ""): "shipped code: inlined only into a preview build",
     ("api/backend.ts", "startBackend"): "connection from the announced port",

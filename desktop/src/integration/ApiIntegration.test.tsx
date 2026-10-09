@@ -120,14 +120,16 @@ function jsonResponse(status: number, body: unknown): Response {
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   url: string;
+  protocols: string[];
   close = vi.fn();
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
 
-  constructor(url: string) {
+  constructor(url: string, protocols: string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -669,7 +671,8 @@ describe("Commands integration (real client + mock server)", () => {
 
     // A pushed command lifecycle event over the (real-client) websocket drives
     // the history UI.
-    const socket = FakeWebSocket.find(`/events?token=${TOKEN}`);
+    const socket = FakeWebSocket.find("/events");
+    expect(socket.protocols).toEqual(["guildbotics.session", TOKEN]);
     await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
     socket.emit({

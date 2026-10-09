@@ -14,6 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from guildbotics.utils.fileio import atomic_write_text, get_machine_state_path
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
+#: Offered before the token on a WebSocket, whose browser API sets no header;
+#: the server selects this name, so the token is never echoed back.
+TOKEN_SUBPROTOCOL = "guildbotics.session"
 PROOF_PATH = "/local-api/proof"
 #: The nonce is fixed-length lowercase hex, so it can never contain the
 #: separator of the proof message.

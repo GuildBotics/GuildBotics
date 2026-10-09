@@ -2076,6 +2076,8 @@ export async function importAvatarFromSlack(personId: string): Promise<AvatarMut
   });
 }
 
+const TOKEN_SUBPROTOCOL = "guildbotics.session";
+
 export function subscribeEvents(
   onEvent: (event: RuntimeEvent) => void,
   onStatus?: (status: StreamStatus) => void,
@@ -2083,8 +2085,9 @@ export function subscribeEvents(
   const { base, token } = connected();
   const url = new URL(`${base}/events`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("token", token);
-  const socket = new WebSocket(url.toString());
+  // A WebSocket takes no header, and the server logs each handshake's URL, so
+  // the token travels as the subprotocol after the name the server selects.
+  const socket = new WebSocket(url.toString(), [TOKEN_SUBPROTOCOL, token]);
   onStatus?.("connecting");
   socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
