@@ -184,6 +184,12 @@ purpose:
   outside any trace and dispatches each candidate in turn; a scheduled or manual run,
   or a routine that names the workflow with arguments, takes the ticket the patrol
   would take next. The workflow only runs the turn.
+- **Manual runs**: a command a person starts runs inside one boundary, whether the
+  Desktop runs it (`AppRuntime._execute_command`) or a local `guildbotics run` does
+  (`cli/run.py`): a `manual` trace, `TaskRunCoordinator.track_work(source="manual")`
+  (the task-run record's start and finish, and the member's lease unless the command
+  declares itself read-only), and the command's `command.started` /
+  `command.finished`. The run is its trace (`run_id == trace_id`).
 - **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
   and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
   then drained per member by `drivers/pending_chat_dispatcher.py`. Like the ticket
@@ -198,9 +204,12 @@ Invariants:
 
 - Scheduler-managed work is serial per person: one worker thread per active member
   (`drivers/task_scheduler.py`) runs scheduled, routine, and queued-event work one at
-  a time. `runtime/person_lease.py` extends that guarantee to App API manual commands,
-  `guildbotics run`, interactive sessions, and separate GuildBotics processes with one
-  OS advisory lease per person. Nested `member` writes require the exact delegated
+  a time. `runtime/person_lease.py` extends that guarantee to manual commands,
+  interactive sessions, and separate GuildBotics processes with one OS advisory lease
+  per person. The lease is taken in two places only: `track_work` in
+  `drivers/execution.py`, which every host run goes through (the scheduler's work, and
+  a manual command whether the Desktop or a local `guildbotics run` starts it), and the
+  interactive member CLI's own guard. Nested `member` writes require the exact delegated
   lease/run identity; environment-variable presence alone never authorizes them.
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
@@ -1090,8 +1099,8 @@ classifies every secret store access and member key spelling in the package.
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed
   over in the member invocation), records a `github.work_target`. A read
   (`inspect`) declares the target too but, like a memory read, never becomes an
-  activity link. Manual desktop command runs (`source: manual`)
-  are excluded from the session timeline because they fire constantly; anything they
+  activity link. Manual command runs (`source: manual`, from the Desktop or a local
+  `guildbotics run`) are excluded from the session timeline because they fire constantly; anything they
   changed still appears as an activity event. The Desktop AI assistants are such runs
   too — the agent work kind scopes the provider conversation, not the trace — so they
   are filterable in diagnostics and absent from the timeline. Diagnostics keeps every source.

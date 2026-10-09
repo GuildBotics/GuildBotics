@@ -17,8 +17,11 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.drivers.command_runner import run_command
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
+from guildbotics.drivers.execution import TaskRunCoordinator, WorkRejectedError
+from guildbotics.drivers.utils import command_boundary
 from guildbotics.editions import get_edition
+from guildbotics.observability import trace_scope
 from guildbotics.utils.env_loader import load_guildbotics_env
 
 
@@ -82,6 +85,9 @@ async def _run_custom_command(
     message: str,
     cwd: Path,
 ) -> None:
+    """Run one command here as manual work, inside the same boundary the
+    Desktop opens for one: a trace, the task-run record and, unless the
+    command declares itself read-only, the member's execution lease."""
     command_name, inline_person = _parse_command_spec(command_spec)
     edition = get_edition()
     context = edition.get_context(message)
@@ -89,13 +95,27 @@ async def _run_custom_command(
 
     try:
         load_guildbotics_env(override=False)
-        outcome = await run_command(
-            context,
-            command_name=command_name,
-            command_args=command_args,
-            person_identifier=identifier,
-            cwd=cwd,
-        )
+        command = prepare_command(context, command_name, command_args, identifier, cwd)
+        person_id = command.context.person.person_id
+        with (
+            trace_scope("manual", command=command_name, person_id=person_id) as trace,
+            TaskRunCoordinator().track_work(
+                source="manual",
+                person_id=person_id,
+                command=command_name,
+                work_id=trace.trace_id,
+                exclusive=not command.access.read_only,
+            ),
+            command_boundary(
+                command_name=command_name, task_type="manual", person_id=person_id
+            ),
+        ):
+            # Closing the run's context is part of the run: a close that
+            # fails ends the run as failed rather than leaving it unended.
+            try:
+                outcome = await run_main_command(command, source="manual")
+            finally:
+                await command.context.aclose()
     except PersonSelectionRequiredError as exc:
         available = ", ".join(exc.available) if exc.available else "none"
         raise click.ClickException(
@@ -107,7 +127,7 @@ async def _run_custom_command(
         raise click.ClickException(
             f"Person '{exc.identifier}' not found. Available: {available}"
         ) from exc
-    except PersonExecutionNotAllowedError as exc:
+    except (PersonExecutionNotAllowedError, WorkRejectedError) as exc:
         raise click.ClickException(str(exc)) from exc
     except CommandError as exc:
         traceback.print_exc()

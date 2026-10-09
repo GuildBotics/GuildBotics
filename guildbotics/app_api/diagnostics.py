@@ -12,7 +12,7 @@ from guildbotics.app_api.verify import (
 )
 from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.commands.errors import CommandError
-from guildbotics.drivers.command_runner import run_command
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.chat_profile import (
@@ -59,13 +59,13 @@ async def _run_cli_agent_check(
     says how, which is what the check reports.
     """
     try:
-        outcome = await run_command(
-            context,
-            _CLI_AGENT_CHECK_COMMAND,
-            [],
-            person_identifier=member.person_id,
-            cwd=Path(cwd),
+        command = prepare_command(
+            context, _CLI_AGENT_CHECK_COMMAND, [], member.person_id, Path(cwd)
         )
+        try:
+            outcome = await run_main_command(command, source="manual")
+        finally:
+            await command.context.aclose()
     except CommandError as exc:
         failure = find_cli_agent_execution_error(exc)
         if failure is None:

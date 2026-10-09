@@ -72,7 +72,6 @@ __all__ = [
     "host_command_cwd",
     "prepare_command",
     "prepare_host_command",
-    "run_command",
     "run_in_environment",
     "run_ledger",
     "run_main_command",
@@ -245,51 +244,6 @@ def _prepared(
         path,
         command_access(path),
     )
-
-
-async def run_command(
-    base_context: Context,
-    command_name: str,
-    command_args: Sequence[str],
-    person_identifier: str | None,
-    cwd: Path,
-) -> CommandOutcome:
-    """Execute a command within the given context.
-
-    A command that declares itself read-only takes no execution lease: it can
-    change nothing, so it runs while the member is busy.
-    """
-    from guildbotics.runtime.person_lease import (
-        PersonExecutionLease,
-        PersonLeaseUnavailableError,
-        current_person_lease,
-    )
-
-    command = prepare_command(
-        base_context, command_name, command_args, person_identifier, cwd
-    )
-    person_id = command.context.person.person_id
-    owned_lease = None
-    try:
-        inherited_lease = current_person_lease()
-        if inherited_lease is not None and inherited_lease.person_id != person_id:
-            raise RuntimeError("The active execution lease belongs to another person.")
-        if inherited_lease is None and not command.access.read_only:
-            lease = PersonExecutionLease(person_id)
-            try:
-                lease.acquire(
-                    source="manual", command=command_name, work_id=uuid4().hex
-                )
-            except PersonLeaseUnavailableError as exc:
-                raise CommandError(str(exc)) from exc
-            owned_lease = lease
-        return await run_main_command(command, source="manual")
-    finally:
-        try:
-            await command.context.aclose()
-        finally:
-            if owned_lease is not None:
-                owned_lease.release()
 
 
 async def run_main_command(

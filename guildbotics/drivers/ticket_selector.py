@@ -102,7 +102,7 @@ class TicketSelector:
 
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
-        record. Without a trace (a plain CLI run) the run stands alone.
+        record.
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
