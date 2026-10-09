@@ -178,10 +178,9 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_trace")
 @pytest.mark.parametrize(("raw", "expected"), [("", 5), ("0", 1), ("x", 5)])
-async def test_run_outside_a_trace_stands_alone_with_the_default_budget(
-    monkeypatch, raw, expected
-):
+async def test_run_hands_the_turn_the_default_budget(monkeypatch, raw, expected):
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", raw)
     manager = _TicketManager()
     invocations: list[WorkflowInvocation] = []
@@ -193,10 +192,28 @@ async def test_run_outside_a_trace_stands_alone_with_the_default_budget(
         _Person(), _invocation(_task(Task.IN_PROGRESS)), run_workflow
     )
 
-    assert invocations[0].run_id
+    assert invocations[0].run_id == "trace"
     assert invocations[0].payload["max_completion_attempts"] == expected
     # Only a ticket that is ready moves to the working lane.
     assert manager.moved == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_outside_a_trace_is_refused_before_the_ticket_moves():
+    """The run is its trace, and every route that takes a ticket opens one
+    first: outside any, the ticket stays where it is and no turn runs."""
+    manager = _TicketManager()
+
+    async def run_workflow(invocation: WorkflowInvocation) -> None:
+        raise AssertionError("no trace, no turn")
+
+    with pytest.raises(RuntimeError, match="outside a trace"):
+        await TicketSelector(_Context(manager)).run(  # type: ignore[arg-type]
+            _Person(), _invocation(_task()), run_workflow
+        )
+
+    assert manager.moved == []
+    assert manager.comments == []
 
 
 @pytest.mark.asyncio
@@ -228,6 +245,7 @@ async def test_failed_run_posts_a_safe_status_comment_and_raises():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_trace")
 async def test_failed_move_is_reported_like_a_failed_run():
     class _FailingMove(_TicketManager):
         async def move_ticket(self, task: Task, status: str) -> bool:
@@ -304,6 +322,7 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_trace")
 async def test_rate_limit_is_recorded_even_if_the_comment_cannot_be_posted(
     monkeypatch,
 ):
@@ -322,6 +341,7 @@ async def test_rate_limit_is_recorded_even_if_the_comment_cannot_be_posted(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_trace")
 async def test_run_next_runs_the_first_ticket_in_patrol_order():
     first = _task()
     second = _task()

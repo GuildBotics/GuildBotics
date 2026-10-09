@@ -26,6 +26,7 @@ from guildbotics.commands.validation import CommandValidationError
 from guildbotics.drivers import command_runner
 from guildbotics.drivers.command_runner import PreparedCommand, prepare_command
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
+from guildbotics.observability import TraceContext
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
     ScriptedAgent,
@@ -49,8 +50,11 @@ def _config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def ran(commands_in_process: list[PreparedCommand]) -> list[PreparedCommand]:
-    """The commands run, as the host read them."""
+def ran(
+    commands_in_process: list[PreparedCommand], in_trace: TraceContext
+) -> list[PreparedCommand]:
+    """The commands run, as the host read them, in the trace the Desktop
+    opens for each."""
     return commands_in_process
 
 

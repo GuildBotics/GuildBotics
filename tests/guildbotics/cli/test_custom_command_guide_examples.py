@@ -17,7 +17,7 @@ from tests.guildbotics.runtime.test_context import (
 
 
 #: The commands the host starts run in this process.
-pytestmark = pytest.mark.usefixtures("commands_in_process")
+pytestmark = pytest.mark.usefixtures("commands_in_process", "in_trace")
 
 
 def _write(path: Path, content: str) -> None:

@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -52,7 +51,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
     get_cli_agent_mapping,
 )
-from guildbotics.observability import current_trace
+from guildbotics.observability import require_trace
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 from guildbotics.runtime.member_invocation import Work
@@ -151,15 +150,19 @@ class HostRunLedger:
 
 def run_ledger(command: PreparedCommand) -> HostRunLedger:
     """The record of the run ``command`` starts, and the work it does: its
-    workflow run's, as the host selected it; else its own run, doing the work
-    the caller named or else manual work."""
+    workflow run's, as the host selected it; else the run its trace is, doing
+    the work the caller named or else manual work.
+
+    Raises:
+        RuntimeError: If no trace is open: every host entry opens the run's
+            trace before it starts one.
+    """
     invocation: WorkflowInvocation | None = command.context.shared_state.get(
         WORKFLOW_INVOCATION_KEY
     )
-    trace = current_trace()
-    run_id = (invocation.run_id if invocation is not None else "") or (
-        trace.trace_id if trace is not None else uuid4().hex
-    )
+    run_id = (
+        invocation.run_id if invocation is not None else ""
+    ) or require_trace().trace_id
     work = (
         (invocation.work if invocation is not None else None)
         or command.work
@@ -288,8 +291,8 @@ async def run_in_environment(command: PreparedCommand) -> CommandOutcome:
     idle sleep for as long as it runs, since sleep would stop its microVM.
     What its microVM asks of the host is answered under the run's grant: the
     member it runs as, the run it records to -- its workflow run's, or else
-    one of its own -- and the work it does: its workflow run's, the one the
-    caller named, or else the run's own manual work.
+    the one its trace is -- and the work it does: its workflow run's, the one
+    the caller named, or else the run's own manual work.
     What it returns is read as the host reads anything from it: its result
     only as the type the caller asked for.
 

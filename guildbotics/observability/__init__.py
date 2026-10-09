@@ -61,6 +61,22 @@ def current_trace() -> TraceContext | None:
     return _current_trace.get()
 
 
+def require_trace() -> TraceContext:
+    """Return the trace a run is recorded under.
+
+    A run is its trace (``run_id == trace_id``), and every host entry that
+    starts one opens its trace first, so a run started outside one is a
+    defect rather than a run of its own.
+
+    Raises:
+        RuntimeError: If no trace is open.
+    """
+    trace = _current_trace.get()
+    if trace is None:
+        raise RuntimeError("A run was started outside a trace.")
+    return trace
+
+
 def current_span() -> SpanContext | None:
     return _current_span.get()
 
@@ -192,6 +208,7 @@ __all__ = [
     "current_trace",
     "join_trace",
     "new_id",
+    "require_trace",
     "set_attributes",
     "span_scope",
     "trace_scope",

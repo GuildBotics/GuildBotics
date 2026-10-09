@@ -122,7 +122,7 @@ class HostWindow:
         work: The work the command does.
         workspace_root: The workspace the command runs in.
         ledger: The host's record of the run the command records to: its
-            workflow run's, or one of its own.
+            workflow run's, or else the one its trace is.
     """
 
     def __init__(

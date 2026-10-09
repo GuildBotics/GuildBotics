@@ -764,8 +764,8 @@ async def test_falls_back_to_common_command_when_no_person_specific(config_dir: 
 
 
 @pytest.fixture(autouse=True)
-def _in_process(commands_in_process) -> None:
-    """The commands the host starts run in this process."""
+def _in_process(commands_in_process, in_trace) -> None:
+    """The commands the host starts run in this process, in its trace."""
 
 
 def test_prepare_command_requires_person_without_candidates(config_dir: Path):
