@@ -63,13 +63,13 @@ STORE_ELSEWHERE = {
         "`guildbotics secrets`: the user names each key explicitly"
     ),
     (
-        "editions/simple/setup_service.py",
+        "setup/setup_service.py",
         "SimpleProjectSetupService.read_project_config",
     ): ("LLM provider API keys named by the project setup"),
-    ("editions/simple/setup_service.py", "SimpleProjectSetupService.update_project"): (
+    ("setup/setup_service.py", "SimpleProjectSetupService.update_project"): (
         "LLM provider API keys named by the project setup"
     ),
-    ("editions/simple/setup_service.py", "SimpleProjectSetupService.write_project"): (
+    ("setup/setup_service.py", "SimpleProjectSetupService.write_project"): (
         "LLM provider API keys named by the project setup"
     ),
     ("intelligences/brains/jev.py", "credential"): "the workspace's Jev key",

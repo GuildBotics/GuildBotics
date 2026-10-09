@@ -2,8 +2,8 @@ import shutil
 import pytest
 from pathlib import Path
 
-from guildbotics.editions.simple import setup_service
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup import setup_service
+from guildbotics.setup.setup_service import (
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonUpdateInput,

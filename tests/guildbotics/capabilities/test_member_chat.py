@@ -4,7 +4,7 @@ from guildbotics.capabilities import member_chat
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_github import MemberCapabilityError
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.chat_service import (
+from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
     ChatIdentity,

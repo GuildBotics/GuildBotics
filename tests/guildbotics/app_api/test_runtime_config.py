@@ -601,13 +601,10 @@ def test_get_context_keeps_selected_workspace_root(
     _write_project(workspace / ".guildbotics" / "config")
     runtime.set_workspace(workspace)
 
-    class _FakeEdition:
-        def get_context(self, message: str = "") -> _FakeContext:
-            return _FakeContext([])
+    def create_context(message: str = "") -> _FakeContext:
+        return _FakeContext([])
 
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.get_edition", lambda: _FakeEdition()
-    )
+    monkeypatch.setattr("guildbotics.app_api.runtime.create_context", create_context)
 
     runtime._get_context()
 

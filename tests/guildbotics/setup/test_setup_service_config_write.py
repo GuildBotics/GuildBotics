@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     LaneMapInput,
     PersonSetupInput,
     PersonUpdateInput,
@@ -128,9 +128,7 @@ def test_write_project_file_set_is_location_independent(
 
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_sample_command_brains_exist_in_template_mapping(language: str) -> None:
-    sample_dir = (
-        Path("guildbotics/editions/simple/templates/sample_commands") / language
-    )
+    sample_dir = Path("guildbotics/setup/templates/sample_commands") / language
     brain_mapping = load_yaml_file(
         get_template_path() / "intelligences/brain_mapping.yml"
     )
@@ -162,7 +160,7 @@ def test_translate_sample_uses_os_ui_language_without_arguments(
     expected: str,
 ) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
+        Path("guildbotics/setup/templates/sample_commands")
         / template_language
         / "translate.md"
     )

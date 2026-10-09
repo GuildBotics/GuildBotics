@@ -18,8 +18,6 @@ from guildbotics.commands.metadata import (
     CommandArgumentMetadata,
     CommandInputPolicy,
 )
-from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationInfo
-from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.agent_environment.contract import (
     LocalGrants,
     NetworkPolicy,
@@ -41,6 +39,8 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
+from guildbotics.setup.github_app import GitHubAppRegistrationInfo
+from guildbotics.setup.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.utils.local_api import NONCE_PATTERN
 from guildbotics.utils.person_id import MemberDirectoryName, OptionalPersonId, PersonId
 

@@ -23,11 +23,11 @@ import time
 import httpx
 from pydantic import BaseModel, Field, computed_field
 
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.integrations.github import app_manifest
+from guildbotics.setup.setup_service import (
     SetupServiceError,
     SimplePersonSetupService,
 )
-from guildbotics.integrations.github import app_manifest
 
 REGISTRATION_TTL_SECONDS = 30 * 60
 GITHUB_APP_NAME_MAX_LENGTH = 34

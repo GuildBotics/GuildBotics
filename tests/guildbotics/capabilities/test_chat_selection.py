@@ -16,7 +16,7 @@ from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.agent_turn import run_agent_turn
 from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.entities.team import Person, Role
-from guildbotics.integrations.chat_service import (
+from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
     ChatIdentity,

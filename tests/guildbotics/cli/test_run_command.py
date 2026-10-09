@@ -39,15 +39,15 @@ from guildbotics.utils.local_api import (
 )
 from guildbotics.utils.safe_paths import normalize_host_path
 from tests.guildbotics.command_environment_doubles import machinery
+from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
-    DummyLoaderFactory,
 )
 
 
 #: The commands the host starts run in this process.
-pytestmark = pytest.mark.usefixtures("commands_in_process")
+pytestmark = pytest.mark.usefixtures("configured_team", "commands_in_process")
 
 
 def test_parse_command_spec_with_person():
@@ -198,10 +198,9 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
     context = _get_context()
     events: list[tuple] = []
 
-    class FakeEdition:
-        def get_context(self, message: str = "") -> Context:
-            events.append(("context", message))
-            return context
+    def create_context(message: str = "") -> Context:
+        events.append(("context", message))
+        return context
 
     def prepare(base, command_name, command_args, person_identifier, cwd):
         events.append(
@@ -213,7 +212,7 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
         events.append(("run", command.command_name, source))
         return CommandOutcome(result=None, text_output="local output")
 
-    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(run_module, "create_context", create_context)
     monkeypatch.setattr(
         run_module,
         "load_guildbotics_env",
@@ -421,12 +420,7 @@ def _context_for_person(person: Person, message: str = "") -> Context:
 
 
 def _context_for_team(team: Team, message: str = "") -> Context:
-    return Context.get_default(
-        DummyLoaderFactory(team),
-        DummyIntegrationFactory(),
-        DummyBrainFactory(),
-        message,
-    )
+    return make_context(team, DummyIntegrationFactory(), DummyBrainFactory(), message)
 
 
 async def _run_locally(
@@ -434,11 +428,10 @@ async def _run_locally(
 ) -> None:
     """Run ``command_spec`` the way ``guildbotics run`` does without a Desktop."""
 
-    class FakeEdition:
-        def get_context(self, message: str = "") -> Context:
-            return context
+    def create_context(message: str = "") -> Context:
+        return context
 
-    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(run_module, "create_context", create_context)
     await run_module._run_custom_command(command_spec, args, None, context.pipe, cwd)
 
 
@@ -594,12 +587,11 @@ async def test_cli_run_rejects_human_member_without_traceback(
     )
     context = _context_for_person(human)
 
-    class FakeEdition:
-        def get_context(self, message: str = "") -> Context:
-            assert message == ""
-            return context
+    def create_context(message: str = "") -> Context:
+        assert message == ""
+        return context
 
-    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(run_module, "create_context", create_context)
 
     with pytest.raises(click.ClickException) as exc_info:
         await run_module._run_custom_command(

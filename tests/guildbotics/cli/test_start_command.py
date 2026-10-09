@@ -12,17 +12,6 @@ from guildbotics.runtime.service_lock import ServiceLock, set_service_keeps_awak
 from guildbotics.utils.i18n_tool import t
 
 
-class _FakeEdition:
-    def __init__(self, context):
-        self._context = context
-
-    def get_context(self, message: str = ""):
-        return self._context
-
-    def get_default_routines(self) -> list[str]:
-        return ["workflows/ticket_driven_workflow"]
-
-
 class _FakeScheduler:
     def __init__(
         self,
@@ -89,7 +78,6 @@ def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
 
 def _patch_start_dependencies(monkeypatch, tmp_path: Path):
     context = object()
-    edition = _FakeEdition(context)
     created: dict[str, object] = {}
     handlers: dict[object, object] = {}
     call_order: list[str] = []
@@ -104,7 +92,9 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
         created["events"] = inst
         return inst
 
-    monkeypatch.setattr("guildbotics.cli.service.get_edition", lambda: edition)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.create_context", lambda message="": context
+    )
     monkeypatch.setattr("guildbotics.cli.service.TaskScheduler", _scheduler_factory)
     monkeypatch.setattr("guildbotics.cli.service.EventListenerRunner", _events_factory)
     monkeypatch.setattr(

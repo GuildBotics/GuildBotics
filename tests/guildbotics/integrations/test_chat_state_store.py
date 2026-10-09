@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     PendingEventRecordError,

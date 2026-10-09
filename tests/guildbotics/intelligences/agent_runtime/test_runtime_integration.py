@@ -21,6 +21,7 @@ from tests.guildbotics.intelligences.agent_runtime.window_doubles import (
     WindowDouble,
     enter_command,
 )
+from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 
 @pytest.fixture
@@ -104,11 +105,9 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     tmp_path,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _Adapter()
 
     def get_adapter(*_args):
@@ -147,21 +146,17 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
             "attempt": 1,
         }
     }
-    try:
-        await brain.run_with_execution_details(
-            "first-turn", cwd=tmp_path, session_state=state
-        )
-        state["agent_execution_context"]["context_cursor"] = "101.1"
-        await brain.run_with_execution_details(
-            "second-turn", cwd=tmp_path, session_state=state
-        )
-        state["agent_execution_context"]["attempt"] = 2
-        await brain.run_with_execution_details(
-            "duplicate-second-turn", cwd=tmp_path, session_state=state
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    await brain.run_with_execution_details(
+        "first-turn", cwd=tmp_path, session_state=state
+    )
+    state["agent_execution_context"]["context_cursor"] = "101.1"
+    await brain.run_with_execution_details(
+        "second-turn", cwd=tmp_path, session_state=state
+    )
+    state["agent_execution_context"]["attempt"] = 2
+    await brain.run_with_execution_details(
+        "duplicate-second-turn", cwd=tmp_path, session_state=state
+    )
 
     assert 'mode="full"' in adapter.prompts[0]
     assert "older-message" in adapter.prompts[0]
@@ -183,11 +178,9 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
     in_a_command,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _Adapter()
 
     def get_adapter(*_args):
@@ -196,22 +189,18 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     doing("chat", "slack:bot:C1:100.1")
-    try:
-        await brain.run_with_execution_details(
-            "first-turn",
-            cwd=tmp_path,
-            session_state={
-                "agent_execution_context": {
-                    "resume_policy": "auto",
-                    "context_cursor": "100.1",
-                    "rebuild_context": "[]",
-                    "rebuild_context_complete": False,
-                }
-            },
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    await brain.run_with_execution_details(
+        "first-turn",
+        cwd=tmp_path,
+        session_state={
+            "agent_execution_context": {
+                "resume_policy": "auto",
+                "context_cursor": "100.1",
+                "rebuild_context": "[]",
+                "rebuild_context_complete": False,
+            }
+        },
+    )
 
     assert 'mode="inspect_required"' in adapter.prompts[0]
     assert any(
@@ -300,11 +289,9 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
     tmp_path,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _Adapter()
 
     def get_adapter(*_args):
@@ -319,18 +306,14 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
             "context_cursor": "cursor-1",
         }
     }
-    try:
-        result = await brain.run_with_execution_details(
-            "first", cwd=tmp_path, session_state=state
-        )
-        adapter.fail = True
-        state["agent_execution_context"]["context_cursor"] = "cursor-2"
-        failed = await brain.run_with_execution_details(
-            "second", cwd=tmp_path, session_state=state
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    result = await brain.run_with_execution_details(
+        "first", cwd=tmp_path, session_state=state
+    )
+    adapter.fail = True
+    state["agent_execution_context"]["context_cursor"] = "cursor-2"
+    failed = await brain.run_with_execution_details(
+        "second", cwd=tmp_path, session_state=state
+    )
 
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
     persisted = ConversationStore(tmp_path).load(key)
@@ -349,11 +332,9 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
     doing,
 ) -> None:
     """A turn that reports no values retains the last known values in the record."""
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _Adapter()
     adapter.model = "gpt-established"
     adapter.effort = "high"
@@ -369,18 +350,14 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
             "resume_policy": "auto",
         }
     }
-    try:
-        first = await brain.run_with_execution_details(
-            "first", cwd=tmp_path, session_state=state
-        )
-        adapter.model = ""
-        adapter.effort = ""
-        second = await brain.run_with_execution_details(
-            "second", cwd=tmp_path, session_state=state
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    first = await brain.run_with_execution_details(
+        "first", cwd=tmp_path, session_state=state
+    )
+    adapter.model = ""
+    adapter.effort = ""
+    second = await brain.run_with_execution_details(
+        "second", cwd=tmp_path, session_state=state
+    )
 
     key = ConversationKey("aiko", "codex", "ticket", "issue-363")
     persisted = ConversationStore(tmp_path).load(key)
@@ -400,11 +377,9 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     tmp_path,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _RateLimitedOnceAdapter()
 
     def get_adapter(*_args):
@@ -424,21 +399,17 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
         "continuation_input": "continue-only",
         "attempt": 1,
     }
-    try:
-        limited = await brain.run_with_execution_details(
-            "new-event",
-            cwd=tmp_path,
-            session_state={"agent_execution_context": execution_context},
-        )
-        execution_context["attempt"] = 2
-        completed = await brain.run_with_execution_details(
-            "new-event",
-            cwd=tmp_path,
-            session_state={"agent_execution_context": execution_context},
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    limited = await brain.run_with_execution_details(
+        "new-event",
+        cwd=tmp_path,
+        session_state={"agent_execution_context": execution_context},
+    )
+    execution_context["attempt"] = 2
+    completed = await brain.run_with_execution_details(
+        "new-event",
+        cwd=tmp_path,
+        session_state={"agent_execution_context": execution_context},
+    )
 
     assert limited.error_category == "rate_limited"
     assert completed.returncode == 0
@@ -468,11 +439,9 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
     tmp_path,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
 
     def get_adapter(*_args):
         return _CrashedAdapter()
@@ -480,20 +449,16 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     doing("ticket", "issue-300")
-    try:
-        result = await brain.run_with_execution_details(
-            "hello",
-            cwd=tmp_path,
-            session_state={
-                "agent_execution_context": {
-                    "resume_policy": "auto",
-                    "context_cursor": "cursor-1",
-                }
-            },
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    result = await brain.run_with_execution_details(
+        "hello",
+        cwd=tmp_path,
+        session_state={
+            "agent_execution_context": {
+                "resume_policy": "auto",
+                "context_cursor": "cursor-1",
+            }
+        },
+    )
 
     # A process that just ended leaves only its stderr as a lead, so the
     # reason a reader sees carries it rather than the bare "closed" claim.
@@ -509,11 +474,9 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
 async def test_native_brain_rotates_after_cancelled_turn(
     monkeypatch, tmp_path, doing
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
 
     def get_adapter(*_args):
         return _CancelledAdapter()
@@ -521,21 +484,17 @@ async def test_native_brain_rotates_after_cancelled_turn(
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     doing("ticket", "issue-300")
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await brain.run_with_execution_details(
-                "cancel",
-                cwd=tmp_path,
-                session_state={
-                    "agent_execution_context": {
-                        "resume_policy": "auto",
-                        "context_cursor": "cursor-1",
-                    }
-                },
-            )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    with pytest.raises(asyncio.CancelledError):
+        await brain.run_with_execution_details(
+            "cancel",
+            cwd=tmp_path,
+            session_state={
+                "agent_execution_context": {
+                    "resume_policy": "auto",
+                    "context_cursor": "cursor-1",
+                }
+            },
+        )
 
     key = ConversationKey("aiko", "codex", "ticket", "issue-300")
     persisted = ConversationStore(tmp_path).load(key)
@@ -551,11 +510,9 @@ async def test_native_authentication_notification_identifies_member_and_cli(
     in_a_command,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
 
     def get_adapter(*_args):
         return _AuthenticationAdapter()
@@ -563,20 +520,16 @@ async def test_native_authentication_notification_identifies_member_and_cli(
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     doing("ticket", "issue-300")
-    try:
-        with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
-            await brain.run(
-                "hello",
-                cwd=tmp_path,
-                session_state={
-                    "agent_execution_context": {
-                        "resume_policy": "fresh",
-                    }
-                },
-            )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
+        await brain.run(
+            "hello",
+            cwd=tmp_path,
+            session_state={
+                "agent_execution_context": {
+                    "resume_policy": "fresh",
+                }
+            },
+        )
 
     # The host records it for the member the command runs as.
     assert excinfo.value.cli_agent == "codex"
@@ -592,11 +545,9 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
     tmp_path,
     doing,
 ) -> None:
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
     adapter = _CompactingAdapter()
 
     def get_adapter(*_args):
@@ -622,19 +573,15 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
             "rebuild_context_complete": True,
         }
     }
-    try:
-        await brain.run_with_execution_details(
-            "first-turn", cwd=tmp_path, session_state=state
-        )
-        compacted = ConversationStore(tmp_path).load(
-            ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1")
-        )
-        await brain.run_with_execution_details(
-            "second-turn", cwd=tmp_path, session_state=state
-        )
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
+    await brain.run_with_execution_details(
+        "first-turn", cwd=tmp_path, session_state=state
+    )
+    compacted = ConversationStore(tmp_path).load(
+        ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1")
+    )
+    await brain.run_with_execution_details(
+        "second-turn", cwd=tmp_path, session_state=state
+    )
 
     assert compacted is not None
     assert compacted.healthy is False
@@ -731,15 +678,10 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
 
 
 @pytest.fixture
-def native_aiko():
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
-    yield
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping.update(original)
+def native_aiko(monkeypatch):
+    use_cli_agent_slots(
+        monkeypatch, "aiko", {"default": cli_agent.ExecutableInfo(adapter="codex")}
+    )
 
 
 _CHAT_IDENTITY = "slack:bot:C1:100.1"
@@ -923,8 +865,8 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     tmp_path,
     doing,
 ):
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         "aiko",
         {
             "default": cli_agent.ExecutableInfo(adapter="codex"),

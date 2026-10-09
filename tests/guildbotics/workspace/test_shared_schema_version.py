@@ -28,7 +28,7 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ThreadConversationState,

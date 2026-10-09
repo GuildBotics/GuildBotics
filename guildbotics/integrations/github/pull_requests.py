@@ -10,17 +10,17 @@ from urllib.parse import quote, urlparse
 from httpx import AsyncClient
 
 from guildbotics.entities import Person, Service, Team
-from guildbotics.integrations.code_hosting_service import (
-    MAX_PAGE_BYTES,
-    ReadinessQuery,
-    RepositoryReadPage,
-)
 from guildbotics.integrations.github.actions_client import (
     GitHubActionsClient,
     GitHubActionsClientError,
 )
 from guildbotics.integrations.github.github_utils import create_github_client
 from guildbotics.integrations.github.repository_scope import configured_owner
+from guildbotics.runtime.code_hosting_service import (
+    MAX_PAGE_BYTES,
+    ReadinessQuery,
+    RepositoryReadPage,
+)
 from guildbotics.utils.i18n_tool import t
 
 GITHUB_RESOURCE_MIN_PART_COUNT = 4

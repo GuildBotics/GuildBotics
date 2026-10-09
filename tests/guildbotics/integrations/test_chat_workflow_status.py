@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from guildbotics.integrations.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     is_suppressed_chat_event,
     is_suppressed_workflow_status_metadata,

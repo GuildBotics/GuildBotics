@@ -5,7 +5,7 @@ from pathlib import Path
 import i18n
 import pytest
 
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
     SimplePersonSetupService,

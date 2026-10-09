@@ -36,7 +36,7 @@ async def assess(
     person_id: str,
     logger: Logger,
     questions: dict[str, Question] | None = None,
-    brain_factory: BrainFactory | None = None,
+    brain_factory: BrainFactory,
 ) -> tuple[Selection, str]:
     """Return a fast path only after both the input and decision were stored."""
     questions = QUESTIONS if questions is None else questions

@@ -20,9 +20,7 @@ def test_markdown_sample_command_inputs(
     command: str, message: str, language: str
 ) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
-        / language
-        / f"{command}.md"
+        Path("guildbotics/setup/templates/sample_commands") / language / f"{command}.md"
     )
 
     metadata = load_markdown_with_frontmatter(path)
@@ -33,9 +31,7 @@ def test_markdown_sample_command_inputs(
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_translate_explicitly_uses_default_brain(language: str) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
-        / language
-        / "translate.md"
+        Path("guildbotics/setup/templates/sample_commands") / language / "translate.md"
     )
 
     metadata = load_markdown_with_frontmatter(path)
@@ -46,7 +42,7 @@ def test_translate_explicitly_uses_default_brain(language: str) -> None:
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_yaml_sample_command_inputs(language: str) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
+        Path("guildbotics/setup/templates/sample_commands")
         / language
         / "get-time-of-day.yml"
     )
@@ -59,7 +55,7 @@ def test_yaml_sample_command_inputs(language: str) -> None:
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_get_time_of_day_uses_selected_member_speaking_style(language: str) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
+        Path("guildbotics/setup/templates/sample_commands")
         / language
         / "get-time-of-day.yml"
     )
@@ -82,9 +78,7 @@ def test_summarize_declares_required_file_and_default_language(
     language: str, default_language: str
 ) -> None:
     path = (
-        Path("guildbotics/editions/simple/templates/sample_commands")
-        / language
-        / "summarize.md"
+        Path("guildbotics/setup/templates/sample_commands") / language / "summarize.md"
     )
 
     metadata = load_markdown_with_frontmatter(path)

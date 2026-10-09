@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
+from guildbotics.runtime.chat_service import ChatEvent
 
 #: A user mention as Slack writes it into message text: ``<@U123>``.
 MENTION_PATTERN = re.compile(r"<@([A-Z0-9]+)>")

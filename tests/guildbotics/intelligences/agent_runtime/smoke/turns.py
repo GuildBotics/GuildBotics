@@ -26,6 +26,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.brains import cli_agent
 from tests.guildbotics.product_path import run_file, workspace_member
+from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 #: The command the turns run in: it drives each turn through the adapter
 #: inside its microVM, working where the command does, one conversation
@@ -113,8 +114,8 @@ async def run_turns(
         For each turn, what the adapter returned, or the failure it raised,
         and the events it emitted.
     """
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
+    use_cli_agent_slots(
+        monkeypatch,
         workspace_member(),
         {"default": cli_agent.ExecutableInfo(adapter=tool)},
     )

@@ -11,13 +11,13 @@ from guildbotics.capabilities.member_github import MemberCapabilityError
 from guildbotics.capabilities.task_runs import RunStore, current_run_id
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.chat_profile import get_chat_slack_base_url
-from guildbotics.integrations.chat_service import (
+from guildbotics.integrations.slack.auth_errors import slack_api_error
+from guildbotics.runtime.chat_service import (
     SEMANTIC_REACTIONS,
     ChatEvent,
     ChatService,
     SemanticReaction,
 )
-from guildbotics.integrations.slack.auth_errors import slack_api_error
 from guildbotics.runtime.member_invocation import current_member_invocation
 
 SLACK_BOT_TOKEN_KEY = "SLACK_BOT_TOKEN"

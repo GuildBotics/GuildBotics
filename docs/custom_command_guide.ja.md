@@ -371,7 +371,7 @@ guildbotics run repository/pr_checks --person alice repo=org/repo number=43 fail
 
 readiness は host サービス自身の通信を使うため、内部の compare 応答には参照ページ用の受信上限を適用しません。返すページの上限は維持し、JSON のエスケープと付帯情報を除いた残りを失敗ログで分け合います。短くしたログは `truncated=true` と `tail_limit_bytes` で分かります。GitHub の権限エラーは必要な権限名を示し、HTTP が成功でも GraphQL の権限不足・レート制限はエラーとして案内します。
 
-共通のサービス・結果型は `integrations/code_hosting_service.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
+共通のサービス・結果型は `runtime/code_hosting_service.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
 
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。
@@ -776,7 +776,7 @@ async def main(context: Context):
 
 ```python
 from guildbotics.commands.errors import CommandError
-from guildbotics.integrations.chat_service import ChatServiceError
+from guildbotics.runtime.chat_service import ChatServiceError
 
 
 async def main(context, channel_id):
@@ -795,7 +795,7 @@ API キーを使う推論の失敗は、例外名と取得できた「報告さ�
 
 コマンドは、自身をメンバーの巡回（routine）実行の候補として宣言できます。巡回候補はメンバーの巡回設定で選択肢として表示され、選択されたものをスケジューラが定期的に実行します。
 
-宣言はコマンド自身のメタデータで行います。これにより、巡回候補を追加する際に edition 側のリストを編集する必要がなくなります。
+宣言はコマンド自身のメタデータで行います。これにより、巡回候補を追加する際に、ほかの場所のリストを編集する必要がなくなります。
 
 - Markdown / YAML コマンド: YAML フロントマターに `routine: true` を追加する。
 - Python コマンド: module-levelの`COMMAND_METADATA` mappingに`"routine": True`を追加する。

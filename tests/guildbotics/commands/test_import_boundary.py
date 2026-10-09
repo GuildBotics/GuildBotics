@@ -22,13 +22,7 @@ import sys
 #: of waiting to be added to a list of forbidden ones.
 _ALLOWED = (
     "guildbotics.commands",
-    "guildbotics.editions.edition",
-    "guildbotics.editions.simple.simple_brain_factory",
-    "guildbotics.editions.simple.simple_loader_factory",
     "guildbotics.entities",
-    "guildbotics.integrations.chat_service",
-    "guildbotics.integrations.code_hosting_service",
-    "guildbotics.integrations.ticket_manager",
     "guildbotics.integrations.window",
     "guildbotics.intelligences.agent_runtime.acp",
     "guildbotics.intelligences.agent_runtime.antigravity",
@@ -44,8 +38,8 @@ _ALLOWED = (
     "guildbotics.intelligences.agent_runtime.turn",
     "guildbotics.intelligences.agent_runtime.usage_snapshots",
     "guildbotics.intelligences.brains.agno_agent",
-    "guildbotics.intelligences.brains.brain",
     "guildbotics.intelligences.brains.cli_agent",
+    "guildbotics.intelligences.brains.factory",
     "guildbotics.intelligences.brains.inference",
     "guildbotics.intelligences.brains.jev",
     "guildbotics.intelligences.brains.util",
@@ -62,8 +56,6 @@ _ALLOWED = (
 #: sends the host with what it records; its writers stay out.
 _PARENTS = {
     "guildbotics",
-    "guildbotics.editions",
-    "guildbotics.editions.simple",
     "guildbotics.integrations",
     "guildbotics.intelligences",
     "guildbotics.intelligences.agent_runtime",
@@ -184,6 +176,7 @@ def test_what_runs_in_the_environment_loads_nothing_host_only() -> None:
     assert {
         "guildbotics.commands.runner",
         "guildbotics.intelligences.brains.cli_agent",
+        "guildbotics.intelligences.brains.factory",
         "guildbotics.intelligences.agent_runtime.codex",
     } <= set(loaded)
     assert _host_only(loaded) == []

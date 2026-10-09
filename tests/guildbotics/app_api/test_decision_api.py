@@ -13,8 +13,8 @@ from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import BrainAssignment, IntelligenceConfigUpdateRequest
-from guildbotics.editions.simple.setup_service import SetupServiceError
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.setup.setup_service import SetupServiceError
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
 from guildbotics.utils.secret_store import KeyringSecretStore
 
@@ -114,7 +114,7 @@ def test_member_rejects_cli_override_and_keeps_inherited_assignment(configured):
             brain_mapping=[assignment("jev-latest")],
         )
     )
-    factory = SimpleBrainFactory()
+    factory = ConfiguredBrainFactory()
 
     def selected():
         return factory.create_brain(
@@ -207,7 +207,7 @@ def test_member_model_resolves_with_inherited_assignment(
             brain_mapping=[assigned],
         )
     )
-    brain = SimpleBrainFactory().create_brain(
+    brain = ConfiguredBrainFactory().create_brain(
         "alice",
         "chat_decision",
         "",

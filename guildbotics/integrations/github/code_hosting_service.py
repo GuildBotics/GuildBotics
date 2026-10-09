@@ -10,16 +10,6 @@ from typing import Any
 import httpx
 from pydantic import Field
 
-from guildbotics.integrations.code_hosting_service import (
-    MAX_PAGE_BYTES,
-    CodeHostingService,
-    DependencyAlert,
-    DependencyAlertQuery,
-    ReadinessQuery,
-    ReadModel,
-    RepositoryReadError,
-    RepositoryReadPage,
-)
 from guildbotics.integrations.github.async_client import ResponseTooLarge
 from guildbotics.integrations.github.pull_requests import (
     GitHubPullRequests,
@@ -34,6 +24,16 @@ from guildbotics.integrations.github.read_resources import (
     graph_connection,
     graph_query,
     translate,
+)
+from guildbotics.runtime.code_hosting_service import (
+    MAX_PAGE_BYTES,
+    CodeHostingService,
+    DependencyAlert,
+    DependencyAlertQuery,
+    ReadinessQuery,
+    ReadModel,
+    RepositoryReadError,
+    RepositoryReadPage,
 )
 from guildbotics.utils.i18n_tool import t
 

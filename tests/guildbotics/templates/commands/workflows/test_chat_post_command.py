@@ -5,7 +5,7 @@ import types
 import pytest
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.runtime.chat_service import ChatPostResult
 from guildbotics.templates.commands.workflows import chat_post_command
 
 

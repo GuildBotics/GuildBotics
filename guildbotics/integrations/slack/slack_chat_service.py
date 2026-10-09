@@ -7,7 +7,10 @@ from typing import Any, cast
 
 import httpx
 
-from guildbotics.integrations.chat_service import (
+from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
+from guildbotics.integrations.slack.message_events import MENTION_PATTERN, chat_event
+from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
     ChatIdentity,
@@ -15,9 +18,6 @@ from guildbotics.integrations.chat_service import (
     ChatService,
     SemanticReaction,
 )
-from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
-from guildbotics.integrations.slack.message_events import MENTION_PATTERN, chat_event
-from guildbotics.observability.diagnostics_events import record_correlated_event
 
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
 _PARTICIPANT_LABEL_MENTION_RE = re.compile(r"@([A-Za-z0-9_-]+)")

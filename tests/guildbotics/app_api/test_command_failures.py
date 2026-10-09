@@ -16,10 +16,7 @@ from guildbotics.app_api.api import TOKEN_HEADER, create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.drivers import command_runner
-from guildbotics.editions.simple.simple_brain_factory import (
-    BrainConfig,
-    person_brain_mapping,
-)
+from guildbotics.intelligences.brains.factory import BrainConfig
 from guildbotics.intelligences.agent_runtime.host_client import (
     CommandFacts,
     CommandReply,
@@ -31,11 +28,11 @@ from guildbotics.intelligences.brains import inference as inference_module
 from guildbotics.intelligences.brains.agno_agent import (
     AgnoAgentDefaultBrain,
     ModelConfig,
-    person_model_mapping,
 )
 from guildbotics.intelligences.brains.jev import JevBrain
 from guildbotics.runtime import command_entry
 from guildbotics.utils.i18n_tool import set_language, t
+from tests.guildbotics.slot_mappings import use_brain_slots, use_model_slots
 
 _WINDOW_FAILURES = {
     "timeout": "The host call timed out.",
@@ -91,16 +88,16 @@ def command_api(tmp_path, monkeypatch, language):
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     set_language(language)
-    monkeypatch.setitem(
-        person_brain_mapping,
+    use_brain_slots(
+        monkeypatch,
         "aiko",
         {
             "default": BrainConfig(type=AgnoAgentDefaultBrain),
             "jev": BrainConfig(type=JevBrain),
         },
     )
-    monkeypatch.setitem(
-        person_model_mapping,
+    use_model_slots(
+        monkeypatch,
         "aiko",
         {"default": ModelConfig(name="test", model_class="test.Model")},
     )

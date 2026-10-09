@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.editions.simple import slack_app_setup
-from guildbotics.editions.simple.setup_service import SimplePersonSetupService
+from guildbotics.setup import slack_app
+from guildbotics.setup.setup_service import SimplePersonSetupService
 from guildbotics.integrations.slack import app_manifest
 
 HTTP_OK = 200
@@ -66,13 +66,13 @@ def slack_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 def _patch_transport(
     monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
 ) -> None:
-    original = slack_app_setup.verify_tokens
+    original = slack_app.verify_tokens
 
     async def verify(bot_token: str, app_token: str, **kwargs):
         kwargs["transport"] = transport
         return await original(bot_token, app_token, **kwargs)
 
-    monkeypatch.setattr(slack_app_setup, "verify_tokens", verify)
+    monkeypatch.setattr(slack_app, "verify_tokens", verify)
 
 
 def test_start_requires_session_token(client: TestClient) -> None:
@@ -146,13 +146,13 @@ def test_verify_reports_bot_identity_and_workspace(client: TestClient) -> None:
         "bot_display_name": "alice-bot",
         "workspace": "GuildBotics HQ",
         "bot_error": "",
-        "bot_source": slack_app_setup.SOURCE_INPUT,
+        "bot_source": slack_app.SOURCE_INPUT,
         "scopes_ok": True,
         "scope_error": "",
         "scope_needed": "",
         "app_token_ok": True,
         "app_token_error": "",
-        "app_token_source": slack_app_setup.SOURCE_INPUT,
+        "app_token_source": slack_app.SOURCE_INPUT,
         "channels": [],
     }
 
@@ -184,10 +184,10 @@ def test_verify_defaults_missing_tokens_to_a_missing_result(client: TestClient) 
     )
 
     body = response.json()
-    assert body["bot_error"] == slack_app_setup.ERROR_MISSING
-    assert body["app_token_error"] == slack_app_setup.ERROR_MISSING
-    assert body["bot_source"] == slack_app_setup.SOURCE_NONE
-    assert body["app_token_source"] == slack_app_setup.SOURCE_NONE
+    assert body["bot_error"] == slack_app.ERROR_MISSING
+    assert body["app_token_error"] == slack_app.ERROR_MISSING
+    assert body["bot_source"] == slack_app.SOURCE_NONE
+    assert body["app_token_source"] == slack_app.SOURCE_NONE
 
 
 @pytest.mark.usefixtures("slack_ok")
@@ -219,8 +219,8 @@ def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
     body = response.json()
     assert body["bot_ok"] is True
     assert body["app_token_ok"] is True
-    assert body["bot_source"] == slack_app_setup.SOURCE_STORED
-    assert body["app_token_source"] == slack_app_setup.SOURCE_STORED
+    assert body["bot_source"] == slack_app.SOURCE_STORED
+    assert body["app_token_source"] == slack_app.SOURCE_STORED
 
 
 def test_verify_does_not_read_stored_tokens_without_a_member(
@@ -235,7 +235,7 @@ def test_verify_does_not_read_stored_tokens_without_a_member(
         "/config/members/slack-app/verify", json={}, headers=AUTH_HEADERS
     )
 
-    assert response.json()["bot_error"] == slack_app_setup.ERROR_MISSING
+    assert response.json()["bot_error"] == slack_app.ERROR_MISSING
 
 
 @pytest.mark.usefixtures("slack_ok")

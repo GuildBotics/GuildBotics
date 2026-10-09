@@ -4,10 +4,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
+from guildbotics.runtime.chat_service import ChatEvent
 
 
 @dataclass(slots=True)

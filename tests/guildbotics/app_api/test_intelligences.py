@@ -17,8 +17,7 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.editions.simple import simple_brain_factory
-from guildbotics.editions.simple.setup_service import SetupServiceError
+from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
@@ -30,7 +29,6 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
 )
-from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 
@@ -112,13 +110,6 @@ def _write_team_config(config_dir: Path) -> None:
             },
         },
     )
-
-
-@pytest.fixture(autouse=True)
-def _clear_caches() -> None:
-    simple_brain_factory.person_brain_mapping.clear()
-    agno_agent.person_model_mapping.clear()
-    cli_agent.person_cli_agent_mapping.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -827,11 +818,7 @@ def test_an_emptied_native_effort_is_not_refilled_by_the_template(
     IntelligenceConfigService().update_config(_team_update_request(tmp_path))
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
-    try:
-        resolved = cli_agent.get_cli_agent_mapping("alice")
-    finally:
-        cli_agent.person_cli_agent_mapping.clear()
+    resolved = cli_agent.get_cli_agent_mapping("alice")
 
     assert resolved["default"].effort == {}
 

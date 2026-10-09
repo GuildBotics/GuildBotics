@@ -158,17 +158,16 @@ class FakeContext:
 
 def _use_real_member_resolution(monkeypatch, *members):
     """Run member commands through the real person resolution for a fake team."""
-    from guildbotics.runtime import member_context as member_context_module
+    from guildbotics.drivers import context as context_module
 
     team = Team(project=Project(name="demo"), members=list(members))
     base_context = FakeContext(members[0])
     base_context.team = team
 
-    class FakeEdition:
-        def get_context(self):
-            return base_context
+    def create_context(message: str = ""):
+        return base_context
 
-    monkeypatch.setattr(member_context_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(context_module, "create_context", create_context)
 
 
 def _files_containing(root, needle):
@@ -373,7 +372,7 @@ def test_repository_read_records_host_target_in_workflow_trace(
     monkeypatch, bind_invocation
 ):
     from types import SimpleNamespace
-    from guildbotics.integrations.code_hosting_service import RepositoryReadPage
+    from guildbotics.runtime.code_hosting_service import RepositoryReadPage
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     bind_invocation(run_id="run-1", trace_id="trace-parent")
@@ -3698,7 +3697,7 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
 ):
     from guildbotics.capabilities.task_runs import RunStore
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
-    from guildbotics.integrations.chat_service import ChatEvent
+    from guildbotics.runtime.chat_service import ChatEvent
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,
     )

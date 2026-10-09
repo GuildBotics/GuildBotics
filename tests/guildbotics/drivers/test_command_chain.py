@@ -44,11 +44,13 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from guildbotics.utils import child_process
 from tests.guildbotics.command_environment_doubles import machinery
+from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
-    DummyLoaderFactory,
 )
+
+pytestmark = pytest.mark.usefixtures("configured_team")
 
 # --- Fixtures / helpers ----------------------------------------------------
 
@@ -61,10 +63,7 @@ def _make_team(members: list[Person] | None = None, language: str = "en") -> Tea
 
 def _make_context(message: str = "", team: Team | None = None) -> Context:
     team = team or _make_team()
-    loader_factory = DummyLoaderFactory(team)
-    base = Context.get_default(
-        loader_factory, DummyIntegrationFactory(), DummyBrainFactory(), message
-    )
+    base = make_context(team, DummyIntegrationFactory(), DummyBrainFactory(), message)
     active = next((m for m in team.members if m.is_active), team.members[0])
     return base.clone_for(active)
 

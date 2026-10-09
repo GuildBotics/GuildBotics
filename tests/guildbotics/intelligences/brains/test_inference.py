@@ -13,7 +13,7 @@ import httpx
 import pytest
 from agno.run.base import RunStatus
 
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences import functions
 from guildbotics.intelligences.brains import (
     agno_agent,
@@ -32,6 +32,7 @@ from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 from guildbotics.intelligences.decisions.models import DecisionConfig
 from guildbotics.intelligences.effort import ResolvedEffort
 from tests.conftest import FakeContext
+from tests.guildbotics.slot_mappings import use_model_slots
 
 
 @pytest.mark.asyncio
@@ -126,8 +127,8 @@ class _Model:
             "instantiate_class",
             lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
         )
-        monkeypatch.setitem(
-            agno_agent.person_model_mapping,
+        use_model_slots(
+            monkeypatch,
             person_id,
             {
                 "default": agno_agent.ModelConfig(
@@ -146,7 +147,7 @@ class _Context(FakeContext):
     language_name = "English"
 
     def get_brain(self, name: str, config: Any, class_resolver: Any) -> Any:
-        return SimpleBrainFactory().create_brain(
+        return ConfiguredBrainFactory().create_brain(
             self.person.person_id, name, "en", self.logger, config, class_resolver
         )
 
@@ -292,8 +293,8 @@ def _openai_slot(monkeypatch, reply: httpx.Response) -> list[dict[str, Any]]:
     provider answers ``reply``; returns the span ends recorded."""
     from agno.models.openai import OpenAIChat
 
-    monkeypatch.setitem(
-        agno_agent.person_model_mapping,
+    use_model_slots(
+        monkeypatch,
         "p1",
         {
             "default": agno_agent.ModelConfig(

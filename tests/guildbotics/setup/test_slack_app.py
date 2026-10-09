@@ -4,8 +4,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
-from guildbotics.editions.simple import slack_app_setup
-from guildbotics.editions.simple.setup_service import SetupServiceError
+from guildbotics.setup import slack_app
+from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.integrations.slack import app_manifest, slack_chat_service
 
 BOT_TOKEN = "xoxb-valid"
@@ -31,7 +31,7 @@ def _slack_ok(request: httpx.Request) -> httpx.Response:
 
 
 def test_start_registration_returns_deep_link():
-    info = slack_app_setup.start_registration("  Alice Bot  ")
+    info = slack_app.start_registration("  Alice Bot  ")
 
     assert info.app_name == "Alice Bot"
     assert info.app_directory_url == "https://api.slack.com/apps"
@@ -44,7 +44,7 @@ def test_start_registration_returns_deep_link():
 @pytest.mark.parametrize("app_name", ["", "   ", "a" * 36])
 def test_start_registration_rejects_invalid_app_name(app_name):
     with pytest.raises(SetupServiceError) as excinfo:
-        slack_app_setup.start_registration(app_name)
+        slack_app.start_registration(app_name)
 
     assert excinfo.value.code == "invalid_slack_app_name"
 
@@ -52,12 +52,12 @@ def test_start_registration_rejects_invalid_app_name(app_name):
 def test_start_registration_accepts_the_maximum_length_name():
     name = "a" * app_manifest.APP_NAME_MAX_LENGTH
 
-    assert slack_app_setup.start_registration(name).app_name == name
+    assert slack_app.start_registration(name).app_name == name
 
 
 @pytest.mark.asyncio
 async def test_verify_tokens_reports_bot_identity_and_workspace():
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(_slack_ok)
     )
 
@@ -78,9 +78,7 @@ async def test_verify_tokens_sends_each_token_to_its_own_slack_method():
         seen[request.url.path] = request.headers["Authorization"]
         return _slack_ok(request)
 
-    await slack_app_setup.verify_tokens(
-        BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
-    )
+    await slack_app.verify_tokens(BOT_TOKEN, APP_TOKEN, transport=_transport(handler))
 
     assert seen == {
         "/api/auth.test": f"Bearer {BOT_TOKEN}",
@@ -98,7 +96,7 @@ async def test_verify_tokens_surfaces_slack_error_codes_per_token():
             200, json={"ok": False, "error": "not_allowed_token_type"}
         )
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -115,7 +113,7 @@ async def test_verify_tokens_keeps_a_valid_token_when_the_other_fails():
             return _slack_ok(request)
         return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -142,7 +140,7 @@ async def test_verify_tokens_flags_a_token_whose_scopes_were_never_granted():
             )
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -162,7 +160,7 @@ async def test_verify_tokens_confirms_scopes_with_a_narrow_read():
             return httpx.Response(200, json={"ok": True, "channels": []})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -179,7 +177,7 @@ async def test_verify_tokens_skips_the_scope_probe_when_the_token_is_bad():
             raise AssertionError("no point probing scopes on a rejected token")
         return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -200,7 +198,7 @@ async def test_verify_tokens_reports_a_channel_the_bot_never_joined():
             return httpx.Response(200, json={"ok": False, "error": "not_in_channel"})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN,
         APP_TOKEN,
         channels=["#general"],
@@ -223,7 +221,7 @@ async def test_verify_tokens_confirms_a_channel_the_bot_can_read():
             return httpx.Response(200, json={"ok": True, "messages": []})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, channels=["general"], transport=_transport(handler)
     )
 
@@ -237,11 +235,11 @@ async def test_verify_tokens_reports_an_unresolvable_channel_name():
             return httpx.Response(200, json={"ok": True, "channels": []})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, channels=["nope"], transport=_transport(handler)
     )
 
-    assert result.channels[0].error == slack_app_setup.ERROR_CHANNEL_NOT_FOUND
+    assert result.channels[0].error == slack_app.ERROR_CHANNEL_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -254,7 +252,7 @@ async def test_verify_tokens_uses_a_channel_id_without_resolving_it():
             return httpx.Response(200, json={"ok": True, "messages": []})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, channels=["C0123456789"], transport=_transport(handler)
     )
 
@@ -272,7 +270,7 @@ async def test_verify_tokens_skips_channels_when_the_scopes_are_missing():
             return httpx.Response(200, json={"ok": False, "error": "missing_scope"})
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, channels=["general"], transport=_transport(handler)
     )
 
@@ -282,12 +280,12 @@ async def test_verify_tokens_skips_channels_when_the_scopes_are_missing():
 
 @pytest.mark.asyncio
 async def test_verify_tokens_reports_the_source_of_each_checked_token():
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(_slack_ok)
     )
 
-    assert result.bot_source == slack_app_setup.SOURCE_INPUT
-    assert result.app_token_source == slack_app_setup.SOURCE_INPUT
+    assert result.bot_source == slack_app.SOURCE_INPUT
+    assert result.app_token_source == slack_app.SOURCE_INPUT
 
 
 @pytest.mark.asyncio
@@ -299,7 +297,7 @@ async def test_verify_tokens_falls_back_to_the_stored_token_for_empty_fields():
         seen[request.url.path] = request.headers["Authorization"]
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         "",
         "",
         stored_bot_token=BOT_TOKEN,
@@ -314,8 +312,8 @@ async def test_verify_tokens_falls_back_to_the_stored_token_for_empty_fields():
     }
     assert result.bot_ok is True
     assert result.app_token_ok is True
-    assert result.bot_source == slack_app_setup.SOURCE_STORED
-    assert result.app_token_source == slack_app_setup.SOURCE_STORED
+    assert result.bot_source == slack_app.SOURCE_STORED
+    assert result.app_token_source == slack_app.SOURCE_STORED
 
 
 @pytest.mark.asyncio
@@ -326,7 +324,7 @@ async def test_verify_tokens_prefers_the_entered_token_over_the_stored_one():
         seen.append(request.headers["Authorization"])
         return _slack_ok(request)
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN,
         "",
         stored_bot_token="xoxb-stale",
@@ -336,8 +334,8 @@ async def test_verify_tokens_prefers_the_entered_token_over_the_stored_one():
 
     assert f"Bearer {BOT_TOKEN}" in seen
     assert "Bearer xoxb-stale" not in seen
-    assert result.bot_source == slack_app_setup.SOURCE_INPUT
-    assert result.app_token_source == slack_app_setup.SOURCE_STORED
+    assert result.bot_source == slack_app.SOURCE_INPUT
+    assert result.app_token_source == slack_app.SOURCE_STORED
 
 
 @pytest.mark.asyncio
@@ -355,7 +353,7 @@ async def test_verify_tokens_does_not_record_a_credential_failure_event(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
@@ -368,12 +366,10 @@ async def test_verify_tokens_reports_missing_tokens_without_calling_slack():
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("Slack must not be called for empty tokens")
 
-    result = await slack_app_setup.verify_tokens(
-        "  ", "", transport=_transport(handler)
-    )
+    result = await slack_app.verify_tokens("  ", "", transport=_transport(handler))
 
-    assert result.bot_error == slack_app_setup.ERROR_MISSING
-    assert result.app_token_error == slack_app_setup.ERROR_MISSING
+    assert result.bot_error == slack_app.ERROR_MISSING
+    assert result.app_token_error == slack_app.ERROR_MISSING
     assert result.bot_ok is False
     assert result.app_token_ok is False
 
@@ -383,12 +379,12 @@ async def test_verify_tokens_detects_swapped_bot_and_app_tokens():
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("Slack must not be called for a wrong token type")
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         APP_TOKEN, BOT_TOKEN, transport=_transport(handler)
     )
 
-    assert result.bot_error == slack_app_setup.ERROR_WRONG_TOKEN_TYPE
-    assert result.app_token_error == slack_app_setup.ERROR_WRONG_TOKEN_TYPE
+    assert result.bot_error == slack_app.ERROR_WRONG_TOKEN_TYPE
+    assert result.app_token_error == slack_app.ERROR_WRONG_TOKEN_TYPE
 
 
 @pytest.mark.asyncio
@@ -396,12 +392,12 @@ async def test_verify_tokens_reports_network_failures_without_leaking_the_token(
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(f"failed to connect with {BOT_TOKEN}")
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
-    assert result.bot_error == slack_app_setup.ERROR_UNREACHABLE
-    assert result.app_token_error == slack_app_setup.ERROR_UNREACHABLE
+    assert result.bot_error == slack_app.ERROR_UNREACHABLE
+    assert result.app_token_error == slack_app.ERROR_UNREACHABLE
     assert BOT_TOKEN not in result.model_dump_json()
     assert APP_TOKEN not in result.model_dump_json()
 
@@ -411,9 +407,9 @@ async def test_verify_tokens_reports_http_errors_as_unreachable():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    result = await slack_app_setup.verify_tokens(
+    result = await slack_app.verify_tokens(
         BOT_TOKEN, APP_TOKEN, transport=_transport(handler)
     )
 
-    assert result.bot_error == slack_app_setup.ERROR_UNREACHABLE
-    assert result.app_token_error == slack_app_setup.ERROR_UNREACHABLE
+    assert result.bot_error == slack_app.ERROR_UNREACHABLE
+    assert result.app_token_error == slack_app.ERROR_UNREACHABLE

@@ -147,15 +147,11 @@ from guildbotics.drivers.command_runner import (
     prepare_command,
     run_main_command,
 )
+from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import (
     ExecutionStatusPublisher,
     TaskRunCoordinator,
     WorkRejectedError,
-)
-from guildbotics.editions import get_edition
-from guildbotics.editions.simple.setup_service import (
-    PersonConfigSummary,
-    SimplePersonSetupService,
 )
 from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
@@ -209,6 +205,11 @@ from guildbotics.runtime.service_lock import (
     set_service_keeps_awake,
 )
 from guildbotics.runtime.trace_presentations import normalize_trace_presentation
+from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+from guildbotics.setup.setup_service import (
+    PersonConfigSummary,
+    SimplePersonSetupService,
+)
 from guildbotics.utils.env_loader import (
     HOME_ENV_PROTECTED_KEYS,
     apply_debug_env_to_process,
@@ -768,7 +769,7 @@ class AppRuntime:
         ``COMMAND_METADATA`` for ``.py``). Discovery scans member, workspace and
         package-template command roots through a single pass, so both built-in
         routine workflows (such as ``workflows/ticket_driven_workflow``) and
-        workspace-defined ones surface without an edition-maintained file list.
+        workspace-defined ones surface without a maintained file list.
 
         The "runs with no caller-supplied input" rule is not used to hide
         candidates: a declared routine that still has required arguments is
@@ -1870,7 +1871,7 @@ class AppRuntime:
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env()
         try:
-            return get_edition().get_context(message)
+            return create_context(message)
         except FileNotFoundError as exc:
             raise AppApiError(
                 "config_not_found",
@@ -1994,15 +1995,11 @@ def _default_routine_command(options: list[CommandOption]) -> str:
     """Pick the routine command to seed / pre-select for a new member.
 
     A single eligible candidate is the default on its own; with several, the
-    edition's declared default wins (``workflows/ticket_driven_workflow`` for the
-    simple edition), so the literal name lives only in the edition.
+    ticket workflow wins.
     """
     eligible = [option.command for option in options if option.routine_eligible]
-    if len(eligible) == 1:
-        return eligible[0]
-    for command in get_edition().get_default_routines():
-        if command in eligible:
-            return command
+    if TICKET_WORKFLOW_COMMAND in eligible:
+        return TICKET_WORKFLOW_COMMAND
     return eligible[0] if eligible else ""
 
 
@@ -2284,7 +2281,7 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
 
     kinds: set[str] = set()
     if (
-        modules & {"guildbotics.integrations.ticket_manager"}
+        modules & {"guildbotics.runtime.ticket_manager"}
         or names
         & {
             "TicketManager",
@@ -2294,7 +2291,7 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
     ):
         kinds.add("github")
     if (
-        modules & {"guildbotics.integrations.chat_service"}
+        modules & {"guildbotics.runtime.chat_service"}
         or names
         & {
             "ChatService",

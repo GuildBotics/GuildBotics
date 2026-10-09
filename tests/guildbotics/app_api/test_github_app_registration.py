@@ -5,8 +5,8 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.editions.simple import github_app_setup
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup import github_app
+from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SimplePersonSetupService,
 )
@@ -59,12 +59,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     async def fake_list(app_id: str, pem: bytes, *, transport=None):
         return [AppInstallation(installation_id=86632391, account_login="acme")]
 
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "convert_manifest_code", fake_convert
-    )
-    monkeypatch.setattr(
-        github_app_setup.app_manifest, "list_app_installations", fake_list
-    )
+    monkeypatch.setattr(github_app.app_manifest, "convert_manifest_code", fake_convert)
+    monkeypatch.setattr(github_app.app_manifest, "list_app_installations", fake_list)
     monkeypatch.setattr(
         SimplePersonSetupService,
         "resolve_github_user",
@@ -305,7 +301,7 @@ def test_member_save_stores_the_registered_key_and_ids(
         (
             lambda client, monkeypatch: (
                 _installed_registration(client),
-                monkeypatch.setattr(github_app_setup, "REGISTRATION_TTL_SECONDS", -1),
+                monkeypatch.setattr(github_app, "REGISTRATION_TTL_SECONDS", -1),
             )[0],
             "github_app_registration_not_found",
         ),

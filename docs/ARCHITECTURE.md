@@ -34,15 +34,15 @@ guildbotics/
 ├── capabilities/    # Member-side git/github/chat/memory operations + domain events
 ├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
 ├── commands/        # Command framework (md/py/sh/yml + inline commands)
-├── drivers/         # Scheduler, command runner, workflow dispatcher, event listeners
-├── editions/        # Edition abstraction + Simple edition (setup services reused by GUI)
+├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, event listeners
 ├── entities/        # Domain models (Team, Person, Task, Message)
 ├── hub/             # The bare repositories a hub holds, and reaching one over OpenSSH
 ├── integrations/    # GitHub / Slack clients (used by capabilities and workflows)
 ├── intelligences/   # Brains (agno_agent / cli_agent), LLM judgment functions, catalogs
 ├── loader/          # YAML team/role loaders
 ├── observability/   # Diagnostics records, trace/span correlation, interactive sessions
-├── runtime/         # Context, member resolution, factories, WorkflowInvocation
+├── runtime/         # Context, member resolution, Brain / factory abstractions, per-kind ports, WorkflowInvocation
+├── setup/           # Workspace and member setup (setup_service, per-provider setup) used by the GUI
 ├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
 ├── templates/       # Config templates, workflow commands, prompts, locales
 ├── workspace/       # Workspace storage: identity, shared-file validation, config CAS
@@ -171,8 +171,8 @@ WorkflowInvocation(command, person_id, source, trigger_type, payload, idempotenc
 attributes, `Context.shared_state` injection), while discovery stays asymmetric on
 purpose:
 
-- **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine of the
-  Simple edition): a routine that _polls_ GitHub ProjectV2. The project board is treated
+- **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine,
+  `TICKET_WORKFLOW_COMMAND`): a routine that _polls_ GitHub ProjectV2. The project board is treated
   as a loose queue/trigger — GuildBotics does not reimplement fine-grained GitHub/git
   operations around it, and there is no GitHub webhook receiver (local-first design).
   Every route that runs it — the patrol, a scheduled command, a manual run
@@ -489,6 +489,17 @@ The generic execution substrate used by workflows and custom commands:
   commands (`commands:`) first, then the main command. It imports nothing only the
   host may hold (the environment, the member broker, the scheduler), which
   `tests/guildbotics/commands/test_import_boundary.py` pins.
+- A `Context` is built in exactly two places: on the host by `create_context()`
+  in `drivers/context.py` (integrations from `integrations/factory.py`'s
+  `ServiceIntegrationFactory`, which picks each kind's provider by
+  `project.services`; brains from `intelligences/brains/factory.py`'s
+  `ConfiguredBrainFactory`), and in a command's isolated environment by
+  `runtime/command_entry.py` (the same brain factory, integrations through
+  `WindowIntegrationFactory`). `tests/guildbotics/drivers/test_context_builders.py`
+  pins the two. A context reads the team from the configuration with
+  `YamlTeamLoader`, anew on every `clone_for()`: a clone's `team` is the
+  configuration as it is when the clone is made, while the person it is
+  given is kept as given.
 - Member resolution lives in `runtime/member_context.py`. A run without an
   explicit member falls back to `Team.get_default_person_id()`: the configured
   `default_person_id` (`team/project.yml`), else the first active non-human
@@ -1328,9 +1339,9 @@ Two Person distinctions matter architecturally:
   rule is enforced in one place, `ensure_execution_subject()` in
   `guildbotics/runtime/member_context.py`, applied by command execution
   (`guildbotics/drivers/command_runner.py`) and by member capability resolution
-  (`resolve_member_context()`). Every `guildbotics member ...` command that acts as
-  a member resolves it that way, so the rejection happens before any capability
-  runs; the commands that do not act as a member (`member help`, and
+  (`resolve_member_context()` in `drivers/context.py`). Every
+  `guildbotics member ...` command that acts as a member resolves it that way,
+  so the rejection happens before any capability runs; the commands that do not act as a member (`member help`, and
   `member task status`, which ignores `--person`) never resolve one.
 
 ## 13. Extension Points
@@ -1349,10 +1360,9 @@ Two Person distinctions matter architecturally:
   adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
-- **New integration**: implement `TicketManager` / `ChatService` and wire it in the
-  edition's `SimpleIntegrationFactory`.
-- **New edition**: implement `Edition` (`get_context()` / `get_default_routines()`)
-  and select it via `GUILDBOTICS_EDITION`.
+- **New integration**: implement `TicketManager` / `ChatService` /
+  `CodeHostingService` (`runtime/`) and select it by its `project.services` name
+  in `ServiceIntegrationFactory` (`integrations/factory.py`).
 - **New activity event/link kind**: add the recording payload (capability →
   observability), the normalizer/API model (app_api), and the frontend rendering
   (desktop) as three separate responsibilities.

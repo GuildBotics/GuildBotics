@@ -28,8 +28,6 @@ from pydantic_core import to_jsonable_python
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.runner import CommandRunner
-from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
-from guildbotics.editions.simple.simple_loader_factory import SimpleLoaderFactory
 from guildbotics.integrations.window import WindowIntegrationFactory
 from guildbotics.intelligences.agent_runtime.host_client import (
     ClientRunLedger,
@@ -42,6 +40,7 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     command_window,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
@@ -58,10 +57,9 @@ async def run(
     """Run ``request`` as the command ``facts`` describe, reaching the host
     through ``client``, and say how it ended."""
     try:
-        context = Context.get_default(
-            SimpleLoaderFactory(),
+        context = Context(
             WindowIntegrationFactory(client),
-            SimpleBrainFactory(),
+            ConfiguredBrainFactory(),
             message=request.pipe,
         )
         person = next(

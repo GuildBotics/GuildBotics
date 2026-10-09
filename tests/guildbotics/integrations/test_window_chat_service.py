@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from guildbotics.integrations.chat_service import ChatServiceError
+from guildbotics.runtime.chat_service import ChatServiceError
 from guildbotics.integrations.window import MemberCommandError, WindowChatService
 from guildbotics.intelligences.agent_runtime.host_client import HostCallError
 

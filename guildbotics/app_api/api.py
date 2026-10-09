@@ -145,12 +145,15 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
-from guildbotics.editions.simple import slack_app_setup
-from guildbotics.editions.simple.github_app_setup import (
+from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.llm_providers import discover_llm_providers
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.setup import slack_app
+from guildbotics.setup.github_app import (
     GitHubAppRegistration,
     GitHubAppRegistrationService,
 )
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     PROJECT_CONFIG_PATHS,
     PersonConfigSnapshot,
     PersonSetupInput,
@@ -167,13 +170,10 @@ from guildbotics.editions.simple.setup_service import (
     stored_person_config_dir,
     stored_person_config_paths,
 )
-from guildbotics.editions.simple.slack_app_setup import (
+from guildbotics.setup.slack_app import (
     SlackAppRegistrationInfo,
     SlackTokenVerification,
 )
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.llm_providers import discover_llm_providers
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
@@ -1742,7 +1742,7 @@ def create_app(
         _: None = Depends(require_token),
     ) -> SlackAppRegistrationInfo:
         try:
-            return slack_app_setup.start_registration(request.app_name)
+            return slack_app.start_registration(request.app_name)
         except SetupServiceError as exc:
             raise AppApiError(exc.code, reason=exc.message) from exc
 
@@ -1765,7 +1765,7 @@ def create_app(
                     person_id=request.person_id,
                 )
             )
-        return await slack_app_setup.verify_tokens(
+        return await slack_app.verify_tokens(
             request.bot_token,
             request.app_token,
             stored_bot_token=stored_bot_token,

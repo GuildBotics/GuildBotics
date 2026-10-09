@@ -16,7 +16,6 @@ from guildbotics.integrations.chat_profile import (
     get_chat_subscriptions,
 )
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
-from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
@@ -28,6 +27,7 @@ from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.event_listener import (
     EventListener,

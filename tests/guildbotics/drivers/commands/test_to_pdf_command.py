@@ -11,22 +11,21 @@ from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.to_pdf_command import ToPdfCommand
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
+from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
-    DummyLoaderFactory,
 )
+
+pytestmark = pytest.mark.usefixtures("configured_team")
 
 
 def _make_context(message: str = "") -> Context:
     members = [Person(person_id="alice", name="Alice", is_active=True)]
     team = Team(project=Project(name="demo"), members=members)
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
-    base = Context.get_default(
-        loader_factory, integration_factory, brain_factory, message
-    )
+    base = make_context(team, integration_factory, brain_factory, message)
     return base.clone_for(members[0])
 
 

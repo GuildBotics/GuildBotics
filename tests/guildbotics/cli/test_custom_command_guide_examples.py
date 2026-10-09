@@ -9,15 +9,17 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.conftest import coverage_suspended
 from tests.guildbotics.command_environment_doubles import machinery
+from tests.guildbotics.runtime.configured_team import make_context
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
-    DummyLoaderFactory,
 )
 
 
 #: The commands the host starts run in this process.
-pytestmark = pytest.mark.usefixtures("commands_in_process", "in_trace")
+pytestmark = pytest.mark.usefixtures(
+    "configured_team", "commands_in_process", "in_trace"
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -33,13 +35,10 @@ def _make_context(
     if members is None:
         members = [Person(person_id="alice", name="Alice", is_active=True)]
     team = Team(project=Project(name="demo", language=language), members=members)
-    loader_factory = DummyLoaderFactory(team)
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
     # Use default, then clone to first active person for deterministic person binding
-    base = Context.get_default(
-        loader_factory, integration_factory, brain_factory, message
-    )
+    base = make_context(team, integration_factory, brain_factory, message)
     for m in members:
         if m.is_active:
             return base.clone_for(m)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.editions.simple.setup_service import (
+from guildbotics.setup.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,

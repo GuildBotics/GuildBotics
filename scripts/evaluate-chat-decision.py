@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.chat_policy import QUESTION_VERSION, QUESTIONS
 from guildbotics.intelligences.decisions.models import DecisionConfig, Question
@@ -56,6 +57,7 @@ async def main() -> None:
         ]
         questions = QUESTIONS
     report = []
+    brain_factory = ConfiguredBrainFactory()
     for case in cases:
         selection, evaluation_id = await assess(
             case["state"],
@@ -63,6 +65,7 @@ async def main() -> None:
             person_id=args.person,
             logger=logging.getLogger("decision-replay"),
             questions=questions,
+            brain_factory=brain_factory,
         )
         item = {
             "case": case["id"],

@@ -4,15 +4,15 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from guildbotics.intelligences.brains.brain import (
-    Brain,
-    ExecutionMetadata,
-    public_parameters,
-)
 from guildbotics.intelligences.brains.inference import AgnoCall, inference
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.effort import resolve_effort, validate_effort_overlay
 from guildbotics.observability import span_scope
+from guildbotics.runtime.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.utils.fileio import (
     get_person_config_path,
     get_template_path,
@@ -54,10 +54,6 @@ class ModelConfig(BaseModel):
 
 #: `models/<provider>/<slot>.yml`
 MODEL_PATH_PARTS = 3
-
-#: Overrides keyed by person id. Production code does not write this dict.
-#: See ``simple_brain_factory.person_brain_mapping`` for why.
-person_model_mapping: dict[str, dict[str, ModelConfig]] = {}
 
 
 def _inherited_effort(person_id: str, model_file: str) -> dict:
@@ -101,9 +97,8 @@ def _effort_of(path: Path) -> dict:
 def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
     """Return the person's model slots, read from configuration each call.
 
-    An entry in :data:`person_model_mapping` is an override and wins over the
-    files. Otherwise the mapping is loaded and not stored, so the next brain
-    sees a file that changed after the previous brain was built.
+    The mapping is loaded and not stored, so the next brain sees a file that
+    changed after the previous brain was built.
 
     Args:
         person_id (str): The person whose ``model_mapping.yml`` to read.
@@ -111,10 +106,6 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
     Returns:
         dict[str, ModelConfig]: Slot name to the validated model definition.
     """
-    override = person_model_mapping.get(person_id)
-    if override is not None:
-        return override
-
     mapping = load_person_slot_mapping(person_id, "intelligences/model_mapping.yml")
     model_mapping = {}
     for name, model_file in mapping.items():

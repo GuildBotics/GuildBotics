@@ -5,7 +5,7 @@ from typing import Any
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.utils import stringify_output
-from guildbotics.integrations.chat_service import ChatService, ChatServiceError
+from guildbotics.runtime.chat_service import ChatService, ChatServiceError
 from guildbotics.utils.i18n_tool import t
 
 
