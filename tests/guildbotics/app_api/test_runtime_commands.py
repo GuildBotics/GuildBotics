@@ -88,7 +88,7 @@ def _make_context(
     github_enabled: bool = False,
     person: Person | None = None,
 ) -> object:
-    # ``Context.get_default`` starts on a placeholder person until a member is
+    # A host context starts on a placeholder person until a member is
     # resolved; pass ``person`` to reproduce that pre-resolution state.
     person = person if person is not None else members[0]
     # A real team so member resolution (including the default executor) behaves
