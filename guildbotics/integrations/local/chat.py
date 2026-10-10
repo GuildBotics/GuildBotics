@@ -133,13 +133,17 @@ def _record(raw: str | bytes) -> dict[str, Any] | None:
 
 
 def _lines(path: Path) -> list[dict[str, Any]]:
-    """The records of a channel's file, in the order written.
+    """The records of a channel's file, in the order written; none for a
+    channel nothing was written to yet.
 
     Raises:
-        ChatServiceError: If the file cannot be read.
+        ChatServiceError: If the file cannot be read: a channel that cannot be
+            read is not an empty one.
     """
     try:
-        raw = path.read_bytes() if path.is_file() else b""
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return []
     except OSError as exc:
         raise ChatServiceError(f"Local chat channel cannot be read: {exc}") from exc
     return [
@@ -248,7 +252,7 @@ class LocalChatService(ChatService):
     async def resolve_channel_id(self, channel_name: str) -> str | None:
         name = channel_name.strip().lstrip("#")
         try:
-            return name if channel_path(name).is_file() else None
+            return name if channel_path(name).exists() else None
         except ChatServiceError:
             return None
 

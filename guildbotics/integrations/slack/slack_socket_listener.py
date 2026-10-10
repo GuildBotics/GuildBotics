@@ -232,7 +232,12 @@ class SlackSocketEventListener(EventListener):
         channel_id = str(event.get("channel", "") or "")
         if not channel_id:
             return None
-        return chat_event(channel_id, event)
+        try:
+            return chat_event(channel_id, event)
+        except ValueError:
+            # A frame naming no message is acked as any other that is no
+            # event: Slack would only send it again.
+            return None
 
     def _parse_json(self, raw: Any) -> dict[str, Any] | None:
         text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)

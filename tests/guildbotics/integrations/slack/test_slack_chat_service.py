@@ -571,36 +571,81 @@ async def test_a_member_without_a_bot_token_is_told_where_it_goes():
         await chat.identity()
 
 
-@pytest.mark.asyncio
-async def test_a_message_without_a_timestamp_is_left_out_of_its_page():
-    async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "messages": [
-                    {"type": "message", "user": "U1", "text": "broken", "ts": "x"},
-                    {"type": "message", "user": "U1", "text": "fine", "ts": "1.5"},
-                    "no object",
-                ],
-            },
-        )
-
-    async with _client_for(handler) as client:
-        service = SlackChatService(logging.getLogger("test"), client=client)
-        page = await service.list_channel_events("C1")
-
-    assert [event.text for event in page.events] == ["fine"]
+_FINE = {"type": "message", "user": "U1", "text": "fine", "ts": "1.5"}
 
 
 @pytest.mark.asyncio
-async def test_a_post_whose_answer_names_no_message_failed():
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ({"messages": None}, "lists no messages"),
+        ({}, "lists no messages"),
+        ({"messages": [_FINE, "no object"]}, "lists no messages"),
+        ({"messages": [_FINE], "response_metadata": "x"}, "lists no messages"),
+        ({"messages": [{**_FINE, "ts": "x"}, _FINE]}, "names no time"),
+    ],
+)
+async def test_a_history_that_cannot_be_read_whole_is_no_page(answer, reason):
+    """Neither a channel nor a thread reads as empty, or shorter than it is,
+    from an answer that does not list its messages."""
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"ok": True, **answer})
 
     async with _client_for(handler) as client:
         service = SlackChatService(logging.getLogger("test"), client=client)
-        with pytest.raises(SlackUnreachableError, match="names no message"):
+        for read in (
+            service.list_channel_events("C1"),
+            service.list_thread_events("C1", thread_id="1.5"),
+        ):
+            with pytest.raises(SlackUnreachableError, match=reason):
+                await read
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"channels": None},
+        {"channels": [{"id": "C9", "name": "other"}], "response_metadata": []},
+    ],
+)
+async def test_a_channel_list_that_cannot_be_read_names_no_absent_channel(answer):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, **answer})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match="lists no channels"):
+            await service.resolve_channel_id("dev-chat")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", 7])
+async def test_an_identity_whose_answer_names_no_user_failed(user_id):
+    """The member's own messages are told apart by its user: no user is not
+    one that never wrote."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "user_id": user_id})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match="names no user_id"):
+            await service.get_bot_identity()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "reason"), [({}, "names no ts"), ({"ts": "x"}, "names no message")]
+)
+async def test_a_post_whose_answer_names_no_message_failed(answer, reason):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, **answer})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match=reason):
             await service.post_message("C1", "hello")
 
 

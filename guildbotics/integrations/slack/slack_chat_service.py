@@ -152,7 +152,7 @@ class SlackChatService(ChatService):
     async def get_bot_identity(self) -> ChatIdentity:
         payload = await self._post_form("auth.test", {})
         return ChatIdentity(
-            user_id=str(payload.get("user_id", "")),
+            user_id=_named("auth.test", payload, "user_id"),
             display_name=str(payload.get("user", "")),
             workspace=str(payload.get("team", "")),
         )
@@ -219,7 +219,8 @@ class SlackChatService(ChatService):
             form["oldest"] = time_ts(since)
         if until:
             form["latest"] = time_ts(until)
-        return _page(channel_id, await self._post_form("conversations.history", form))
+        method = "conversations.history"
+        return _page(method, channel_id, await self._post_form(method, form))
 
     async def list_thread_events(
         self,
@@ -243,7 +244,7 @@ class SlackChatService(ChatService):
             if exc.error == "thread_not_found":
                 raise ChatThreadNotFoundError(str(exc)) from exc
             raise
-        return _page(channel_id, payload)
+        return _page("conversations.replies", channel_id, payload)
 
     async def probe_read_scopes(self) -> None:
         """Make the narrowest scoped read call, to prove scopes were granted.
@@ -279,8 +280,12 @@ class SlackChatService(ChatService):
             }
             if cursor:
                 form["cursor"] = cursor
-            payload = await self._post_form("conversations.list", form)
-            for item in _items(payload, "channels"):
+            channels, cursor = _listing(
+                "conversations.list",
+                await self._post_form("conversations.list", form),
+                "channels",
+            )
+            for item in channels:
                 cid = _str_or_none(item.get("id"))
                 if not cid:
                     continue
@@ -289,13 +294,8 @@ class SlackChatService(ChatService):
                 if name in (raw_name, normalized):
                     self._channel_name_cache[name] = cid
                     return cid
-            metadata = payload.get("response_metadata", {})
-            next_cursor = None
-            if isinstance(metadata, dict):
-                next_cursor = _str_or_none(metadata.get("next_cursor"))
-            if not next_cursor:
+            if not cursor:
                 return None
-            cursor = next_cursor
 
     async def post_message(
         self,
@@ -310,14 +310,12 @@ class SlackChatService(ChatService):
             form["thread_ts"] = thread_id
         if metadata:
             form["metadata"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
-        payload = await self._post_form("chat.postMessage", form)
-        ts = str(payload.get("ts", ""))
+        method = "chat.postMessage"
+        ts = _named(method, await self._post_form(method, form), "ts")
         try:
             occurred_at = ts_time(ts)
         except ValueError as exc:
-            raise SlackUnreachableError(
-                "chat.postMessage", "the answer names no message"
-            ) from exc
+            raise SlackUnreachableError(method, "the answer names no message") from exc
         return ChatPostResult(
             channel_id=channel_id,
             message_id=ts,
@@ -419,28 +417,53 @@ class SlackChatService(ChatService):
         return self._client
 
 
-def _items(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    """The objects an answer lists under ``key``; what is no object is none."""
+def _named(method: str, payload: dict[str, Any], key: str) -> str:
+    """What ``method``'s answer names under ``key``.
+
+    Raises:
+        SlackUnreachableError: If it names nothing there.
+    """
     value = payload.get(key)
-    return (
-        [item for item in value if isinstance(item, dict)]
-        if isinstance(value, list)
-        else []
-    )
+    if not isinstance(value, str) or not value:
+        raise SlackUnreachableError(method, f"the answer names no {key}")
+    return value
 
 
-def _page(channel_id: str, payload: dict[str, Any]) -> ChatEventPage:
-    events = [
-        event
-        for item in _items(payload, "messages")
-        if (event := chat_event(channel_id, item)) is not None
-    ]
+def _listing(
+    method: str, payload: dict[str, Any], key: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The objects ``method``'s answer lists under ``key``, and the cursor of
+    the page after it (``None`` on the last page).
+
+    Raises:
+        SlackUnreachableError: If the answer lists no objects there: an answer
+            that cannot be read is not an empty one.
+    """
+    items = payload.get(key)
     metadata = payload.get("response_metadata", {})
-    cursor = (
-        _str_or_none(metadata.get("next_cursor"))
-        if isinstance(metadata, dict)
-        else None
-    )
+    if not (
+        isinstance(items, list)
+        and all(isinstance(item, dict) for item in items)
+        and isinstance(metadata, dict)
+    ):
+        raise SlackUnreachableError(method, f"the answer lists no {key}")
+    return items, str(metadata.get("next_cursor") or "") or None
+
+
+def _page(method: str, channel_id: str, payload: dict[str, Any]) -> ChatEventPage:
+    """Raises:
+    SlackUnreachableError: If the answer lists no messages, or a message no
+        time names: a page that cannot be read whole is not a shorter one.
+    """
+    messages, cursor = _listing(method, payload, "messages")
+    try:
+        events = [
+            event
+            for item in messages
+            if (event := chat_event(channel_id, item)) is not None
+        ]
+    except ValueError as exc:
+        raise SlackUnreachableError(method, "a message names no time") from exc
     return ChatEventPage(events=events, cursor=cursor)
 
 

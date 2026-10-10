@@ -30,6 +30,8 @@ from tests.guildbotics.local_chat import lines
 
 MEMBER = "aiko"
 CHANNEL_NAME = "dev-chat"
+#: The port's operations a failure underneath can affect.
+OPERATIONS = ("identity", "resolve", "post", "channel", "thread", "reaction")
 
 
 @dataclass
@@ -49,8 +51,9 @@ class ChatHarness:
     reactions: Callable[[str], list[tuple[str, str]]]
     #: What checking the member's credentials should find.
     credentials: list[CredentialCheck]
-    #: Ways the provider fails underneath, by name: each makes it fail so.
-    failures: dict[str, Callable[[], None]]
+    #: Ways the provider fails underneath, by name: what makes it fail so,
+    #: and the operations of ``OPERATIONS`` that failure leaves no answer to.
+    failures: dict[str, tuple[Callable[[], None], tuple[str, ...]]]
 
     async def aclose(self) -> None:
         close = getattr(self.service, "aclose", None)
@@ -130,11 +133,16 @@ def _local(monkeypatch) -> ChatHarness:
         ),
         reactions,
         [],
-        {"channel unwritable": _unwritable},
+        {
+            "channel unreadable": (
+                _unreadable,
+                ("post", "channel", "thread", "reaction"),
+            )
+        },
     )
 
 
-def _unwritable() -> None:
+def _unreadable() -> None:
     """Have a directory where ``dev-chat``'s file is."""
     path = local_chat.channel_path(CHANNEL_NAME)
     path.unlink()
@@ -164,8 +172,11 @@ def _slack(monkeypatch) -> ChatHarness:
         lambda ts: [(r, u) for r, u in double.reactions.get(ts, [])],
         [CredentialCheck("bot_token", "ok"), CredentialCheck("app_token", "ok")],
         {
-            failure: (lambda failure=failure: setattr(double, "failure", failure))
-            for failure in SlackDouble.FAILURES
+            failure: (
+                lambda failure=failure: setattr(double, "failure", failure),
+                operations,
+            )
+            for failure, operations in SlackDouble.FAILURES.items()
         },
     )
 
@@ -219,8 +230,16 @@ class SlackDouble:
     reactions it is sent, and delivers what a person writes on the socket."""
 
     BOT = "U_AIKO"
-    #: How Slack can fail to answer: what ``failure`` may be set to.
-    FAILURES = ("unreachable", "HTTP 429", "no JSON", "no JSON object")
+    #: How Slack can fail to answer -- what ``failure`` may be set to -- and
+    #: the operations each failure leaves no answer to.
+    FAILURES = {
+        "unreachable": OPERATIONS,
+        "HTTP 429": OPERATIONS,
+        "no JSON": OPERATIONS,
+        "no JSON object": OPERATIONS,
+        # ``ok`` and nothing else: a reaction asks for nothing more.
+        "answer names nothing": tuple(op for op in OPERATIONS if op != "reaction"),
+    }
 
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = [
@@ -256,6 +275,8 @@ class SlackDouble:
             return httpx.Response(200, text="<html>bad gateway</html>")
         if self.failure == "no JSON object":
             return httpx.Response(200, json=["ok"])
+        if self.failure == "answer names nothing":
+            return httpx.Response(200, json={"ok": True})
         method = request.url.path.rsplit("/", 1)[1]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         return httpx.Response(200, json={"ok": True, **self._answer(method, form)})

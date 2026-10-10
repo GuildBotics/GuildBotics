@@ -13,7 +13,11 @@ import pytest
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local import chat
 from guildbotics.integrations.local.chat import LocalChatListener, LocalChatService
-from guildbotics.runtime.chat_service import ChatEvent, ChatServiceError
+from guildbotics.runtime.chat_service import (
+    ChatEvent,
+    ChatServiceError,
+    ChatThreadNotFoundError,
+)
 from tests.guildbotics.local_chat import at, say
 
 #: Lines no message or reaction is recorded in.
@@ -98,6 +102,29 @@ async def test_reading_a_channel_passes_over_a_bad_line(bad):
 
     assert [e.message_id for e in channel.events] == ["t1", "t2"]
     assert [e.message_id for e in thread.events] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_nothing_was_written_to_is_empty_and_one_unreadable_fails():
+    """A channel with no file yet has no messages and no threads; one whose
+    file cannot be read has no answer, never an empty one."""
+    service = LocalChatService(Person(person_id="aiko", name="Aiko"))
+
+    assert (await service.list_channel_events("C1")).events == []
+    with pytest.raises(ChatThreadNotFoundError):
+        await service.list_thread_events("C1", thread_id="t1")
+    assert await service.resolve_channel_id("C1") is None
+
+    chat.channel_path("C1").mkdir(parents=True)
+
+    assert await service.resolve_channel_id("C1") == "C1"
+    for read in (
+        service.list_channel_events("C1"),
+        service.list_thread_events("C1", thread_id="t1"),
+    ):
+        with pytest.raises(ChatServiceError, match="cannot be read") as caught:
+            await read
+        assert not isinstance(caught.value, ChatThreadNotFoundError)
 
 
 @pytest.mark.asyncio

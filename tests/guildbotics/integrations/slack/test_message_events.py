@@ -51,16 +51,19 @@ def test_chat_event_starts_its_own_thread_without_thread_ts() -> None:
     assert event.author_id is None
 
 
+def test_chat_event_is_none_for_what_is_no_conversation() -> None:
+    raw = {"ts": "1.0", "subtype": "channel_join", "text": "joined"}
+
+    assert chat_event("C1", raw) is None
+
+
 @pytest.mark.parametrize(
     "raw",
-    [
-        {"text": "no timestamp"},
-        {"ts": "", "text": "empty timestamp"},
-        {"ts": "1.0", "subtype": "channel_join", "text": "joined"},
-    ],
+    [{"text": "no timestamp"}, {"ts": "", "text": "empty"}, {"ts": "x", "text": "x"}],
 )
-def test_chat_event_is_none_for_what_is_no_conversation(raw) -> None:
-    assert chat_event("C1", raw) is None
+def test_a_message_no_timestamp_names_is_refused(raw) -> None:
+    with pytest.raises(ValueError):
+        chat_event("C1", raw)
 
 
 @pytest.mark.parametrize(

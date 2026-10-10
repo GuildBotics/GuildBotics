@@ -26,6 +26,7 @@ from guildbotics.runtime.chat_service import (
 )
 from tests.guildbotics.integrations.contracts.chat_providers import (
     CHANNEL_NAME,
+    OPERATIONS,
     ChatHarness,
     chat_harness,
 )
@@ -179,23 +180,30 @@ async def test_a_chat_that_fails_underneath_answers_with_the_ports_error(
     chat: ChatHarness,
 ):
     """Whatever fails under a provider -- the network, the HTTP answer, its
-    decoding, a file -- reaches its user as the port's ``ChatServiceError``,
-    so no user needs to know a provider's libraries to handle it."""
+    decoding, its shape, a file -- reaches its user as the port's
+    ``ChatServiceError``, so no user needs to know a provider's libraries to
+    handle it. What cannot be read is never an empty answer or a thread that
+    is not there: a user would take either as the truth and act on it."""
     root = chat.write("question")
-    for failure, fail in chat.failures.items():
+    service = chat.service
+    operation = {
+        "identity": service.get_bot_identity,
+        "resolve": lambda: service.resolve_channel_id("another-channel"),
+        "post": lambda: service.post_message(chat.channel_id, "while failing"),
+        "channel": lambda: service.list_channel_events(chat.channel_id),
+        "thread": lambda: service.list_thread_events(chat.channel_id, thread_id=root),
+        "reaction": lambda: service.add_reaction(chat.channel_id, root, "ack"),
+    }
+    assert sorted(operation) == sorted(OPERATIONS)
+    for failure, (fail, affected) in chat.failures.items():
         fail()
-        with pytest.raises(ChatServiceError):
-            await chat.service.post_message(chat.channel_id, f"while {failure}")
-        for read in (
-            lambda: chat.service.resolve_channel_id("another-channel"),
-            lambda: chat.service.list_channel_events(chat.channel_id),
-            lambda: chat.service.list_thread_events(chat.channel_id, thread_id=root),
-            lambda: chat.service.add_reaction(chat.channel_id, root, "ack"),
-        ):
-            try:
-                await read()
-            except ChatServiceError:
-                pass
+        for name in affected:
+            with pytest.raises(ChatServiceError) as caught:
+                await operation[name]()
+            assert not isinstance(caught.value, ChatThreadNotFoundError), (
+                failure,
+                name,
+            )
 
 
 @pytest.mark.asyncio

@@ -61,19 +61,19 @@ def is_bot_message(raw: dict[str, Any]) -> bool:
 
 
 def chat_event(channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
-    """A Slack message in ``channel_id`` as a chat event.
+    """A Slack message in ``channel_id`` as a chat event; ``None`` for one
+    that is not conversational.
 
     The Web API's history and Socket Mode's events carry messages in the same
-    shape. A message that is not conversational, or has no timestamp to name
-    it by, is no event.
+    shape.
+
+    Raises:
+        ValueError: If the message has no timestamp to name it by.
     """
-    message_ts = str(raw.get("ts", "") or "")
-    try:
-        occurred_at = ts_time(message_ts)
-    except ValueError:
-        return None
     if not is_conversational_message(raw):
         return None
+    message_ts = str(raw.get("ts", "") or "")
+    occurred_at = ts_time(message_ts)
     thread_ts = str(raw.get("thread_ts", "") or "") or message_ts
     text = str(raw.get("text", "") or "")
     return ChatEvent(
