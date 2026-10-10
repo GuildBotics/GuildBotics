@@ -12,7 +12,7 @@ from guildbotics.cli.workspace import workspace
 
 @pytest.mark.parametrize("entry", ["use", "member"])
 def test_workspace_permission_refusal_is_a_click_error(monkeypatch, tmp_path, entry):
-    from guildbotics.intelligences.agent_environment import contract
+    from guildbotics.environment import contract
     from guildbotics.utils import workspace_state
     from guildbotics.utils.safe_paths import (
         HostPathPermissionError,

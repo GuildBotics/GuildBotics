@@ -142,6 +142,7 @@ def test_keychain_failures_return_status_without_traceback(
     hosted, fake_keyring, monkeypatch, locked
 ):
     from keyring.errors import KeyringError, KeyringLocked
+
     from guildbotics.hub import secret_host
 
     _receive(hosted, [_offer("A_TOKEN", "first", 0, 1)])

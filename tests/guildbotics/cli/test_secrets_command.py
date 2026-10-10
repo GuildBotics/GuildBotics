@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import importlib
+from pathlib import Path
 
 import i18n
 from click.testing import CliRunner
@@ -11,11 +10,11 @@ from guildbotics.cli import main
 from guildbotics.cli.secrets import secrets
 
 secrets_cli = importlib.import_module("guildbotics.cli.secrets")
+from guildbotics.utils.i18n_tool import set_language, t
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     read_env_values,
 )
-from guildbotics.utils.i18n_tool import set_language, t
 from guildbotics.utils.windows_credentials import WindowsCredentialManager
 
 
@@ -407,11 +406,12 @@ class FakeHubSecrets:
 
 def test_desktop_requirement_is_localized(monkeypatch):
     import click
-    from guildbotics.cli.secrets import _run_transfer, _report
+    from click.testing import CliRunner
+
+    from guildbotics.cli.secrets import _report, _run_transfer
     from guildbotics.hub.secret_service import HubDesktopRequiredError
     from guildbotics.secrets import SecretTransferOutcome
     from guildbotics.utils.i18n_tool import t
-    from click.testing import CliRunner
 
     @click.command()
     def command():

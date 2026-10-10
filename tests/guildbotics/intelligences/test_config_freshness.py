@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.guest.cli_agent import CliAgentBrain
 from guildbotics.intelligences.brains.agno_agent import AgnoAgentDefaultBrain
-from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
 

@@ -18,18 +18,19 @@ from guildbotics.commands.metadata import (
     CommandArgumentMetadata,
     CommandInputPolicy,
 )
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.drivers.live_state import LivePresentation
+from guildbotics.environment.contract import (
     LocalGrants,
     NetworkPolicy,
     SharedGrants,
 )
-from guildbotics.intelligences.agent_environment.image import (
+from guildbotics.environment.image import (
     IMAGE,
     device_architecture,
 )
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
-from guildbotics.intelligences.agent_environment.status import DeviceSetting
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.snapshot import SnapshotState
+from guildbotics.environment.status import DeviceSetting
+from guildbotics.environment.toolchain import (
     EnvironmentResources,
     ToolchainDeclaration,
 )
@@ -38,7 +39,6 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 )
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
-from guildbotics.runtime.live_state import LivePresentation
 from guildbotics.setup.github_app import GitHubAppRegistrationInfo
 from guildbotics.setup.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.utils.local_api import NONCE_PATTERN

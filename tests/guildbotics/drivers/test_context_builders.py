@@ -17,13 +17,15 @@ from guildbotics.commands.errors import PersonExecutionNotAllowedError
 from guildbotics.drivers import context as context_module
 from guildbotics.drivers.context import resolve_member_context
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.environment.inference_host import DirectInference
+from guildbotics.intelligences.brains.inference import inference
 
 _ROOT = Path(guildbotics.__file__).parent
 
 #: Every function that builds a context, by module and qualified name.
 _BUILDERS = {
     ("drivers/context.py", "create_context"),
-    ("runtime/command_entry.py", "run"),
+    ("guest/entry.py", "run"),
     ("runtime/context.py", "Context.clone_for"),
 }
 
@@ -147,3 +149,20 @@ def test_resolve_member_context_clones_for_agent_member(monkeypatch):
 
     assert person.person_id == "aiko"
     assert context.person is person
+
+
+def test_no_way_to_the_inference_apis_is_assumed() -> None:
+    """Only the place that builds the process's context says where a brain's
+    inference call goes."""
+    with pytest.raises(RuntimeError, match="No inference implementation"):
+        inference()
+
+
+def test_the_host_builder_has_its_brains_call_the_apis_themselves(
+    configured_team,
+) -> None:
+    configured_team.team = Team(project=Project(name="demo"), members=[])
+
+    context_module.create_context()
+
+    assert isinstance(inference(), DirectInference)

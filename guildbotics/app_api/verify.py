@@ -5,13 +5,13 @@ from typing import Any, cast
 
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
 from guildbotics.entities.team import Person, Service, Team
+from guildbotics.environment.status import (
+    DeviceStatus,
+    device_status,
+)
 from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
     get_github_account_type,
-)
-from guildbotics.intelligences.agent_environment.status import (
-    DeviceStatus,
-    device_status,
 )
 from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
 from guildbotics.intelligences.llm_providers import provider_env_keys, provider_of

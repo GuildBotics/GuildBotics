@@ -15,12 +15,11 @@ from typing import Any
 import pytest
 
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.runtime.chat_service import ChatIdentity
-from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
-from guildbotics.runtime.context import Context
+from guildbotics.runtime.chat_service import ChatIdentity
 from guildbotics.runtime.integration_factory import IntegrationFactory
+from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.utils.import_utils import ClassResolver
 from tests.guildbotics.runtime.configured_team import CONFIGURED_TEAM, make_context
 

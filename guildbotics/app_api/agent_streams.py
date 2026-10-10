@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from guildbotics.intelligences.agent_runtime.diagnostics import MAX_MESSAGE
+from guildbotics.environment.diagnostics import MAX_MESSAGE
 
 #: Fewest records in a stream worth merging into one.
 _MERGEABLE = 2

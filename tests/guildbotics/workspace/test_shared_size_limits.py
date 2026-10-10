@@ -91,31 +91,31 @@ NOT_SHARED = {
         "one secret value on that same stream; it lands in an OS secret store "
         "and never in the shared history"
     ),
-    "guildbotics/intelligences/agent_environment/auth_gateway.py:_MAX_REQUEST_BYTES": (
+    "guildbotics/environment/auth_gateway.py:_MAX_REQUEST_BYTES": (
         "a turn's API request passing through the credential gateway in memory"
     ),
-    "guildbotics/intelligences/agent_environment/credential_vault.py:_KEY_BYTES": (
+    "guildbotics/environment/credential_vault.py:_KEY_BYTES": (
         "the length of the device's sealing key, kept in the OS keychain"
     ),
-    "guildbotics/intelligences/agent_environment/credential_vault.py:_NONCE_BYTES": (
+    "guildbotics/environment/credential_vault.py:_NONCE_BYTES": (
         "the AES-GCM nonce of a login sealed on this device only"
     ),
-    "guildbotics/intelligences/agent_runtime/antigravity.py:_LOG_TAIL_BYTES": (
+    "guildbotics/guest/antigravity.py:_LOG_TAIL_BYTES": (
         "how much of an agent's log is read back after a failure"
     ),
-    "guildbotics/intelligences/agent_runtime/antigravity.py:_MAX_PROMPT_BYTES": (
+    "guildbotics/guest/antigravity.py:_MAX_PROMPT_BYTES": (
         "a prompt handed to an agent process"
     ),
-    "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_ARGUMENT_BYTES": (
+    "guildbotics/environment/member_broker.py:_MAX_ARGUMENT_BYTES": (
         "one argument of a broker request"
     ),
-    "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_OUTPUT_BYTES": (
+    "guildbotics/environment/member_broker.py:_MAX_OUTPUT_BYTES": (
         "what the broker reads back from a member command"
     ),
-    "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_REQUEST_BYTES": (
+    "guildbotics/environment/member_broker.py:_MAX_REQUEST_BYTES": (
         "a broker request on the local socket"
     ),
-    "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_STDIN_BYTES": (
+    "guildbotics/environment/member_broker.py:_MAX_STDIN_BYTES": (
         "what is piped into a member command"
     ),
     "guildbotics/capabilities/member_git.py:MAX_GIT_BUNDLE_BYTES": (
@@ -124,31 +124,31 @@ NOT_SHARED = {
     "guildbotics/capabilities/member_git.py:_MAX_GIT_OUTPUT_BYTES": (
         "what the host reads back from git run in a member's clone"
     ),
-    "guildbotics/intelligences/agent_runtime/command_guest.py:_CHUNK_BYTES": (
+    "guildbotics/environment/command_guest.py:_CHUNK_BYTES": (
         "how much of a process's input or output is moved at a time"
     ),
-    "guildbotics/intelligences/agent_runtime/command_guest.py:_MAX_STDERR_BYTES": (
+    "guildbotics/environment/command_guest.py:_MAX_STDERR_BYTES": (
         "how much of a process's standard error is kept for its reason"
     ),
-    "guildbotics/intelligences/agent_runtime/environment.py:_CHUNK_BYTES": (
+    "guildbotics/environment/command_environment.py:_CHUNK_BYTES": (
         "how much of a command's reply or log is read at a time"
     ),
-    "guildbotics/intelligences/agent_runtime/environment.py:_MAX_LOG_LINE_BYTES": (
+    "guildbotics/environment/command_environment.py:_MAX_LOG_LINE_BYTES": (
         "one line of a command's log, logged on the host"
     ),
     "guildbotics/runtime/code_hosting_service.py:MAX_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),
-    "guildbotics/runtime/worktree_copy.py:MAX_WORKTREE_LIST_BYTES": (
+    "guildbotics/intelligences/agent_runtime/wire.py:MAX_WORKTREE_LIST_BYTES": (
         "the list of files copied into a command's microVM, kept by the host"
     ),
-    "guildbotics/runtime/worktree_copy.py:MAX_WORKTREE_CHANGE_BYTES": (
+    "guildbotics/intelligences/agent_runtime/wire.py:MAX_WORKTREE_CHANGE_BYTES": (
         "a command's changes to its copy, into a temporary file of the host's"
     ),
-    "guildbotics/runtime/worktree_copy.py:_CHUNK_BYTES": (
+    "guildbotics/guest/worktree_copy.py:_CHUNK_BYTES": (
         "how much of a copied file is hashed at a time"
     ),
-    "guildbotics/intelligences/agent_runtime/worktree.py:_CHUNK_BYTES": (
+    "guildbotics/environment/worktree.py:_CHUNK_BYTES": (
         "how much of a file in the working directory is hashed at a time"
     ),
     "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (

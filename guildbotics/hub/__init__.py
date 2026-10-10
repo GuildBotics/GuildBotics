@@ -9,6 +9,16 @@ machine that hosts a hub, where the bare repositories are created;
 :mod:`guildbotics.hub.connection` is a device reaching a hub, whether that hub
 is this same machine or another one over OpenSSH.
 
+Besides the repositories, a hub keeps per workspace the device that owns its
+persistent service (``service-owner.json``, ``guildbotics hub owner``), each
+device's live snapshots (``live/<device>/<publisher>.json``,
+``guildbotics hub live``), and the ``head-updated`` file its post-receive hook
+touches (:mod:`guildbotics.hub.relay`; the device side is
+:mod:`guildbotics.hub.relay_client`). A live line is passed on as it is: the
+hub reads only its ``observed_at``, to expire it by the one contract in
+:mod:`guildbotics.utils.live_freshness`, and what a snapshot means is the
+device's (``guildbotics.drivers.relay_runtime``).
+
 The hub knows nothing about what the repositories contain. Shared state and its
 rules belong to :mod:`guildbotics.workspace`, and turning local writes into
 commits belongs to :mod:`guildbotics.sync`.

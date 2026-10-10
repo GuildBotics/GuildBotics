@@ -11,8 +11,11 @@ import pytest
 from guildbotics.app_api import diagnostics as diagnostics_module
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.commands.errors import CommandError
-from guildbotics.commands.metadata import CommandAccess, command_access
+from guildbotics.commands.metadata import (
+    command_access,
+)
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.drivers.member_context import resolve_person
 from guildbotics.entities.team import (
     MessageChannel,
     Person,
@@ -20,14 +23,14 @@ from guildbotics.entities.team import (
     Role,
     Team,
 )
-from guildbotics.runtime.chat_service import ChatIdentity
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentBrain,
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
-    ExecutableInfo,
 )
-from guildbotics.runtime.member_context import resolve_person
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.runtime.chat_service import ChatIdentity
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 
@@ -42,17 +45,18 @@ class _CliResult:
     stderr: str = ""
 
 
-class _StubBrain(CliAgentBrain):
-    """Minimal CliAgentBrain stand-in answering from a canned execution result.
+class _StubBrain:
+    """Minimal AI CLI brain stand-in answering from a canned execution result.
 
     Like the real brain, a tool that fails or says nothing fails the turn.
+    ``adapter`` is the tool the member's slot names.
     """
 
     def __init__(
         self, result: _CliResult | Exception, *, adapter: str = "codex"
     ) -> None:
         self._result = result
-        self.executable_info = ExecutableInfo(adapter=adapter)
+        self.adapter = adapter
         self.cli_agent = adapter
 
     async def run(self, message: str, **kwargs: Any) -> str:
@@ -70,6 +74,9 @@ class _StubBrain(CliAgentBrain):
 
 #: The check commands run, as ``(command, person, cwd, message)``.
 _CHECK_RUNS: list[tuple[str, str | None, Path, str]] = []
+#: The AI CLI tool each member's check command runs, by person (None when the
+#: member's brain runs none), as the members' mappings would name it.
+_TOOLS: dict[str, str | None] = {}
 
 
 @pytest.fixture(autouse=True)
@@ -98,8 +105,13 @@ def _check_command(monkeypatch: pytest.MonkeyPatch) -> None:
             ) from exc
         return CommandOutcome(result=output, text_output=output)
 
+    def cli_agent_of(person_id: str, brain: str) -> str | None:
+        assert brain == "agent"
+        return _TOOLS[person_id]
+
     monkeypatch.setattr(diagnostics_module, "prepare_command", prepare_command)
     monkeypatch.setattr(diagnostics_module, "run_main_command", run_main_command)
+    monkeypatch.setattr(diagnostics_module, "cli_agent_of", cli_agent_of)
 
 
 class _StubChatService:
@@ -223,12 +235,21 @@ def _by_code(response: Any) -> dict:
     return {check.code: check for check in response.checks}
 
 
+def _name_tools(context: Any) -> None:
+    """Have each member's mapping name the tool of the member's stub brain."""
+    _TOOLS.clear()
+    for member in context.team.members if context else []:
+        brain = context.member_brains.get(member.person_id, context.brain)
+        _TOOLS[member.person_id] = getattr(brain, "adapter", None)
+
+
 async def _run(
     context: Any,
     *,
     context_error: Exception | None = None,
     person_id: str | None = None,
 ) -> Any:
+    _name_tools(context)
     return await ScenarioDiagnosticsService().run(
         context=context, context_error=context_error, person_id=person_id
     )
@@ -456,6 +477,7 @@ async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("direct_inference")
 async def test_llm_live_call_asks_the_members_model_through_its_brain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -736,6 +758,7 @@ async def test_cli_agent_closes_context_before_removing_temporary_directory(
         brain=_StubBrain(_CliResult(returncode=0, stdout="OK")),
         close_events=events,
     )
+    _name_tools(context)
 
     checks = await ScenarioDiagnosticsService()._check_cli_agent_brain(context, member)
 
@@ -787,7 +810,7 @@ async def test_cli_agent_brain_empty_stdout(
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_brain_wrong_type(
+async def test_cli_agent_brain_of_another_kind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
@@ -800,7 +823,7 @@ async def test_cli_agent_brain_wrong_type(
 
     check = _by_code(response)["cli_agent_brain"]
     assert check.status == "error"
-    assert "not CliAgentBrain" in check.message
+    assert "runs no AI CLI tool" in check.message
 
 
 @pytest.mark.asyncio

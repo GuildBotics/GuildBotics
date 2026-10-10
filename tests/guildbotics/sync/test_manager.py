@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
-from contextlib import contextmanager
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,19 +13,20 @@ import pytest
 from git import GitCommandError, Repo
 
 import guildbotics.sync.local_repository as local_repository
+import guildbotics.sync.manager as manager_module
+import guildbotics.utils.sync_lock as sync_lock_module
+from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.entities.team import Person
 from guildbotics.sync.local_repository import (
     REJECTED_REF_PREFIX,
     HubCommandError,
     LocalSyncRepository,
 )
-from guildbotics.capabilities.member_memory import MemberMemoryService
-from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
-from guildbotics.entities.team import Person
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-import guildbotics.sync.manager as manager_module
-import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
 from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_lock_path
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
@@ -42,7 +42,6 @@ from tests.guildbotics.sync.conftest import (
     push_entries,
     refuse_listing,
 )
-from guildbotics.utils.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 CONFIG = "config/team/project.yml"

@@ -29,7 +29,7 @@ class CommandRunner:
         path: Its file, as the host resolved it: the main command is never
             resolved again by name.
         mounts: Where the environment lets a command work
-            (:func:`~guildbotics.intelligences.agent_runtime.host_client.admits`):
+            (:func:`~guildbotics.intelligences.agent_runtime.wire.admits`):
             a subcommand working anywhere else is refused.
         ledger: The host's run record, which an invocation driven until its
             run records completion reads and reports to; without one it is

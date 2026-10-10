@@ -16,8 +16,12 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github import async_client
 from guildbotics.observability.activity_event_store import ActivityEventStore
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.interactive_sessions import (
+    InteractiveSessionStore,
+    InteractiveTraceSession,
+)
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
@@ -25,10 +29,6 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from guildbotics.runtime.person_lease import PersonExecutionLease
-from guildbotics.observability.interactive_sessions import (
-    InteractiveSessionStore,
-    InteractiveTraceSession,
-)
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
@@ -372,6 +372,7 @@ def test_repository_read_records_host_target_in_workflow_trace(
     monkeypatch, bind_invocation
 ):
     from types import SimpleNamespace
+
     from guildbotics.runtime.code_hosting_service import RepositoryReadPage
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -3697,10 +3698,10 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
 ):
     from guildbotics.capabilities.task_runs import RunStore
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
-    from guildbotics.runtime.chat_service import ChatEvent
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,
     )
+    from guildbotics.runtime.chat_service import ChatEvent
 
     lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")

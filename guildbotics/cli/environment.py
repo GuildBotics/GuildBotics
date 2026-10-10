@@ -21,25 +21,25 @@ from guildbotics.cli._options import (
     format_option,
     workspace_option,
 )
-from guildbotics.intelligences.agent_environment import image as image_module
-from guildbotics.intelligences.agent_environment import (
+from guildbotics.environment import image as image_module
+from guildbotics.environment import (
     provider_state,
     runtime,
     snapshot,
 )
-from guildbotics.intelligences.agent_environment.image import (
+from guildbotics.environment.image import (
     IMAGE,
     candidate_images,
     device_architecture,
     image_status,
     short_digest,
 )
-from guildbotics.intelligences.agent_environment.runtime import (
+from guildbotics.environment.runtime import (
     AgentEnvironmentError,
     ImageInfo,
 )
-from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.status import device_status
+from guildbotics.environment.toolchain import (
     TOOLCHAIN_PATH,
     BaseImage,
     ToolchainDeclaration,

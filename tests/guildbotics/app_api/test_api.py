@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from yaml import safe_load
 
+from guildbotics.app_api import lifecycle as lifecycle_module
 from guildbotics.app_api.api import (
     TAURI_ORIGINS,
     TEARDOWN_BUDGET_SECONDS,
@@ -21,7 +22,6 @@ from guildbotics.app_api.api import (
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api import lifecycle as lifecycle_module
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     AgentFieldOption,
@@ -49,29 +49,31 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.drivers import service_lock as service_lock_module
+from guildbotics.drivers.relay_runtime import RelayRuntime
+from guildbotics.drivers.service_lock import ServiceLock
+from guildbotics.entities.team import Person, Project, Team
+from guildbotics.environment.spec import guest_path
+from guildbotics.integrations.chat_state_store import ChannelCursorState
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    CliAgentUsageSnapshot,
+    CliAgentUsageWindow,
+)
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.entities.team import Person, Project, Team
-from guildbotics.runtime.chat_service import ChatEvent
-from guildbotics.integrations.chat_state_store import ChannelCursorState
-from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.usage_snapshots import (
-    CliAgentUsageSnapshot,
-    CliAgentUsageWindow,
-)
-from guildbotics.observability import trace_scope
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.runtime.relay_runtime import RelayRuntime
-from guildbotics.runtime import service_lock as service_lock_module
-from guildbotics.runtime.service_lock import ServiceLock
 from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
 
 HTTP_OK = 200
@@ -221,7 +223,6 @@ def test_registration_removal_needs_no_access_to_obsolete_path(
 def test_api_starts_unselected_when_input_store_cannot_be_initialized(
     tmp_path, monkeypatch, problem
 ):
-    from guildbotics.app_api import api
     from guildbotics.utils.fileio import (
         GUILDBOTICS_CONFIG_DIR,
         GUILDBOTICS_WORKSPACE_ROOT,
@@ -893,7 +894,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
                 "default:",
                 "  class: guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain",
                 "workspace_actor:",
-                "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+                "  class: guildbotics.guest.cli_agent.CliAgentBrain",
             ]
         )
     )
@@ -1397,7 +1398,7 @@ def test_cli_agent_usage_endpoint_reads_one_tool(tmp_path: Path) -> None:
 async def test_app_runtime_cli_agent_usage_reads_the_named_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from guildbotics.intelligences.agent_runtime import usage as usage_module
+    from guildbotics.environment import usage as usage_module
     from guildbotics.intelligences.agent_runtime.usage_snapshots import (
         CliAgentUsageSnapshot,
     )
@@ -1683,7 +1684,7 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         payload["model_mapping"]["default"] = "models/openai/gpt-5-mini.yml"
         payload["brain_mapping"][0] = {
             "name": "default",
-            "brain_class": "guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+            "brain_class": "guildbotics.guest.cli_agent.CliAgentBrain",
             "engine": "cli",
             "target": "codex",
         }
@@ -1760,7 +1761,7 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         (config_dir / "intelligences/brain_mapping.yml").read_text()
     )
     assert brain_mapping["default"]["class"] == (
-        "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
+        "guildbotics.guest.cli_agent.CliAgentBrain"
     )
     assert not (config_dir / "team/members/alice/intelligences").exists()
 
@@ -3430,7 +3431,7 @@ async def test_command_event_preserves_authentication_cause(
 ):
     from guildbotics.app_api import runtime as runtime_module
     from guildbotics.commands.errors import CommandError
-    from guildbotics.intelligences.brains.cli_agent import (
+    from guildbotics.intelligences.agent_runtime.models import (
         CliAgentExecutionError,
         CliAgentExecutionResult,
     )

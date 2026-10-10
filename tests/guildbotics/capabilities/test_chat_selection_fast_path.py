@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from guildbotics.capabilities import chat_selection
+from guildbotics.capabilities.decisions.models import Selection
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.chat_state_store import ThreadContextUnavailableError
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.decisions.models import Selection
-from guildbotics.capabilities import chat_selection
 from tests.guildbotics.capabilities.test_chat_selection import (
     FakeChatService,
     FakeInvokeContext,

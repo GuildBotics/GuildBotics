@@ -67,7 +67,6 @@ from guildbotics.commands.errors import (
 )
 from guildbotics.drivers.context import resolve_member_context
 from guildbotics.integrations.github.repository_scope import RepositoryScopeError
-from guildbotics.observability import join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
@@ -92,6 +91,7 @@ from guildbotics.sync.activation import (
     PreparedOneShotSync,
     prepare_commit_and_push_once,
 )
+from guildbotics.utils.correlation import join_trace, trace_scope
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t

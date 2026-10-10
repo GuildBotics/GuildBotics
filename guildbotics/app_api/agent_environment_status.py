@@ -35,8 +35,8 @@ from guildbotics.app_api.models import (
     GrantEvaluation,
     GrantScope,
 )
-from guildbotics.intelligences.agent_environment import runtime
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment import runtime
+from guildbotics.environment.contract import (
     AccessContractError,
     DocumentGrant,
     LocalGrants,
@@ -49,25 +49,27 @@ from guildbotics.intelligences.agent_environment.contract import (
     redact_path,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.image import (
+from guildbotics.environment.image import (
     IMAGE,
     candidate_images,
     device_architecture,
     image_load_command,
     image_status,
 )
-from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-from guildbotics.intelligences.agent_environment.status import (
+from guildbotics.environment.runtime import AgentEnvironmentError
+from guildbotics.environment.status import (
     device_status,
     login_command,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.toolchain import (
     ToolchainError,
     load_toolchain,
 )
-from guildbotics.intelligences.agent_runtime.usage import CLI_AGENT_USAGE_READERS
-from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
-from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.environment.usage import CLI_AGENT_USAGE_READERS
+from guildbotics.intelligences.cli_agents import (
+    cli_agent_info,
+    get_cli_agent_mapping,
+)
 from guildbotics.utils.i18n_tool import t
 
 

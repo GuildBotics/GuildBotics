@@ -424,7 +424,7 @@ def test_chat_work_states_no_frontmatter_effort():
 
 
 def test_chat_judgment_owns_repository_work_criteria():
-    from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
+    from guildbotics.capabilities.decisions.chat_policy import QUESTIONS
 
     assert "repository guidelines" in QUESTIONS["work_repo_decision"].instructions
     assert "Technical terminology alone" in QUESTIONS["work_repo_decision"].instructions

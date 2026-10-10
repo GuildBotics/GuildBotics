@@ -316,7 +316,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Run bundled inspections on the host with `guildbotics run repository/issue_inspect "
     "--person <person> repo=<owner/repo> number=<n>` (or repository/pr_inspect, "
     "repository/pr_checks). Inside a workflow or delegated command's isolated "
-    "environment, use `python -m guildbotics.runtime.command_entry "
+    "environment, use `python -m guildbotics.guest.entry "
     "repository/issue_inspect repo=<owner/repo> number=<n>` instead: it runs inside "
     "the existing environment, inherits the main command's access contract and "
     "member, and uses its member broker. Do not start a host run from there. "

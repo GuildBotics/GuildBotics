@@ -133,7 +133,7 @@ const npm = npmInvocation(stackEnv);
 function backendFacts() {
   const source = [
     "import json",
-    "from guildbotics.intelligences.agent_environment.runtime import runtime_home",
+    "from guildbotics.environment.runtime import runtime_home",
     "from guildbotics.intelligences.cli_agents import CLI_AGENTS",
     "print(json.dumps({" +
       "'executables': [agent.executable for agent in CLI_AGENTS], " +
@@ -155,8 +155,8 @@ const { executables: cliAgentExecutables, runtime_home: runtimeHome } = backendF
 function sourceEnvironment() {
   const source = [
     "import json",
-    "from guildbotics.intelligences.agent_environment.runtime import runtime_home",
-    "from guildbotics.intelligences.agent_environment.status import device_status",
+    "from guildbotics.environment.runtime import runtime_home",
+    "from guildbotics.environment.status import device_status",
     "status = device_status()",
     "print(json.dumps({'refusal': status.refusal, " +
       "'runtime_home': str(runtime_home()), " +

@@ -24,7 +24,6 @@ from pydantic_core import to_jsonable_python
 
 from guildbotics.commands.agent_turn import RunLedger
 from guildbotics.commands.discovery import resolve_named_command
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers import command_runner, utils, workflow_dispatcher
@@ -32,8 +31,11 @@ from guildbotics.drivers.command_runner import (
     PreparedCommand,
     host_command_cwd,
 )
-from guildbotics.intelligences.agent_runtime.host_client import CommandReply
-from guildbotics.observability import TraceContext, trace_scope
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+    CommandReply,
+)
+from guildbotics.utils.correlation import TraceContext, trace_scope
 
 
 def everywhere(cwd: Path) -> dict[str, bool]:

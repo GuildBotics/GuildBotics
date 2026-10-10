@@ -6,12 +6,14 @@ import types
 
 import pytest
 
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
@@ -465,7 +467,7 @@ def test_task_scheduler_routine_with_args_runs_as_a_command(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dispatcher_reuses_active_trace(monkeypatch):
-    from guildbotics.observability import current_trace, trace_scope
+    from guildbotics.utils.correlation import current_trace, trace_scope
 
     seen = {}
 
@@ -503,7 +505,7 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
     # The caller owns the trace and records the boundary events that say the
     # execution started and ended. A trace opened here would have no layer
     # able to close it, and would read as still running forever.
-    from guildbotics.observability import current_trace
+    from guildbotics.utils.correlation import current_trace
 
     seen = {}
 

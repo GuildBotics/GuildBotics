@@ -6,8 +6,10 @@ import pytest
 
 from guildbotics.intelligences.brains import factory as brain_factory_module
 from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
-from guildbotics.runtime.brain import Brain
+from guildbotics.intelligences.cli_agents import ExecutableInfo
 from guildbotics.intelligences.effort import EffortError
+from guildbotics.runtime.brain import Brain
+from tests.guildbotics.slot_mappings import class_path
 
 
 class RecordingBrain(Brain):
@@ -25,7 +27,7 @@ class RecordingBrain(Brain):
 def _brain_mapping(monkeypatch):
     mapping = {
         "default": brain_factory_module.BrainConfig(
-            type=RecordingBrain, args={"model": "default"}
+            class_path=class_path(RecordingBrain), args={"model": "default"}
         )
     }
     monkeypatch.setattr(
@@ -62,3 +64,35 @@ def test_brain_specific_arguments_still_reach_the_brain() -> None:
 def test_an_unknown_frontmatter_effort_is_rejected() -> None:
     with pytest.raises(EffortError):
         _create({"body": "prompt", "effort": "extreme"})
+
+
+@pytest.fixture
+def _cli_slots(monkeypatch):
+    brains = {
+        "agent": brain_factory_module.BrainConfig(
+            class_path=brain_factory_module.CLI_BRAIN_CLASS,
+            args={"cli_agent": "reviewer"},
+        ),
+        "unmapped": brain_factory_module.BrainConfig(
+            class_path=brain_factory_module.CLI_BRAIN_CLASS,
+            args={"cli_agent": "missing"},
+        ),
+        "default": brain_factory_module.BrainConfig(
+            class_path=brain_factory_module.AGNO_BRAIN_CLASS
+        ),
+    }
+    monkeypatch.setattr(brain_factory_module, "get_brain_mapping", lambda _: brains)
+    monkeypatch.setattr(
+        brain_factory_module,
+        "get_cli_agent_mapping",
+        lambda _: {"reviewer": ExecutableInfo(adapter="claude")},
+    )
+
+
+@pytest.mark.usefixtures("_cli_slots")
+@pytest.mark.parametrize(
+    ("brain", "tool"),
+    [("agent", "claude"), ("unmapped", ""), ("default", None), ("absent", None)],
+)
+def test_the_tool_a_brain_slot_runs_is_read_from_the_mappings(brain, tool) -> None:
+    assert brain_factory_module.cli_agent_of("p1", brain) == tool

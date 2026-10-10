@@ -205,7 +205,7 @@ def test_public_path_operations_preserve_absolute_permission_path(
 def test_protected_link_permission_error_names_owner_and_denied_component(
     tmp_path, monkeypatch, symlinks, language
 ):
-    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+    from guildbotics.environment.contract import DeniedPath
     from guildbotics.utils import i18n_tool
 
     target = tmp_path / "blocked"

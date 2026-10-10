@@ -16,7 +16,7 @@ from guildbotics.app_api.command_input_files import (
     save_command_input_file,
 )
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     SENSITIVE_HOME_DIRECTORIES,
     DeniedPath,
     DocumentGrant,
@@ -364,7 +364,7 @@ def test_command_cwd_and_input_paths_use_the_normalized_os_name(
 def test_input_preview_classifies_symlinks_without_failing_other_paths(
     tmp_path, monkeypatch, symlinks
 ):
-    from guildbotics.intelligences.agent_environment.contract import (
+    from guildbotics.environment.contract import (
         ResolvedAccess,
         ResolvedGrant,
     )

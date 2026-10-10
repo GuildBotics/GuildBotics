@@ -35,8 +35,8 @@ import guildbotics.utils.shared_write_lock as shared_write_lock_module
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.entities.team import Person
+from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,

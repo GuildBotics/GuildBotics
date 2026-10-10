@@ -1,12 +1,12 @@
 import pytest
 
+from guildbotics.entities.team import Person
 from guildbotics.setup.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
     _person_config_dir,
     person_config_paths,
 )
-from guildbotics.entities.team import Person
 from guildbotics.utils.avatar import get_member_avatar_dir
 from guildbotics.utils.fileio import get_member_clone_path, get_person_config_path
 

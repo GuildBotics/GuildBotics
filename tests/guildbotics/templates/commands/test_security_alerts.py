@@ -18,7 +18,7 @@ from guildbotics.commands.metadata import (
     parse_command_arguments,
 )
 from guildbotics.commands.python_command import _load_python_module
-from guildbotics.integrations.window import MemberCommandError, WindowCodeHostingService
+from guildbotics.guest.window import MemberCommandError, WindowCodeHostingService
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 

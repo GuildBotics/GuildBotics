@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     is_suppressed_chat_event,
     is_suppressed_workflow_status_metadata,
     workflow_status_fields,
     workflow_status_metadata,
 )
+from guildbotics.runtime.chat_service import ChatEvent
 
 
 def test_workflow_status_metadata_builds_suppressed_payload():

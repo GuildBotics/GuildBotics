@@ -7,10 +7,10 @@ import json
 import logging
 from pathlib import Path
 
-from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
-from guildbotics.intelligences.decisions.assessment import assess
-from guildbotics.intelligences.decisions.chat_policy import QUESTION_VERSION, QUESTIONS
-from guildbotics.intelligences.decisions.models import DecisionConfig, Question
+from guildbotics.capabilities.decisions.assessment import assess
+from guildbotics.capabilities.decisions.chat_policy import QUESTION_VERSION, QUESTIONS
+from guildbotics.capabilities.decisions.models import DecisionConfig, Question
+from guildbotics.drivers.context import create_context
 from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
@@ -57,7 +57,7 @@ async def main() -> None:
         ]
         questions = QUESTIONS
     report = []
-    brain_factory = ConfiguredBrainFactory()
+    brain_factory = create_context().brain_factory
     for case in cases:
         selection, evaluation_id = await assess(
             case["state"],

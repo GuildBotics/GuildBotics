@@ -39,7 +39,7 @@ uv run --no-sync python -m pytest \
   tests/guildbotics/cli/test_start_command.py \
   tests/guildbotics/cli/test_stop_command.py \
   tests/guildbotics/cli/test_member_command.py \
-  tests/guildbotics/intelligences/agent_runtime/test_environment.py
+  tests/guildbotics/environment/test_command_environment.py
 
 scripts/desktop-test-rust.sh
 ```

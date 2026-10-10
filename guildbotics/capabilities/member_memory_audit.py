@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability import correlation_fields
 from guildbotics.runtime.member_invocation import current_member_invocation
+from guildbotics.utils.correlation import correlation_fields
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock

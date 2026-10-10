@@ -1,0 +1,656 @@
+"""The contract → boundary translation is pure and provider-neutral."""
+
+from __future__ import annotations
+
+import locale
+import subprocess
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
+from zoneinfo import ZoneInfoNotFoundError
+
+import pytest
+import tzlocal
+
+from guildbotics.environment import spec as spec_module
+from guildbotics.environment.contract import (
+    AccessContract,
+    AccessContractError,
+    DeniedPath,
+    DocumentGrant,
+    LocalGrants,
+    LocalPathGrant,
+    NetworkPolicy,
+    ResolvedAccess,
+    ResolvedGrant,
+    SharedGrants,
+    resolve_access,
+)
+from guildbotics.environment.spec import (
+    WORKTREE_SOURCE,
+    AgentEnvironmentSpecError,
+    EnvironmentMount,
+    WorktreeCopy,
+    guest_path,
+    host_environment,
+)
+from guildbotics.environment.spec import (
+    build_environment_spec as _build_environment_spec,
+)
+from guildbotics.utils import os_language
+from guildbotics.utils.safe_paths import inspect_host_path
+
+_NAMESERVERS = ("10.0.0.53",)
+
+
+def build_environment_spec(*args: object, **kwargs: object) -> object:
+    """The translation with the declaration's resolvers already supplied."""
+    kwargs.setdefault("nameservers", _NAMESERVERS)
+    return _build_environment_spec(*args, **kwargs)
+
+
+def _contract(
+    access: ResolvedAccess | None = None,
+    *,
+    read_only: bool = False,
+    **network: object,
+) -> AccessContract:
+    return AccessContract(
+        network=NetworkPolicy(**network) if network else NetworkPolicy(),
+        access=access or ResolvedAccess(),
+        read_only=read_only,
+    )
+
+
+def _work(root: Path) -> Path:
+    path = root / "work"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+# --- filesystem -----------------------------------------------------------------
+
+
+def test_a_working_directory_no_grant_opens_is_worked_on_as_a_copy(
+    tmp_path: Path, host_facts: dict[str, str]
+) -> None:
+    """The working directory itself opens nothing for writing: outside every
+    grant it is mounted read-only, its ``.git`` with it, to be copied onto
+    the microVM's own disk at its own path."""
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+
+    spec = build_environment_spec(_contract(), cwd, home=tmp_path)
+
+    assert spec.cwd == guest_path(cwd)
+    assert spec.home == guest_path(tmp_path.resolve())
+    assert spec.mounts == (
+        EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
+    )
+    assert spec.worktree == WorktreeCopy(cwd, inspect_host_path(cwd).identities[-1])
+    assert spec.env == host_facts
+
+
+def test_a_working_directory_a_read_write_grant_opens_is_written_directly(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    cwd = home / "out" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="out", access="read_write")]),
+        LocalGrants(),
+        home=home,
+    )
+
+    spec = build_environment_spec(_contract(access), cwd, home=home)
+
+    assert EnvironmentMount(guest_path(cwd), cwd, False, user=True) in spec.mounts
+    assert not any(mount.guest == WORKTREE_SOURCE for mount in spec.mounts)
+    assert spec.worktree is None
+
+
+def test_a_command_that_may_write_is_refused_where_only_a_read_grant_opens(
+    tmp_path: Path,
+) -> None:
+    """The user said the turns may only read there; a read-only command,
+    which changes nothing, still runs."""
+    from guildbotics.utils.i18n_tool import t
+
+    home = tmp_path / "home"
+    cwd = home / "notes" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
+        LocalGrants(),
+        home=home,
+    )
+
+    with pytest.raises(AccessContractError) as refused:
+        build_environment_spec(_contract(access), cwd, home=home)
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.read_only_cwd", path=cwd
+    )
+    spec = build_environment_spec(_contract(access, read_only=True), cwd, home=home)
+    assert spec.worktree is None
+
+
+def test_a_grant_nested_in_a_copied_working_directory_is_left_out_of_the_copy(
+    tmp_path: Path,
+) -> None:
+    """It is a mount of its own, reached directly as its grant says."""
+    cwd = tmp_path / "repo"
+    docs = cwd / "docs" / "shared"
+    docs.mkdir(parents=True)
+    access = ResolvedAccess(paths=(ResolvedGrant(docs, "read_write", str(docs)),))
+
+    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
+
+    assert spec.worktree == WorktreeCopy(
+        cwd, inspect_host_path(cwd).identities[-1], ("docs/shared",)
+    )
+    assert EnvironmentMount(guest_path(docs), docs, False, user=True) in spec.mounts
+
+
+def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
+    """Inside and outside agree on what a path means: the guest's home is
+    the host's, so a document grant sits where the user's own `~` has it."""
+    home = tmp_path / "home"
+    cwd = home / "repo"
+    cache = tmp_path / "cache"
+    for directory in (home / "Documents" / "notes", home / "out", cwd, cache):
+        directory.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(
+            documents=[
+                DocumentGrant(path="Documents/notes", access="read"),
+                DocumentGrant(path="out", access="read_write"),
+            ]
+        ),
+        LocalGrants(paths=[LocalPathGrant(path=str(cache), access="read")]),
+        home=home,
+    )
+
+    spec = build_environment_spec(_contract(access), cwd, home=home)
+
+    assert spec.home == guest_path(home)
+    exchange = home / "Documents" / "GuildBotics"
+    assert set(spec.mounts) == {
+        EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
+        EnvironmentMount(guest_path(exchange), exchange, readonly=False, user=True),
+        EnvironmentMount(
+            guest_path(home / "out"), home / "out", readonly=False, user=True
+        ),
+        EnvironmentMount(
+            guest_path(home / "Documents" / "notes"),
+            home / "Documents" / "notes",
+            readonly=True,
+            user=True,
+        ),
+        EnvironmentMount(guest_path(cache), cache, readonly=True, user=True),
+    }
+
+
+def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
+    """A nested mount needs its parent mounted before it."""
+    home = tmp_path / "home"
+    cwd = home / "Projects" / "repo"
+    cwd.mkdir(parents=True)
+    (cwd / "docs").mkdir()
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="Projects", access="read_write")]),
+        LocalGrants(paths=[LocalPathGrant(path=str(cwd / "docs"), access="read")]),
+        home=home,
+    )
+
+    spec = build_environment_spec(_contract(access), cwd, home=home)
+
+    depths = [len(PurePosixPath(m.guest).parts) for m in spec.mounts]
+    assert depths == sorted(depths)
+    assert [m for m in spec.mounts if m.guest.startswith(guest_path(cwd))] == [
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False, user=True),
+        EnvironmentMount(guest_path(cwd / "docs"), cwd / "docs", True, user=True),
+    ]
+
+
+def test_the_innermost_grant_holding_the_working_directory_decides(
+    tmp_path: Path,
+) -> None:
+    """A read grant inside a read-write one is mounted over it, so a command
+    that may write is refused there as under the read grant alone."""
+    home = tmp_path / "home"
+    cwd = home / "Projects" / "repo"
+    cwd.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(documents=[DocumentGrant(path="Projects", access="read_write")]),
+        LocalGrants(paths=[LocalPathGrant(path=str(cwd), access="read")]),
+        home=home,
+    )
+
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd, home=home)
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_a_grant_containing_a_deny_is_refused(tmp_path: Path, read_only: bool) -> None:
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    granted = tmp_path / "granted"
+    granted.mkdir()
+    access = ResolvedAccess(
+        documents=(ResolvedGrant(granted, "read", "granted"),),
+        denied=(DeniedPath(granted / "private", "local"),),
+    )
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access, read_only=read_only), cwd)
+
+
+def test_a_missing_denied_corner_also_refuses_its_parent(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    access = ResolvedAccess(denied=(DeniedPath(cwd / "not-created", "local"),))
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd)
+
+
+def test_an_absent_grant_is_not_mounted(tmp_path: Path) -> None:
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    access = ResolvedAccess(
+        documents=(
+            ResolvedGrant(tmp_path / "missing", "read", "missing", present=False),
+        )
+    )
+    spec = build_environment_spec(_contract(access), cwd)
+    assert spec.mounts == (EnvironmentMount(WORKTREE_SOURCE, cwd, True, user=True),)
+
+
+def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
+    tmp_path: Path,
+) -> None:
+    """Whatever provider runs a read-only turn, nothing it sees of the host
+    can be changed: the exchange directory and a `read_write` grant
+    included. Its working directory has nothing to show, so no host
+    directory backs it: it is the microVM's own; a deny inside a grant is
+    still covered."""
+    home = tmp_path / "home"
+    cwd = home / "work"
+    secret = home / "private"
+    for directory in (cwd, secret, home / "Documents" / "notes"):
+        directory.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(
+            documents=[
+                DocumentGrant(path="Documents/notes", access="read"),
+                DocumentGrant(path="out", access="read_write"),
+            ]
+        ),
+        LocalGrants(deny=[str(secret)]),
+        home=home,
+    )
+
+    spec = build_environment_spec(_contract(access, read_only=True), cwd, home=home)
+
+    exchange = home / "Documents" / "GuildBotics"
+    assert set(spec.mounts) == {
+        EnvironmentMount(guest_path(cwd), None, readonly=False, user=True),
+        EnvironmentMount(guest_path(exchange), exchange, readonly=True, user=True),
+        EnvironmentMount(
+            guest_path(home / "out"), home / "out", readonly=True, user=True
+        ),
+        EnvironmentMount(
+            guest_path(home / "Documents" / "notes"),
+            home / "Documents" / "notes",
+            readonly=True,
+            user=True,
+        ),
+    }
+
+
+def test_read_only_cwd_is_guest_owned_and_writable(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    spec = build_environment_spec(_contract(read_only=True), home, home=home)
+    assert spec.mounts == (EnvironmentMount(guest_path(home), None, False, user=True),)
+
+
+def test_what_guildbotics_binds_itself_keeps_its_access_on_a_read_only_turn(
+    tmp_path: Path,
+) -> None:
+    """The provider's sessions are resumed, so they stay writable."""
+    store = tmp_path / "sessions"
+    store.mkdir()
+    sessions = EnvironmentMount("/home/x/.codex/sessions", store, readonly=False)
+
+    spec = build_environment_spec(
+        _contract(read_only=True), tmp_path, home=tmp_path, mounts=[sessions]
+    )
+
+    assert sessions in spec.mounts
+
+
+# --- guest paths ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (PurePosixPath("/Users/x/repo"), "/Users/x/repo"),
+        (PureWindowsPath("C:\\tmp\\gb\\repo"), "/c/tmp/gb/repo"),
+        (PureWindowsPath("d:\\"), "/d"),
+    ],
+)
+def test_guest_paths_keep_posix_spelling_and_map_windows_drives(
+    path: PurePosixPath | PureWindowsPath, expected: str
+) -> None:
+    assert guest_path(path) == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        PurePosixPath("relative"),
+        PureWindowsPath("C:relative"),
+        PureWindowsPath("\\\\srv\\share\\x"),
+    ],
+)
+def test_relative_and_network_paths_have_no_guest_path(
+    path: PurePosixPath | PureWindowsPath,
+) -> None:
+    with pytest.raises(AgentEnvironmentSpecError):
+        guest_path(path)
+
+
+# --- network --------------------------------------------------------------------
+
+
+def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
+    tmp_path: Path,
+) -> None:
+    spec = build_environment_spec(
+        _contract(),
+        _work(tmp_path),
+        host_ports=[43123, 43123],
+        provider_domains=["api.openai.com", "*.openai.com"],
+        home=tmp_path,
+    )
+
+    network = spec.network
+    assert not network.unrestricted
+    assert network.domains == ("api.openai.com", "*.openai.com")
+    assert network.host_ports == (43123,)
+    assert not network.local_network
+    assert network.nameservers == _NAMESERVERS
+
+
+def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> None:
+    spec = build_environment_spec(
+        _contract(
+            mode="allowlist",
+            allowed_domains=["pypi.org", "files.pythonhosted.org", "api.openai.com"],
+            allow_local_network=True,
+        ),
+        _work(tmp_path),
+        provider_domains=["api.openai.com"],
+        home=tmp_path,
+        nameservers=["10.0.0.53"],
+    )
+
+    network = spec.network
+    assert network.domains == ("api.openai.com", "pypi.org", "files.pythonhosted.org")
+    assert network.local_network
+    assert network.nameservers == ("10.0.0.53",)
+
+
+def test_unrestricted_opens_all_egress(tmp_path: Path) -> None:
+    spec = build_environment_spec(
+        _contract(mode="unrestricted"),
+        _work(tmp_path),
+        provider_domains=["api.openai.com"],
+        home=tmp_path,
+    )
+
+    assert spec.network.unrestricted
+    assert spec.network.domains == ()
+
+
+@pytest.mark.parametrize(
+    "network",
+    [
+        {
+            "mode": "allowlist",
+            "allowed_domains": ["github.com"],
+            "allow_local_network": True,
+        },
+        {"mode": "unrestricted"},
+    ],
+)
+def test_a_read_only_contract_reaches_only_the_provider_and_the_host_ports(
+    tmp_path: Path, network: dict[str, object]
+) -> None:
+    """The workspace's declaration is for turns that work; one that may
+    change nothing sends nothing anywhere else."""
+    spec = build_environment_spec(
+        _contract(read_only=True, **network),
+        tmp_path,
+        host_ports=[43123],
+        provider_domains=["api.openai.com"],
+        home=tmp_path,
+    )
+
+    assert not spec.network.unrestricted
+    assert spec.network.domains == ("api.openai.com",)
+    assert spec.network.host_ports == (43123,)
+    assert not spec.network.local_network
+
+
+def test_the_environment_is_what_the_caller_states_and_the_host_facts(
+    tmp_path: Path, monkeypatch, host_facts: dict[str, str]
+) -> None:
+    """The boundary is another machine: the host environment is not inherited,
+    only what the guest is told of the host."""
+    monkeypatch.setenv("OPENAI_API_KEY", "not-for-the-guest")
+
+    spec = build_environment_spec(
+        _contract(),
+        _work(tmp_path),
+        env={"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"},
+        home=tmp_path,
+    )
+
+    assert spec.env == {**host_facts, "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+
+
+# --- host facts -----------------------------------------------------------------
+
+
+def test_the_host_time_zone_is_read_afresh_for_every_environment(
+    monkeypatch,
+) -> None:
+    """The Desktop outlives a change of zone: a later environment is told the
+    zone the host has then."""
+    zones = iter(["Asia/Tokyo", "America/Los_Angeles"])
+    monkeypatch.setattr(spec_module, "reload_localzone", lambda: None)
+    monkeypatch.setattr(spec_module, "get_localzone_name", lambda: next(zones))
+
+    assert host_environment()["TZ"] == "Asia/Tokyo"
+    assert host_environment()["TZ"] == "America/Los_Angeles"
+
+
+@pytest.mark.parametrize(
+    "zone", [None, "Not/A_Zone"], ids=["no name configured", "unknown name"]
+)
+def test_a_zone_without_an_iana_name_leaves_the_guest_on_utc(
+    monkeypatch, zone: str | None
+) -> None:
+    monkeypatch.setattr(spec_module, "get_localzone_name", lambda: zone)
+
+    assert "TZ" not in host_environment()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ZoneInfoNotFoundError("Nowhere Standard Time"), OSError("no registry")],
+    ids=["windows name without a mapping", "unreadable configuration"],
+)
+def test_a_zone_the_host_cannot_name_leaves_the_guest_on_utc(
+    monkeypatch, error: Exception
+) -> None:
+    def fail() -> None:
+        raise error
+
+    monkeypatch.setattr(spec_module, "reload_localzone", fail)
+
+    assert "TZ" not in host_environment()
+
+
+# The zone set here is not the one the test process started in.
+@pytest.mark.filterwarnings("ignore:Timezone offset does not match system offset")
+def test_the_host_time_zone_is_found_through_tzlocal(monkeypatch) -> None:
+    """Without the suite's fixed zone, the name comes from the host's own
+    configuration; ``TZ`` is the one every platform reads first."""
+    monkeypatch.setattr(spec_module, "reload_localzone", tzlocal.reload_localzone)
+    monkeypatch.setattr(spec_module, "get_localzone_name", tzlocal.get_localzone_name)
+    monkeypatch.setenv("TZ", "America/New_York")
+
+    assert host_environment()["TZ"] == "America/New_York"
+
+
+def test_windows_zone_names_map_to_iana_names() -> None:
+    """Windows names its zones its own way; the guest is told the IANA name
+    tzlocal maps the registry's name to."""
+    from tzlocal.windows_tz import win_tz
+
+    assert win_tz["Tokyo Standard Time"] == "Asia/Tokyo"
+    assert win_tz["Pacific Standard Time"] == "America/Los_Angeles"
+
+
+def test_workspace_root_is_refused_but_its_explicit_clone_is_allowed(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    clone = workspace / ".guildbotics/local/clones/aiko"
+    clone.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), workspace, home=home)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), clone, home=home)
+    spec = build_environment_spec(
+        _contract(access), _work(tmp_path), home=home, worktrees=[clone]
+    )
+    assert EnvironmentMount(guest_path(clone), clone, False) in spec.mounts
+    assert all(m.host is not None for m in spec.mounts)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".ssh/sub",
+        ".guildbotics/data/run",
+        "workspace/.guildbotics/state",
+        "workspace/.guildbotics/local/member_git/aiko",
+    ],
+)
+def test_user_cwd_never_opens_a_protected_descendant(tmp_path, name):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = home / "workspace"
+    cwd = home / name
+    cwd.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    with pytest.raises(AccessContractError):
+        build_environment_spec(_contract(access), cwd, home=home)
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_clone_is_opened_only_for_writable_commands(
+    tmp_path: Path, read_only: bool
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    clone = workspace / ".guildbotics/local/clones/aiko"
+    clone.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    cwd = home / "Documents/GuildBotics"
+    spec = build_environment_spec(
+        _contract(access, read_only=read_only), cwd, home=home, worktrees=[clone]
+    )
+    assert (EnvironmentMount(guest_path(clone), clone, False) in spec.mounts) == (
+        not read_only
+    )
+    assert not any(
+        m.guest == guest_path(workspace / ".guildbotics") for m in spec.mounts
+    )
+
+
+def _ui_language_on(platform: str, setting: str, monkeypatch, fake_platform) -> None:
+    """Make the host an operating system of ``platform`` whose UI language is
+    ``setting``, kept where that operating system keeps it."""
+    fake_platform(os_language, platform)
+    monkeypatch.setattr(spec_module, "os_ui_language", os_language.os_ui_language)
+    for name in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    if platform == "darwin":
+        listed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f'(\n    "{setting}",\n    "en-US"\n)\n'
+        )
+        monkeypatch.setattr(os_language.subprocess, "run", lambda *_a, **_k: listed)
+    elif platform == "win32":
+        lcid = {v: k for k, v in locale.windows_locale.items()}[setting]
+
+        class GetUserDefaultUILanguage:
+            restype = None
+
+            def __call__(self) -> int:
+                return lcid
+
+        kernel32 = SimpleNamespace(GetUserDefaultUILanguage=GetUserDefaultUILanguage())
+        monkeypatch.setattr(
+            os_language.ctypes,
+            "windll",
+            SimpleNamespace(kernel32=kernel32),
+            raising=False,
+        )
+    else:
+        monkeypatch.setenv("LANG", setting)
+
+
+@pytest.mark.parametrize(
+    ("platform", "setting", "language"),
+    [
+        ("darwin", "fr-FR", "fr_FR"),
+        ("darwin", "zh-Hans-CN", "zh_CN"),
+        ("darwin", "en", "en"),
+        ("win32", "ja_JP", "ja_JP"),
+        ("linux", "pt_BR.UTF-8", "pt_BR"),
+    ],
+)
+def test_the_host_ui_language_is_told_as_language(
+    monkeypatch, fake_platform, platform: str, setting: str, language: str
+) -> None:
+    """Each operating system keeps its UI language its own way; the guest is
+    told it as gettext names it, beside the zone."""
+    _ui_language_on(platform, setting, monkeypatch, fake_platform)
+
+    told = host_environment()
+
+    assert told == {"TZ": "Asia/Tokyo", "LANGUAGE": language}
+    # A command in the guest, which is Linux, reads back what it was told.
+    fake_platform(os_language, "linux")
+    monkeypatch.setenv("LANGUAGE", told["LANGUAGE"])
+    guest = os_language.os_ui_language()
+    assert guest is not None
+    assert "_".join(filter(None, (guest.language, guest.territory))) == language
+
+
+@pytest.mark.parametrize("setting", ["C.UTF-8", "POSIX"])
+def test_a_host_that_names_no_ui_language_tells_the_guest_none(
+    monkeypatch, fake_platform, setting: str
+) -> None:
+    _ui_language_on("linux", setting, monkeypatch, fake_platform)
+
+    assert host_environment() == {"TZ": "Asia/Tokyo"}

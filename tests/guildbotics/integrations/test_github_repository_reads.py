@@ -1,15 +1,16 @@
 """GitHub reads keep their approved destination and bounded authenticated client."""
 
-import httpx
 import json
+
+import httpx
 import pytest
 import pytest_asyncio
 
 from guildbotics.entities import Person, Project, Team
-from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
+from guildbotics.runtime.code_hosting_service import RepositoryReadError
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 REPO = "GuildBotics/GuildBotics"
@@ -546,8 +547,8 @@ async def test_graphql_partial_data_and_project_field_overflow_fail_explicitly(r
 async def test_common_readiness_is_the_host_service_used_by_push_and_completion(
     reader, monkeypatch
 ):
-    from guildbotics.integrations.github.pull_requests import GitHubPullRequests
     from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+    from guildbotics.integrations.github.pull_requests import GitHubPullRequests
 
     service, _, _ = reader
     assert MemberGitHubCapabilityService.pr_checks is GitHubPullRequests.pr_checks

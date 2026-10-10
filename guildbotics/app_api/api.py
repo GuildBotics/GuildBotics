@@ -145,7 +145,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
-from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.environment.spec import guest_path
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup import slack_app

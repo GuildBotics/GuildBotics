@@ -15,7 +15,7 @@ import ast
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 

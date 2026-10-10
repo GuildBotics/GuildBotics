@@ -37,6 +37,7 @@ from guildbotics.app_api.models import (
     TroubleshootingRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
@@ -44,24 +45,25 @@ from guildbotics.commands.authoring import (
 from guildbotics.commands.errors import (
     CommandError,
 )
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import run_main_command
 from guildbotics.drivers.execution import WorkRejectedError
-from guildbotics.entities import Person, Project, Team
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentExecutionError,
-    CliAgentExecutionResult,
-)
-from guildbotics.intelligences.troubleshooting import TroubleshootingResult
-from guildbotics.observability.trace_status import resolve_trace_status
-from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.person_lease import PersonExecutionLease
-from guildbotics.runtime.service_lock import (
+from guildbotics.drivers.service_lock import (
     ServiceLockMetadata,
     ServiceLockUnavailableError,
 )
+from guildbotics.entities import Person, Project, Team
+from guildbotics.environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.models import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.observability.trace_status import resolve_trace_status
+from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.app_api.command_doubles import stub_commands
 from tests.guildbotics.templates.commands.assistant_doubles import (
@@ -589,7 +591,7 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
         )
     _write(
         config_dir / "commands/scripted.py",
-        "from guildbotics.intelligences.brains.cli_agent import CliAgentBrain\n",
+        "from guildbotics.guest.cli_agent import CliAgentBrain\n",
     )
     reads: list[None] = []
 
@@ -632,7 +634,7 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
     _write(
         config_dir / "intelligences/brain_mapping.yml",
         "agent:\n"
-        "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain\n"
+        "  class: guildbotics.guest.cli_agent.CliAgentBrain\n"
         "  args:\n"
         "    cli_agent: missing\n",
     )
@@ -646,6 +648,18 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
         "scripted": refused,
     }
     assert requirements("cli_agent") == everything
+
+    # A mapping that does not load names no need at all: running the command
+    # says why it cannot run.
+    _write(
+        config_dir / "intelligences/cli_agent_mapping.yml",
+        "missing: not-a-tool.yml\n",
+    )
+    assert {
+        option.command: {requirement.kind for requirement in option.requirements}
+        for option in runtime.get_command_options().options
+        if option.command in {"first", "second"}
+    } == {"first": {"environment"}, "second": {"environment"}}
 
 
 def test_command_options_ignore_invalid_metadata_without_crashing(

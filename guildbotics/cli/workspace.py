@@ -7,7 +7,7 @@ from typing import Any
 import click
 
 from guildbotics.cli._options import format_option
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     AccessContractError,
     validate_workspace_location,
 )

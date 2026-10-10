@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from guildbotics.observability import correlation_fields
+from guildbotics.utils.correlation import correlation_fields
 
 if TYPE_CHECKING:
     from guildbotics.observability.diagnostics_store import DiagnosticsStore

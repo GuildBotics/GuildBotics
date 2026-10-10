@@ -27,33 +27,37 @@ from guildbotics.capabilities.workflow_completion_events import (
 )
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError, CommandFailedError
-from guildbotics.commands.metadata import CommandAccess, command_access
+from guildbotics.commands.metadata import (
+    command_access,
+)
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.drivers.member_context import ensure_execution_subject, resolve_person
+from guildbotics.environment.command_environment import (
+    command_environment,
+    command_path,
+)
+from guildbotics.environment.contract import (
     AccessContractError,
     exchange_dir,
     protected_paths,
     validate_mount_source,
 )
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import (
-    command_environment,
-    command_path,
+from guildbotics.environment.host_window import HostWindow
+from guildbotics.environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.models import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
 )
-from guildbotics.intelligences.agent_runtime.host_client import (
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
     CommandFailure,
     CommandReply,
     CommandRequest,
 )
-from guildbotics.intelligences.agent_runtime.host_window import HostWindow
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentExecutionError,
-    CliAgentExecutionResult,
+from guildbotics.intelligences.cli_agents import (
     get_cli_agent_mapping,
 )
-from guildbotics.observability import require_trace
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
@@ -61,6 +65,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
     WorkflowSource,
 )
+from guildbotics.utils.correlation import require_trace
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 from guildbotics.utils.keep_awake import keep_awake
 from guildbotics.utils.safe_paths import normalize_host_path

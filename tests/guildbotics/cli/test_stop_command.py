@@ -6,14 +6,14 @@ import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main as cli_main
-from guildbotics.runtime.service_lock import ServiceLock
+from guildbotics.drivers.service_lock import ServiceLock
 from guildbotics.utils.i18n_tool import t
 
 
 def _setup_stop(monkeypatch, tmp_path: Path, *, dies_after_stage: str | None):
     """Wire a fake scheduler process behind the stop command."""
     lock_path = tmp_path / "service.lock"
-    monkeypatch.setattr("guildbotics.runtime.service_lock.os.getpid", lambda: 4242)
+    monkeypatch.setattr("guildbotics.drivers.service_lock.os.getpid", lambda: 4242)
     service_lock = ServiceLock(lock_path)
     service_lock.acquire(owner="cli", workspace=tmp_path)
     monkeypatch.setattr("guildbotics.cli.service._service_lock_path", lambda: lock_path)

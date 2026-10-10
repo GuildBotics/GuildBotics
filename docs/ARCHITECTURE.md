@@ -28,26 +28,56 @@ Users interact with the system through:
 
 ## 2. Package Map and Dependency Rules
 
+A command runs inside its isolated environment (the guest); everything else runs
+on the host. Every package is on one side of that trust boundary or shared by
+both, never a mix:
+
 ```
 guildbotics/
-├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
-├── capabilities/    # Member-side git/github/chat/memory operations + domain events
+│  host
 ├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
-├── commands/        # Command framework (md/py/sh/yml + inline commands)
-├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, event listeners
-├── entities/        # Domain models (Team, Person, Task, Message)
-├── hub/             # The bare repositories a hub holds, and reaching one over OpenSSH
-├── integrations/    # GitHub / Slack clients (used by capabilities and workflows)
-├── intelligences/   # Brains (agno_agent / cli_agent), LLM judgment functions, catalogs
-├── loader/          # YAML team/role loaders
-├── observability/   # Diagnostics records, trace/span correlation, interactive sessions
-├── runtime/         # Context, member resolution, Brain / factory abstractions, per-kind ports, WorkflowInvocation
+├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
+├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control, live state
 ├── setup/           # Workspace and member setup (setup_service, per-provider setup) used by the GUI
+├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
+├── capabilities/    # Member-side git/github/chat/memory operations + domain events, judgments (decisions/)
+├── integrations/    # Per-kind provider selection and the receiving port; GitHub / Slack implementations
+├── observability/   # Diagnostics and activity record writers, trace status, interactive sessions
 ├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
-├── templates/       # Config templates, workflow commands, prompts, locales
+├── hub/             # The bare repositories and relay a hub holds, and reaching one over OpenSSH
+├── secrets/         # Secret value distribution between machines
 ├── workspace/       # Workspace storage: identity, shared-file validation, config CAS
-└── utils/           # fileio (config/storage roots), secret store, i18n, ...
+│  guest
+├── guest/           # The entry inside a command's microVM, worktree copy, AI CLI adapters and turns, the AI CLI brain, the window's client
+│  shared
+├── commands/        # Command framework (md/py/sh/yml + inline commands)
+├── intelligences/   # Brains (agno_agent / jev), LLM judgment functions, catalogs, the host-guest wire (agent_runtime/)
+├── runtime/         # Context, Brain / factory abstractions, per-kind ports, invocation records
+├── loader/          # YAML team/role loaders
+├── entities/        # Domain models (Team, Person, Task, Message)
+├── utils/           # fileio (config/storage roots), span correlation, secret store, i18n, ...
+└── templates/       # Config templates, workflow commands, prompts, locales
 ```
+
+The map is `[tool.importlinter]` in `pyproject.toml`, checked by `lint-imports`
+in CI: it classifies every package (an unclassified one fails), and its
+contracts state each side's responsibility. The host and the guest never import
+each other: the host starts the guest's entry by module name
+(`python -m guildbotics.guest.entry`), and what crosses between them is the
+shared wire (`intelligences/agent_runtime/wire.py`). Shared code imports
+neither, and neither it nor the guest imports a library only the host uses (a
+server stack, the microVM SDK, the OS keychain, the inference SDK).
+`tests/guildbotics/test_package_map.py` checks what imports cannot show: it
+loads the brains and bundled commands the guest loads by name and finds
+nothing host-only, and it finds every shared package used from the guest's
+entries.
+
+The external inference calls show how one shared interface reaches either
+side: a brain calls `inference()` (`intelligences/brains/inference.py`), which
+imports no implementation. The two places that build a `Context` install one —
+the host's `create_context()` the calls themselves
+(`environment/inference_host.py`), the guest's entry the command's window
+(`guest/window.py`).
 
 Hard dependency rules (enforced by `tests/guildbotics/test_layer_boundaries.py`):
 
@@ -125,7 +155,7 @@ workflow (orchestration)
   the host selects fixed REST routes or GraphQL documents, validates continuations,
   and records observed work targets. `integrations/github/pull_requests.py` owns
   readiness, shared by the inspection, push, and completion paths. An agent already
-  inside a command calls `python -m guildbotics.runtime.command_entry <name> <args>`
+  inside a command calls `python -m guildbotics.guest.entry <name> <args>`
   to run a child in that environment under the main command's access contract.
 
 Trust rules that follow from this shape:
@@ -266,7 +296,7 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
 - Rate limits from AI CLI tools are detected in the isolated environment
-  (`intelligences/brains/cli_agent.py`), never amplified by in-process retries
+  (`guest/cli_agent.py`), never amplified by in-process retries
   (`commands/agent_turn.py` raises them as they are), and recorded on the host by the
   ticket selector and chat selection through shared logic
   (`capabilities/workflow_rate_limits.py`) as a `workflow.rate_limited` diagnostics
@@ -317,8 +347,9 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
 
 ### Native agent runtime
 
-`intelligences/agent_runtime/*` is the provider-neutral boundary for Codex App Server
-and Claude Code stream-json. It defines execution context, conversation key/record,
+`guest/*` holds the provider adapters behind a provider-neutral boundary for Codex
+App Server and Claude Code stream-json, whose shared models are
+`intelligences/agent_runtime/models.py`. It defines execution context, conversation key/record,
 normalized events, terminal results, errors, explicit resume policy, process lifecycle,
 and redacted diagnostics. Provider adapters own only protocol translation.
 
@@ -345,12 +376,12 @@ once.
 (1) A host path means the same thing inside: every mount is at its host path and the
 guest's home is the host's, so GuildBotics never rewrites a path in user content. The
 one exception is Windows, where a drive becomes `/c/`; `guest_path()` in
-`intelligences/agent_environment/spec.py` is the single translation point, applied to
+`environment/spec.py` is the single translation point, applied to
 the mount table and the working directory only. (2) A turn reaches only its working
 directory, the granted directories, and what GuildBotics itself binds; everything else
 is absent rather than forbidden. (3) Hand-overs go through the exchange directory
 `~/Documents/GuildBotics`, which every turn is granted read-write by GuildBotics itself
-(`EXCHANGE_GRANT` in `intelligences/agent_environment/contract.py`; the grants file adds
+(`EXCHANGE_GRANT` in `environment/contract.py`; the grants file adds
 to it and cannot remove it).
 What the Desktop hands a command -- a pasted image, a copy of a dropped file the
 environment could not reach -- is placed in its `tmp/` for one App API session and
@@ -365,7 +396,7 @@ in its path field, from the quick-run window too via the host's `open_main_windo
 dismisses the file.
 
 Host bind sources are judged in `utils/safe_paths.py` and
-`intelligences/agent_environment/contract.py`: directory-relative no-follow
+`environment/contract.py`: directory-relative no-follow
 opens provide ancestry identities and anchor directory creation. Windows uses
 relative handles and refuses reparse points. The contract's protected-path table
 includes absent credential directories, device state, all registered workspace
@@ -483,24 +514,23 @@ The generic execution substrate used by workflows and custom commands:
   the main command once (`prepare_command()`), opens the isolated environment the
   command, its subcommands, and their AI CLI turns all run in
   (`run_in_environment()`), and runs the command there through
-  `runtime/command_entry.py`.
+  `guest/entry.py`.
 - `commands/runner.py` (`CommandRunner`) is the execution machinery: it builds a
   `CommandSpec` (`commands/models.py`, via `commands/spec_factory.py`), runs child
-  commands (`commands:`) first, then the main command. It imports nothing only the
-  host may hold (the environment, the member broker, the scheduler), which
-  `tests/guildbotics/commands/test_import_boundary.py` pins.
+  commands (`commands:`) first, then the main command. It is shared code, so it
+  imports nothing only the host may hold (section 2).
 - A `Context` is built in exactly two places: on the host by `create_context()`
   in `drivers/context.py` (integrations from `integrations/factory.py`'s
   `ServiceIntegrationFactory`, which picks each kind's provider by
   `project.services`; brains from `intelligences/brains/factory.py`'s
   `ConfiguredBrainFactory`), and in a command's isolated environment by
-  `runtime/command_entry.py` (the same brain factory, integrations through
+  `guest/entry.py` (the same brain factory, integrations through
   `WindowIntegrationFactory`). `tests/guildbotics/drivers/test_context_builders.py`
   pins the two. A context reads the team from the configuration with
   `YamlTeamLoader`, anew on every `clone_for()`: a clone's `team` is the
   configuration as it is when the clone is made, while the person it is
   given is kept as given.
-- Member resolution lives in `runtime/member_context.py`. A run without an
+- Member resolution lives in `drivers/member_context.py`. A run without an
   explicit member falls back to `Team.get_default_person_id()`: the configured
   `default_person_id` (`team/project.yml`), else the first active non-human
   member in person ID order, so only a team without any command-capable member
@@ -1131,7 +1161,7 @@ classifies every secret store access and member key spelling in the package.
   `credential.verified` when a later turn of the same member is answered, which closes
   that alert without a diagnostics run. Inference with a workspace API key (an LLM
   provider's through agno, Jev's) is recorded where the call is made,
-  `brains/inference_host.py`: agno keeps a failed run and answers with the error's
+  `environment/inference_host.py`: agno keeps a failed run and answers with the error's
   text, so the provider's own error is taken from the model instance and the call
   raises `InferenceFailure` instead. Every such call ends its span naming the key
   (`credential.provider` `llm` / `jev`, `llm.provider`) and, when refused, why
@@ -1337,7 +1367,7 @@ Two Person distinctions matter architecturally:
   desktop settings UI intentionally hides all agent-execution fields for them. Treat
   any path that would execute a human member as a boundary bug, not a feature. The
   rule is enforced in one place, `ensure_execution_subject()` in
-  `guildbotics/runtime/member_context.py`, applied by command execution
+  `guildbotics/drivers/member_context.py`, applied by command execution
   (`guildbotics/drivers/command_runner.py`) and by member capability resolution
   (`resolve_member_context()` in `drivers/context.py`). Every
   `guildbotics member ...` command that acts as a member resolves it that way,
@@ -1349,14 +1379,14 @@ Two Person distinctions matter architecturally:
 - **New brain**: implement `Brain`, register via the intelligence mappings
   (`guildbotics/templates/intelligences/*.yml`).
 - **New AI CLI tool**: implement a native adapter under
-  `intelligences/agent_runtime/`, register it in `agent_runtime/factory.py`, and add
+  `guest/`, register it in `guest/factory.py`, and add
   its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
   `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
   a tool without an adapter cannot run. Declare in its catalog entry how the tool is
   provisioned into the isolated agent environment (`CliAgentProvision`: the pinned
   npm package, its state root, which entries persist, its login command, its API
-  domains); the access contract (`intelligences/agent_environment/contract.py`) is
-  enforced by the environment (`intelligences/agent_environment/`), not translated per
+  domains); the access contract (`environment/contract.py`) is
+  enforced by the environment (`environment/`), not translated per
   adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).

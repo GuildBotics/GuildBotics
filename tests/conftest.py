@@ -17,7 +17,7 @@ import pytest
 from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.team import Person, Role
-from guildbotics.intelligences.agent_runtime.host_client import (
+from guildbotics.intelligences.agent_runtime.wire import (
     COMMAND_ENV,
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
@@ -500,7 +500,7 @@ def host_facts(monkeypatch) -> dict[str, str]:
     """
     from langcodes import Language
 
-    from guildbotics.intelligences.agent_environment import spec
+    from guildbotics.environment import spec
 
     monkeypatch.setattr(spec, "reload_localzone", lambda: None)
     monkeypatch.setattr(spec, "get_localzone_name", lambda: "Asia/Tokyo")
@@ -549,6 +549,28 @@ def _isolate_secret_key_registry():
     secret_store._KNOWN_SECRET_ENV_KEYS.clear()
     yield
     secret_store._KNOWN_SECRET_ENV_KEYS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_inference(monkeypatch):
+    """Start every test with no way to the inference APIs installed.
+
+    The process installs one when it builds a context, and it stays for the
+    process; without this reset a test that builds one would decide what a
+    later test's brains reach.
+    """
+    from guildbotics.intelligences.brains import inference
+
+    monkeypatch.setattr(inference, "_installed", None)
+
+
+@pytest.fixture
+def direct_inference():
+    """Brains call the inference APIs themselves, as on the host."""
+    from guildbotics.environment.inference_host import DirectInference
+    from guildbotics.intelligences.brains.inference import install_inference
+
+    install_inference(DirectInference())
 
 
 @pytest.fixture(autouse=True)

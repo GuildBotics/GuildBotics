@@ -34,10 +34,10 @@ from guildbotics.integrations.chat_state_store import (
     ThreadContextUnavailableError,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import ChatTurn, WorkflowInvocation
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 _SECOND_ATTEMPT = 2

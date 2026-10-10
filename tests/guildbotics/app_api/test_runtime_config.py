@@ -9,8 +9,8 @@ and never touch the real home directory or network.
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -927,11 +927,9 @@ def test_build_agent_environment_runs_in_the_background_and_reports_its_lines(
     import threading
 
     from guildbotics.app_api import runtime as runtime_module
-    from guildbotics.intelligences.agent_environment.runtime import (
-        AgentEnvironmentHealth,
-    )
-    from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
-    from guildbotics.intelligences.agent_environment.toolchain import (
+    from guildbotics.environment.runtime import AgentEnvironmentHealth
+    from guildbotics.environment.snapshot import SnapshotStatus
+    from guildbotics.environment.toolchain import (
         DnsSettings,
         ToolchainDeclaration,
     )
@@ -977,9 +975,7 @@ def test_build_agent_environment_refuses_without_a_runtime(
 ) -> None:
     from guildbotics.app_api import runtime as runtime_module
     from guildbotics.app_api.errors import AppApiError
-    from guildbotics.intelligences.agent_environment.runtime import (
-        AgentEnvironmentHealth,
-    )
+    from guildbotics.environment.runtime import AgentEnvironmentHealth
 
     monkeypatch.setattr(
         runtime_module, "doctor", lambda: AgentEnvironmentHealth(False, "no hypervisor")

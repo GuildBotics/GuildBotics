@@ -23,6 +23,8 @@ from guildbotics.capabilities.chat_updates import (
     ensure_chat_current,
     noop_payload,
 )
+from guildbotics.capabilities.decisions.assessment import assess
+from guildbotics.capabilities.decisions.models import Selection
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.task_runs import (
     RunStatus,
@@ -56,8 +58,6 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.decisions.assessment import assess
-from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.chat_service import ChatEvent, ChatService
 from guildbotics.runtime.context import Context

@@ -28,7 +28,6 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ThreadConversationState,
@@ -39,6 +38,7 @@ from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
     InteractiveTraceSession,
 )
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 from guildbotics.workspace.identity import (
     ensure_workspace_identity,

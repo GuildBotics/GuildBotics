@@ -11,11 +11,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.commands.metadata import CommandAccess, command_access
+from guildbotics.commands.metadata import (
+    command_access,
+)
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import PreparedCommand, run_in_environment
 from guildbotics.drivers.context import create_context
-from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
+from guildbotics.drivers.member_context import ensure_execution_subject, resolve_person
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 
 
 def workspace_member(person_id: str | None = None) -> str:

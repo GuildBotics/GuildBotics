@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from guildbotics.intelligences.brains.inference import JevCall, inference
-from guildbotics.observability import span_scope
 from guildbotics.runtime.brain import Brain, ExecutionMetadata
+from guildbotics.utils.correlation import span_scope
 
 JEV_KEY = "TYPESAFE_API_KEY"
 JEV_MODEL = "jev-latest"

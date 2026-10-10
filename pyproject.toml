@@ -73,8 +73,10 @@ dev = [
   "ruff>=0.11",
   "types-requests>=2.32",
   "types-PyYAML>=6.0",
+  "import-linter>=2.5",
 ]
 test = [
+  "grimp>=3.9",
   # 9.1.0 and 9.1.1 drop a directory's conftest fixtures for files collected
   # after it is revisited on the command line (pytest-dev/pytest#14964). Drop
   # the exclusions once they are no longer the newest releases.
@@ -162,3 +164,94 @@ ignore-comments = true
 ignore-docstrings = true
 ignore-imports = true
 ignore-signatures = true
+
+# The package map: every package is the host's, the guest's (what runs only
+# inside a command's isolated environment), or shared by both. This is the
+# source of truth for which side a package is on; a new package is classified
+# here, and a package never mixes two sides.
+[tool.importlinter]
+root_package = "guildbotics"
+include_external_packages = true
+
+# host: the entries (cli, app_api), execution control (drivers), the
+# workspace's setup, the isolated environment itself (microVM, credential
+# gateway, the window's host side, member broker), member capabilities, the
+# provider integrations, and the records, sync, Hub and Secret distribution.
+# shared: what the guest runs and the host reads alike -- the command
+# machinery, the brains and catalogs, the Context and its ports, the domain
+# models and the utilities. Shared code imports neither the host nor the
+# guest, and the host starts the guest by module name, never importing it.
+[[tool.importlinter.contracts]]
+id = "zones"
+name = "Every package is the host's, the guest's, or shared; shared imports neither"
+type = "layers"
+containers = ["guildbotics"]
+exhaustive = true
+exhaustive_ignores = ["_version"]
+layers = [
+  "guest",
+  "cli : app_api : drivers : setup : environment : capabilities : integrations : observability : sync : hub : secrets : workspace",
+  "commands : intelligences : runtime : loader : entities : utils",
+]
+
+# guest: the entry the host starts in a command's microVM, the working
+# directory's copy, the AI CLI adapters and their turns, the AI CLI brain, and
+# the client of the command's window. The microVM holds no credential and no
+# host-only code: it asks the host through the window.
+[[tool.importlinter.contracts]]
+id = "guest-imports-no-host"
+name = "The guest imports nothing of the host's"
+type = "forbidden"
+source_modules = ["guildbotics.guest"]
+forbidden_modules = [
+  "guildbotics.cli",
+  "guildbotics.app_api",
+  "guildbotics.drivers",
+  "guildbotics.setup",
+  "guildbotics.environment",
+  "guildbotics.capabilities",
+  "guildbotics.integrations",
+  "guildbotics.observability",
+  "guildbotics.sync",
+  "guildbotics.hub",
+  "guildbotics.secrets",
+  "guildbotics.workspace",
+]
+
+# What runs in a command's microVM (the guest and the shared packages) loads
+# none of the libraries only the host uses: a server stack, the microVM SDK,
+# the OS keychain, the inference SDK, the chat SDK. The keychain is reached
+# only from functions a host caller runs; utils never imports one of these at
+# module level.
+[[tool.importlinter.contracts]]
+id = "environment-loads-no-host-only-library"
+name = "The guest and the shared packages import no host-only library"
+type = "forbidden"
+source_modules = [
+  "guildbotics.guest",
+  "guildbotics.commands",
+  "guildbotics.intelligences",
+  "guildbotics.runtime",
+  "guildbotics.loader",
+  "guildbotics.entities",
+  "guildbotics.utils",
+]
+forbidden_modules = [
+  "agno",
+  "cryptography",
+  "fastapi",
+  "jwt",
+  "keyring",
+  "mcp",
+  "microsandbox",
+  "opentelemetry",
+  "slack_sdk",
+  "sse_starlette",
+  "starlette",
+  "uvicorn",
+  "watchfiles",
+]
+ignore_imports = [
+  "guildbotics.utils.keychain -> keyring",
+  "guildbotics.utils.secret_store -> keyring",
+]

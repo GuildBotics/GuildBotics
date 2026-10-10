@@ -19,17 +19,15 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_memory import MemberMemoryService
-from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.observability import current_trace, span_scope, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
     InteractiveTraceSession,
 )
-
+from guildbotics.utils.correlation import current_trace, span_scope, trace_scope
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 HTTP_OK = 200

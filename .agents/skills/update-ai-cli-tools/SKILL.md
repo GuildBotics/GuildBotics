@@ -84,11 +84,11 @@ version, and the documented baselines:
 ```bash
 # A tool name next to a version, anywhere in the repository
 git grep -nIiE '(codex|claude[- ]code|grok( build)?|copilot( cli)?|antigravity( cli)?|agy)[^0-9(=_]{0,24}[ @/]v?[0-9]+\.[0-9]+(\.[0-9]+)?([^0-9a-z]|$)' \
-  -- . ':!tests/guildbotics/intelligences/agent_environment/test_snapshot.py' ':!.agents/skills/update-ai-cli-tools'
+  -- . ':!tests/guildbotics/environment/test_snapshot.py' ':!.agents/skills/update-ai-cli-tools'
 # Every full version, and every version-named fixture, in the files that describe the tools
 git grep -nIE '(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)|_[0-9]+_[0-9]+_[0-9]+\.json' \
-  -- guildbotics/intelligences/cli_agents.py guildbotics/intelligences/agent_runtime \
-     guildbotics/templates/intelligences/cli_agents tests/guildbotics/intelligences/agent_runtime \
+  -- guildbotics/intelligences/cli_agents.py guildbotics/guest \
+     guildbotics/templates/intelligences/cli_agents tests/guildbotics/guest \
      'docs/native_agent_runtime.*.md' | grep -v 'node:'
 ```
 
@@ -126,7 +126,7 @@ Also check by hand:
   unchanged unless official release information establishes a necessary change.
 - Codex: `docker/agent-environment/Dockerfile` removes the image's bubblewrap
   because Debian's 0.8.0 could not exec Codex's helper, and
-  `agent_runtime/codex.py` says so. Preserve this configuration; this workflow
+  `guest/codex.py` says so. Preserve this configuration; this workflow
   does not test the new Codex release's bundled helper.
 
 Make adapter or template changes only when supported by official release

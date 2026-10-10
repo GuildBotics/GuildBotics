@@ -15,13 +15,14 @@ import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, get_args
 
 import yaml
 
 from guildbotics.commands.arguments import parse_command_argument_definitions
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.registry import get_command_extensions
+from guildbotics.intelligences.agent_runtime.wire import CommandAccess, InspectionScope
 from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
@@ -53,27 +54,6 @@ class CommandInputPolicy:
     defined_args: str = "auto"
     extra_args: str = "hidden"
     message: str = "optional"
-
-
-#: The workspace's own state a command may let its AI CLI turns inspect:
-#: ``diagnostics`` is the recorded runs, ``config`` the workspace
-#: configuration and the packaged templates it falls back to.
-InspectionScope = Literal["diagnostics", "config"]
-
-
-@dataclass(frozen=True)
-class CommandAccess:
-    """What a command declares about the access of its AI CLI turns.
-
-    Mirrors the ``read_only`` / ``inspects`` metadata. A command declares it
-    and every turn of its run is held to it: a read-only command's turns can
-    change nothing, which is what lets the run take no execution lease and no
-    manual-command reservation. ``inspects`` is independent of that: what a
-    command needs to read is its work's business.
-    """
-
-    read_only: bool = False
-    inspects: frozenset[InspectionScope] = frozenset()
 
 
 def parse_command_access(metadata: dict[str, Any]) -> CommandAccess:

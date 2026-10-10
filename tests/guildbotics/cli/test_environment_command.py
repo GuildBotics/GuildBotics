@@ -5,38 +5,37 @@ from __future__ import annotations
 import base64
 import importlib
 import json
-
-import yaml
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 environment_cli = importlib.import_module("guildbotics.cli.environment")
-from guildbotics.intelligences.agent_environment.status import login_command
-from guildbotics.cli.environment import environment as environment_group
 from guildbotics.cli import main
-from guildbotics.intelligences.agent_environment import (
+from guildbotics.cli.environment import environment as environment_group
+from guildbotics.environment import image as image_module
+from guildbotics.environment import (
     provider_state,
     runtime,
     snapshot,
 )
-from guildbotics.intelligences.agent_environment import image as image_module
-from guildbotics.intelligences.agent_environment.image import (
+from guildbotics.environment.image import (
     ImageStatus,
     image_load_command,
 )
-from guildbotics.intelligences.agent_environment.runtime import (
+from guildbotics.environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
     ImageInfo,
 )
-from guildbotics.intelligences.agent_environment.snapshot import (
+from guildbotics.environment.snapshot import (
     SnapshotStatus,
     snapshot_name,
 )
+from guildbotics.environment.status import login_command
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.i18n_tool import t
 

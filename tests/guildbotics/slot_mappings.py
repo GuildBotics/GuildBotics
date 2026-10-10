@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.brains import agno_agent, cli_agent, factory
+from guildbotics.guest import cli_agent
+from guildbotics.intelligences.brains import agno_agent, factory
 
 
 def use_brain_slots(
@@ -59,3 +60,8 @@ def _use(
         for attribute, value in list(vars(module).items()):
             if value is read:
                 monkeypatch.setattr(module, attribute, stubbed)
+
+
+def class_path(cls: type) -> str:
+    """How a brain mapping names ``cls``."""
+    return f"{cls.__module__}.{cls.__qualname__}"

@@ -13,8 +13,8 @@ from guildbotics.app_api.agent_environment_status import (
     agent_environment_status,
     evaluate_grant,
 )
-from guildbotics.intelligences.agent_environment import status as device_module
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment import status as device_module
+from guildbotics.environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
@@ -22,29 +22,31 @@ from guildbotics.intelligences.agent_environment.contract import (
     SharedGrants,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.image import (
+from guildbotics.environment.image import (
     IMAGE,
     ImageStatus,
     image_load_command,
 )
-from guildbotics.intelligences.agent_environment.runtime import (
+from guildbotics.environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
     ImageInfo,
 )
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
-from guildbotics.intelligences.agent_environment.status import (
+from guildbotics.environment.snapshot import SnapshotStatus
+from guildbotics.environment.status import (
     DeviceStatus,
     DnsStatus,
     ToolStatus,
     login_command,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
 )
-from guildbotics.intelligences.brains.cli_agent import ExecutableInfo
-from guildbotics.intelligences.cli_agents import CLI_AGENTS
+from guildbotics.intelligences.cli_agents import (
+    CLI_AGENTS,
+    ExecutableInfo,
+)
 from guildbotics.utils.i18n_tool import t
 
 
@@ -610,7 +612,7 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
 ):
     from guildbotics.app_api.models import RuntimeStatus, RuntimeUnitStatus
     from guildbotics.app_api.system_alerts import SystemAlertService
-    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.environment import provider_state
     from guildbotics.intelligences.cli_agents import cli_agent_info
 
     _codex_slot(monkeypatch)
@@ -698,7 +700,8 @@ async def test_usage_result_is_shared_by_card_and_alerts(
 
     from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.runtime import AppRuntime
-    from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
+    from guildbotics.environment import usage
+    from guildbotics.intelligences.agent_runtime import usage_snapshots
     from guildbotics.observability.diagnostics_store import DiagnosticsStore
     from guildbotics.utils.i18n_tool import set_language
 
@@ -783,7 +786,8 @@ async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
     from guildbotics.app_api.errors import AppApiError
     from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.runtime import AppRuntime
-    from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
+    from guildbotics.environment import usage
+    from guildbotics.intelligences.agent_runtime import usage_snapshots
 
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(

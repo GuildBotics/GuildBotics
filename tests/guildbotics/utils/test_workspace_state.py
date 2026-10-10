@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
-    register_workspace,
-    registered_workspaces,
-    unregister_workspace,
     GUILDBOTICS_CONFIG_DIR,
     WorkspaceUnresolvedError,
     active_workspace_file,
     apply_workspace_environment,
     apply_workspace_for_cli,
     read_active_workspace,
+    register_workspace,
+    registered_workspaces,
+    unregister_workspace,
     workspace_status_payload,
     write_active_workspace,
 )
-import pytest
 
 
 @pytest.mark.parametrize("payload", ["{", "{}", "[1]", '["/bad/../path"]'])

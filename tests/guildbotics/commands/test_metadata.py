@@ -8,7 +8,6 @@ import pytest
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
-    CommandAccess,
     CommandInputPolicy,
     command_output_names,
     extract_placeholders,
@@ -18,6 +17,9 @@ from guildbotics.commands.metadata import (
     parse_command_input_policy,
     parse_metadata_arguments,
     parse_python_arguments_from_source,
+)
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
 )
 
 

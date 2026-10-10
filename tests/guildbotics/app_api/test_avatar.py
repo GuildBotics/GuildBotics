@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
-from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import ConfigStatus
 from guildbotics.setup.setup_service import PersonConfigSnapshot
 from guildbotics.utils.secret_store import KeyringSecretStore

@@ -5,12 +5,14 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.entities.task import Task
-from guildbotics.observability import current_trace
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+from guildbotics.utils.correlation import current_trace
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.command_environment_doubles import runs_as
 

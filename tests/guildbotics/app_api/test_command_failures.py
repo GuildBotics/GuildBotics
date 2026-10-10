@@ -16,21 +16,22 @@ from guildbotics.app_api.api import TOKEN_HEADER, create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.drivers import command_runner
-from guildbotics.intelligences.brains.factory import BrainConfig
-from guildbotics.intelligences.agent_runtime.host_client import (
+from guildbotics.environment.host_window import _inference_failed
+from guildbotics.guest import entry as command_entry
+from guildbotics.intelligences.agent_runtime.wire import (
     CommandFacts,
     CommandReply,
     CommandRequest,
     HostCallError,
 )
-from guildbotics.intelligences.agent_runtime.host_window import _inference_failed
-from guildbotics.intelligences.brains import inference as inference_module
 from guildbotics.intelligences.brains.agno_agent import (
-    AgnoAgentDefaultBrain,
     ModelConfig,
 )
-from guildbotics.intelligences.brains.jev import JevBrain
-from guildbotics.runtime import command_entry
+from guildbotics.intelligences.brains.factory import (
+    AGNO_BRAIN_CLASS,
+    JEV_BRAIN_CLASS,
+    BrainConfig,
+)
 from guildbotics.utils.i18n_tool import set_language, t
 from tests.guildbotics.slot_mappings import use_brain_slots, use_model_slots
 
@@ -92,8 +93,8 @@ def command_api(tmp_path, monkeypatch, language):
         monkeypatch,
         "aiko",
         {
-            "default": BrainConfig(type=AgnoAgentDefaultBrain),
-            "jev": BrainConfig(type=JevBrain),
+            "default": BrainConfig(class_path=AGNO_BRAIN_CLASS),
+            "jev": BrainConfig(class_path=JEV_BRAIN_CLASS),
         },
     )
     use_model_slots(
@@ -120,7 +121,6 @@ def command_api(tmp_path, monkeypatch, language):
             return {"exit_code": 0, "stdout": json.dumps({"channel_id": "C1"})}
 
     window = Window()
-    monkeypatch.setattr(inference_module, "command_window", lambda: window)
 
     async def in_process(command):
         reply = await command_entry.run(

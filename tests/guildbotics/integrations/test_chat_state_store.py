@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     PendingEventRecordError,
@@ -15,6 +14,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.runtime.chat_service import ChatEvent
 
 EXPECTED_BACKFILL_ERROR_COUNT = 2
 EXPECTED_ATTEMPT_COUNT = 2

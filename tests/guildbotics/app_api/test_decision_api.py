@@ -8,14 +8,16 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.intelligences import (
-    CLI_BRAIN_CLASS,
-    JEV_BRAIN_CLASS,
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import BrainAssignment, IntelligenceConfigUpdateRequest
-from guildbotics.setup.setup_service import SetupServiceError
-from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
+from guildbotics.intelligences.brains.factory import (
+    CLI_BRAIN_CLASS,
+    JEV_BRAIN_CLASS,
+    ConfiguredBrainFactory,
+)
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
+from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 HEADERS = {"X-GuildBotics-Session-Token": "test"}
@@ -173,8 +175,10 @@ def test_cli_assignment_cannot_be_saved_for_chat_decision(configured, tool):
 def test_member_model_resolves_with_inherited_assignment(
     configured,
 ):
-    from guildbotics.app_api.intelligences import AGNO_BRAIN_CLASS
     from guildbotics.app_api.models import ModelDefinition
+    from guildbotics.intelligences.brains.factory import (
+        AGNO_BRAIN_CLASS,
+    )
 
     root, _ = configured
     service = IntelligenceConfigService()

@@ -16,15 +16,15 @@ from guildbotics.drivers.execution import (
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand, Task
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotUpkeep
-from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.observability import trace_scope
+from guildbotics.environment.snapshot import SnapshotUpkeep
+from guildbotics.environment.status import device_status
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WorkflowInvocation,
 )
+from guildbotics.utils.correlation import trace_scope
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0

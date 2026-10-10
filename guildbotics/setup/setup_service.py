@@ -12,7 +12,7 @@ import requests  # type: ignore
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from yaml import YAMLError
 
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     AccessContractError,
     validate_workspace_location,
 )

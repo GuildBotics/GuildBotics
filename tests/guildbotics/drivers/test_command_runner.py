@@ -9,20 +9,22 @@ import pytest
 import wakepy
 
 from guildbotics.commands.errors import CommandError, CommandFailedError
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.drivers import command_runner
 from guildbotics.drivers.command_runner import PreparedCommand
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.host_client import (
+from guildbotics.environment.spec import guest_path
+from guildbotics.guest.cli_agent import (
+    PromptInfo,
+)
+from guildbotics.intelligences.agent_runtime.models import (
+    CliAgentExecutionError,
+)
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
     CommandFailure,
     CommandReply,
-)
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentExecutionError,
-    PromptInfo,
 )
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
@@ -417,15 +419,15 @@ async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured
     """Which tool a turn uses is decided while the command runs, so the
     environment is started able to run each of the member's slots, and held
     to what the command declares."""
-    from guildbotics.intelligences.brains import cli_agent
+    from guildbotics.intelligences import cli_agents
 
     use_cli_agent_slots(
         monkeypatch,
         "aiko",
         {
-            "default": cli_agent.ExecutableInfo(adapter="claude"),
-            "review": cli_agent.ExecutableInfo(adapter="codex"),
-            "again": cli_agent.ExecutableInfo(adapter="claude"),
+            "default": cli_agents.ExecutableInfo(adapter="claude"),
+            "review": cli_agents.ExecutableInfo(adapter="codex"),
+            "again": cli_agents.ExecutableInfo(adapter="claude"),
         },
     )
     booted = _environment(monkeypatch)
@@ -471,14 +473,10 @@ async def test_invalid_contract_settings_fail_the_command_when_it_starts(
     turn included, before anything of it runs."""
     from guildbotics.commands.errors import CommandError
     from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_environment.contract import (
-        AccessContractError,
-    )
-    from guildbotics.intelligences.agent_environment.status import (
-        filesystem_permission_problem,
-    )
-    from guildbotics.intelligences.agent_environment.toolchain import ToolchainError
-    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.environment import command_environment as environment
+    from guildbotics.environment.contract import AccessContractError
+    from guildbotics.environment.status import filesystem_permission_problem
+    from guildbotics.environment.toolchain import ToolchainError
 
     unreadable = tmp_path / "Documents" / "shared"
     monkeypatch.setattr(
@@ -554,7 +552,7 @@ async def test_the_run_is_granted_for_its_member_run_and_work(
     and the work it does: its workflow run's, else the one its caller named,
     else its own run's manual work."""
     from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+    from guildbotics.environment.host_window import HostWindow
     from guildbotics.runtime.workflow_invocation import (
         WORKFLOW_INVOCATION_KEY,
         WorkflowInvocation,
@@ -600,7 +598,7 @@ async def test_the_grant_ends_with_its_command_however_it_ended(monkeypatch):
     """What the command's microVM was granted ends with the command -- a
     turn it left open among it -- whether the command said how it ended or
     its environment failed."""
-    from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+    from guildbotics.environment.host_window import HostWindow
 
     closed = []
 

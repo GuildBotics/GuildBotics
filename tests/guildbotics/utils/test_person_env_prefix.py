@@ -5,14 +5,14 @@ from pathlib import Path
 import i18n
 import pytest
 
+from guildbotics.entities.team import Person
+from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup.setup_service import (
     PersonSetupInput,
     PersonUpdateInput,
-    SimplePersonSetupService,
     SetupServiceError,
+    SimplePersonSetupService,
 )
-from guildbotics.entities.team import Person
-from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import MemberConfigError, person_secret_env_keys

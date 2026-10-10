@@ -9,14 +9,14 @@ import yaml  # type: ignore
 
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import save_yaml_file
+from guildbotics.utils.shared_write_lock import (
+    shared_write_lock,
+    shared_write_lock_path,
+)
 from guildbotics.workspace.config_repository import (
     ConfigRepository,
     StaleConfigWriteError,
     blob_id,
-)
-from guildbotics.utils.shared_write_lock import (
-    shared_write_lock,
-    shared_write_lock_path,
 )
 from guildbotics.workspace.validation import SharedFileInvalidError
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort

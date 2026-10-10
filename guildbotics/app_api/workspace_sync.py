@@ -39,6 +39,15 @@ from guildbotics.app_api.models import (
     WorkspaceSyncPreview,
     WorkspaceSyncStatus,
 )
+from guildbotics.drivers.live_state import LiveState, LiveStatePort
+from guildbotics.drivers.relay_runtime import RelayRuntime
+from guildbotics.drivers.service_owner import (
+    ServiceOwnerError,
+    create_relay_runtime,
+)
+from guildbotics.drivers.service_owner import (
+    prepare_service_owner as prepare_relay_service_owner,
+)
 from guildbotics.hub import (
     HostKeyChangedError,
     HubLocation,
@@ -51,15 +60,6 @@ from guildbotics.hub.relay import ServiceOwner
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
-from guildbotics.runtime.live_state import LiveState, LiveStatePort
-from guildbotics.runtime.relay_runtime import RelayRuntime
-from guildbotics.runtime.service_owner import (
-    ServiceOwnerError,
-    create_relay_runtime,
-)
-from guildbotics.runtime.service_owner import (
-    prepare_service_owner as prepare_relay_service_owner,
-)
 from guildbotics.sync import (
     EnrollmentError,
     GitSyncManager,
@@ -376,9 +376,7 @@ class WorkspaceSyncService:
                 workspace ends up selected.
         """
         location = _location(request.hub)
-        from guildbotics.intelligences.agent_environment.contract import (
-            validate_workspace_location,
-        )
+        from guildbotics.environment.contract import validate_workspace_location
 
         destination = validate_workspace_location(request.workspace_dir)
         # Not "does .guildbotics exist": selecting this folder is what opened

@@ -7,7 +7,6 @@ import pytest
 
 from guildbotics.capabilities.chat_selection import ChatAttempt
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
     TaskRunCoordinator,
@@ -15,17 +14,20 @@ from guildbotics.drivers.execution import (
 )
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.brains.cli_agent import (
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
-from guildbotics.observability import current_trace
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 from guildbotics.observability.trace_status import resolve_trace_status
-from tests.guildbotics.command_environment_doubles import runs_as
+from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
+from guildbotics.utils.correlation import current_trace
+from tests.guildbotics.command_environment_doubles import runs_as
 
 
 class _FakeContext:

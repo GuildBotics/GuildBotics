@@ -2487,7 +2487,7 @@ function IntelligenceEditor({
 
       if (engine !== currentAssignment?.engine) {
         if (engine === "cli") {
-          nextClass = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain";
+          nextClass = "guildbotics.guest.cli_agent.CliAgentBrain";
           const firstCliSlot = Object.keys(current.cli_agent_mapping)[0] ?? "default";
           nextTarget = firstCliSlot;
         } else if (engine === "jev") {

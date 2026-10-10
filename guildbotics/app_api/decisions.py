@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel, SecretStr
 
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.intelligences.decisions import preparation
+from guildbotics.capabilities.decisions import preparation
 
 
 class DecisionCredential(BaseModel):

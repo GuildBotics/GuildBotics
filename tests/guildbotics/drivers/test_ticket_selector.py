@@ -11,9 +11,9 @@ from guildbotics.entities.task import Task
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.observability import current_trace, trace_scope
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+from guildbotics.utils.correlation import current_trace, trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 ISSUE_URL = "https://github.com/o/r/issues/1"
@@ -107,7 +107,7 @@ def _invocation(task: Task, source: str = "routine") -> WorkflowInvocation:
 
 
 def _rate_limit_error(at="2026-07-04T11:44:00+09:00", hint="11:44 AM"):
-    from guildbotics.intelligences.brains.cli_agent import (
+    from guildbotics.intelligences.agent_runtime.models import (
         CliAgentExecutionError,
         CliAgentExecutionResult,
     )

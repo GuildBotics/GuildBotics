@@ -1,19 +1,20 @@
 import shutil
-import pytest
 from pathlib import Path
 
+import pytest
+
+from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup import setup_service
 from guildbotics.setup.setup_service import (
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,
-    SetupServiceError,
     ProjectUpdateInput,
+    SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.utils.secret_store import KeyringSecretStore
 

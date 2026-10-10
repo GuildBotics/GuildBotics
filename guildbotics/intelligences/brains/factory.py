@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from builtins import type as builtin_type
 from logging import Logger
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from guildbotics.intelligences.cli_agents import get_cli_agent_mapping
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.runtime import BrainFactory
 from guildbotics.runtime.brain import Brain
@@ -16,13 +16,20 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.import_utils import ClassResolver, load_class
 
+#: The brain classes the bundled mapping and the settings screen name. They
+#: are class paths, not classes: the host reads a mapping without loading the
+#: AI CLI brain, which runs only inside a command's isolated environment.
+AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
+CLI_BRAIN_CLASS = "guildbotics.guest.cli_agent.CliAgentBrain"
+JEV_BRAIN_CLASS = "guildbotics.intelligences.brains.jev.JevBrain"
+
 
 class BrainConfig(BaseModel):
     """
     Configuration for a brain.
     """
 
-    type: builtin_type[Brain] = Field(..., description="The type of the intelligence.")
+    class_path: str = Field(..., description="The class path of the brain.")
     args: dict = Field(
         default_factory=dict, description="The arguments for the intelligence."
     )
@@ -40,16 +47,48 @@ def get_brain_mapping(person_id: str) -> dict[str, BrainConfig]:
         person_id (str): The person whose ``brain_mapping.yml`` to read.
 
     Returns:
-        dict[str, BrainConfig]: Slot name to the brain class and its arguments.
+        dict[str, BrainConfig]: Slot name to the brain class path and its
+            arguments.
     """
     mapping = load_person_slot_mapping(person_id, "intelligences/brain_mapping.yml")
     brain_mapping = {}
     for name, config in mapping.items():
         brain_mapping[name] = BrainConfig(
-            type=load_class(config["class"]),
+            class_path=config["class"],
             args=config.get("args", {}),
         )
     return brain_mapping
+
+
+def cli_agent_of(person_id: str, brain: str) -> str | None:
+    """The AI CLI tool the person's brain slot ``brain`` runs.
+
+    Args:
+        person_id (str): The person whose mappings to read.
+        brain (str): The brain slot a command names.
+
+    Returns:
+        str | None: The tool's catalog name; "" when the slot names an AI CLI
+        tool slot that does not resolve (its turn says why); None when the
+        slot's brain is no AI CLI tool's.
+    """
+    config = get_brain_mapping(person_id).get(brain)
+    if config is None or config.class_path != CLI_BRAIN_CLASS:
+        return None
+    tool = get_cli_agent_mapping(person_id).get(
+        str(config.args.get("cli_agent", "default"))
+    )
+    return tool.adapter if tool else ""
+
+
+def command_config(person_id: str, name: str, language_code: str) -> dict:
+    """The frontmatter and body of the person's command ``name`` (a name, or
+    the path of a ``.md`` file)."""
+    if name.endswith(".md"):
+        path = Path(name)
+    else:
+        path = get_person_config_path(person_id, f"commands/{name}.md", language_code)
+    return load_markdown_with_frontmatter(path)
 
 
 class ConfiguredBrainFactory(BrainFactory):
@@ -66,14 +105,7 @@ class ConfiguredBrainFactory(BrainFactory):
         class_resolver: ClassResolver | None = None,
     ) -> Brain:
         if not config:
-            if name.endswith(".md"):
-                path = Path(name)
-            else:
-                path = get_person_config_path(
-                    person_id, f"commands/{name}.md", language_code
-                )
-
-            config = load_markdown_with_frontmatter(path)
+            config = command_config(person_id, name, language_code)
 
         class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         response_class = None
@@ -88,7 +120,7 @@ class ConfiguredBrainFactory(BrainFactory):
 
         brain_mapping = get_brain_mapping(person_id)
         brain_config = brain_mapping[config.get("brain", "default")]
-        brain = brain_config.type(
+        brain = load_class(brain_config.class_path)(
             person_id,
             name,
             logger,
