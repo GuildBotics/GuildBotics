@@ -14,8 +14,10 @@ reported; ``.git`` is neither copied nor reported. Of a directory whose
 not reported when git ignores it or it is in a repository of its own (a
 submodule, a nested repository). Git is asked in both with the original's
 ``.git``, whatever the command did to the copy's, and names what it ignores
-as it reads it from the disk, so nothing is matched by name. Any other
-directory is copied whole. The copy gets a gitfile naming the read-only
+as it reads it from the disk. What git tracks is copied even when git here
+takes it for an ignored one: the index of a repository made on macOS spells
+it in another Unicode form than the disk. Any other directory is copied
+whole. The copy gets a gitfile naming the read-only
 original's ``.git``, so ``git status`` and ``git diff`` work while nothing
 can be committed.
 
@@ -36,6 +38,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Iterator, Set
 from pathlib import Path, PurePosixPath
 
@@ -150,6 +153,36 @@ def _ignored(repository: Path, tree: Path) -> set[str]:
     the ones git read from ``tree``: in the microVM, where git changes no
     Unicode form, spelled as the disk spells them.
 
+    Git on macOS composes the names it adds to the index, and git here does
+    not: it takes the disk's other form of a tracked file or directory for an
+    untracked one, which an ignore rule may match. Such a name is no ignored
+    one.
+
+    Raises:
+        WorktreeCopyError: When git cannot list it.
+    """
+    tracked = {
+        _composed(name)
+        for each in _listed(repository, tree, "--cached")
+        for name in (each, *map(str, PurePosixPath(each).parents))
+    }
+    return {
+        each
+        for each in _listed(
+            repository,
+            tree,
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        )
+        if _composed(each) not in tracked
+    }
+
+
+def _listed(repository: Path, tree: Path, *selection: str) -> set[str]:
+    """What ``git ls-files`` names in ``tree`` with ``repository``.
+
     Raises:
         WorktreeCopyError: When git cannot list it.
     """
@@ -160,10 +193,7 @@ def _ignored(repository: Path, tree: Path) -> set[str]:
             f"--work-tree={tree}",
             "ls-files",
             "-z",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
+            *selection,
         ],
         cwd=tree,
         capture_output=True,
@@ -174,6 +204,10 @@ def _ignored(repository: Path, tree: Path) -> set[str]:
     return {
         os.fsdecode(each).rstrip("/") for each in listed.stdout.split(b"\0") if each
     }
+
+
+def _composed(name: str) -> str:
+    return unicodedata.normalize("NFC", name)
 
 
 def _walk(root: Path, left_out: Set[str]) -> Iterator[tuple[str, os.stat_result]]:

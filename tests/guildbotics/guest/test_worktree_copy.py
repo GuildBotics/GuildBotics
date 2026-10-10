@@ -120,11 +120,17 @@ def test_a_repository_is_copied_but_what_git_ignores(tmp_path: Path) -> None:
 def test_a_name_the_disk_spells_otherwise_is_copied_as_the_disk_spells_it(
     tmp_path: Path, indexed: str, on_disk: str
 ) -> None:
-    """Where the host tells files apart by neither case nor Unicode form, git
-    names a tracked file -- or its directory -- as its index spells it,
-    whatever the disk says: it is copied all the same, and is no change."""
-    source = _tree(tmp_path / "source", {on_disk: "x"})
+    """A repository made on macOS or Windows tells files apart by neither
+    case nor Unicode form, and its index may spell a tracked file -- or its
+    directory -- otherwise than the disk. Git in the microVM honours the
+    case, not the form: the file is copied all the same, even where an ignore
+    rule matches it, and is no change."""
+    source = _tree(tmp_path / "source", {".gitignore": "*.md\n*.py\n*.txt\n"})
+    _tree(source, {on_disk: "x"})
     _git(source, "init", "-q")
+    _git(source, "config", "core.ignorecase", "true")
+    # As git in the microVM: macOS's git would compose the disk's names.
+    _git(source, "config", "core.precomposeunicode", "false")
     blob = subprocess.run(
         ["git", "hash-object", "-w", "--", on_disk],
         cwd=source,
@@ -137,8 +143,42 @@ def test_a_name_the_disk_spells_otherwise_is_copied_as_the_disk_spells_it(
 
     copied = _copied(source, destination)
 
-    assert list(copied) == [on_disk]
+    assert sorted(copied) == [".gitignore", on_disk]
     assert _changes(source, destination, copied) == []
+
+
+def test_a_tracked_directory_git_here_takes_for_an_ignored_one_holds_changes(
+    tmp_path: Path,
+) -> None:
+    """A rule spelled as the disk spells a directory (as a shell writes it)
+    matches it for git in the microVM, which does not relate it to the
+    index's composed form; macOS's git never matches it. What git tracks
+    there is copied, and a new file beside it is told."""
+    decomposed = unicodedata.normalize("NFD", "ぶ")
+    source = _tree(
+        tmp_path / "source",
+        {".gitignore": f"{decomposed}/\n", f"{decomposed}/c.txt": "c"},
+    )
+    _git(source, "init", "-q")
+    _git(source, "config", "core.precomposeunicode", "false")
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--", f"{decomposed}/c.txt"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    composed = unicodedata.normalize("NFC", "ぶ/c.txt")
+    _git(source, "update-index", "--add", "--cacheinfo", f"100644,{blob},{composed}")
+    destination = tmp_path / "copy"
+
+    copied = _copied(source, destination)
+
+    assert sorted(copied) == [".gitignore", f"{decomposed}/c.txt"]
+    _tree(destination, {f"{decomposed}/new.rs": "n"})
+    assert [each["path"] for each in _changes(source, destination, copied)] == [
+        f"{decomposed}/new.rs"
+    ]
 
 
 def test_a_new_file_spelled_like_a_tracked_one_is_told_only_as_git_names_it(
