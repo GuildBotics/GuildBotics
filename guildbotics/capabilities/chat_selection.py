@@ -47,7 +47,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadContextUnavailableError,
     ThreadConversationState,
     ThreadHandoffState,
-    ThreadMessageState,
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.chat_workflow_status import (
@@ -58,7 +57,7 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.effort import promote_effort
-from guildbotics.runtime.chat_service import ChatEvent, ChatService
+from guildbotics.runtime.chat_service import ChatEvent, ChatMessage, ChatService
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
@@ -98,7 +97,7 @@ class ChatBatch:
     self_user_id: str
     participation: str
     thread_state: ThreadConversationState
-    cached_thread_messages: list[ThreadMessageState]
+    cached_thread_messages: list[ChatMessage]
     snapshot_events: list[ChatEvent]
     snapshot_complete: bool
     batch_events: list[ChatEvent]
@@ -144,7 +143,7 @@ class ChatSelector:
     ) -> ChatBatch | None:
         """Read the thread and decide whether the event is work for the member.
 
-        Events that are not (edits, deletions, the member's own messages,
+        Events that are not (the member's own messages,
         messages the member's participation setting excludes) are marked
         processed and yield ``None``. This runs before any trace is opened, so
         the dispatcher leaves no diagnostics behind for them.
@@ -159,12 +158,6 @@ class ChatSelector:
                 service_name, person_id, channel_id
             ).processed_event_ids
         )
-        if event.is_edit_or_delete:
-            if event.event_id not in processed:
-                self._state_store.mark_processed_event(
-                    service_name, person_id, channel_id, event.event_id
-                )
-            return None
         if event.event_id in processed:
             return None
         if event.is_from_user(identity.user_id):
@@ -302,7 +295,7 @@ class ChatSelector:
                 self._person_id,
                 batch.channel_id,
                 event.thread_id,
-                _event_to_thread_message(event.thread_id, thread_event),
+                thread_event,
             )
             cached.add(thread_event.message_id)
         return await _build_agent_prompt_payload(
@@ -629,7 +622,7 @@ class ChatSelector:
                     person_id,
                     batch.channel_id,
                     thread_id,
-                    ThreadMessageState(
+                    ChatMessage(
                         channel_id=batch.channel_id,
                         thread_id=thread_id,
                         message_id=message_id,
@@ -713,7 +706,6 @@ def _collect_batch_events(
         and item.thread_id == event.thread_id
         and item.position >= event.position
         and item.event_id not in processed_event_ids
-        and not item.is_edit_or_delete
         and not is_suppressed_chat_event(item)
     }
     return sorted(events.values(), key=lambda item: item.position)
@@ -724,7 +716,7 @@ async def _build_agent_prompt_payload(
     context: Any,
     chat_service: ChatService,
     event: ChatEvent,
-    thread_messages: list[ThreadMessageState],
+    thread_messages: list[ChatMessage],
     self_user_id: str,
     thread_state: ThreadConversationState,
     chat_participation: str,
@@ -743,9 +735,7 @@ async def _build_agent_prompt_payload(
     }
     cached_thread_context = [
         _message_to_prompt_dict(
-            _to_prompt_message_from_state(
-                message, self_user_id, author_labels, chat_service
-            )
+            _to_prompt_message(message, self_user_id, author_labels, chat_service)
         )
         for message in thread_messages
     ]
@@ -761,9 +751,7 @@ async def _build_agent_prompt_payload(
     return {
         "unprocessed_messages": [
             _message_to_prompt_dict(
-                _to_prompt_message_from_event(
-                    item, self_user_id, author_labels, chat_service
-                )
+                _to_prompt_message(item, self_user_id, author_labels, chat_service)
             )
             for item in batch_events
         ],
@@ -823,21 +811,6 @@ def _events_mention_user(events: list[ChatEvent], user_id: str) -> bool:
     return bool(user_id) and any(user_id in event.mentions for event in events)
 
 
-def _event_to_thread_message(
-    thread_id: str, thread_event: ChatEvent
-) -> ThreadMessageState:
-    return ThreadMessageState(
-        channel_id=thread_event.channel_id,
-        thread_id=thread_id,
-        message_id=thread_event.message_id,
-        occurred_at=thread_event.occurred_at,
-        author_id=thread_event.author_id,
-        text=thread_event.text,
-        mentions=list(thread_event.mentions),
-        is_bot_message=thread_event.is_bot_message,
-    )
-
-
 def _merge_thread_context(
     live_events: list[ChatEvent],
     *,
@@ -853,7 +826,7 @@ def _merge_thread_context(
         if message.get("timestamp")
     }
     for thread_event in live_events:
-        prompt_message = _to_prompt_message_from_event(
+        prompt_message = _to_prompt_message(
             thread_event, self_user_id, author_labels, chat_service
         )
         messages[prompt_message.timestamp] = _message_to_prompt_dict(prompt_message)
@@ -977,7 +950,7 @@ def _handoff_to_prompt_dict(handoff: ThreadHandoffState) -> dict[str, Any]:
 
 
 def _thread_has_mentioned_user(
-    thread_messages: list[ThreadMessageState], user_id: str
+    thread_messages: list[ChatMessage], user_id: str
 ) -> bool:
     if not user_id:
         return False
@@ -1011,7 +984,7 @@ def _build_author_labels(
     context: Any,
     self_user_id: str,
     event: ChatEvent | None,
-    thread_messages: list[ThreadMessageState],
+    thread_messages: list[ChatMessage],
     person_labels: dict[str, str],
 ) -> dict[str, str]:
     ordered_ids: list[str] = []
@@ -1142,8 +1115,8 @@ async def _chat_user_to_person_labels(
     return labels
 
 
-def _to_prompt_message_from_state(
-    message: ThreadMessageState,
+def _to_prompt_message(
+    message: ChatMessage,
     self_user_id: str,
     author_labels: dict[str, str],
     chat_service: ChatService,
@@ -1157,24 +1130,6 @@ def _to_prompt_message_from_state(
             message.is_bot_message, message.author_id, self_user_id
         ),
         timestamp=message.position,
-    )
-
-
-def _to_prompt_message_from_event(
-    event: ChatEvent,
-    self_user_id: str,
-    author_labels: dict[str, str],
-    chat_service: ChatService,
-) -> Message:
-    return Message(
-        content=chat_service.normalize_participant_text(event.text, author_labels),
-        author=_resolve_author_label(
-            event.author_id, event.is_bot_message, author_labels
-        ),
-        author_type=_to_author_type(
-            event.is_bot_message, event.author_id, self_user_id
-        ),
-        timestamp=event.position,
     )
 
 

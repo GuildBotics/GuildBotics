@@ -18,10 +18,10 @@ from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
-    ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability.activity_event_store import ActivityEventStore
+from guildbotics.runtime.chat_service import ChatMessage
 from guildbotics.utils import workspace_sync_port
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.workspace.identity import ensure_device_identity
@@ -183,8 +183,8 @@ def test_a_workspace_local_write_never_reaches_the_queue(
     assert port.changes == []
 
 
-def _thread_message() -> ThreadMessageState:
-    return ThreadMessageState(
+def _thread_message() -> ChatMessage:
+    return ChatMessage(
         channel_id="C1",
         thread_id="T1",
         message_id="1.0",

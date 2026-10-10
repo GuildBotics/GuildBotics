@@ -55,7 +55,6 @@ def _pending(
             if item.event.thread_id == subject.thread_id
             and item.event.event_id not in delivered
             and item.event.author_id != subject.self_user_id
-            and not item.event.is_edit_or_delete
             and not is_suppressed_chat_event(item.event)
             and item.event.event_id not in processed
         ),

@@ -16,11 +16,10 @@ from guildbotics.integrations.chat_state_store import (
     PendingChatEvent,
     ThreadConversationState,
     ThreadHandoffState,
-    ThreadMessageState,
     ThreadSystemNoticeState,
 )
 from guildbotics.intelligences.effort import normalize_effort
-from guildbotics.runtime.chat_service import ChatEvent, message_position
+from guildbotics.runtime.chat_service import ChatEvent, ChatMessage, message_position
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
@@ -152,14 +151,14 @@ class FileConversationStateStore(ConversationStateStore):
 
     def load_thread_messages(
         self, service: str, person_id: str, channel_id: str, thread_id: str
-    ) -> list[ThreadMessageState]:
+    ) -> list[ChatMessage]:
         data = self._read_json(
             self._thread_cache_file(service, person_id, channel_id, thread_id)
         )
         raw_items = data.get("messages") or []
         if not isinstance(raw_items, list):
             return []
-        out: list[ThreadMessageState] = []
+        out: list[ChatMessage] = []
         for item in raw_items:
             if not isinstance(item, dict):
                 continue
@@ -168,7 +167,7 @@ class FileConversationStateStore(ConversationStateStore):
             if not message_id or occurred_at is None:
                 continue
             out.append(
-                ThreadMessageState(
+                ChatMessage(
                     channel_id=str(item.get("channel_id", channel_id)),
                     thread_id=str(item.get("thread_id", thread_id)),
                     message_id=message_id,
@@ -203,7 +202,7 @@ class FileConversationStateStore(ConversationStateStore):
         person_id: str,
         channel_id: str,
         thread_id: str,
-        message: ThreadMessageState,
+        message: ChatMessage,
     ) -> None:
         item = {
             "channel_id": message.channel_id,

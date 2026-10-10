@@ -20,7 +20,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadContextUnavailableError,
     ThreadConversationState,
     ThreadHandoffState,
-    ThreadMessageState,
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -36,6 +35,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
 from guildbotics.runtime.chat_service import (
     ChatEventPage,
     ChatIdentity,
+    ChatMessage,
 )
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
@@ -762,7 +762,7 @@ async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",
@@ -791,7 +791,7 @@ async def test_muted_unmentioned_followup_after_prior_mention_skips(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",
@@ -918,7 +918,7 @@ async def test_provider_unavailable_with_cached_mention_waits_for_fresh_input(
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",
@@ -953,7 +953,7 @@ async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",

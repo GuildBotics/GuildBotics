@@ -10,10 +10,10 @@ from guildbotics.integrations.chat_state_store import (
     PendingEventRecordError,
     ThreadConversationState,
     ThreadHandoffState,
-    ThreadMessageState,
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.runtime.chat_service import ChatMessage
 from tests.guildbotics.local_chat import at, chat_event
 
 EXPECTED_BACKFILL_ERROR_COUNT = 2
@@ -168,7 +168,7 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",
@@ -184,7 +184,7 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.2",
@@ -200,7 +200,7 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.2",
@@ -216,7 +216,7 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.3",
@@ -273,7 +273,7 @@ def test_append_thread_message_splits_cache_from_shared_state(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="100.1",
             message_id="100.1",
@@ -453,7 +453,7 @@ def test_list_known_channels_unions_cursor_pending_and_threads(tmp_path):
         "alice",
         "C3",
         "50.0",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C3",
             thread_id="50.0",
             message_id="50.0",
@@ -504,7 +504,7 @@ def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
         "alice",
         "C1",
         "50.0",
-        ThreadMessageState(
+        ChatMessage(
             channel_id="C1",
             thread_id="50.0",
             message_id="50.0",

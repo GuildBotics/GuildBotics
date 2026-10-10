@@ -84,7 +84,6 @@ def test_only_source_thread_external_unprocessed_input_is_new(chat_run):
         event(1),
         replace(event(2), author_id="U_BOT"),
         replace(event(3), thread_id="other"),
-        event(4, is_edit_or_delete=True),
         event(5),
     ):
         queue(chat_run, message)

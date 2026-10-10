@@ -2,7 +2,7 @@
 names for ``chat_service``.
 
 A message is named by opaque ids and placed in time by ``occurred_at``. Its
-:attr:`ChatEvent.position` orders the messages of a channel as text, so the
+:attr:`ChatMessage.position` orders the messages of a channel as text, so the
 same order holds wherever it is stored or sent.
 """
 
@@ -69,9 +69,10 @@ class ChatMessageRef:
     thread_id: str
 
 
-@dataclass(slots=True)
-class ChatEvent:
-    event_id: str
+@dataclass(slots=True, kw_only=True)
+class ChatMessage:
+    """A message of a thread, as the thread's history keeps it."""
+
     channel_id: str
     message_id: str
     thread_id: str
@@ -79,14 +80,26 @@ class ChatEvent:
     author_id: str | None
     text: str
     mentions: list[str] = field(default_factory=list)
-    is_edit_or_delete: bool = False
     is_bot_message: bool = False
-    is_thread_reply: bool = False
-    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def position(self) -> str:
         return message_position(self.occurred_at, self.message_id)
+
+    def is_from_user(self, user_id: str | None) -> bool:
+        if not user_id:
+            return False
+        return self.author_id == user_id
+
+
+@dataclass(slots=True, kw_only=True)
+class ChatEvent(ChatMessage):
+    """A message as the work it may be for a member: ``event_id`` names it
+    where it is queued and marked processed."""
+
+    event_id: str
+    is_thread_reply: bool = False
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def payload(self) -> dict[str, Any]:
         """The event as the member commands print it."""
@@ -102,11 +115,6 @@ class ChatEvent:
             "is_bot_message": self.is_bot_message,
             "is_thread_reply": self.is_thread_reply,
         }
-
-    def is_from_user(self, user_id: str | None) -> bool:
-        if not user_id:
-            return False
-        return self.author_id == user_id
 
 
 @dataclass(slots=True)

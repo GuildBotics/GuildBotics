@@ -8,7 +8,7 @@ from typing import Any
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
-from guildbotics.runtime.chat_service import ChatEvent, message_position
+from guildbotics.runtime.chat_service import ChatEvent, ChatMessage
 
 
 @dataclass(slots=True)
@@ -54,22 +54,6 @@ class ThreadConversationState:
     backfill_error_count: int = 0
     last_backfill_error: str = ""
     effort: str = ""
-
-
-@dataclass(slots=True)
-class ThreadMessageState:
-    channel_id: str
-    thread_id: str
-    message_id: str
-    occurred_at: datetime
-    author_id: str | None
-    text: str
-    mentions: list[str] = field(default_factory=list)
-    is_bot_message: bool = False
-
-    @property
-    def position(self) -> str:
-        return message_position(self.occurred_at, self.message_id)
 
 
 @dataclass(slots=True)
@@ -133,7 +117,6 @@ class PendingChatEvent:
                 author_id=_optional_text(item.get("author_id")),
                 text=str(item.get("text", "") or ""),
                 mentions=[str(value) for value in mentions if str(value)],
-                is_edit_or_delete=bool(item.get("is_edit_or_delete", False)),
                 is_bot_message=bool(item.get("is_bot_message", False)),
                 is_thread_reply=bool(item.get("is_thread_reply", False)),
                 metadata=normalize_workflow_status_metadata(item.get("metadata")),
@@ -161,7 +144,6 @@ class PendingChatEvent:
             "author_id": event.author_id,
             "text": event.text,
             "mentions": [str(value) for value in event.mentions if str(value)],
-            "is_edit_or_delete": bool(event.is_edit_or_delete),
             "is_bot_message": bool(event.is_bot_message),
             "is_thread_reply": bool(event.is_thread_reply),
             "metadata": normalize_workflow_status_metadata(event.metadata),
@@ -257,7 +239,7 @@ class ConversationStateStore(ABC):
     @abstractmethod
     def load_thread_messages(
         self, service: str, person_id: str, channel_id: str, thread_id: str
-    ) -> list[ThreadMessageState]:
+    ) -> list[ChatMessage]:
         """Load locally cached messages observed in a thread."""
 
     @abstractmethod
@@ -273,7 +255,7 @@ class ConversationStateStore(ABC):
         person_id: str,
         channel_id: str,
         thread_id: str,
-        message: ThreadMessageState,
+        message: ChatMessage,
     ) -> None:
         """Append or update a locally cached thread message."""
 

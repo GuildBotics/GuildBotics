@@ -535,9 +535,9 @@ async def test_thread_backfill_reads_from_the_newest_known_message_less_overlap(
 
 
 def chat_selection_message(message_id: str, occurred_at):
-    from guildbotics.integrations.chat_state_store import ThreadMessageState
+    from guildbotics.runtime.chat_service import ChatMessage
 
-    return ThreadMessageState(
+    return ChatMessage(
         channel_id="C1",
         thread_id="t1",
         message_id=message_id,
