@@ -279,7 +279,7 @@ class PendingChatDispatcher:
                                 max_attempts=pending.max_attempts,
                             ),
                             run_turn=lambda turn: self._run_workflow(
-                                person, service, channel_id, pending, turn
+                                person, pending, turn
                             ),
                         )
             except WorkRejectedError as exc:
@@ -404,8 +404,6 @@ class PendingChatDispatcher:
     async def _run_workflow(
         self,
         person: Person,
-        service: str,
-        channel_id: str,
         pending: PendingChatEvent,
         turn: ChatTurn,
     ) -> None:
@@ -415,7 +413,6 @@ class PendingChatDispatcher:
             source="event_queue",
             trigger_type="chat",
             payload=turn.model_dump(),
-            idempotency_key=f"{service}:message:{channel_id}:{pending.event.event_id}",
             run_id=pending.run_id,
             work=Work.of_chat(turn.subject),
         )

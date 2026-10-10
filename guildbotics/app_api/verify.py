@@ -4,15 +4,12 @@ import os
 from typing import Any, cast
 
 from guildbotics.app_api.models import ConfigStatus, VerifyCheck, VerifyResponse
-from guildbotics.entities.team import Person, Service, Team
+from guildbotics.entities.team import Team
 from guildbotics.environment.status import (
     DeviceStatus,
     device_status,
 )
-from guildbotics.integrations.github.github_utils import (
-    GitHubAppAuth,
-    get_github_account_type,
-)
+from guildbotics.integrations.factory import configured_providers
 from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
 from guildbotics.intelligences.llm_providers import provider_env_keys, provider_of
 from guildbotics.utils.env_loader import workspace_secret_store
@@ -55,7 +52,7 @@ class VerifyService:
             checks.extend(self._check_llm_provider(team, env))
             checks.append(self._check_environment(device))
             checks.extend(self._check_cli_agent(device))
-            checks.extend(self._check_github_credentials(team, env))
+            checks.extend(self._check_credentials(team))
 
         errors = [check for check in checks if check.status == "error"]
         warnings = [check for check in checks if check.status == "warning"]
@@ -205,57 +202,20 @@ class VerifyService:
             )
         ]
 
-    def _check_github_credentials(
-        self, team: Team, env: dict[str, str | None]
-    ) -> list[VerifyCheck]:
-        if not team.project.is_available_service(Service.TICKET_MANAGER):
-            return []
-
-        checks: list[VerifyCheck] = []
-        for member in team.members:
-            if not member.is_active:
-                continue
-
-            keys = self._github_required_keys(member)
-            for key in keys:
-                if key in {"github_app_id", "github_installation_id"}:
-                    configured = member.has_account_info(key)
-                    target = f"account_info.{key}"
-                elif key == "github_private_key":
-                    configured = bool(
-                        workspace_secret_store().get(
-                            member.to_person_env_key("github_private_key")
-                        )
-                    )
-                    target = member.to_person_env_key(key)
-                else:
-                    target = member.to_person_env_key(key)
-                    configured = self._has_env(target, env) or bool(
-                        workspace_secret_store().get(target)
-                    )
-                checks.append(
-                    self._check(
-                        "github_credential",
-                        configured,
-                        f"{target} is configured.",
-                        f"{target} is not configured.",
-                        target=target,
-                        context={"person_id": member.person_id, "key": key},
-                    )
-                )
-        return checks
-
-    def _github_required_keys(self, member: Person) -> list[str]:
-        github_account_type = get_github_account_type(member)
-        if github_account_type == GitHubAppAuth.GITHUB_APPS:
-            return [
-                "github_installation_id",
-                "github_app_id",
-                "github_private_key",
-            ]
-        if github_account_type == GitHubAppAuth.MACHINE_USER:
-            return ["github_access_token"]
-        return []
+    def _check_credentials(self, team: Team) -> list[VerifyCheck]:
+        return [
+            VerifyCheck(
+                code=check.code,
+                status=check.status,
+                message=check.message,
+                target=check.target,
+                context=check.context,
+            )
+            for provider in configured_providers(team)
+            for member in team.members
+            if member.is_active
+            for check in provider.verify(member)
+        ]
 
     def _resolve_default_model_provider(self, team: Team) -> str:
         # The team parameter is retained for API stability; provider resolution

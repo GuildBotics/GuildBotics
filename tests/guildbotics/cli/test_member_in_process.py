@@ -88,13 +88,14 @@ def test_path_checks_read_from_the_commands_directory(
     (tmp_path / "a-file").write_text("", encoding="utf-8")
     seen: list[Path] = []
 
-    async def github(person, operation):
-        return operation(
-            SimpleNamespace(
-                artifact_download=lambda _u, _n, d: seen.append(d) or {"dest": str(d)}
-            )
-        )
+    async def download(_context, _url, _name, destination):
+        seen.append(destination)
+        return {"dest": str(destination)}
 
+    async def github(person, operation):
+        return await operation(None)
+
+    monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
     monkeypatch.setattr(member_module, "_github", github)
     command = ["github", "run", "artifact", "download", "--person", "aiko"]
     command += ["--url", "https://example.test/pr/1", "--name", "logs", *arguments]
@@ -438,11 +439,14 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
     (tmp_path / "a-file").write_text("", encoding="utf-8")
     seen: list[Path] = []
 
-    async def github(person, operation):
-        return operation(
-            SimpleNamespace(artifact_download=lambda _u, _n, d: seen.append(d) or {})
-        )
+    async def download(_context, _url, _name, destination):
+        seen.append(destination)
+        return {}
 
+    async def github(person, operation):
+        return await operation(None)
+
+    monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
     monkeypatch.setattr(member_module, "_github", github)
     looked: list[str] = []
     for name in ("stat", "lstat"):

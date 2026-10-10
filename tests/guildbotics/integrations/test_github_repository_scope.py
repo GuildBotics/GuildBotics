@@ -15,11 +15,14 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from guildbotics.integrations.github import async_client, github_utils, repository_scope
+from guildbotics.integrations import repository_scope
+from guildbotics.integrations.github import async_client, github_utils
 from guildbotics.integrations.github.repository_scope import (
     NODE_MUTATIONS,
     NODE_REPOSITORY,
     PROJECT_MUTATIONS,
+)
+from guildbotics.integrations.repository_scope import (
     RepositoryScopeError,
     check_repository,
 )
@@ -196,7 +199,7 @@ async def test_without_a_configured_owner_every_repository_write_is_refused(
     client = _client(monkeypatch, sent, owner="")
     try:
         await client.get("/repos/acme/demo")
-        with pytest.raises(RepositoryScopeError, match="No GitHub owner"):
+        with pytest.raises(RepositoryScopeError, match="No owner is configured"):
             await client.post("/repos/acme/demo/issues", json={})
     finally:
         await client.aclose()
@@ -295,7 +298,8 @@ def test_check_repository_refuses_anything_else(refusals, scope, owner, reposito
 
 
 def test_project_mutations_are_mutations_of_the_configured_project() -> None:
-    """The allowlist is exactly the four Project operations the issue names."""
+    """The allowlist is exactly the Project's own operations: what writes to
+    no repository."""
     operations = {
         match.group(1)
         for document in PROJECT_MUTATIONS
@@ -303,7 +307,6 @@ def test_project_mutations_are_mutations_of_the_configured_project() -> None:
     }
 
     assert operations == {
-        "addProjectV2ItemById",
         "updateProjectV2ItemFieldValue",
         "updateProjectV2Field",
         "createProjectV2Field",
@@ -326,13 +329,16 @@ def _subject(owner: str, name: str = "demo") -> dict[str, Any]:
     return {"repository": {"name": name, "owner": {"login": owner}}}
 
 
-def test_node_mutations_are_a_reaction_and_the_patrols_draft_conversion() -> None:
+def test_node_mutations_are_what_names_a_node_of_a_repository() -> None:
+    """A reaction, the patrol's draft conversion, and adding an issue to the
+    Project (which the issue records in its timeline)."""
     operations = {
         re.search(r"\{\s*(\w+)\(", document).group(1): variable
         for document, variable in NODE_MUTATIONS.items()
     }
 
     assert operations == {
+        "addProjectV2ItemById": "content",
         "addReaction": "subject",
         "convertPullRequestToDraft": "pullRequest",
     }
@@ -347,7 +353,7 @@ async def test_a_node_write_is_sent_once_its_node_is_in_the_owners_repository(
     client = _client(monkeypatch, sent, node=_subject(owner))
     try:
         await client.post(
-            "/graphql", **_node_write(document, {variable: "N_1", "content": "EYES"})
+            "/graphql", **_node_write(document, {"content": "EYES", variable: "N_1"})
         )
     finally:
         await client.aclose()
@@ -394,7 +400,7 @@ async def test_a_node_write_outside_the_owner_is_refused_before_it_is_sent(
         with pytest.raises(RepositoryScopeError, match="'acme'"):
             await client.post(
                 "/graphql",
-                **_node_write(document, {variable: "N_1", "content": "EYES"}),
+                **_node_write(document, {"content": "EYES", variable: "N_1"}),
             )
     finally:
         await client.aclose()

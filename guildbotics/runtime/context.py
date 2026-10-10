@@ -143,6 +143,8 @@ class Context:
         """Close cached integrations that hold network resources."""
         await _maybe_aclose(self.code_hosting_service)
         self.code_hosting_service = None
+        await _maybe_aclose(self.ticket_manager)
+        self.ticket_manager = None
         await _maybe_aclose(self.chat_service)
         self.chat_service = None
 

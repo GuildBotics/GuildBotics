@@ -375,7 +375,8 @@ async def test_person_id_human_member_without_github_username_uses_stable_code()
                     person_type="human",
                     account_info={"slack_user_id": "U012345678"},
                 )
-            ]
+            ],
+            {"ticket_manager": {"name": "github"}},
         )
     )
 
@@ -387,7 +388,9 @@ async def test_person_id_human_member_without_github_username_uses_stable_code()
 
 
 @pytest.mark.asyncio
-async def test_person_id_human_member_without_github_service_uses_stable_code() -> None:
+async def test_person_id_human_member_without_a_board_has_no_board_check() -> None:
+    """Whether a human can be assigned is the board's question: with none,
+    nothing is asked."""
     context = _StubContext(
         team=_team(
             [
@@ -407,8 +410,8 @@ async def test_person_id_human_member_without_github_service_uses_stable_code() 
     response = await _run(context, person_id="aiko")
 
     checks = _by_code(response)
-    assert checks["human_github_user"].status == "ok"
-    assert "human_github_username" not in checks
+    assert "human_github_user" not in checks
+    assert checks["human_slack_user_id"].status == "ok"
 
 
 @pytest.mark.asyncio
@@ -1144,7 +1147,7 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
 
 @pytest.mark.asyncio
 async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    from guildbotics.capabilities.member_github import MemberCapabilityError
+    from guildbotics.runtime.integration_factory import MemberCapabilityError
 
     _patch_talk(monkeypatch)
     _patch_app_token_probe(monkeypatch, error=MemberCapabilityError("invalid_auth"))

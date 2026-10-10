@@ -43,7 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from guildbotics.integrations.github.github_utils import normalize_login
-from guildbotics.integrations.workflow_status_comment import (
+from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
     suppresses_ticket_selection,
 )

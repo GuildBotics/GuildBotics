@@ -7,7 +7,7 @@ writes a clone therefore runs inside the command's environment
 (:class:`CommandGuest`), never on the host, and outside a command there is
 none to run it. The member's credential is only used on the host, against a
 repository of the host's own per ``owner/repo`` that no environment mounts,
-and toward the URL the host derives. The two exchange history as git bundles:
+and toward the URL the code host gives it. The two exchange history as git bundles:
 data, which the host takes only under the branch it checked.
 
 The repository open in the user's own session (``--workspace-mode current``)
@@ -33,13 +33,15 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
-from guildbotics.capabilities.member_github import (
-    MemberCapabilityError,
-    MemberGitHubCapabilityService,
-)
+from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
-from guildbotics.integrations.github.github_utils import get_person_github_token
-from guildbotics.integrations.github.repository_scope import NAME, check_repository
+from guildbotics.integrations.repository_scope import (
+    NAME,
+    check_repository,
+    configured_owner,
+)
+from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
@@ -343,18 +345,31 @@ class _Origin:
 
 class MemberGitWorkspaceService:
     def __init__(
-        self, person: Person, team: Team, logger: logging.Logger | None = None
+        self,
+        person: Person,
+        team: Team,
+        code: Callable[[], CodeHostingService],
+        logger: logging.Logger | None = None,
     ) -> None:
+        """
+        Args:
+            person: The member.
+            team: The member's team.
+            code: The code host, asked for only by what reaches it (a commit
+                does not).
+            logger: Where to log.
+        """
         self.person = person
         self.team = team
+        self._code = code
         self.logger = logger or logging.getLogger(__name__)
-        self.github = MemberGitHubCapabilityService(person, team)
         self.workspace_root = get_member_clone_path(person.person_id)
         #: The host's own repositories and records of the member's clones.
         self.host_root = get_workspace_local_path("member_git", person.person_id)
 
-    async def aclose(self) -> None:
-        await self.github.aclose()
+    @property
+    def code(self) -> CodeHostingService:
+        return self._code()
 
     async def prepare(
         self,
@@ -370,12 +385,12 @@ class MemberGitWorkspaceService:
         guest = self._guest()
         anchor_url = pr_url or issue_url
         if anchor_url:
-            resource = self.github.parse_url(anchor_url)
+            resource = self.code.locate(anchor_url)
             full_repo = resource.full_repo
-            if resource.kind == "pull":
+            if resource.kind == "pull_request":
                 mode = "pull_request_review"
                 pr_url = pr_url or anchor_url
-                head = await self.github.get_pr_head(pr_url)
+                head = await self.code.pull_request_head(pr_url)
                 branch = head.branch
                 checkout_owner = head.owner
                 checkout_repo = head.repo
@@ -396,8 +411,8 @@ class MemberGitWorkspaceService:
             full_repo = repo
         _name(checkout_owner, "owner")
         _name(checkout_repo, "repository")
-        default_branch = await self.github.default_branch(checkout_owner, checkout_repo)
-        token = await get_person_github_token(self.person, self.github.base_url)
+        default_branch = await self.code.default_branch(checkout_owner, checkout_repo)
+        token = await self.code.push_credential()
         with self._locked(self.host_root, guest.remaining()):
             self._branch_name(guest.remaining, branch)
             self._branch_name(guest.remaining, default_branch)
@@ -504,11 +519,11 @@ class MemberGitWorkspaceService:
                 if isinstance(source, _GuestGit)
                 else self._push_destination(source)
             )
-            check_repository(self.github.owner, owner, repo)
+            check_repository(configured_owner(self.team.project), owner, repo)
             branch = self._branch_name(timeout, _current_branch(source))
             origin = await self._origin(root, owner, repo, timeout)
             ensure_chat_current(self.person.person_id)
-            token = await get_person_github_token(self.person, self.github.base_url)
+            token = await self.code.push_credential()
             origin.fetch(token)
             sha = (
                 _receive(source, origin, branch)
@@ -523,7 +538,9 @@ class MemberGitWorkspaceService:
         pull_requests: list[dict[str, Any]] = []
         pull_requests_error = None
         try:
-            pull_requests = await self.github.open_pr_checks(origin.url, branch)
+            pull_requests = await open_pull_request_readiness(
+                self.code, origin.url, branch
+            )
         except (MemberCapabilityError, httpx.HTTPError) as exc:
             pull_requests_error = str(exc)
         return PushResult(
@@ -596,7 +613,7 @@ class MemberGitWorkspaceService:
     async def _origin(
         self, root: Path, owner: str, repo: str, timeout: Callable[[], float] | None
     ) -> _Origin:
-        url = await self.github.get_clone_url(owner, repo)
+        url = await self.code.clone_url(owner, repo)
         return _Origin(root, owner, repo, url, timeout)
 
     def _push_destination(self, git: _Git) -> tuple[str, str]:
@@ -606,12 +623,10 @@ class MemberGitWorkspaceService:
         listed = git("remote", "get-url", "--push", "--all", "origin").stdout
         remotes = listed.decode(errors="replace").splitlines()
         repository = (
-            self.github.repository_from_remote(remotes[0])
-            if len(remotes) == 1
-            else None
+            self.code.repository_from_remote(remotes[0]) if len(remotes) == 1 else None
         )
         return repository or (
-            ", ".join(self.github.remote_host(url) for url in remotes),
+            ", ".join(self.code.remote_host(url) for url in remotes),
             "",
         )
 
@@ -780,7 +795,7 @@ class MemberGitWorkspaceService:
             {
                 "id": sha,
                 "message": subject or sha[:7],
-                "url": self.github.commit_url_from_remote(origin.url, sha),
+                "url": self.code.commit_url(origin.url, sha),
             }
             for sha, _, subject in (
                 line.partition("\0") for line in listed.stdout.decode().splitlines()

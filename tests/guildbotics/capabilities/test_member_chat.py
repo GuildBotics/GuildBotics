@@ -2,7 +2,7 @@ import pytest
 
 from guildbotics.capabilities import member_chat
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
-from guildbotics.capabilities.member_github import MemberCapabilityError
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.chat_service import (
     ChatEvent,

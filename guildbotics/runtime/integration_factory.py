@@ -7,6 +7,14 @@ from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_manager import TicketManager
 
 
+class MemberCapabilityError(RuntimeError):
+    """A member's operation on a configured service failed.
+
+    The message is safe to show the member: it carries no upstream body and
+    no credential.
+    """
+
+
 class IntegrationFactory(ABC):
     @abstractmethod
     def create_code_hosting_service(

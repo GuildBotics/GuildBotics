@@ -161,7 +161,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "branch": (
         SERVICE,
         frozenset({"git prepare"}),
-        "guildbotics.integrations.github.repository_scope.check_repository",
+        "guildbotics.integrations.repository_scope.check_repository",
     ),
     # GitHub: what the member writes to, within the configured owner.
     "repo": (

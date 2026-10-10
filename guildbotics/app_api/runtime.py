@@ -99,11 +99,9 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
+from guildbotics.capabilities.activity_events import refresh_activity_events
 from guildbotics.capabilities.command_failures import (
     command_failure_payload,
-)
-from guildbotics.capabilities.github_activity_events import (
-    refresh_github_activity_events,
 )
 from guildbotics.capabilities.member_memory_audit import (
     MemoryAuditStore,
@@ -184,7 +182,6 @@ from guildbotics.environment.toolchain import (
 )
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
 )
@@ -208,6 +205,7 @@ from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+from guildbotics.setup.github_project import ProjectBoard, with_project_board
 from guildbotics.setup.setup_service import (
     PersonConfigSummary,
     SimplePersonSetupService,
@@ -1661,13 +1659,11 @@ class AppRuntime:
         self, team: Team, start: datetime, end: datetime, period: tuple[str, str]
     ) -> None:
         try:
-            asyncio.run(refresh_github_activity_events(team, start, end))
+            asyncio.run(refresh_activity_events(team, start, end))
             if end <= datetime.now(UTC):
                 _mark_activity_week_completed(period)
         except Exception as exc:
-            self._event_bus.publish_log(
-                "WARNING", f"GitHub activity refresh failed: {exc}"
-            )
+            self._event_bus.publish_log("WARNING", f"Activity refresh failed: {exc}")
 
     def _activity_records_between(
         self, start: datetime, end: datetime
@@ -1797,16 +1793,11 @@ class AppRuntime:
     async def _with_setup_ticket_manager(
         self,
         request: ProjectStatusOptionsRequest,
-        action: Callable[[GitHubTicketManager], Awaitable[Any]],
+        action: Callable[[ProjectBoard], Awaitable[Any]],
     ) -> Any:
-        """Run *action* against a GitHubTicketManager built from form identity.
-
-        The project identity comes from the (possibly unsaved) form, while the
-        member roster and credentials come from the saved team config. Tries
-        each member's credentials until one succeeds; returns the action result,
-        or ``None`` when the project identity is incomplete, no context/member is
-        available, or every attempt fails (so callers degrade gracefully).
-        """
+        """Run *action* against the board of the Project the form identifies;
+        ``None`` when the identity is incomplete, no context is available, or
+        every attempt fails (so callers degrade gracefully)."""
         if not (request.owner and request.project_id and request.github_project_url):
             return None
         try:
@@ -1814,36 +1805,13 @@ class AppRuntime:
         except Exception:
             return None
         try:
-            members = [m for m in context.team.members if m.is_active]
-            members = members or list(context.team.members)
-            project = Project(
-                name=context.team.project.name or "setup",
-                services={
-                    "ticket_manager": {
-                        "name": "GitHub",
-                        "owner": request.owner,
-                        "project_id": request.project_id,
-                        "url": request.github_project_url,
-                    }
-                },
+            return await with_project_board(
+                context.team,
+                owner=request.owner,
+                project_id=request.project_id,
+                url=request.github_project_url,
+                action=action,
             )
-            team = Team(project=project, members=context.team.members)
-            logger = logging.getLogger("guildbotics.app_api.setup_github")
-            for member in members:
-                # Construct inside the try: GitHubTicketManager.__init__ raises for
-                # a member without a GitHub username, and such members must be
-                # skipped (not surfaced as a 500) so a later credentialed member
-                # is still tried.
-                ticket_manager: GitHubTicketManager | None = None
-                try:
-                    ticket_manager = GitHubTicketManager(logger, member, team)
-                    return await action(ticket_manager)
-                except Exception:
-                    continue
-                finally:
-                    if ticket_manager is not None and ticket_manager.client is not None:
-                        await ticket_manager.client.aclose()
-            return None
         finally:
             await context.aclose()
 
@@ -2272,7 +2240,6 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
         or names
         & {
             "TicketManager",
-            "GitHubTicketManager",
         }
         or attrs & {"get_ticket_manager", "create_ticket_manager"}
     ):

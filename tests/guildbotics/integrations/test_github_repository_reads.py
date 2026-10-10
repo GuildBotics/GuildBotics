@@ -10,7 +10,7 @@ from guildbotics.entities import Person, Project, Team
 from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
-from guildbotics.runtime.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import RepositoryReadError
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 REPO = "GuildBotics/GuildBotics"
@@ -56,8 +56,7 @@ def readiness_payloads():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("large_path", [*readiness_payloads(), "actions/jobs/1/logs"])
 async def test_readiness_uses_host_transport_for_all_internal_reads(reader, large_path):
-    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
-    from guildbotics.runtime.code_hosting_service import MAX_PAGE_BYTES
+    from guildbotics.runtime.code_hosting_resources import MAX_PAGE_BYTES
 
     service, state, requests = reader
     payloads = readiness_payloads()
@@ -80,14 +79,10 @@ async def test_readiness_uses_host_transport_for_all_internal_reads(reader, larg
     page = await service.read(
         "pull_request_readiness", REPO, identifier="7", parameters={"failed_logs": True}
     )
-    host = MemberGitHubCapabilityService(service.person, service.team)
-    try:
-        expected = await host.pr_checks(
-            f"https://github.example.test/{REPO}/pull/7", failed_logs=True
-        )
-    finally:
-        await host.aclose()
-    assert page.items == [expected]
+    expected = await service.readiness(
+        f"https://github.example.test/{REPO}/pull/7", failed_logs=True
+    )
+    assert page.items == [expected.model_dump()]
     assert page.items[0]["readiness"] == "blocked"
     assert len(json.dumps(page.model_dump()).encode()) <= MAX_PAGE_BYTES
     assert all("max_response_bytes" not in r.extensions for r in requests)
@@ -170,13 +165,19 @@ async def test_graphql_errors_are_safe_resource_diagnostics(
 @pytest.mark.parametrize("state", ["open", "closed"])
 def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
     from guildbotics.integrations.github.pull_requests import _fit_log_tails
-    from guildbotics.runtime.code_hosting_service import (
+    from guildbotics.runtime.code_hosting_resources import (
         MAX_PAGE_BYTES,
         RepositoryReadPage,
     )
 
     result = {
-        "target": {"title": "PR"},
+        "target": {
+            "kind": "pull_request",
+            "repo": REPO,
+            "number": 7,
+            "title": "PR",
+            "html_url": f"https://github.com/{REPO}/pull/7",
+        },
         "readiness": "blocked" if state == "open" else "not_applicable",
         "checks": [{"name": "test"}],
         "failed_logs": [
@@ -324,7 +325,8 @@ async def test_detail_names_host_observed_target_and_fork_head(reader, resource)
         },
     )
     page = await service.read(resource, REPO, identifier="7")
-    assert page.target["title"] == "Target" and page.target["number"] == 7
+    assert page.target is not None
+    assert (page.target.title, page.target.number) == ("Target", 7)
     assert page.items[0]["assignees"] == ["aiko"] and page.items[0]["labels"] == ["bug"]
     if resource == "pull_requests":
         assert page.items[0]["head_repo"] == "fork/repo"
@@ -502,11 +504,7 @@ async def test_large_thread_returns_metadata_before_comment_pagination(reader):
         ("", "https://api.github.com"),
     ],
 )
-def test_common_reads_and_member_actions_share_the_configured_endpoint(
-    code_url, expected
-):
-    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
-
+def test_reads_and_writes_use_the_configured_code_host_endpoint(code_url, expected):
     person = Person(person_id="aiko", name="Aiko")
     team = Team(
         members=[],
@@ -522,7 +520,6 @@ def test_common_reads_and_member_actions_share_the_configured_endpoint(
         ),
     )
     assert hosting.GitHubCodeHostingService(person, team).base_url == expected
-    assert MemberGitHubCapabilityService(person, team).base_url == expected
 
 
 @pytest.mark.asyncio
@@ -541,40 +538,6 @@ async def test_graphql_partial_data_and_project_field_overflow_fail_explicitly(r
         with pytest.raises(RepositoryReadError) as error:
             await service.read("issue_projects", REPO, identifier="7")
         assert "private upstream detail" not in str(error.value)
-
-
-@pytest.mark.asyncio
-async def test_common_readiness_is_the_host_service_used_by_push_and_completion(
-    reader, monkeypatch
-):
-    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
-    from guildbotics.integrations.github.pull_requests import GitHubPullRequests
-
-    service, _, _ = reader
-    assert MemberGitHubCapabilityService.pr_checks is GitHubPullRequests.pr_checks
-    observed = []
-
-    async def checks(self, url, **kwargs):
-        observed.append((url, kwargs))
-        return {
-            "target": {"title": "host target"},
-            "readiness": "blocked",
-            "completion_blockers": [{"code": "head_changed"}],
-        }
-
-    monkeypatch.setattr(GitHubPullRequests, "pr_checks", checks)
-    page = await service.read(
-        "pull_request_readiness", REPO, identifier="7", parameters={"failed_logs": True}
-    )
-    assert page.items[0]["readiness"] == "blocked" and page.target == {
-        "title": "host target"
-    }
-    assert observed == [
-        (
-            f"https://github.example.test/{REPO}/pull/7",
-            {"failed_logs": True, "log_tail_bytes": 65536},
-        )
-    ]
 
 
 @pytest_asyncio.fixture
@@ -717,7 +680,7 @@ async def test_missing_ambiguous_or_oversized_link_cursor_is_rejected(reader, qu
         },
     )
     with pytest.raises(
-        RepositoryReadError, match=t("integrations.github.read.continuation")
+        RepositoryReadError, match=t("integrations.repository.continuation")
     ):
         await read(service)
 
@@ -851,7 +814,7 @@ async def test_detail_and_transport_failure(reader):
         200, json={"number": 42, "state": "open"}
     )
     result = await read(service, identifier="42")
-    assert result.items[0].id == "42" and result.continuation is None
+    assert result.items[0]["id"] == "42" and result.continuation is None
     assert requests[0].url.path == PATH + "/42" and not requests[0].url.query
 
     def fail(request):

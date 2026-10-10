@@ -5,7 +5,7 @@ from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_ROUTING_SUPPRESS,
     workflow_status_fields,
 )
-from guildbotics.integrations.workflow_status_comment import (
+from guildbotics.integrations.github.workflow_status_comment import (
     WORKFLOW_STATUS_MARKER,
     WorkflowStatusComment,
     parse_workflow_status_comment,

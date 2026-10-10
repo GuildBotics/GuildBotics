@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.chat_batch import chat_batch_event_ids
 from guildbotics.capabilities.chat_updates import (
     ChatUpdatesRequired,
@@ -23,12 +24,7 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
-from tests.guildbotics.capabilities.test_member_github import (
-    FakeClient,
-)
-from tests.guildbotics.capabilities.test_member_github import (
-    _service as github_service,
-)
+from tests.guildbotics.local_code_host import issue, item, local_member
 
 _SOURCE = ChatSubject(
     service="slack",
@@ -181,18 +177,16 @@ async def test_chat_write_checks_source_even_for_another_destination(chat_run, a
 
 
 @pytest.mark.asyncio
-async def test_github_comment_checks_original_chat(chat_run):
-    service = github_service()
-    client = FakeClient()
-    client.get_payloads["/repos/owner/repo/issues/1"] = {"number": 1, "title": "T"}
-    service._client = client
+async def test_code_host_comment_checks_original_chat(chat_run):
+    member = local_member()
+    url = issue(1)
     with pytest.raises(ChatUpdatesRequired):
-        await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
-    # A refused write reaches GitHub for nothing, not even to read the issue.
-    assert not client.posts and not client.gets
+        await member_repository.issue_comment(member, url, "comment")
+    # A refused write reaches the code host for nothing.
+    assert item(url)["comments"] == []
     check_chat_updates("aiko")
-    await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
-    assert len(client.posts) == 1
+    await member_repository.issue_comment(member, url, "comment")
+    assert [c["body"] for c in item(url)["comments"]] == ["comment"]
 
 
 def test_interactive_and_ticket_runs_have_no_chat_precondition():

@@ -9,7 +9,7 @@ from typing import Any
 from pydantic_core import to_jsonable_python
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import RepositoryReadError
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {

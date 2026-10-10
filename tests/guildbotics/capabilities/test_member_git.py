@@ -16,7 +16,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import git
@@ -25,13 +25,12 @@ import pytest
 
 from guildbotics.capabilities import member_git
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
-from guildbotics.capabilities.member_github import (
-    GitHubPullRequestHead,
-    MemberCapabilityError,
-)
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.github import repository_scope
-from guildbotics.integrations.github.repository_scope import RepositoryScopeError
+from guildbotics.integrations import repository_scope
+from guildbotics.integrations.local import store
+from guildbotics.integrations.local.code_hosting import LocalCodeHostingService
+from guildbotics.integrations.repository_scope import RepositoryScopeError
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     GuestProcessError,
@@ -41,8 +40,10 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from tests.git_seed import WorkerGitSeed
+from tests.guildbotics.local_code_host import write
 
 GUEST_MARK = "GUILDBOTICS_TEST_GUEST"
+_ISSUE = "local://owner/repo/issues/1"
 _REAL_RUN = subprocess.run
 #: What the member's git may be given inside the environment.
 _GUEST_ENV_KEYS = {
@@ -152,17 +153,50 @@ def _person() -> Person:
     )
 
 
+class _CredentialedHost(LocalCodeHostingService):
+    """The local code host with a credential, which git must be given only
+    toward it."""
+
+    async def push_credential(self) -> str:
+        return _TOKEN
+
+
 @dataclass
 class _Member:
     """A member with a command's environment, and the remotes it reaches.
 
-    ``remotes[owner]`` is the ``<owner>/repo`` repository of the code host.
+    ``remotes[owner]`` is the ``<owner>/repo`` repository of the local code
+    host.
     """
 
     service: MemberGitWorkspaceService
     guest: _LocalGuest
     remotes: dict[str, Path]
-    heads: dict[str, GitHubPullRequestHead] = field(default_factory=dict)
+
+    def pull_request(self, number: int, head: str, head_repo: str = "") -> str:
+        """Open ``#<number>`` of owner/repo from ``head`` (of ``head_repo``)."""
+        write(
+            "owner",
+            "repo",
+            {
+                "kind": "pull_request",
+                "number": number,
+                "title": "PR",
+                "body": "",
+                "state": "open",
+                "author": "someone",
+                "head": head,
+                "head_repo": head_repo or None,
+                "base": "main",
+                "draft": False,
+                "reviewers": [],
+                "reviews": [],
+                "review_comments": [],
+                "comments": [],
+                "created_at": store.now(),
+            },
+        )
+        return store.url("owner", "repo", "pull_request", number)
 
     @property
     def clone(self) -> Path:
@@ -183,7 +217,7 @@ class _Member:
         return invoke()
 
     async def prepare(self, **anchor: str) -> dict:
-        anchor = anchor or {"issue_url": "https://github.com/owner/repo/issues/1"}
+        anchor = anchor or {"issue_url": _ISSUE}
         return await self.run(lambda service: service.prepare(**anchor))
 
     def repo(self) -> git.Repo:
@@ -206,46 +240,20 @@ def member(
     worker_git_seed: WorkerGitSeed,
     posix_sh: str,
 ) -> _Member:
-    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", _TOKEN)
     remotes: dict[str, Path] = {}
     for owner in ("owner", "contributor"):
-        remotes[owner] = tmp_path / "remotes" / owner / "repo.git"
+        remotes[owner] = store.bare(owner, "repo")
         worker_git_seed.copy(worker_git_seed.member_remote, remotes[owner])
     project = Project(
         name="demo",
-        services={"code_hosting_service": {"name": "GitHub", "owner": "owner"}},
+        services={"code_hosting_service": {"name": "local", "owner": "owner"}},
     )
-    service = MemberGitWorkspaceService(
-        _person(), Team(project=project, members=[_person()])
-    )
+    team = Team(project=project, members=[_person()])
+    code = _CredentialedHost(_person(), team)
+    service = MemberGitWorkspaceService(_person(), team, lambda: code)
     # The command's turns work in it: it is there before any of them runs.
     service.workspace_root.mkdir(parents=True)
-    result = _Member(service, _LocalGuest(posix_sh), remotes)
-
-    async def default_branch(owner, repo):
-        return "main"
-
-    async def clone_url(owner, repo):
-        return result.url(owner)
-
-    def repository_from_remote(url):
-        owners = [owner for owner in remotes if result.url(owner) == url]
-        return (owners[0], "repo") if owners else None
-
-    async def pr_head(url):
-        return result.heads[url]
-
-    async def no_pull_requests(remote_url, branch):
-        return []
-
-    monkeypatch.setattr(service.github, "default_branch", default_branch)
-    monkeypatch.setattr(service.github, "open_pr_checks", no_pull_requests)
-    monkeypatch.setattr(service.github, "get_clone_url", clone_url)
-    monkeypatch.setattr(
-        service.github, "repository_from_remote", repository_from_remote
-    )
-    monkeypatch.setattr(service.github, "get_pr_head", pr_head)
-    return result
+    return _Member(service, _LocalGuest(posix_sh), remotes)
 
 
 @pytest.fixture
@@ -522,18 +530,25 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(member, monkey
     member.repo().index.commit("local commit")
     calls = {}
 
-    async def fake_open_pr_checks(remote_url, branch):
-        calls.update({"remote_url": remote_url, "branch": branch})
-        return [
-            {"pr_url": "https://github.com/owner/repo/pull/7", "readiness": "blocked"}
-        ]
+    member.pull_request(7, "ticket/1")
+    open_pull_requests = member.service.code.open_pull_requests
 
-    monkeypatch.setattr(member.service.github, "open_pr_checks", fake_open_pr_checks)
+    async def observed(remote_url, branch):
+        calls.update({"remote_url": remote_url, "branch": branch})
+        return await open_pull_requests(remote_url, branch)
+
+    monkeypatch.setattr(member.service.code, "open_pull_requests", observed)
 
     result = await member.run(lambda s: s.push(member.clone))
 
     assert calls == {"remote_url": member.url("owner"), "branch": "ticket/1"}
-    assert result.pull_requests[0]["readiness"] == "blocked"
+    assert result.pull_requests == [
+        {
+            "pr_url": "local://owner/repo/pull/7",
+            "readiness": "ready",
+            "completion_blockers": [],
+        }
+    ]
     assert "pull_requests_error" not in result.to_dict()
 
 
@@ -554,7 +569,9 @@ async def test_push_stays_successful_when_pr_readiness_lookup_fails(
     async def failed_open_pr_checks(_remote_url, _branch):
         raise failure
 
-    monkeypatch.setattr(member.service.github, "open_pr_checks", failed_open_pr_checks)
+    monkeypatch.setattr(
+        member.service.code, "open_pull_requests", failed_open_pr_checks
+    )
 
     result = await member.run(lambda s: s.push(member.clone))
 
@@ -655,7 +672,7 @@ async def test_prepare_checks_out_a_new_ticket_branch_from_the_default(member):
         "repo_path": str(member.clone),
         "branch": "ticket/1",
         "default_branch": "main",
-        "issue_url": "https://github.com/owner/repo/issues/1",
+        "issue_url": _ISSUE,
         "pr_url": "",
         "mode": "issue",
     }
@@ -670,11 +687,10 @@ async def test_prepare_checks_out_a_new_ticket_branch_from_the_default(member):
 async def test_prepare_pull_request_review_checks_out_the_fork_head(member, tmp_path):
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
-    pr_url = "https://github.com/owner/repo/pull/7"
-    member.heads[pr_url] = GitHubPullRequestHead("contributor", "repo", "feature")
+    pr_url = member.pull_request(7, "feature", "contributor/repo")
 
     result = await member.prepare(
-        issue_url="https://github.com/owner/repo/issues/42", pr_url=pr_url
+        issue_url="local://owner/repo/issues/42", pr_url=pr_url
     )
 
     assert result["repo"] == "owner/repo"
@@ -748,8 +764,7 @@ async def test_a_fork_is_prepared_but_only_its_upstream_is_pushed_to(member, tmp
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
     before = fork.commit("feature").hexsha
-    pr_url = "https://github.com/owner/repo/pull/7"
-    member.heads[pr_url] = GitHubPullRequestHead("contributor", "repo", "feature")
+    pr_url = member.pull_request(7, "feature", "contributor/repo")
 
     await member.prepare(pr_url=pr_url)
     member.stage(content="fork\n").index.commit("to the fork")
@@ -976,7 +991,7 @@ async def test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token(
         lambda s: s.commit(member.clone, "planted"),
         lambda s: s.push(member.clone),
         lambda s: s.publish(member.clone, "planted"),
-        lambda s: s.prepare(issue_url="https://github.com/owner/repo/issues/1"),
+        lambda s: s.prepare(issue_url=_ISSUE),
     ):
         try:
             await member.run(operation)
@@ -1070,9 +1085,11 @@ async def test_the_host_takes_only_the_branch_of_what_a_clone_sends(
 @pytest.mark.asyncio
 async def test_a_prepare_that_failed_leaves_where_the_clone_pushes(member, tmp_path):
     await member.prepare()
-    member.remotes["contributor"].rename(tmp_path / "gone.git")
-    pr_url = "https://github.com/owner/repo/pull/7"
-    member.heads[pr_url] = GitHubPullRequestHead("contributor", "repo", "feature")
+    # The fork still names its default branch, but its commits are gone.
+    objects = member.remotes["contributor"] / "objects"
+    objects.rename(tmp_path / "gone")
+    (objects / "pack").mkdir(parents=True)
+    pr_url = member.pull_request(7, "feature", "contributor/repo")
     with pytest.raises(MemberCapabilityError, match="git fetch failed"):
         await member.prepare(pr_url=pr_url)
     sha = member.stage().index.commit("to the upstream").hexsha

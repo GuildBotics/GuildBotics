@@ -17,12 +17,12 @@ import httpx
 from pydantic import BaseModel
 
 from guildbotics.capabilities.member_chat import probe_slack_app_token
-from guildbotics.capabilities.member_github import MemberCapabilityError
 from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
     SlackChatService,
 )
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.setup.setup_service import SetupServiceError
 
 BOT_TOKEN_PREFIX = "xoxb-"

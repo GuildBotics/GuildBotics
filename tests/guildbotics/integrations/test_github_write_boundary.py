@@ -11,8 +11,10 @@ happened to think of:
   reaches GitHub
 - every HTTP client those modules make, since a client other than the gated
   one is not judged
-- every caller of ``create_github_client`` and ``get_person_github_token``,
-  since the gate is only as right as the owner it is given
+- every caller of ``create_github_client``, since the gate is only as right
+  as the owner it is given
+- every use of the member's credential for git (``push_credential``), in any
+  module, since it is given to git only where the repository is checked
 - every GraphQL mutation document in the package
 
 A new one fails here until it is classified.
@@ -22,7 +24,6 @@ from __future__ import annotations
 
 import ast
 import json
-import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,17 +32,18 @@ import httpx
 import pytest
 
 import guildbotics
-from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github import async_client, github_utils
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.code_hosting_service import (
+    GitHubCodeHostingService,
+)
 from guildbotics.integrations.github.repository_scope import (
     CONVERT_PULL_REQUEST_TO_DRAFT,
     NODE_MUTATIONS,
     NODE_REPOSITORY,
     PROJECT_MUTATIONS,
-    RepositoryScopeError,
 )
+from guildbotics.integrations.repository_scope import RepositoryScopeError
 
 PACKAGE = Path(guildbotics.__file__).parent
 SCOPE_MODULE = "integrations/github/repository_scope.py"
@@ -54,26 +56,48 @@ GRAPHQL = "gated: GraphQL"
 #: ``(module, function, method)`` of every write, and what judges it.
 WRITES = {
     ("integrations/github/code_hosting_service.py", "_read_resource", "post"): GRAPHQL,
-    ("capabilities/github_activity_events.py", "_project_items", "post"): GRAPHQL,
-    ("capabilities/member_github.py", "issue_create", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "issue_update", "patch"): REPOSITORY,
-    ("capabilities/member_github.py", "_apply_label_changes", "delete"): REPOSITORY,
-    ("capabilities/member_github.py", "_apply_label_changes", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "pr_create", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "pr_update", "patch"): REPOSITORY,
-    ("capabilities/member_github.py", "pr_review", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "pr_review_comment", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "pr_reply", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "reaction_add", "post"): REPOSITORY,
-    ("capabilities/member_github.py", "_graphql", "post"): GRAPHQL,
-    ("capabilities/member_github.py", "_post_comment", "post"): REPOSITORY,
-    ("integrations/github/github_ticket_manager.py", "_graphql", "post"): GRAPHQL,
-    ("integrations/github/repository_scope.py", "_node_in_scope", "post"): GRAPHQL,
+    ("integrations/github/code_hosting_service.py", "create_issue", "post"): REPOSITORY,
     (
-        "integrations/github/github_ticket_manager.py",
-        "add_comment_to_ticket",
+        "integrations/github/code_hosting_service.py",
+        "update_issue",
+        "patch",
+    ): REPOSITORY,
+    (
+        "integrations/github/code_hosting_service.py",
+        "_apply_label_changes",
+        "delete",
+    ): REPOSITORY,
+    (
+        "integrations/github/code_hosting_service.py",
+        "_apply_label_changes",
         "post",
     ): REPOSITORY,
+    (
+        "integrations/github/code_hosting_service.py",
+        "create_pull_request",
+        "post",
+    ): REPOSITORY,
+    (
+        "integrations/github/code_hosting_service.py",
+        "update_pull_request",
+        "patch",
+    ): REPOSITORY,
+    ("integrations/github/code_hosting_service.py", "review", "post"): REPOSITORY,
+    (
+        "integrations/github/code_hosting_service.py",
+        "review_comment",
+        "post",
+    ): REPOSITORY,
+    ("integrations/github/code_hosting_service.py", "reply", "post"): REPOSITORY,
+    ("integrations/github/code_hosting_service.py", "add_reaction", "post"): REPOSITORY,
+    ("integrations/github/code_hosting_service.py", "_graphql", "post"): GRAPHQL,
+    (
+        "integrations/github/code_hosting_service.py",
+        "_post_comment",
+        "post",
+    ): REPOSITORY,
+    ("integrations/github/github_ticket_manager.py", "_graphql", "post"): GRAPHQL,
+    ("integrations/github/repository_scope.py", "_node_in_scope", "post"): GRAPHQL,
     (
         "integrations/github/github_utils.py",
         "create_github_app_installation_token",
@@ -84,7 +108,6 @@ WRITES = {
         "convert_manifest_code",
         "post",
     ): "creates the GitHub App during setup, before any member credential",
-    ("cli/member.py", "_chat_post", "post"): "Slack, not GitHub",
 }
 
 #: ``(module, function)`` of every HTTP client made, and why it may be one.
@@ -108,11 +131,14 @@ CLIENTS = {
     ): "GETs a short-lived log URL without credentials",
 }
 
-#: ``(module, function)`` of every use of a member's token for git.
+#: ``(module, function)`` of every use of a member's credential for git, in
+#: any module: the code host hands it out (``push_credential``).
 TOKEN_USES = {
     ("capabilities/member_git.py", "prepare"): "fetch only; a read",
     ("capabilities/member_git.py", "push"): "checked",
 }
+#: Where GitHub makes the credential git is handed.
+GITHUB_TOKENS = {("integrations/github/code_hosting_service.py", "push_credential")}
 
 _READS = {"GET", "HEAD"}
 _WRITE_METHODS = {"post", "patch", "put", "delete"}
@@ -222,7 +248,6 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
             callers.add((module, function))
 
     assert callers == {
-        ("capabilities/github_activity_events.py", "poll"),
         ("integrations/github/pull_requests.py", "_get_client"),
         ("integrations/github/github_ticket_manager.py", "login"),
     }
@@ -230,9 +255,10 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
 
 def test_every_git_push_is_checked_before_git_is_given_the_token() -> None:
     uses = set()
-    for module, tree in _modules():
-        for function, call, ancestors in _calls(tree):
-            if _callee(call) != "get_person_github_token":
+    for path in sorted(PACKAGE.rglob("*.py")):
+        module = path.relative_to(PACKAGE).as_posix()
+        for function, call, ancestors in _calls(ast.parse(path.read_text("utf-8"))):
+            if _callee(call) != "push_credential":
                 continue
             uses.add((module, function))
             if TOKEN_USES.get((module, function)) != "checked":
@@ -240,6 +266,12 @@ def test_every_git_push_is_checked_before_git_is_given_the_token() -> None:
             assert _checked_before(call, ancestors), (module, function, call.lineno)
 
     assert uses == set(TOKEN_USES)
+    assert {
+        (module, function)
+        for module, tree in _modules()
+        for function, call, _ in _calls(tree)
+        if _callee(call) == "get_person_github_token"
+    } == GITHUB_TOKENS
 
 
 def test_git_is_given_the_token_only_where_its_destination_is_checked() -> None:
@@ -322,15 +354,13 @@ async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_
         name="demo",
         services={"code_hosting_service": {"name": "github", "owner": "acme"}},
     )
-    service = MemberGitHubCapabilityService(
-        person, Team(project=project, members=[person])
-    )
+    service = GitHubCodeHostingService(person, Team(project=project, members=[person]))
     service._client = async_client.get_async_client(
         "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
     )
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await service.reaction_add("other-owner/demo", "pr-review", 55, "eyes", 7)
+            await service.add_reaction("other-owner/demo", "pr-review", 55, "eyes", 7)
     finally:
         await service.aclose()
 
@@ -342,7 +372,7 @@ async def test_a_draft_conversion_outside_the_owner_is_refused_before_it_is_sent
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The patrol converts a PR to a draft by its node: the gate reads where the
-    node lives before the ticket manager's mutation goes out."""
+    node lives before the code host's mutation goes out."""
     sent: list[dict[str, object]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -364,27 +394,18 @@ async def test_a_draft_conversion_outside_the_owner_is_refused_before_it_is_sent
     )
     project = Project(
         name="demo",
-        services={
-            "ticket_manager": {
-                "name": "GitHub",
-                "owner": "acme",
-                "project_id": "1",
-                "url": "https://github.com/orgs/acme/projects/1",
-            }
-        },
+        services={"code_hosting_service": {"name": "github", "owner": "acme"}},
     )
-    manager = GitHubTicketManager(
-        logging.getLogger("test"), person, Team(project=project, members=[person])
-    )
-    manager.client = async_client.get_async_client(
+    service = GitHubCodeHostingService(person, Team(project=project, members=[person]))
+    service._client = async_client.get_async_client(
         "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
     )
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await manager._graphql(
+            await service._graphql(
                 CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": "PR_1"}
             )
     finally:
-        await manager.client.aclose()
+        await service.aclose()
 
     assert sent == [{"query": NODE_REPOSITORY, "variables": {"id": "PR_1"}}]
