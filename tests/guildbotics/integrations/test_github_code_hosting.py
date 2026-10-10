@@ -456,7 +456,7 @@ async def test_context_returns_llm_ready_communication_style():
     assert "親しみやすいアイデアメーカー" in style["voice_basis"]
     assert "具体案をやわらかく提案する" in style["voice_basis"]
     assert "interactive replies" in style["interactive_replies"]
-    assert "GitHub issue comments" in style["github_comments"]
+    assert "issue comments" in style["comments"]
     assert "PR titles/bodies" in style["neutral_documents"]
     assert "workflow AgentResponse.message" in style["machine_outputs"]
     assert "token" not in str(style).lower()
@@ -489,8 +489,8 @@ async def test_context_includes_capability_reference():
     # The context carries the full capability reference (single source of truth)
     # instead of a flat command-name list, and not the old fields.
     assert "guildbotics member chat reply" in result["capabilities"]
-    assert "guildbotics member github pr create" in result["capabilities"]
-    assert "guildbotics member github pr review-comment" in result["capabilities"]
+    assert "guildbotics member repository pr create" in result["capabilities"]
+    assert "guildbotics member repository pr review-comment" in result["capabilities"]
     assert "#### Handling review feedback" in result["capabilities"]
     assert "#### レビュー指摘への対応" in result["capabilities"]
     assert "available_member_commands" not in result
@@ -2476,7 +2476,7 @@ async def test_reaction_add_uses_target_specific_endpoint():
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "pr-review-comment", 101, "+1"
+        _member(service), "owner/repo", "review-comment", 101, "+1"
     )
 
     assert result == {"reaction_id": 10, "content": "+1", "comment_id": 101}
@@ -2499,7 +2499,7 @@ async def test_reaction_on_a_review_body_goes_through_graphql():
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "pr-review", 55, "+1", 7
+        _member(service), "owner/repo", "review", 55, "+1", 7
     )
 
     assert result == {"content": "+1", "comment_id": 55}
@@ -2521,7 +2521,7 @@ async def test_reaction_on_a_review_body_needs_the_pr_number():
 
     with pytest.raises(MemberCapabilityError, match="PR number"):
         await member_repository.reaction_add(
-            _member(service), "owner/repo", "pr-review", 55, "+1"
+            _member(service), "owner/repo", "review", 55, "+1"
         )
 
     assert fake.history == []

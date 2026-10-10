@@ -153,9 +153,9 @@ async def test_pull_request_work_reports_its_target(member):
 @pytest.mark.parametrize(
     ("target", "key"),
     [
-        ("issue-comment", "comments"),
-        ("pr-review-comment", "review_comments"),
-        ("pr-review", "reviews"),
+        ("comment", "comments"),
+        ("review-comment", "review_comments"),
+        ("review", "reviews"),
     ],
 )
 async def test_reaction_add_reacts_to_each_kind_of_target(member, target, key):

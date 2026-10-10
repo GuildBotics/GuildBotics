@@ -1,7 +1,7 @@
 """Contract tests for the shared workflow envelope text.
 
 The workflow contract is the single source for everything the two workflow
-prompts (``handle_github_ticket`` / ``handle_chat_event``) have in common:
+prompts (``handle_ticket`` / ``handle_chat_event``) have in common:
 execution-mode marker, isolated workspace, non-interactive question routing,
 complete-or-fail, and the AgentResponse shape. Trigger-specific completion
 command forms stay in each prompt.

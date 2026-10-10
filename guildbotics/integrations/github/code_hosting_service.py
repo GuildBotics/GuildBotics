@@ -744,7 +744,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     ) -> ReactionAdded:
         owner, repo_name = self.parse_repo(repo)
         client = await self._get_client()
-        if target == "pr-review":
+        if target == "review":
             if pr_number is None:
                 raise MemberCapabilityError("A review reaction needs the PR number.")
             # A review's body is reached only through GraphQL.
@@ -760,7 +760,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                 },
             )
             return ReactionAdded(content=reaction, comment_id=comment_id)
-        collection = "issues" if target == "issue-comment" else "pulls"
+        # A pull request's conversation comments are issue comments on GitHub.
+        collection = "issues" if target == "comment" else "pulls"
         resp = await client.post(
             f"/repos/{owner}/{repo_name}/{collection}/comments/{comment_id}/reactions",
             json={"content": reaction},

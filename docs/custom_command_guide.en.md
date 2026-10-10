@@ -940,7 +940,7 @@ The provider-neutral label is never passed through to the provider as a fallback
 
 ### 9.6. Workflow defaults
 
-- **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
+- **Ticket-driven workflow**: no automatic assessment. `functions/handle_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
 - **Chat workflow**: in one evaluation per unread batch, the judgment engine determines routing, a reaction, and the response effort (`default` or `high`). Definite local file work, repository-wide investigation, or a decision requiring repository guidelines yields `high`; all three being unnecessary yields `default`. Uncertain work requirements, judgment failures, and recording failures leave effort unchanged.
 
 Chat selection persists the result in the thread and never lowers it once it reaches `high`. When starting an agent, the workflow passes that value as the runtime effort for `functions/handle_chat_event`. The response slot's existing mappings translate the label into model and reasoning parameters. Without either a saved value or an effort decision, no runtime effort is added and leaves normal configuration resolution in effect. Reaction and no-action routes do not change effort.

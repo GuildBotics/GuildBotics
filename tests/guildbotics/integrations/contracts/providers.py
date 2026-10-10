@@ -255,6 +255,8 @@ class GitHubDouble:
         self.items: dict[int, dict[str, Any]] = {}
         self.comments: dict[int, dict[str, Any]] = {}
         self.review_comments: dict[int, dict[str, Any]] = {}
+        #: Review id -> the number of the pull request it reviews.
+        self.reviews: dict[int, int] = {}
         self.branches: dict[str, str] = {"main": "base-sha"}
         #: The Project's items: issue number -> Status option name.
         self.board: dict[int, str] = {}
@@ -339,9 +341,22 @@ class GitHubDouble:
         if re.fullmatch(r"/issues/\d+/timeline", route):
             return []
         if match := re.fullmatch(r"/(issues|pulls)/comments/(\d+)/reactions", route):
+            # A pull request's conversation comments are issue comments.
+            comments = (
+                self.comments if match.group(1) == "issues" else self.review_comments
+            )
+            if int(match.group(2)) not in comments:
+                return None
             return {"id": next(self._ids), "content": body["content"]}
         if match := re.fullmatch(r"/pulls/(\d+)/reviews", route):
-            return {**self._entry(body), "state": "APPROVED", "submitted_at": "t"}
+            review = {**self._entry(body), "state": "APPROVED", "submitted_at": "t"}
+            self.reviews[review["id"]] = int(match.group(1))
+            return review
+        if match := re.fullmatch(r"/pulls/(\d+)/reviews/(\d+)", route):
+            review_id = int(match.group(2))
+            if self.reviews.get(review_id) != int(match.group(1)):
+                return None
+            return {"id": review_id, "node_id": f"REVIEW{review_id}"}
         if match := re.fullmatch(r"/pulls/(\d+)/comments", route):
             comment = self._entry(
                 body, pull_request_url=f"{API}/repos/{REPO}/pulls/{match.group(1)}"
@@ -416,6 +431,8 @@ class GitHubDouble:
                 "/"
             )
             return {"node": {"repository": {"name": name, "owner": {"login": owner}}}}
+        if "addReaction" in query:
+            return {"addReaction": {"reaction": {"content": variables["content"]}}}
         if "projectV2(number" in query:
             return {"organization": {"projectV2": {"id": "PROJECT"}}}
         if "addProjectV2ItemById" in query:

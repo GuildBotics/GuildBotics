@@ -474,12 +474,12 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> ReactionAdded:
         owner, name = store.split(repo)
         key = {
-            "issue-comment": "comments",
-            "pr-review-comment": "review_comments",
-            "pr-review": "reviews",
+            "comment": "comments",
+            "review-comment": "review_comments",
+            "review": "reviews",
         }[target]
         item, entry = store.find_entry(owner, name, key, comment_id)
-        if target == "pr-review" and item["number"] != pr_number:
+        if target == "review" and item["number"] != pr_number:
             raise MemberCapabilityError(
                 f"Review {comment_id} is not a review of #{pr_number}."
             )

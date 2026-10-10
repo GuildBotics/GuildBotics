@@ -26,7 +26,9 @@ from guildbotics.runtime.code_hosting_resources import (
 
 ItemKind = Literal["issue", "pull_request"]
 ReviewEvent = Literal["approve", "request-changes", "comment"]
-ReactionTarget = Literal["issue-comment", "pr-review-comment", "pr-review"]
+#: A conversation comment on an issue or pull request, an inline review
+#: comment, or a review's body.
+ReactionTarget = Literal["comment", "review-comment", "review"]
 
 
 class ItemRef(ReadModel):

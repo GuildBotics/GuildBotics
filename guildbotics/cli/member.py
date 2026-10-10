@@ -1284,12 +1284,7 @@ def _workspace_mode(value: str) -> WorkspaceMode:
     return cast(WorkspaceMode, value)
 
 
-@member.group()
-def github() -> None:
-    """GitHub issue, pull request, Actions, and reaction capabilities."""
-
-
-async def _github(
+async def _code_hosting(
     person: str,
     action: Callable[[Context], Awaitable[dict[str, Any]]],
     *,
@@ -1325,14 +1320,14 @@ def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
     )
 
 
-@github.group()
-def issue() -> None:
-    """GitHub issue operations."""
+@member.group()
+def ticket() -> None:
+    """Create, update, and comment on issues, and react to their comments."""
 
 
 @member.group()
 def repository() -> None:
-    """Read resources from the configured code-hosting service."""
+    """Repository reads, pull requests, CI artifacts, and reactions."""
 
 
 @repository.command(name="read")
@@ -1373,7 +1368,7 @@ def repository_read(
         raise click.BadParameter(
             "Expected a JSON object.", param_hint="--params"
         ) from None
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.read_repository(
             context,
@@ -1386,7 +1381,7 @@ def repository_read(
     )
 
 
-@issue.command(name="comment")
+@ticket.command(name="comment")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_required_content_stdin_option
@@ -1397,7 +1392,7 @@ def issue_comment(
     output_format: str,
 ) -> _CommandWork:
     body = _read_stdin("issue comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_comment(context, issue_url, body),
         evidence="issue_comment",
@@ -1405,7 +1400,7 @@ def issue_comment(
     )
 
 
-@issue.command(name="create")
+@ticket.command(name="create")
 @_person_option
 @click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
 @click.option("--title", required=True, help="Issue title.")
@@ -1434,7 +1429,7 @@ def issue_create(
 ) -> _CommandWork:
     title = _validate_title(title)
     body = _read_stdin("issue body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_create(
             context, repo, title, body, add_to_project, labels, human_approved
@@ -1444,7 +1439,7 @@ def issue_create(
     )
 
 
-@issue.command(name="update")
+@ticket.command(name="update")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_optional_content_stdin_option
@@ -1494,7 +1489,7 @@ def issue_update(
         )
     body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_update(
             context,
@@ -1512,9 +1507,9 @@ def issue_update(
     )
 
 
-@github.group()
+@repository.group()
 def pr() -> None:
-    """GitHub pull request operations."""
+    """Pull request operations."""
 
 
 @pr.command(name="create")
@@ -1564,7 +1559,7 @@ def pr_create(
     if closes_issue and not issue_url.strip():
         raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_create(
             context, repo, head, base, title, body, issue_url, draft, closes_issue
@@ -1613,7 +1608,7 @@ def pr_update(
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_update(
             context,
@@ -1633,7 +1628,7 @@ def pr_update(
 @_json_format_option
 def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_comment(context, pr_url, body),
         evidence="pr_comment",
@@ -1653,7 +1648,7 @@ def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
 @_json_format_option
 def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request review body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_review(
             context, pr_url, body, cast(ReviewEvent, event)
@@ -1707,7 +1702,7 @@ def pr_review_comment(
             "--start-line and --start-side must be provided together."
         )
     body = _read_stdin("pull request review comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_review_comment(
             context, pr_url, body, file_path, line, side, start_line, start_side
@@ -1734,7 +1729,7 @@ def pr_reply(
     output_format: str,
 ) -> _CommandWork:
     body = _read_stdin("pull request reply body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_reply(
             context, pr_url, reply_target_id, body
@@ -1743,14 +1738,9 @@ def pr_reply(
     )
 
 
-@github.group()
-def run() -> None:
-    """GitHub Actions run operations."""
-
-
-@run.group()
+@repository.group()
 def artifact() -> None:
-    """GitHub Actions artifact operations."""
+    """CI artifact operations."""
 
 
 @artifact.command(name="download")
@@ -1760,7 +1750,7 @@ def artifact() -> None:
     "--url",
     "target_url",
     required=True,
-    help="Pull request URL or GitHub Actions run URL.",
+    help="Pull request URL or CI run URL.",
 )
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
@@ -1780,7 +1770,7 @@ def artifact_download(
     dest: Path,
     output_format: str,
 ) -> _CommandWork:
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.artifact_download(
             context, target_url, name, dest
@@ -1788,33 +1778,10 @@ def artifact_download(
     )
 
 
-@github.group()
-def reaction() -> None:
-    """GitHub reaction operations."""
-
-
-@reaction.command(name="add")
-@_person_option
-@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
-@click.option(
-    "--target",
-    required=True,
-    type=click.Choice(["issue-comment", "pr-review-comment", "pr-review"]),
-    help="Kind of comment to react to; pr-review is a review's body.",
+_reaction_repo_option = click.option(
+    "--repo", required=True, help="Target repository as <owner>/<repo>."
 )
-@click.option(
-    "--comment-id",
-    required=True,
-    type=int,
-    help="Numeric id of the comment, or of the review for pr-review.",
-)
-@click.option(
-    "--pr-number",
-    type=int,
-    default=None,
-    help="Number of the pull request the review belongs to (pr-review only).",
-)
-@click.option(
+_reaction_option = click.option(
     "--reaction",
     "reaction_content",
     required=True,
@@ -1823,8 +1790,80 @@ def reaction() -> None:
     ),
     help="Reaction to add.",
 )
+
+
+def _add_reaction(
+    person: str,
+    repo: str,
+    target: ReactionTarget,
+    comment_id: int,
+    reaction_content: str,
+    pr_number: int | None = None,
+) -> _CommandWork:
+    return _code_hosting(
+        person,
+        lambda context: member_repository.reaction_add(
+            context, repo, target, comment_id, reaction_content, pr_number
+        ),
+        evidence="reaction_add",
+    )
+
+
+@ticket.group(name="reaction")
+def ticket_reaction() -> None:
+    """Reactions to issue comments."""
+
+
+@ticket_reaction.command(name="add")
+@_person_option
+@_reaction_repo_option
+@click.option(
+    "--comment-id", required=True, type=int, help="Numeric id of the comment."
+)
+@_reaction_option
 @_json_format_option
-def reaction_add(
+def ticket_reaction_add(
+    person: str,
+    repo: str,
+    comment_id: int,
+    reaction_content: str,
+    output_format: str,
+) -> _CommandWork:
+    return _add_reaction(person, repo, "comment", comment_id, reaction_content)
+
+
+@repository.group(name="reaction")
+def repository_reaction() -> None:
+    """Reactions to pull request comments and reviews."""
+
+
+@repository_reaction.command(name="add")
+@_person_option
+@_reaction_repo_option
+@click.option(
+    "--target",
+    required=True,
+    type=click.Choice(["comment", "review-comment", "review"]),
+    help=(
+        "What to react to: a conversation comment, an inline review comment, "
+        "or a review's body."
+    ),
+)
+@click.option(
+    "--comment-id",
+    required=True,
+    type=int,
+    help="Numeric id of the comment, or of the review with --target review.",
+)
+@click.option(
+    "--pr-number",
+    type=int,
+    default=None,
+    help="Number of the pull request the review belongs to (review only).",
+)
+@_reaction_option
+@_json_format_option
+def repository_reaction_add(
     person: str,
     repo: str,
     target: str,
@@ -1833,17 +1872,13 @@ def reaction_add(
     reaction_content: str,
     output_format: str,
 ) -> _CommandWork:
-    return _github(
+    return _add_reaction(
         person,
-        lambda context: member_repository.reaction_add(
-            context,
-            repo,
-            cast(ReactionTarget, target),
-            comment_id,
-            reaction_content,
-            pr_number,
-        ),
-        evidence="reaction_add",
+        repo,
+        cast(ReactionTarget, target),
+        comment_id,
+        reaction_content,
+        pr_number,
     )
 
 
@@ -2335,7 +2370,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
                 "active_member_instruction",
                 "voice_basis",
                 "interactive_replies",
-                "github_comments",
+                "comments",
                 "neutral_documents",
                 "machine_outputs",
             ):
@@ -2349,7 +2384,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         if key == "failed_logs" and isinstance(value, list):
             lines.append("## Failed job logs")
             if not value:
-                lines.append("_No failed GitHub Actions job logs found._")
+                lines.append("_No failed CI job logs found._")
                 continue
             for item in value:
                 if not isinstance(item, dict):

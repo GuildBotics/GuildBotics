@@ -92,12 +92,12 @@ def test_path_checks_read_from_the_commands_directory(
         seen.append(destination)
         return {"dest": str(destination)}
 
-    async def github(person, operation):
+    async def code_hosting(person, operation):
         return await operation(None)
 
     monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
-    monkeypatch.setattr(member_module, "_github", github)
-    command = ["github", "run", "artifact", "download", "--person", "aiko"]
+    monkeypatch.setattr(member_module, "_code_hosting", code_hosting)
+    command = ["repository", "artifact", "download", "--person", "aiko"]
     command += ["--url", "https://example.test/pr/1", "--name", "logs", *arguments]
 
     exit_code, _stdout, stderr = _run(
@@ -443,11 +443,11 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
         seen.append(destination)
         return {}
 
-    async def github(person, operation):
+    async def code_hosting(person, operation):
         return await operation(None)
 
     monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
-    monkeypatch.setattr(member_module, "_github", github)
+    monkeypatch.setattr(member_module, "_code_hosting", code_hosting)
     looked: list[str] = []
     for name in ("stat", "lstat"):
         original = getattr(os, name)
@@ -460,7 +460,7 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
         monkeypatch.setattr(os, name, look)
 
     exit_code, _stdout, stderr = _run(
-        ["github", "run", "artifact", "download", "--person", "aiko"]
+        ["repository", "artifact", "download", "--person", "aiko"]
         + ["--url", "https://example.test/pr/1", "--name", "logs"]
         + ["--dest", "a-file"],
         MemberInvocation(task_run_id="run-1", guest=SimpleNamespace()),

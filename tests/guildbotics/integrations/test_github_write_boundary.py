@@ -331,7 +331,7 @@ def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
 async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``reaction add --target pr-review`` names the review by repository, but
+    """``reaction add --target review`` names the review by repository, but
     the mutation names only its node: the gate reads where the node lives."""
     sent: list[dict[str, object]] = []
 
@@ -360,7 +360,7 @@ async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_
     )
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await service.add_reaction("other-owner/demo", "pr-review", 55, "eyes", 7)
+            await service.add_reaction("other-owner/demo", "review", 55, "eyes", 7)
     finally:
         await service.aclose()
 

@@ -1,4 +1,4 @@
-"""Unpack a GitHub Actions artifact where it is to be read.
+"""Unpack a CI artifact where it is to be read.
 
 A member command a command of an isolated environment asks for unpacks its
 artifact inside that environment: the host downloads it, and this module,
@@ -106,7 +106,7 @@ def extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:
                 files.append(target)
             return files
     except BadZipFile as exc:
-        raise ArtifactError("GitHub artifact is not a valid ZIP archive.") from exc
+        raise ArtifactError("CI artifact is not a valid ZIP archive.") from exc
 
 
 def unpacked(destination: Path, files: list[Path]) -> Unpacked:

@@ -12,12 +12,10 @@ COMMAND_METADATA = {
     },
     "description": {
         "en": (
-            "Poll the ticket manager for one actionable GitHub issue or PR and "
+            "Poll the ticket manager for one actionable issue or PR and "
             "delegate it to the AI CLI tool."
         ),
-        "ja": (
-            "対応可能な GitHub issue または PR を1件取得し、AI CLIツールへ委譲します。"
-        ),
+        "ja": ("対応可能な issue または PR を1件取得し、AI CLIツールへ委譲します。"),
     },
     "routine": True,
 }
@@ -43,7 +41,7 @@ def _prepare_command(person_id: str, ticket_url: str, pull_request_url: str) -> 
 
 
 async def main(context: Context) -> Any:
-    """Work on the GitHub issue or PR the host selected, with an AI CLI turn.
+    """Work on the issue or PR the host selected, with an AI CLI turn.
 
     The host has already selected the ticket, moved it to the working lane,
     and settles how the run ends; this workflow asks for the turn, which the
@@ -57,7 +55,7 @@ async def main(context: Context) -> Any:
     trigger_reason = turn["trigger_reason"]
     member_workspace = get_member_clone_path(person_id)
     return await context.invoke(
-        "functions/handle_github_ticket",
+        "functions/handle_ticket",
         person_id=person_id,
         workflow_contract=t(
             "commands.workflows.common.workflow_contract",

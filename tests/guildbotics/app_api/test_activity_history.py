@@ -644,7 +644,7 @@ def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
             _lifecycle(
                 "t-issue",
                 source="interactive",
-                command="member github issue create",
+                command="member ticket create",
                 started_at="2026-07-01T12:00:00+00:00",
                 attributes={},
             )
@@ -668,7 +668,7 @@ def test_issue_comments_add_session_link_without_event_row() -> None:
             _lifecycle(
                 "t-comment",
                 source="interactive",
-                command="member github issue comment",
+                command="member ticket comment",
                 started_at="2026-07-01T13:00:00+00:00",
                 attributes={},
             )
