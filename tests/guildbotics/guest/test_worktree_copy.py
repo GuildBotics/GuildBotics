@@ -147,17 +147,32 @@ def test_a_name_the_disk_spells_otherwise_is_copied_as_the_disk_spells_it(
     assert _changes(source, destination, copied) == []
 
 
-def test_a_tracked_directory_git_here_takes_for_an_ignored_one_holds_changes(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("rules", "told"),
+    [
+        ("*.txt\n", ["new.rs"]),
+        # A directory rule spelled as the disk spells it, as a shell writes it:
+        # git here ignores everything in it but what it tracks.
+        ("{directory}/\n*.txt\n", []),
+    ],
+    ids=["files", "directory"],
+)
+def test_in_a_directory_git_here_takes_for_an_ignored_one_tracked_files_stay(
+    tmp_path: Path, rules: str, told: list[str]
 ) -> None:
-    """A rule spelled as the disk spells a directory (as a shell writes it)
-    matches it for git in the microVM, which does not relate it to the
-    index's composed form; macOS's git never matches it. What git tracks
-    there is copied, and a new file beside it is told."""
+    """Git in the microVM takes a tracked file whose index spells it in
+    another Unicode form for an untracked one, and a directory holding it
+    and nothing else it does not ignore for an ignored one. The tracked file
+    is copied and its changes are told; what git ignores there is neither
+    copied nor told."""
     decomposed = unicodedata.normalize("NFD", "ぶ")
     source = _tree(
         tmp_path / "source",
-        {".gitignore": f"{decomposed}/\n", f"{decomposed}/c.txt": "c"},
+        {
+            ".gitignore": rules.format(directory=decomposed),
+            f"{decomposed}/c.txt": "c",
+            f"{decomposed}/o.txt": "o",
+        },
     )
     _git(source, "init", "-q")
     _git(source, "config", "core.precomposeunicode", "false")
@@ -168,16 +183,23 @@ def test_a_tracked_directory_git_here_takes_for_an_ignored_one_holds_changes(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    composed = unicodedata.normalize("NFC", "ぶ/c.txt")
+    composed = unicodedata.normalize("NFC", f"{decomposed}/c.txt")
     _git(source, "update-index", "--add", "--cacheinfo", f"100644,{blob},{composed}")
     destination = tmp_path / "copy"
 
     copied = _copied(source, destination)
 
     assert sorted(copied) == [".gitignore", f"{decomposed}/c.txt"]
-    _tree(destination, {f"{decomposed}/new.rs": "n"})
-    assert [each["path"] for each in _changes(source, destination, copied)] == [
-        f"{decomposed}/new.rs"
+    (destination / decomposed / "c.txt").write_text("edited", encoding="utf-8")
+    _tree(destination, {f"{decomposed}/new.txt": "n", f"{decomposed}/new.rs": "n"})
+    changes = _changes(source, destination, copied)
+    assert sorted(each["path"] for each in changes) == [
+        f"{decomposed}/{name}" for name in sorted(["c.txt", *told])
+    ]
+    (destination / decomposed / "c.txt").unlink()
+    changes = _changes(source, destination, copied)
+    assert (f"{decomposed}/c.txt", True) in [
+        (each["path"], "deleted" in each) for each in changes
     ]
 
 

@@ -49,6 +49,8 @@ from guildbotics.intelligences.agent_runtime.wire import (
 
 _GIT = ".git"
 _CHUNK_BYTES = 1 << 20
+#: What git ignores: the untracked files its rules match.
+_IGNORED = ("--others", "--ignored", "--exclude-standard")
 
 
 class WorktreeCopyError(ValueError):
@@ -154,30 +156,25 @@ def _ignored(repository: Path, tree: Path) -> set[str]:
     Unicode form, spelled as the disk spells them.
 
     Git on macOS composes the names it adds to the index, and git here does
-    not: it takes the disk's other form of a tracked file or directory for an
-    untracked one, which an ignore rule may match. Such a name is no ignored
-    one.
+    not: it takes the disk's other form of a tracked file for an untracked
+    one, which an ignore rule may match, and a directory holding it for one
+    holding nothing tracked. Such a file is no ignored one, and what is
+    ignored in such a directory is told file by file.
 
     Raises:
         WorktreeCopyError: When git cannot list it.
     """
-    tracked = {
-        _composed(name)
-        for each in _listed(repository, tree, "--cached")
-        for name in (each, *map(str, PurePosixPath(each).parents))
+    tracked = {_composed(each) for each in _listed(repository, tree, "--cached")}
+    holding = {
+        str(parent) for each in tracked for parent in PurePosixPath(each).parents
     }
-    return {
-        each
-        for each in _listed(
-            repository,
-            tree,
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-        )
-        if _composed(each) not in tracked
-    }
+    ignored: set[str] = set()
+    for each in _listed(repository, tree, *_IGNORED, "--directory"):
+        if _composed(each) in holding:
+            ignored |= _listed(repository, tree, *_IGNORED, "--", f"{each}/")
+        else:
+            ignored.add(each)
+    return {each for each in ignored if _composed(each) not in tracked}
 
 
 def _listed(repository: Path, tree: Path, *selection: str) -> set[str]:
@@ -189,6 +186,8 @@ def _listed(repository: Path, tree: Path, *selection: str) -> set[str]:
     listed = subprocess.run(
         [
             "git",
+            # A directory's name is no pathspec magic, as ``:name`` would be.
+            "--literal-pathspecs",
             f"--git-dir={repository}",
             f"--work-tree={tree}",
             "ls-files",
