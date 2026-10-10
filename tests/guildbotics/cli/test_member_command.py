@@ -16,6 +16,7 @@ from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.factory import ServiceIntegrationFactory
+from guildbotics.integrations.local import chat
 from guildbotics.integrations.github import async_client
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -33,10 +34,13 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.local_chat import at, chat_team, lines, say
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     write_active_workspace,
 )
+from tests.guildbotics.local_chat import at, chat_event
 
 member_module = importlib.import_module("guildbotics.cli.member")
 
@@ -1128,7 +1132,7 @@ def test_member_write_command_requires_content_source():
 CONTENT_COMMANDS = (
     "memory record --person aiko --title Title",
     "chat post --person aiko --channel-id C1",
-    "chat reply --person aiko --channel-id C1 --thread-ts 100.1",
+    "chat reply --person aiko --channel-id C1 --thread-id 100.1",
     "chat noop --person aiko",
     "chat complete --person aiko --status done",
     "git commit --person aiko --repo-path .",
@@ -3187,328 +3191,191 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
     assert calls["workspace"] == str(workspace.resolve())
 
 
-def test_member_chat_reply_reads_body_file_and_records_evidence(
-    monkeypatch, bind_invocation, tmp_path
-):
+@pytest.fixture
+def local_chat(monkeypatch, tmp_path):
+    """Aiko, whose chat is the local one, with channel ``C1``."""
+    from guildbotics.integrations.local.chat import LocalChatService
+
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    # The run id is injected by the workflow via env, not a CLI flag; the write
-    # command records its evidence under the env-provided run id.
-    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
-    context.get_chat_service = lambda: object()
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def reply(self, *, channel_id, channel_name, thread_ts, body):
-            return {
-                "service": "slack",
-                "channel_id": channel_id,
-                "channel_name": channel_name,
-                "message_ts": "200.1",
-                "thread_ts": thread_ts,
-                "text": body,
-                "posted": True,
-            }
-
-        async def aclose(self):
-            pass
-
+    context.team = chat_team(person)
+    context.get_chat_service = lambda: LocalChatService(person)
     monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
+        member_module, "resolve_member_context", lambda _person: (context, person)
     )
-    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
-    runner = CliRunner()
+    say("C1", "question", message_id="t1", occurred_at=at(100))
+    say("C1", "detail", message_id="r1", thread_id="t1", occurred_at=at(101))
+    return "C1"
 
-    result = runner.invoke(
+
+def _chat(*args: str, content: str | None = None):
+    return CliRunner().invoke(
         member_module.member,
-        [
-            "chat",
-            "reply",
-            "--person",
-            "aiko",
-            "--channel-id",
-            "C1",
-            "--thread-ts",
-            "100.1",
-            "--content-stdin",
-        ],
-        input="了解しました。",
+        ["chat", *args, "--person", "aiko"]
+        + (["--content-stdin"] if content is not None else []),
+        input=content,
+    )
+
+
+def _replies(channel_id: str) -> list[tuple[str, str]]:
+    return [
+        (line["text"], line["thread_id"])
+        for line in lines(channel_id)
+        if line["author"] == "aiko" and "reaction" not in line
+    ]
+
+
+def test_member_chat_reply_reads_body_and_records_evidence(local_chat, bind_invocation):
+    # The run id is injected by the workflow via env, not a CLI flag; the write
+    # command records its evidence under the env-provided run id.
+    from guildbotics.capabilities.task_runs import RunStore
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
+    # The chat run has been handed its batch and has read the updates since.
+    RunStore().append_evidence("run-1", "chat_batch", {"event_ids": ["E1"]})
+    RunStore().append_evidence("run-1", "chat_updates", {"event_ids": []})
+    ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+
+    result = _chat(
+        "reply",
+        "--channel-id",
+        local_chat,
+        "--thread-id",
+        "t1",
+        content="了解しました。",
     )
     lease.release()
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["text"] == "了解しました。"
-    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "chat_reply"
+    assert payload["thread_id"] == "t1"
+    assert _replies(local_chat) == [("了解しました。", "t1")]
+    assert TaskRunStore().evidence("run-1")[-1]["evidence_type"] == "chat_reply"
 
 
-def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    person = Person(person_id="aiko", name="Aiko")
-    context = FakeContext(person)
-    context.get_chat_service = lambda: object()
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def reply(self, *, channel_id, channel_name, thread_ts, body):
-            return {
-                "service": "slack",
-                "channel_id": channel_id,
-                "channel_name": channel_name,
-                "message_ts": "200.1",
-                "thread_ts": thread_ts,
-                "text": body,
-                "posted": True,
-            }
-
-        async def aclose(self):
-            pass
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "chat",
-            "reply",
-            "--person",
-            "aiko",
-            "--channel-name",
-            "general",
-            "--message-url",
-            "https://example.slack.com/archives/C1/p1000000000000001",
-            "--content-stdin",
-        ],
-        input="了解しました。",
+def test_member_chat_reply_to_a_message_url_answers_its_thread(local_chat):
+    result = _chat(
+        "reply",
+        "--message-url",
+        chat.message_url(local_chat, "r1", "t1"),
+        content="了解しました。",
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["channel_id"] == "C1"
-    assert payload["channel_name"] == "general"
-    assert payload["thread_ts"] == "1000000000.000001"
+    assert (payload["channel_id"], payload["thread_id"]) == (local_chat, "t1")
+    assert _replies(local_chat) == [("了解しました。", "t1")]
 
 
-def test_member_chat_inspect_thread_accepts_message_url(monkeypatch, tmp_path):
-    expected_limit = 20
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    person = Person(person_id="aiko", name="Aiko")
-    context = FakeContext(person)
-    context.get_chat_service = lambda: object()
+def test_member_chat_reply_needs_a_thread(local_chat):
+    result = _chat("reply", "--channel-id", local_chat, content="hi")
 
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
+    assert result.exit_code != 0
+    assert "message id or message URL is required" in result.output
+    assert _replies(local_chat) == []
 
-    class FakeService:
-        def __init__(self, *_args, **_kwargs):
-            pass
 
-        async def inspect_thread(self, *, channel_id, channel_name, thread_ts, limit):
-            return {
-                "service": "slack",
-                "mode": "thread",
-                "channel_id": channel_id,
-                "channel_name": channel_name or "",
-                "thread_ts": thread_ts,
-                "next_cursor": "",
-                "messages": [{"message_ts": "100.1", "text": "question"}],
-                "limit": limit,
-            }
-
-        async def aclose(self):
-            pass
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "chat",
-            "inspect",
-            "thread",
-            "--person",
-            "aiko",
-            "--message-url",
-            "https://example.slack.com/archives/C1/p1000000000000002"
-            "?thread_ts=1000000000.000001&cid=C1",
-            "--limit",
-            str(expected_limit),
-        ],
+def test_member_chat_inspect_thread_accepts_message_url(local_chat):
+    result = _chat(
+        "inspect",
+        "thread",
+        "--message-url",
+        chat.message_url(local_chat, "r1", "t1"),
+        "--limit",
+        "20",
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["channel_id"] == "C1"
-    assert payload["thread_ts"] == "1000000000.000001"
-    assert payload["limit"] == expected_limit
+    assert payload["channel_id"] == local_chat
+    assert payload["thread_id"] == "t1"
+    assert [m["text"] for m in payload["messages"]] == ["question", "detail"]
 
 
-def test_member_chat_inspect_channel_accepts_channel_name(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    person = Person(person_id="aiko", name="Aiko")
-    context = FakeContext(person)
-    context.get_chat_service = lambda: object()
+@pytest.mark.parametrize(
+    ("since", "until"),
+    [
+        (at(90).isoformat(), at(100).isoformat()),
+        # Without an offset, a time is the local one.
+        (
+            at(90).astimezone().replace(tzinfo=None).isoformat(),
+            at(100).astimezone().replace(tzinfo=None).isoformat(),
+        ),
+    ],
+)
+def test_member_chat_inspect_channel_reads_a_window_by_channel_name(
+    local_chat, since, until
+):
+    say("general", "topic", message_id="g1", occurred_at=at(100))
+    say("general", "later", message_id="g2", occurred_at=at(101))
 
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def inspect_channel(
-            self, *, channel_id, channel_name, oldest_ts, latest_ts, limit
-        ):
-            return {
-                "service": "slack",
-                "mode": "channel",
-                "channel_id": channel_id or "C_GENERAL",
-                "channel_name": channel_name,
-                "oldest_ts": oldest_ts,
-                "latest_ts": latest_ts,
-                "next_cursor": "",
-                "messages": [{"message_ts": "100.1", "text": "topic"}],
-                "limit": limit,
-            }
-
-        async def aclose(self):
-            pass
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "chat",
-            "inspect",
-            "channel",
-            "--person",
-            "aiko",
-            "--channel-name",
-            "general",
-            "--oldest-ts",
-            "100.0",
-            "--latest-ts",
-            "200.0",
-        ],
+    result = _chat(
+        "inspect",
+        "channel",
+        "--channel-name",
+        "general",
+        "--since",
+        since,
+        "--until",
+        until,
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["channel_name"] == "general"
-    assert payload["oldest_ts"] == "100.0"
-    assert payload["latest_ts"] == "200.0"
+    assert datetime.fromisoformat(payload["since"]) == at(90)
+    assert [m["text"] for m in payload["messages"]] == ["topic"]
+
+
+def test_member_chat_inspect_channel_refuses_what_is_no_time(local_chat):
+    result = _chat("inspect", "channel", "--channel-id", local_chat, "--since", "100.0")
+
+    assert result.exit_code != 0
+    assert "not an ISO 8601 time" in result.output
 
 
 def test_member_chat_rejects_empty_content():
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "chat",
-            "reply",
-            "--person",
-            "aiko",
-            "--channel-id",
-            "C1",
-            "--thread-ts",
-            "100.1",
-            "--content-stdin",
-        ],
-        input="",
-    )
+    result = _chat("reply", "--channel-id", "C1", "--thread-id", "100.1", content="")
 
     assert result.exit_code != 0
     assert "message body must not be empty" in result.output
 
 
-def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+def test_member_chat_reaction_accepts_message_url(local_chat):
+    result = _chat(
+        "reaction",
+        "add",
+        "--message-url",
+        chat.message_url(local_chat, "r1", "t1"),
+        "--reaction",
+        "ack",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["channel_id"] == local_chat
+    assert payload["message_id"] == "r1"
+    assert [line for line in lines(local_chat) if "reaction" in line] == [
+        {"reaction": "ack", "author": "aiko", "message_id": "r1"}
+    ]
+
+
+def test_member_chat_needs_a_chat_service(monkeypatch):
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
-    context.get_chat_service = lambda: object()
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return context, person
-
-    class FakeService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def add_reaction(self, *, channel_id, channel_name, message_ts, reaction):
-            return {
-                "service": "slack",
-                "channel_id": channel_id,
-                "channel_name": channel_name,
-                "message_ts": message_ts,
-                "reaction": reaction,
-                "reacted": True,
-            }
-
-        async def aclose(self):
-            pass
-
+    context.get_chat_service = lambda: pytest.fail("no chat service to make")
     monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberChatCapabilityService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "chat",
-            "reaction",
-            "add",
-            "--person",
-            "aiko",
-            "--message-url",
-            "https://example.slack.com/archives/C1/p1000000000000002"
-            "?thread_ts=1000000000.000001&cid=C1",
-            "--reaction",
-            "ack",
-        ],
+        member_module, "resolve_member_context", lambda _person: (context, person)
     )
 
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
-    assert payload["channel_id"] == "C1"
-    assert payload["message_ts"] == "1000000000.000002"
-    assert payload["reaction"] == "ack"
+    result = _chat("identity")
+
+    assert result.exit_code != 0
+    assert t("integrations.chat.unsupported", name="") in result.output
 
 
 def test_member_chat_noop_and_complete(tmp_path, monkeypatch, bind_invocation):
@@ -3782,7 +3649,7 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
             "person_id": "aiko",
             "service": "slack",
             "channel_id": "C1",
-            "thread_ts": "100.1",
+            "thread_id": "100.1",
             "self_user_id": "U_BOT",
             "event_ids": ["E1"],
         },
@@ -3793,11 +3660,11 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
         "slack",
         "aiko",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="E3",
             channel_id="C1",
-            message_ts="103.1",
-            thread_ts="100.1",
+            message_id="103.1",
+            thread_id="100.1",
             author_id="U_USER",
             text="訂正です",
         ),

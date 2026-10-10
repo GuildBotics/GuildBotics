@@ -40,9 +40,9 @@ _GITHUB = "guildbotics.integrations.github.repository_scope.check_request"
 _GITHUB_READ = (
     "Reads go through the member's GitHub token, which bounds what they reach."
 )
-_SLACK = "The member's Slack bot reaches only the channels it was invited to."
+_CHAT = "The member's chat credential reaches only the channels it was given."
 #: Why a service bounds what no function of GuildBotics checks.
-_SERVICE_RATIONALES = frozenset({_GITHUB_READ, _SLACK})
+_SERVICE_RATIONALES = frozenset({_GITHUB_READ, _CHAT})
 _CONVERSATION = "guildbotics.environment.host_window.HostWindow._check_conversation"
 
 _CHAT_TARGETS = frozenset(
@@ -133,22 +133,17 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     ),
     # Chat: where the member reads and posts. The chat run's own event is
     # not among them: it is the grant's work.
-    "service_name": (
-        SERVICE,
-        _CHAT_TARGETS | {"chat identity", "chat resolve-channel"},
-        _SLACK,
-    ),
-    "channel_id": (SERVICE, _CHAT_TARGETS, _SLACK),
-    "channel_name": (SERVICE, _CHAT_TARGETS | {"chat resolve-channel"}, _SLACK),
-    "thread_ts": (SERVICE, frozenset({"chat inspect thread", "chat reply"}), _SLACK),
-    "message_ts": (SERVICE, frozenset({"chat reaction add"}), _SLACK),
+    "channel_id": (SERVICE, _CHAT_TARGETS, _CHAT),
+    "channel_name": (SERVICE, _CHAT_TARGETS | {"chat resolve-channel"}, _CHAT),
+    "thread_id": (SERVICE, frozenset({"chat inspect thread", "chat reply"}), _CHAT),
+    "message_id": (SERVICE, frozenset({"chat reaction add"}), _CHAT),
     "message_url": (
         SERVICE,
         frozenset({"chat inspect thread", "chat reply", "chat reaction add"}),
-        _SLACK,
+        _CHAT,
     ),
-    "oldest_ts": (SERVICE, frozenset({"chat inspect channel"}), _SLACK),
-    "latest_ts": (SERVICE, frozenset({"chat inspect channel"}), _SLACK),
+    "since": (SERVICE, frozenset({"chat inspect channel"}), _CHAT),
+    "until": (SERVICE, frozenset({"chat inspect channel"}), _CHAT),
     "reaction": (CONTENT, frozenset({"chat reaction add"}), ""),
     "status": (CONTENT, frozenset({"chat complete", "task complete"}), ""),
     # Git: the member's clone, worked on in the command's environment.

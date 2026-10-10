@@ -731,6 +731,8 @@ class SimpleProjectSetupService:
         else:
             services.pop("ticket_manager", None)
             services.pop("code_hosting_service", None)
+        # Slack is the one hosted chat these screens set up.
+        services.setdefault("chat_service", {"name": "slack"})
 
         if services:
             project_data["services"] = services
@@ -794,8 +796,10 @@ class SimpleProjectSetupService:
         if config.description:
             project["description"] = config.description
 
+        # Slack is the one hosted chat these screens set up.
+        project["services"] = {"chat_service": {"name": "slack"}}
         if config.github_project_url:
-            project["services"] = {
+            project["services"] |= {
                 "ticket_manager": {
                     "name": "GitHub",
                     "owner": config.owner,
@@ -924,10 +928,7 @@ class SimplePersonSetupService:
         raw_channels = person_data.get("message_channels", [])
         if isinstance(raw_channels, list):
             for channel in raw_channels:
-                if (
-                    not isinstance(channel, dict)
-                    or str(channel.get("service", "")).lower() != "slack"
-                ):
+                if not isinstance(channel, dict):
                     continue
                 channel_name = str(channel.get("name", "")).strip()
                 if not channel_name:
@@ -1281,7 +1282,6 @@ class SimplePersonSetupService:
             chat["channel_name"] = channel_ref
         return {
             "name": channel_ref,
-            "service": "slack",
             "used_as": ["internal_communication"],
             "used_by": [person_id],
             "channel_info": channel_info,

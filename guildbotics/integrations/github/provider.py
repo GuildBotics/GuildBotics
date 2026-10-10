@@ -15,7 +15,11 @@ from guildbotics.integrations.github.github_utils import (
     get_github_account_type,
     get_github_username,
 )
-from guildbotics.integrations.provider import Provider, ProviderCheck
+from guildbotics.integrations.provider import (
+    Provider,
+    ProviderCheck,
+    configured_check,
+)
 from guildbotics.runtime.context import Context
 from guildbotics.utils.env_loader import workspace_secret_store
 
@@ -43,15 +47,8 @@ def _verify(person: Person) -> list[ProviderCheck]:
                 bool(workspace_secret_store().get(target))
             )
         checks.append(
-            ProviderCheck(
-                section=_SECTION,
-                code="github_credential",
-                status="ok" if configured else "error",
-                message=f"{target} is configured."
-                if configured
-                else f"{target} is not configured.",
-                target=target,
-                context={"person_id": person.person_id, "key": key},
+            configured_check(
+                _SECTION, "github_credential", person, key, target, configured
             )
         )
     return checks

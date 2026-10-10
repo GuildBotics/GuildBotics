@@ -236,9 +236,14 @@ purpose:
   (the task-run record's start and finish, and the member's lease unless the command
   declares itself read-only), and the command's `command.started` /
   `command.finished`. The run is its trace (`run_id == trace_id`).
-- **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
-  and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
-  then drained per member by `drivers/pending_chat_dispatcher.py`. Like the ticket
+- **Chat workflow** (`workflows/chat_conversation_workflow`): the events the project's
+  chat (`project.services.chat_service`) delivers to its listeners and backfill are
+  persisted as pending events by `drivers/event_listener_runner.py`, then drained per
+  member by `drivers/pending_chat_dispatcher.py`. The runner holds one listener per
+  connection the provider names (`listener_key`: Slack's per app-level token), and
+  places messages in time by their `occurred_at`; a message's `position` (its UTC
+  time at fixed width, then its id) orders a channel's messages as text, so pending
+  queues, wake cursors, and the AI CLI session's context cursor compare positions. Like the ticket
   patrol, the dispatcher selects before it starts a workflow: selection
   (`capabilities/chat_selection.py`) reads the thread, drops events that are not work
   for the member, judges the rest, and settles reaction-only and no-op outcomes itself.
@@ -1408,11 +1413,13 @@ Two Person distinctions matter architecturally:
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement the ports of the kinds the provider serves
   (`CodeHostingService` with the item shapes of `runtime/code_hosting_resources.py`,
-  `TicketManager`, `ChatService`; all in `runtime/`) under
+  `TicketManager`, `ChatService` with its `EventListener`; all in `runtime/` but the
+  listener, at the root of `integrations/`) under
   `integrations/<provider>/`, passing every write through `check_repository`
   (`integrations/repository_scope.py`). Describe it with a `Provider`
-  (`integrations/provider.py`: its kinds, the secret names and `account_info` keys a
-  member needs, `verify`, `diagnose`, `credentialed`) and add it to `PROVIDERS` in
+  (`integrations/provider.py`: its kinds -- for a chat, the `Chat` of its service,
+  listener, and `listener_key` --, the secret names and `account_info` keys a member
+  needs, `verify`, `diagnose`, `credentialed`) and add it to `PROVIDERS` in
   `integrations/factory.py`, which selects it by its `project.services` name; add the
   package to the `providers-behind-the-factory` import contract. The ports' contract
   tests (`tests/guildbotics/integrations/contracts/`) then run against it, and the

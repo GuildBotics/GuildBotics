@@ -304,11 +304,13 @@ type = "protected"
 protected_modules = [
   "guildbotics.integrations.github",
   "guildbotics.integrations.local",
+  "guildbotics.integrations.slack",
 ]
 allowed_importers = [
   "guildbotics.integrations.factory",
   "guildbotics.setup.github_app",
   "guildbotics.setup.github_project",
+  "guildbotics.setup.slack_app",
 ]
 
 # One module drives the microVM SDK: the access contract is enforced by one

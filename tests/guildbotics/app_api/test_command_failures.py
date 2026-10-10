@@ -173,12 +173,6 @@ def command_api(tmp_path, monkeypatch, language):
             for brain in ("default", "jev")
             for failure, message in _WINDOW_FAILURES.items()
         ],
-        (
-            "workflows/chat_post_command",
-            ["service=discord", "channel_id=C1", "command=print"],
-            "",
-            "unsupported",
-        ),
         *[
             (
                 "workflows/chat_post_command",
@@ -228,11 +222,6 @@ def test_anticipated_failure_reaches_desktop(
                 status=429,
             )
             in message
-        )
-    elif reason == "unsupported":
-        assert message == t(
-            "commands.workflows.chat_post_command.unsupported_service",
-            service="discord",
         )
     elif reason == "network":
         assert message == t(

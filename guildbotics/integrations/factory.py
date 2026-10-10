@@ -1,35 +1,50 @@
 """The one place a provider is chosen: each kind of service is the provider
 ``project.services`` names for it."""
 
+from collections.abc import Callable
 from logging import Logger
 
 from guildbotics.entities import Person, Service, Team
-from guildbotics.integrations.chat_profile import (
-    get_chat_slack_base_url,
-)
+from guildbotics.integrations.event_listener import EventListener
 from guildbotics.integrations.github.provider import GITHUB
 from guildbotics.integrations.local.provider import LOCAL
-from guildbotics.integrations.provider import Provider
-from guildbotics.integrations.slack.slack_chat_service import SlackChatService
+from guildbotics.integrations.provider import Chat, Provider
+from guildbotics.integrations.slack.provider import SLACK
 from guildbotics.runtime import IntegrationFactory
-from guildbotics.runtime.chat_service import ChatService
+from guildbotics.runtime.chat_service import ChatService, ChatServiceError
 from guildbotics.runtime.code_hosting_resources import RepositoryReadError
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.utils.i18n_tool import t
 
 PROVIDERS: dict[str, Provider] = {
-    provider.name: provider for provider in (GITHUB, LOCAL)
+    provider.name: provider for provider in (GITHUB, LOCAL, SLACK)
 }
 
 
 def configured_providers(team: Team) -> list[Provider]:
-    """The providers the project's code host and board are, each once."""
-    names = {
-        team.project.get_service_name(service)
-        for service in (Service.CODE_HOSTING_SERVICE, Service.TICKET_MANAGER)
-    }
+    """The providers the project's services are, each once."""
+    names = {team.project.get_service_name(service) for service in Service}
     return [provider for name, provider in PROVIDERS.items() if name in names]
+
+
+def chat_provider_name(team: Team) -> str:
+    """The name of the provider the project's chat is, which keys what is
+    recorded of its chat.
+
+    Raises:
+        ChatServiceError: If the project names none, or one that has no chat.
+    """
+    _chat(team)
+    return team.project.get_service_name(Service.CHAT_SERVICE)
+
+
+def _chat(team: Team) -> Chat:
+    name = team.project.get_service_name(Service.CHAT_SERVICE)
+    provider = PROVIDERS.get(name)
+    if provider is None or provider.chat is None:
+        raise ChatServiceError(t("integrations.chat.unsupported", name=name))
+    return provider.chat
 
 
 class ServiceIntegrationFactory(IntegrationFactory):
@@ -61,20 +76,23 @@ class ServiceIntegrationFactory(IntegrationFactory):
     def create_chat_service(
         self, logger: Logger, person: Person, team: Team
     ) -> ChatService:
-        """
-        Create a chat service for the given person.
+        return _chat(team).service(logger, person, team)
 
-        MVP: Slack only.
+    def create_event_listener(
+        self,
+        logger: Logger,
+        team: Team,
+        persons: list[Person],
+        on_activity: Callable[[], None],
+    ) -> EventListener:
+        """The listener of the connection ``persons`` share, by their
+        :meth:`listener_key`."""
+        return _chat(team).event_listener(logger, team, persons, on_activity)
+
+    def listener_key(self, person: Person, team: Team) -> str:
+        """The connection ``person``'s chat events arrive on.
+
+        Raises:
+            ChatServiceError: If the person cannot connect.
         """
-        if not person.has_secret("SLACK_BOT_TOKEN"):
-            env_key = person.to_person_env_key("SLACK_BOT_TOKEN")
-            raise ValueError(
-                f"Slack Bot Token is required for person '{person.person_id}'. "
-                f"Set environment variable '{env_key}'."
-            )
-        token = person.get_secret("SLACK_BOT_TOKEN")
-        return SlackChatService(
-            logger=logger,
-            token=token,
-            base_url=get_chat_slack_base_url(person),
-        )
+        return _chat(team).listener_key(person, team)

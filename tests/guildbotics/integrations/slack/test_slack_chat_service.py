@@ -6,9 +6,21 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
+from guildbotics.integrations.slack.message_events import (
+    mentioned_user_ids,
+    time_ts,
+    ts_time,
+)
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
     SlackChatService,
+    SlackUnreachableError,
+)
+from guildbotics.runtime.chat_service import (
+    ChatMessageRef,
+    ChatServiceError,
+    ChatThreadNotFoundError,
+    CredentialCheck,
 )
 
 
@@ -117,7 +129,9 @@ async def test_list_channel_events_normalizes_messages():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    page = await svc.list_channel_events("C1", oldest_ts="90.0", latest_ts="110.0")
+    page = await svc.list_channel_events(
+        "C1", since=ts_time("90.0"), until=ts_time("110.0")
+    )
     assert page.cursor == "abc"
     assert len(page.events) == expected_event_count
     assert page.events[0].event_id == "C1:100.1"
@@ -127,8 +141,9 @@ async def test_list_channel_events_normalizes_messages():
     assert page.events[1].is_bot_message is True
     assert page.events[2].event_id == "C1:102.1"
     assert page.events[2].text == "please check this file"
-    assert "oldest=90.0" in seen_body
-    assert "latest=110.0" in seen_body
+    assert "oldest=90.000000" in seen_body
+    assert "latest=110.000000" in seen_body
+    assert "inclusive=true" in seen_body
     assert "include_all_metadata=true" in seen_body
     await client.aclose()
 
@@ -174,7 +189,7 @@ async def test_list_thread_events_uses_conversations_replies():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    page = await svc.list_thread_events("C1", thread_ts="100.1", limit=20)
+    page = await svc.list_thread_events("C1", thread_id="100.1", limit=20)
     assert "ts=100.1" in seen_body
     assert "limit=20" in seen_body
     assert "include_all_metadata=true" in seen_body
@@ -246,15 +261,16 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
     res = await svc.post_message(
         "C1",
         "hello",
-        thread_ts="100.1",
+        thread_id="100.1",
         metadata={
             "event_type": "guildbotics.workflow_status",
             "event_payload": {"routing": "suppress"},
         },
     )
     await svc.add_reaction("C1", "100.1", "ack")
-    assert res.message_ts == "200.1"
-    assert res.thread_ts == "100.1"
+    assert res.message_id == "200.1"
+    assert res.thread_id == "100.1"
+    assert res.occurred_at == ts_time("200.1")
     assert any(
         path.endswith("/chat.postMessage") and "thread_ts=100.1" in body
         for path, body in seen
@@ -275,7 +291,7 @@ async def test_add_reaction_raises_for_unknown_semantic_reaction():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    with pytest.raises(RuntimeError, match="Unsupported semantic reaction"):
+    with pytest.raises(ChatServiceError, match="Unsupported semantic reaction"):
         await svc.add_reaction("C1", "100.1", "eyes")
     await client.aclose()
 
@@ -412,7 +428,233 @@ async def test_auth_error_records_no_credential_event_when_opted_out(monkeypatch
         base_url="https://x.test",
         record_credential_events=False,
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(SlackUnreachableError, match="HTTP 401") as raised:
         await svc.get_bot_identity()
+    assert raised.value.status == 401  # noqa: PLR2004
     assert recorded == []
     await client.aclose()
+
+
+@pytest.mark.parametrize(
+    "ts", ["1728000000.123456", "1728000000.000001", "1.000000", "1728000000.100000"]
+)
+def test_a_timestamp_is_a_time_to_the_microsecond_both_ways(ts):
+    assert time_ts(ts_time(ts)) == ts
+
+
+def test_mentions_read_both_forms_of_a_user_mention():
+    assert mentioned_user_ids("<@U1> and <@U2|bob> and <@U1>") == ["U1", "U2"]
+
+
+@pytest.mark.parametrize(
+    ("url", "ref"),
+    [
+        (
+            "https://acme.slack.com/archives/C1/p1728000000123456",
+            ChatMessageRef("C1", "1728000000.123456", "1728000000.123456"),
+        ),
+        (
+            "https://acme.slack.com/archives/C1/p1728000001000001"
+            "?thread_ts=1728000000.123456&cid=C1",
+            ChatMessageRef("C1", "1728000001.000001", "1728000000.123456"),
+        ),
+    ],
+)
+def test_a_permalink_names_its_message_and_thread(url, ref):
+    service = SlackChatService(logging.getLogger("test"))
+    assert service.parse_message_url(url) == ref
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://acme.slack.com/messages/C1/p1728000000123456",
+        "https://acme.slack.com/archives/C1/x1728000000123456",
+        "https://acme.slack.com/archives/C1/p123",
+    ],
+)
+def test_a_url_that_is_no_permalink_is_refused(url):
+    with pytest.raises(ChatServiceError):
+        SlackChatService(logging.getLogger("test")).parse_message_url(url)
+
+
+@pytest.mark.asyncio
+async def test_a_missing_thread_is_the_ports_thread_not_found():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "thread_not_found"})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(ChatThreadNotFoundError):
+            await service.list_thread_events("C1", thread_id="1.0")
+
+
+@pytest.mark.asyncio
+async def test_credentials_are_each_tried_and_named_without_their_values():
+    tried: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        tried.append((request.url.path, token))
+        if request.url.path.endswith("/auth.test"):
+            return httpx.Response(200, json={"ok": True, "user_id": "U1"})
+        return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
+
+    transport = httpx.MockTransport(handler)
+    service = SlackChatService(
+        logging.getLogger("test"),
+        token="xoxb-bot",
+        app_token="xapp-app",
+        transport=transport,
+        record_credential_events=False,
+    )
+
+    checks = await service.check_credentials()
+
+    assert checks == [
+        CredentialCheck("bot_token", "ok"),
+        CredentialCheck(
+            "app_token",
+            "failed",
+            "Slack API 'apps.connections.open' failed: invalid_auth",
+        ),
+    ]
+    assert tried == [
+        ("/api/auth.test", "xoxb-bot"),
+        ("/api/apps.connections.open", "xapp-app"),
+    ]
+    assert await SlackChatService(logging.getLogger("test")).check_credentials() == [
+        CredentialCheck("bot_token", "unconfigured"),
+        CredentialCheck("app_token", "unconfigured"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_credential_that_gets_no_slack_answer_failed():
+    """A proxy's error page is no answer from Slack: the check says the
+    credential failed rather than failing itself."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>bad gateway</html>")
+
+    service = SlackChatService(
+        logging.getLogger("test"),
+        token="xoxb-bot",
+        app_token="xapp-app",
+        transport=httpx.MockTransport(handler),
+        record_credential_events=False,
+    )
+
+    checks = await service.check_credentials()
+
+    assert [(c.name, c.status) for c in checks] == [
+        ("bot_token", "failed"),
+        ("app_token", "failed"),
+    ]
+    assert all(c.error for c in checks)
+
+
+@pytest.mark.asyncio
+async def test_a_member_without_a_bot_token_is_told_where_it_goes():
+    from guildbotics.capabilities.member_chat import MemberChatCapabilityService
+    from guildbotics.entities.team import Person
+    from guildbotics.runtime.integration_factory import MemberCapabilityError
+
+    service = SlackChatService(
+        logging.getLogger("test"), token_name="AIKO_SLACK_BOT_TOKEN"
+    )
+    chat = MemberChatCapabilityService(
+        Person(person_id="aiko", name="Aiko"), service, "slack"
+    )
+
+    with pytest.raises(MemberCapabilityError, match="set AIKO_SLACK_BOT_TOKEN"):
+        await chat.identity()
+
+
+_FINE = {"type": "message", "user": "U1", "text": "fine", "ts": "1.5"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ({"messages": None}, "lists no messages"),
+        ({}, "lists no messages"),
+        ({"messages": [_FINE, "no object"]}, "lists no messages"),
+        ({"messages": [_FINE], "response_metadata": "x"}, "lists no messages"),
+        ({"messages": [{**_FINE, "ts": "x"}, _FINE]}, "names no time"),
+    ],
+)
+async def test_a_history_that_cannot_be_read_whole_is_no_page(answer, reason):
+    """Neither a channel nor a thread reads as empty, or shorter than it is,
+    from an answer that does not list its messages."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, **answer})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        for read in (
+            service.list_channel_events("C1"),
+            service.list_thread_events("C1", thread_id="1.5"),
+        ):
+            with pytest.raises(SlackUnreachableError, match=reason):
+                await read
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"channels": None},
+        {"channels": [{"id": "C9", "name": "other"}], "response_metadata": []},
+    ],
+)
+async def test_a_channel_list_that_cannot_be_read_names_no_absent_channel(answer):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, **answer})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match="lists no channels"):
+            await service.resolve_channel_id("dev-chat")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", 7])
+async def test_an_identity_whose_answer_names_no_user_failed(user_id):
+    """The member's own messages are told apart by its user: no user is not
+    one that never wrote."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "user_id": user_id})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match="names no user_id"):
+            await service.get_bot_identity()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "reason"), [({}, "names no ts"), ({"ts": "x"}, "names no message")]
+)
+async def test_a_post_whose_answer_names_no_message_failed(answer, reason):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, **answer})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match=reason):
+            await service.post_message("C1", "hello")
+
+
+@pytest.mark.asyncio
+async def test_a_slack_at_no_url_cannot_be_reached():
+    service = SlackChatService(
+        logging.getLogger("test"), token="xoxb-bot", base_url="http://[not a url"
+    )
+
+    with pytest.raises(SlackUnreachableError):
+        await service.get_bot_identity()
+    assert [c.status for c in await service.check_credentials()][0] == "failed"

@@ -194,7 +194,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "Chat (Slack)",
+        "Chat",
         [
             (
                 "guildbotics member chat updates --person <person>",
@@ -202,41 +202,41 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "reconsider new messages, and stop external writes when reception is unavailable.",
             ),
             (
-                "guildbotics member chat identity --person <person> --service slack",
+                "guildbotics member chat identity --person <person>",
                 "Show the member's chat identity.",
             ),
             (
-                "guildbotics member chat inspect thread --person <person> --service slack "
-                "(--message-url <url> | --channel-id <id> --thread-ts <ts>) [--limit <n>]",
+                "guildbotics member chat inspect thread --person <person> "
+                "(--message-url <url> | --channel-id <id> --thread-id <id>) [--limit <n>]",
                 "Read a thread before replying or reacting.",
             ),
             (
-                "guildbotics member chat inspect channel --person <person> --service slack "
-                "(--channel-id <id> | --channel-name <name>) [--oldest-ts <ts>] [--latest-ts <ts>] [--limit <n>]",
+                "guildbotics member chat inspect channel --person <person> "
+                "(--channel-id <id> | --channel-name <name>) [--since <iso-time>] [--until <iso-time>] [--limit <n>]",
                 "Read recent channel messages.",
             ),
             (
-                "guildbotics member chat resolve-channel --person <person> --service slack "
+                "guildbotics member chat resolve-channel --person <person> "
                 "--channel-name <name>",
                 "Resolve a channel name to its channel id without reading or posting; "
                 "the id is empty when no channel has that name.",
             ),
             (
-                "guildbotics member chat reply --person <person> --service slack "
+                "guildbotics member chat reply --person <person> "
                 "(--message-url <url> | (--channel-id <id> | --channel-name <name>) "
-                "--thread-ts <ts>) "
+                "--thread-id <id>) "
                 "--content-file <file>",
                 "Reply in a thread in the member voice.",
             ),
             (
-                "guildbotics member chat post --person <person> --service slack "
+                "guildbotics member chat post --person <person> "
                 "(--channel-id <id> | --channel-name <name>) "
                 "--content-file <file>",
                 "Post a new channel message.",
             ),
             (
-                "guildbotics member chat reaction add --person <person> --service slack "
-                "(--message-url <url> | --channel-id <id> --message-ts <ts>) "
+                "guildbotics member chat reaction add --person <person> "
+                "(--message-url <url> | --channel-id <id> --message-id <id>) "
                 "--reaction ack|agree|celebrate|support",
                 "Add a semantic reaction.",
             ),
@@ -322,7 +322,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "member, and uses its member broker. Do not start a host run from there. "
     "Commands return JSON. A failed or incomplete read is not an empty result.",
     "Inspect first: read the current issue / PR / thread with the bundled repository inspections or member chat inspect "
-    "commands before acting. Fields owned by GitHub or Slack (state, assignees, "
+    "commands before acting. Fields owned by GitHub or the chat (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
     "inspect output.",
     "Ground repository judgments in the repository's own guidelines: before "
@@ -375,7 +375,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating issue or PR for issue-driven work, the review thread or PR "
-    "conversation for PR review work, the Slack thread for Slack-driven work. "
+    "conversation for PR review work, the chat thread for chat-driven work. "
     "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
 ]
@@ -426,9 +426,9 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
 
 _CROSS_CUTTING_RULES: list[str] = [
     "GitHub inspections use the bundled repository commands. All underlying "
-    "GitHub and Slack access, reads and writes alike, goes through the "
+    "GitHub and chat access, reads and writes alike, goes through the "
     "corresponding `guildbotics member ...` commands. Never use `gh`, raw "
-    "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. When a needed read has "
+    "GitHub/chat tokens or APIs, or raw chat HTTP calls. When a needed read has "
     "no member command, ask a human for the information instead of using `gh` or "
     "a raw API. Publishing git commits and pushes also goes through member "
     "commands; never use raw `git commit` or `git push`.",
@@ -479,14 +479,14 @@ _CROSS_CUTTING_RULES: list[str] = [
     "`AgentResponse.message`.",
     "`memory.pinned` from `member context` contains standing rules. `memory.digest` is only a hint "
     "that a relevant note may exist.",
-    "Before work, recall prior memory by source whenever a ticket URL, PR URL, Slack thread URL, "
-    "or thread timestamp is known. Use topic recall only when prior notes seem likely, with "
+    "Before work, recall prior memory by source whenever a ticket URL, PR URL, chat thread URL, "
+    "or thread id is known. Use topic recall only when prior notes seem likely, with "
     "repeated `--query` options for synonyms and English/Japanese variants. Get only promising "
     "hits; if nothing looks relevant, do not get.",
     "Memory can carry prior context, rationale, and progress, but it is not the canonical current "
-    "state of GitHub, Slack, or code. Reality-check every memory you read against the current "
+    "state of GitHub, the chat, or code. Reality-check every memory you read against the current "
     "owning system, and when sources differ prefer the owning system for canonical fields such "
-    "as GitHub state, assignees, labels, PR links, Slack thread contents, and code behavior.",
+    "as GitHub state, assignees, labels, PR links, chat thread contents, and code behavior.",
     "When the requester asks what the member remembers, recorded, learned, or previously "
     "discussed, use memory as the primary basis for the answer, then verify freshness against "
     "the owning system when current state matters.",

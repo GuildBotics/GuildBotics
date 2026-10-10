@@ -5,42 +5,31 @@ import types
 import pytest
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.chat_service import ChatPostResult
+from guildbotics.entities.team import Person
+from guildbotics.integrations.local.chat import LocalChatService
 from guildbotics.templates.commands.workflows import chat_post_command
-
-
-class FakeChatService:
-    def __init__(self) -> None:
-        self.channel_name_map: dict[str, str] = {}
-        self.posts: list[tuple[str, str, str | None]] = []
-
-    async def resolve_channel_id(self, channel_name: str) -> str | None:
-        return self.channel_name_map.get(channel_name)
-
-    async def post_message(
-        self, channel_id: str, text: str, *, thread_ts: str | None = None
-    ) -> ChatPostResult:
-        self.posts.append((channel_id, text, thread_ts))
-        return ChatPostResult(
-            channel_id=channel_id, message_ts="200.1", thread_ts="200.1"
-        )
+from tests.guildbotics.local_chat import lines, say
 
 
 def _context(command_result: object = "hello") -> types.SimpleNamespace:
-    svc = FakeChatService()
+    """A command's context, whose chat is the local one with ``dev-chat``."""
+    say("dev-chat", "welcome", message_id="0")
     calls: list[tuple[str, tuple]] = []
 
     async def invoke(name: str, *args):
         calls.append((name, args))
         return command_result
 
+    person = Person(person_id="aiko", name="Aiko")
     ctx = types.SimpleNamespace(
-        invoke=invoke,
-        get_chat_service=lambda: svc,
+        invoke=invoke, get_chat_service=lambda: LocalChatService(person)
     )
-    ctx._svc = svc
     ctx._calls = calls
     return ctx
+
+
+def _posts(channel_id: str) -> list[str]:
+    return [line["text"] for line in lines(channel_id) if line["author"] == "aiko"]
 
 
 @pytest.mark.asyncio
@@ -48,32 +37,27 @@ async def test_posts_using_explicit_channel_id():
     ctx = _context(command_result="daily summary")
 
     out = await chat_post_command.main(
-        ctx,
-        service="slack",
-        channel_id="C1",
-        command="examples/reports/morning_summary",
+        ctx, channel_id="dev-chat", command="examples/reports/morning_summary"
     )
 
     assert out == "daily summary"
     assert ctx._calls == [("examples/reports/morning_summary", ())]
-    assert ctx._svc.posts == [("C1", "daily summary", None)]
+    assert _posts("dev-chat") == ["daily summary"]
 
 
 @pytest.mark.asyncio
 async def test_resolves_channel_name_when_channel_id_missing():
     ctx = _context(command_result="digest")
-    ctx._svc.channel_name_map["dev-chat"] = "C2"
 
     out = await chat_post_command.main(
         ctx,
-        service="slack",
-        channel_name="dev-chat",
+        channel_name="#dev-chat",
         command='examples/reports/ai_news_digest query="OpenAI"',
     )
 
     assert out == "digest"
     assert ctx._calls == [("examples/reports/ai_news_digest", ("query=OpenAI",))]
-    assert ctx._svc.posts == [("C2", "digest", None)]
+    assert _posts("dev-chat") == ["digest"]
 
 
 @pytest.mark.asyncio
@@ -81,15 +65,12 @@ async def test_skips_when_command_output_is_empty():
     ctx = _context(command_result=None)
 
     out = await chat_post_command.main(
-        ctx,
-        service="slack",
-        channel_id="C1",
-        command="examples/reports/morning_summary",
+        ctx, channel_id="dev-chat", command="examples/reports/morning_summary"
     )
 
     assert out == ""
     assert len(ctx._calls) == 1
-    assert ctx._svc.posts == []
+    assert _posts("dev-chat") == []
 
 
 @pytest.mark.parametrize(
@@ -108,13 +89,13 @@ async def test_skips_when_command_output_is_empty():
             id="unresolved-channel-name",
         ),
         pytest.param(
-            {"channel_id": "C1"},
+            {"channel_id": "dev-chat"},
             'examples/reports/ai_news_digest query="OpenAI',
             "Invalid command syntax",
             id="invalid-quotes",
         ),
         pytest.param(
-            {"channel_id": "C1"},
+            {"channel_id": "dev-chat"},
             "  ",
             "A command to post is required",
             id="empty-command",
@@ -128,7 +109,15 @@ async def test_fails_without_running_or_posting_when_it_cannot_post(
     ctx = _context(command_result="digest")
 
     with pytest.raises(CommandError, match=message):
-        await chat_post_command.main(ctx, service="slack", command=command, **channel)
+        await chat_post_command.main(ctx, command=command, **channel)
 
     assert ctx._calls == []
-    assert ctx._svc.posts == []
+    assert _posts("dev-chat") == []
+
+
+@pytest.mark.asyncio
+async def test_a_chat_failure_is_the_commands_failure():
+    ctx = _context(command_result="digest")
+
+    with pytest.raises(CommandError, match="Unsupported local chat channel"):
+        await chat_post_command.main(ctx, channel_id="../etc", command="print")

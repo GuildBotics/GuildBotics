@@ -34,6 +34,7 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_markdown_with_frontmatter,
     load_yaml_file,
+    save_yaml_file,
 )
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.text_utils import replace_placeholders
@@ -241,7 +242,7 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     # Initially disabled: no GitHub services present.
     service.update_project(ProjectUpdateInput(**base, github_enabled=False))
     disabled = load_yaml_file(project_file)
-    assert "services" not in disabled
+    assert disabled["services"] == {"chat_service": {"name": "slack"}}
     assert "repositories" not in disabled
 
     # Enabled: ticket_manager + code_hosting_service added (no repository entry;
@@ -266,7 +267,7 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     # Disabled again: GitHub services removed.
     service.update_project(ProjectUpdateInput(**base, github_enabled=False))
     re_disabled = load_yaml_file(project_file)
-    assert "services" not in re_disabled
+    assert re_disabled["services"] == {"chat_service": {"name": "slack"}}
     assert "repositories" not in re_disabled
 
 
@@ -410,7 +411,32 @@ def test_update_project_github_disabled_writes_no_lane_map(tmp_path: Path) -> No
     )
 
     stored = load_yaml_file(config_dir / "team/project.yml")
-    assert "services" not in stored
+    assert stored["services"] == {"chat_service": {"name": "slack"}}
+
+
+def test_update_project_keeps_the_chat_service_it_finds(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    _seed_project(config_dir)
+    project_file = config_dir / "team/project.yml"
+    stored = load_yaml_file(project_file)
+    stored["services"] = {
+        "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
+    }
+    save_yaml_file(project_file, stored)
+
+    SimpleProjectSetupService().update_project(
+        ProjectUpdateInput(
+            config_dir=config_dir,
+            language="en",
+            llm_api_type="openai",
+            cli_agent="codex",
+            github_enabled=False,
+        )
+    )
+
+    assert load_yaml_file(project_file)["services"] == {
+        "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
+    }
 
 
 # --------------------------------------------------------------------------- #

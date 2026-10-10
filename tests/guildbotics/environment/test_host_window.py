@@ -13,6 +13,7 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -109,6 +110,7 @@ from tests.guildbotics.environment.test_command_environment import (
     _device,
 )
 from tests.guildbotics.intelligences.brains.test_inference import _Model
+from tests.guildbotics.local_chat import chat_team, lines, say
 
 _RUN = "run-1"
 
@@ -1206,37 +1208,34 @@ def test_inference_failure_text_is_safe_and_localized(language, source, caplog):
     assert secret not in caplog.text
 
 
-class _Chat:
-    """The member's chat as Slack would answer it."""
-
-    def __init__(self) -> None:
-        self.posted: list[tuple[str, str]] = []
-
-    async def resolve_channel_id(self, channel_name: str) -> str | None:
-        return {"general": "C9"}.get(channel_name)
-
-    async def post_message(self, channel_id: str, text: str, **_: Any):
-        self.posted.append((channel_id, text))
-        return ChatPostResult(channel_id, "100.1", "")
-
-
 @pytest.fixture
-def chat(monkeypatch) -> _Chat:
-    """The chat of the member the member commands resolve."""
+def chat(monkeypatch) -> str:
+    """The local chat of the member the member commands resolve, with its
+    channel ``general``."""
     from guildbotics.cli import member as member_cli
-    from guildbotics.entities.team import Person, Project, Team
+    from guildbotics.entities.team import Person
+    from guildbotics.integrations.local.chat import LocalChatService
 
-    service = _Chat()
+    say("general", "welcome", message_id="0")
     person = Person(person_id="aiko", name="Aiko")
+
+    async def aclose() -> None:
+        return None
+
     context = SimpleNamespace(
-        team=Team(project=Project(name="demo"), members=[person]),
+        team=chat_team(person),
         logger=logging.getLogger("test"),
-        get_chat_service=lambda: service,
+        get_chat_service=lambda: LocalChatService(person),
+        aclose=aclose,
     )
     monkeypatch.setattr(
         member_cli, "resolve_member_context", lambda _person: (context, person)
     )
-    return service
+    return "general"
+
+
+def _posted(channel_id: str) -> list[str]:
+    return [line["text"] for line in lines(channel_id) if line["author"] == "aiko"]
 
 
 @pytest.mark.asyncio
@@ -1253,13 +1252,19 @@ async def test_the_commands_chat_is_the_members_chat_commands(
             )
             general = await service.resolve_channel_id("general")
             missing = await service.resolve_channel_id("nowhere")
-            posted = await service.post_message("C9", "Good morning!")
+            posted = await service.post_message(chat, "Good morning!")
     finally:
         lease.release()
 
-    assert (general, missing) == ("C9", None)
-    assert posted == ChatPostResult("C9", "100.1", "")
-    assert chat.posted == [("C9", "Good morning!")]
+    assert (general, missing) == (chat, None)
+    [line] = [line for line in lines(chat) if line["author"] == "aiko"]
+    assert posted == ChatPostResult(
+        chat,
+        line["message_id"],
+        line["message_id"],
+        datetime.fromisoformat(line["occurred_at"]),
+    )
+    assert _posted(chat) == ["Good morning!"]
     (evidence,) = TaskRunStore().evidence(_RUN)
     assert evidence["evidence_type"] == "chat_post"
 
@@ -1278,13 +1283,13 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
             service = WindowChatService(command.client, "aiko")
             general = await service.resolve_channel_id("general")
             with pytest.raises(ChatServiceError) as refused:
-                await service.post_message("C9", "Good morning!")
+                await service.post_message(chat, "Good morning!")
     finally:
         lease.release()
 
-    assert general == "C9"
+    assert general == chat
     assert str(refused.value).endswith(t("cli.member.lease.invalid_delegation"))
-    assert chat.posted == []
+    assert _posted(chat) == []
 
 
 @pytest.mark.asyncio

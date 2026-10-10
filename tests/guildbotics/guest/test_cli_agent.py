@@ -11,11 +11,13 @@ from guildbotics.intelligences.agent_runtime.wire import (
     IoEntry,
     SummaryEntry,
 )
+from guildbotics.runtime.chat_service import message_position
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.environment.window_doubles import (
     WindowDouble,
     enter_command,
 )
+from tests.guildbotics.local_chat import at, position
 from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 
@@ -521,18 +523,22 @@ async def test_an_asking_response_points_at_the_commands_trace(
 @pytest.mark.parametrize(
     ("current", "persisted", "expected"),
     [
-        ("101.2", "101.1", "newer"),
-        ("101.1", "101.1", "equal"),
-        ("100.9", "101.1", "older"),
-        ("2", "10", "older"),
-        ("same-text", "same-text", "equal"),
-        ("text-a", "text-b", "unknown"),
-        ("", "101.1", "unknown"),
-        ("101.1", "", "unknown"),
+        (position(101.2), position(101.1), "newer"),
+        (position(101.1), position(101.1), "equal"),
+        (position(100.9), position(101.1), "older"),
+        # Positions order by time first, then by id, as text.
+        (position(9.5), position(10.5), "older"),
+        (
+            message_position(at(1), "b"),
+            message_position(at(1), "a"),
+            "newer",
+        ),
+        ("", position(101.1), "unknown"),
+        (position(101.1), "", "unknown"),
         ("", "", "unknown"),
     ],
 )
-def test_cursor_relation_orders_numeric_and_rejects_unorderable(
+def test_cursor_relation_orders_positions_and_rejects_missing_ones(
     current, persisted, expected
 ):
     assert cli_agent._cursor_relation(current, persisted) == expected

@@ -1,7 +1,5 @@
 """Fast-path execution retains the workflow's receipt and completion contract."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from guildbotics.capabilities import chat_selection
@@ -22,11 +20,10 @@ from tests.guildbotics.capabilities.test_chat_selection import (
 def chat(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     context = FakeInvokeContext("reply")
-    context.team = SimpleNamespace(members=[])
     _set_incoming_event(context)
     store = FileConversationStateStore()
     service = FakeChatService()
-    ChatReceiveStatus().save("slack", "alice", "C1", state="ready")
+    ChatReceiveStatus().save("local", "alice", "C1", state="ready")
     return context, store, service
 
 
@@ -39,9 +36,9 @@ async def test_fast_path_records_evidence_before_completing(
     chat, monkeypatch, route, reaction, visible, stored_effort
 ):
     context, store, service = chat
-    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    state = store.load_thread_state("local", "alice", "C1", "100.1")
     state.effort = stored_effort
-    store.save_thread_state("slack", "alice", "C1", "100.1", state)
+    store.save_thread_state("local", "alice", "C1", "100.1", state)
     seen = []
 
     async def assess(state, *args, **kwargs):
@@ -68,10 +65,13 @@ async def test_fast_path_records_evidence_before_completing(
     assert types.index("chat_batch") < types.index(
         "chat_reaction" if visible else "chat_noop"
     )
-    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    state = store.load_thread_state("local", "alice", "C1", "100.1")
     assert ("alice" in state.participants) == visible
     assert state.effort == stored_effort
-    assert "E1" in store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+    assert (
+        "C1:100.1"
+        in store.load_channel_cursor("local", "alice", "C1").processed_event_ids
+    )
     assert service.reactions == ([("C1", "100.1", reaction)] if visible else [])
 
 
@@ -83,13 +83,13 @@ async def test_unavailable_receiver_never_confirms_a_fast_path(
     context, store, service = chat
 
     async def assess(*args, **kwargs):
-        ChatReceiveStatus().save("slack", "alice", "C1", state=receive)
+        ChatReceiveStatus().save("local", "alice", "C1", state=receive)
         return Selection(route="no-op", reason="none"), "f" * 32
 
     monkeypatch.setattr(chat_selection, "assess", assess)
     with pytest.raises(ThreadContextUnavailableError):
         await _dispatch(context, chat_service=service, state_store=store)
-    assert not store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+    assert not store.load_channel_cursor("local", "alice", "C1").processed_event_ids
     assert not service.reactions
 
 
@@ -110,7 +110,7 @@ async def test_new_input_during_evaluation_is_reconsidered(chat, monkeypatch):
     )
     with pytest.raises(ThreadContextUnavailableError):
         await _dispatch(context, chat_service=service, state_store=store)
-    assert not store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+    assert not store.load_channel_cursor("local", "alice", "C1").processed_event_ids
     assert not service.reactions
 
 
@@ -132,7 +132,7 @@ async def test_reaction_failure_never_completes(chat, monkeypatch):
     monkeypatch.setattr(service, "add_reaction", fail)
     with pytest.raises(ThreadContextUnavailableError, match="remains pending"):
         await _dispatch(context, chat_service=service, state_store=store)
-    assert not store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+    assert not store.load_channel_cursor("local", "alice", "C1").processed_event_ids
     assert all(
         e["evidence_type"] != "chat_reaction"
         for e in RunStore().evidence(seen[0]["run_id"])
@@ -156,13 +156,8 @@ async def test_reaction_recovers_without_duplicate_visible_action(
             route="reaction-only", reaction="ack", reason="reaction"
         ), "f" * 32
 
-    async def idempotent_reaction(channel, ts, reaction):
-        item = (channel, ts, reaction)
-        if item not in service.reactions:
-            service.reactions.append(item)
-
+    # Reacting again is the same reaction, as a chat keeps it.
     monkeypatch.setattr(chat_selection, "assess", assess)
-    monkeypatch.setattr(service, "add_reaction", idempotent_reaction)
     method = "append_evidence" if failure == "evidence" else "complete_run"
     original = getattr(RunStore, method)
     failed = False
@@ -178,7 +173,7 @@ async def test_reaction_recovers_without_duplicate_visible_action(
     with pytest.raises(ThreadContextUnavailableError):
         await _dispatch(context, chat_service=service, state_store=state_store)
     assert not state_store.load_channel_cursor(
-        "slack", "alice", "C1"
+        "local", "alice", "C1"
     ).processed_event_ids
     run_id = seen[0]["run_id"]
     if edited:
@@ -225,7 +220,7 @@ async def test_failed_judgment_agent_fallback_escalates_on_final_attempt(
 
     monkeypatch.setattr(chat_selection, "assess", assess)
     await _dispatch(context, chat_service=service, state_store=store)
-    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
-        "E1"
+    assert store.load_channel_cursor("local", "alice", "C1").processed_event_ids == [
+        "C1:100.1"
     ]
     assert len(service.posts) == 1

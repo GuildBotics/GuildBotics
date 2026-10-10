@@ -181,6 +181,7 @@ from guildbotics.environment.toolchain import (
     load_toolchain,
 )
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.factory import chat_provider_name
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
@@ -203,6 +204,7 @@ from guildbotics.observability.session_transcripts import (
 )
 from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
+from guildbotics.runtime.chat_service import ChatServiceError
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.setup.github_project import ProjectBoard, with_project_board
@@ -1251,7 +1253,7 @@ class AppRuntime:
         return self.get_system_alerts()
 
     def reset_chat_receive_state(self) -> ChatReceiveResetResponse:
-        """Ignore every chat message up to now across all active Slack members.
+        """Ignore every chat message up to now across all subscribed members.
 
         Records a per-member receive cutoff at the current time (a hard floor
         that backfill never fetches before, covering channels known only by name
@@ -1268,18 +1270,25 @@ class AppRuntime:
         context = self._get_context()
         self._load_workspace_env()
         store = FileConversationStateStore()
-        cutoff_ts = f"{time.time():.6f}"
+        cutoff = datetime.now(UTC)
         members_reset = 0
         channels_reset = 0
-        for member in context.team.members:
+        try:
+            service = chat_provider_name(context.team)
+        except ChatServiceError:
+            service = ""
+        for member in context.team.members if service else []:
             if not getattr(member, "is_active", False):
                 continue
-            if not self._has_slack_subscription(member):
+            if not any(
+                sub["channel_id"] or sub["channel_name"]
+                for sub in get_chat_subscriptions(member)
+            ):
                 continue
-            store.save_receive_cutoff("slack", member.person_id, cutoff_ts)
-            for channel_id in store.list_known_channels("slack", member.person_id):
+            store.save_receive_cutoff(service, member.person_id, cutoff)
+            for channel_id in store.list_known_channels(service, member.person_id):
                 store.clear_channel_receive_backlog(
-                    "slack", member.person_id, channel_id
+                    service, member.person_id, channel_id
                 )
                 channels_reset += 1
             members_reset += 1
@@ -1290,22 +1299,6 @@ class AppRuntime:
         return ChatReceiveResetResponse(
             members_reset=members_reset, channels_reset=channels_reset
         )
-
-    def _has_slack_subscription(self, member: Any) -> bool:
-        """True when a member subscribes to any enabled Slack channel, whether it
-        is identified by id or only by name."""
-        for sub in get_chat_subscriptions(member):
-            if not isinstance(sub, dict):
-                continue
-            if str(sub.get("service", "slack")).strip().lower() != "slack":
-                continue
-            if not bool(sub.get("enabled", True)):
-                continue
-            channel_id = str(sub.get("channel_id", "") or "").strip()
-            channel_name = str(sub.get("channel_name", "") or "").strip()
-            if channel_id or channel_name:
-                return True
-        return False
 
     def get_transcript_settings(self) -> TranscriptSettingsStatus:
         usage = (

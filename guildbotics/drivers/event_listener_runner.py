@@ -1,37 +1,35 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import threading
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_profile import (
-    get_chat_slack_base_url,
-    get_chat_subscriptions,
-)
+from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
 from guildbotics.integrations.chat_state_store import (
-    ChannelCursorState,
     ConversationStateStore,
     ThreadConversationState,
 )
 from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
-from guildbotics.integrations.event_listener import (
-    EventListener,
-    IncomingChatEvent,
+from guildbotics.integrations.event_listener import EventListener
+from guildbotics.integrations.factory import (
+    ServiceIntegrationFactory,
+    chat_provider_name,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.slack.slack_chat_service import SlackApiError
-from guildbotics.integrations.slack.slack_socket_listener import (
-    SlackSocketEventListener,
+from guildbotics.runtime.chat_service import (
+    ChatEvent,
+    ChatService,
+    ChatServiceError,
+    ChatThreadNotFoundError,
 )
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.context import Context
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
@@ -46,14 +44,6 @@ class ChatBackfillPolicy:
     overlap_seconds: float = 60.0
     limit: int = 100
     participation: str = "strict"
-
-
-@dataclass(frozen=True, slots=True)
-class SlackConnectionKey:
-    service: str
-    event_source: str
-    app_token_hash: str
-    base_url: str
 
 
 class EventListenerRunner:
@@ -81,7 +71,7 @@ class EventListenerRunner:
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
         # Set inside the worker thread so stop() can cancel an in-flight cycle.
-        # The cycle only drains/backfills, but backfill awaits Slack HTTP requests
+        # The cycle only drains/backfills, but backfill awaits provider requests
         # that the stop event cannot interrupt; cancelling the cycle aborts those
         # awaits so a stop overlapping a backfill does not exceed the stop timeout.
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -89,13 +79,14 @@ class EventListenerRunner:
         self._receive_wakeup = asyncio.Event()
         self._receive_status = ChatReceiveStatus()
         self._backfill_waiting: set[tuple[str, str, str]] = set()
+        self._factory = ServiceIntegrationFactory()
+        #: The provider the project's chat is, which keys what is recorded.
+        self._service = ""
         self._connection_subscriptions: dict[
-            SlackConnectionKey, list[tuple[Person, ResolvedSubscriptions]]
+            str, list[tuple[Person, ResolvedSubscriptions]]
         ] = {}
-        self._undelivered: dict[SlackConnectionKey, list[IncomingChatEvent]] = {}
-        self._listeners: dict[SlackConnectionKey, EventListener] = {}
-        self._listener_tokens: dict[SlackConnectionKey, str] = {}
-        self._connection_person_ids: dict[SlackConnectionKey, list[str]] = {}
+        self._undelivered: dict[str, list[ChatEvent]] = {}
+        self._listeners: dict[str, EventListener] = {}
         self._subscription_channel_cache: dict[
             str, tuple[SubscriptionSignature, ResolvedSubscriptions]
         ] = {}
@@ -124,7 +115,7 @@ class EventListenerRunner:
     def stop(self) -> None:
         self._stop_event.set()
         # Cancel an in-flight cycle so a stop overlapping a backfill aborts the
-        # awaited Slack request instead of waiting it out past the stop timeout.
+        # awaited provider request instead of waiting it out past the stop timeout.
         # Scheduled onto the worker loop because stop() runs on another thread.
         loop = self._loop
         cycle = self._active_cycle
@@ -151,9 +142,12 @@ class EventListenerRunner:
         auth_failed_persons: list[str] = []
         auth_failed_count = 0
         for key, listener in self._listeners.items():
-            if getattr(listener, "auth_failed", False):
+            if listener.auth_failed:
                 auth_failed_count += 1
-                auth_failed_persons.extend(self._connection_person_ids.get(key, []))
+                auth_failed_persons.extend(
+                    person.person_id
+                    for person, _ in self._connection_subscriptions.get(key, [])
+                )
         return {
             "subscription_count": subscription_count,
             "listener_count": len(self._listeners),
@@ -264,7 +258,7 @@ class EventListenerRunner:
                         for p, c in grouped.get(key, [])
                     ):
                         self._receive_status.save(
-                            key.service,
+                            self._service,
                             person.person_id,
                             channel_id,
                             state="unavailable",
@@ -273,17 +267,17 @@ class EventListenerRunner:
         for key, person_subs in grouped.items():
             if self._stop_event.is_set():
                 break
-            self._get_or_create_listener(key).start()
+            self._get_or_create_listener(key, person_subs).start()
             self._flush_listener(key)
             backfilled = await asyncio.gather(
                 *(
-                    self._backfill_person(person, key.service, subscriptions)
+                    self._backfill_person(person, subscriptions)
                     for person, subscriptions in person_subs
                 )
             )
             self._events_backfilled_count += sum(backfilled)
 
-    def _flush_listener(self, key: SlackConnectionKey) -> None:
+    def _flush_listener(self, key: str) -> None:
         listener = self._listeners.get(key)
         if listener is None:
             return
@@ -299,40 +293,25 @@ class EventListenerRunner:
             if pending:
                 with shared_write_lock(timeout=0):
                     while pending:
-                        incoming = pending[0]
+                        event = pending[0]
                         for person, subscriptions in subscribers:
-                            if (
-                                incoming.channel_id not in subscriptions
-                                or self._is_processed_for_person(person, incoming)
-                            ):
-                                continue
-                            if is_suppressed_chat_event(incoming.event):
-                                self._state_store.mark_processed_event(
-                                    incoming.service_name,
-                                    person.person_id,
-                                    incoming.channel_id,
-                                    incoming.event.event_id,
+                            if event.channel_id in subscriptions:
+                                self._events_pending_count += self._queue_event(
+                                    person,
+                                    event,
+                                    subscriptions[event.channel_id].participation,
                                 )
-                            else:
-                                self._state_store.upsert_pending_event(
-                                    incoming.service_name,
-                                    person.person_id,
-                                    incoming.channel_id,
-                                    incoming.event,
-                                    subscriptions[incoming.channel_id].participation,
-                                )
-                                self._events_pending_count += 1
                         pending.pop(0)
         except SharedWriteBusyError:
             state = "catching_up" if pending else "ready"
         except Exception as exc:
             state = "unavailable"
             self._log_warning("chat receive persistence failed: %s", exc)
-        if not getattr(listener, "connected", False) or self._stop_event.is_set():
+        if not listener.connected or self._stop_event.is_set():
             state = "unavailable"
         for person, channels in subscribers:
             for channel_id in channels:
-                scope = (key.service, person.person_id, channel_id)
+                scope = (self._service, person.person_id, channel_id)
                 channel_state = (
                     "catching_up"
                     if state == "ready" and scope in self._backfill_waiting
@@ -360,53 +339,44 @@ class EventListenerRunner:
             self._wake_receiver()
 
     async def _backfill_person(
-        self,
-        person: Person,
-        service: str,
-        subscriptions: ResolvedSubscriptions,
+        self, person: Person, subscriptions: ResolvedSubscriptions
     ) -> int:
         """Backfill one member's channels into the pending queue (no execution)."""
         backfilled = 0
         for channel_id, policy in subscriptions.items():
             if self._stop_event.is_set():
                 break
-            backfilled += await self._backfill_due_events(
-                person, service, channel_id, policy
-            )
+            backfilled += await self._backfill_due_events(person, channel_id, policy)
         return backfilled
 
     async def _build_person_subscriptions_by_connection(
         self,
-    ) -> dict[SlackConnectionKey, list[tuple[Person, ResolvedSubscriptions]]]:
-        grouped: dict[
-            SlackConnectionKey, list[tuple[Person, ResolvedSubscriptions]]
-        ] = {}
-        for person in self.context.team.members:
+    ) -> dict[str, list[tuple[Person, ResolvedSubscriptions]]]:
+        grouped: dict[str, list[tuple[Person, ResolvedSubscriptions]]] = {}
+        team = self.context.team
+        try:
+            self._service = chat_provider_name(team)
+        except ChatServiceError:
+            return grouped
+        for person in team.members:
             if self._stop_event.is_set():
                 break
             if not getattr(person, "is_active", False):
                 continue
-            subscriptions = self._socket_subscriptions_for_person(person)
+            subscriptions = get_chat_subscriptions(person)
             if not subscriptions:
                 continue
             resolved = await self._resolve_subscriptions_cached(person, subscriptions)
             if not resolved:
                 continue
             try:
-                key, app_token = self._make_connection_key(person)
-            except ValueError as e:
+                key = self._factory.listener_key(person, team)
+            except ChatServiceError as e:
                 self._log_warning(
-                    "event listener runner skipped person=%s due to invalid socket_mode config: %s",
-                    person.person_id,
-                    e,
+                    "event listener runner skipped person=%s: %s", person.person_id, e
                 )
                 continue
-            self._listener_tokens.setdefault(key, app_token)
             grouped.setdefault(key, []).append((person, resolved))
-        self._connection_person_ids = {
-            key: [person.person_id for person, _ in subs]
-            for key, subs in grouped.items()
-        }
         return grouped
 
     async def _resolve_subscriptions_cached(
@@ -448,12 +418,6 @@ class EventListenerRunner:
         for sub in subscriptions:
             items.append(
                 (
-                    ("service", str(sub.get("service", "slack")).strip().lower()),
-                    (
-                        "event_source",
-                        str(sub.get("event_source", "socket_mode")).strip().lower(),
-                    ),
-                    ("enabled", "1" if bool(sub.get("enabled", True)) else "0"),
                     ("channel_id", str(sub.get("channel_id", "")).strip()),
                     ("channel_name", str(sub.get("channel_name", "")).strip()),
                     ("name", str(sub.get("name", "")).strip()),
@@ -497,21 +461,6 @@ class EventListenerRunner:
             participation=_chat_participation(subscription.get("participation")),
         )
 
-    def _socket_subscriptions_for_person(self, person: Person) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for sub in get_chat_subscriptions(person):
-            if not isinstance(sub, dict):
-                continue
-            if not bool(sub.get("enabled", True)):
-                continue
-            if str(sub.get("service", "slack")).strip().lower() != "slack":
-                continue
-            source_kind = str(sub.get("event_source", "socket_mode")).strip().lower()
-            if source_kind != "socket_mode":
-                continue
-            out.append(dict(sub))
-        return out
-
     async def _resolve_subscription_channels(
         self, person: Person, subscriptions: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -542,69 +491,41 @@ class EventListenerRunner:
         finally:
             await person_context.aclose()
 
-    def _get_or_create_listener(self, key: SlackConnectionKey) -> EventListener:
+    def _get_or_create_listener(
+        self, key: str, subscribers: list[tuple[Person, ResolvedSubscriptions]]
+    ) -> EventListener:
         listener = self._listeners.get(key)
         if listener is not None:
             return listener
-        app_token = self._listener_tokens.get(key)
-        if not app_token:
-            raise RuntimeError("Missing app token for listener creation.")
-        listener = SlackSocketEventListener(
-            logger=self.context.logger,
-            app_token=app_token,
-            base_url=key.base_url,
-            person_ids=self._connection_person_ids.get(key, []),
-            on_activity=self._wake_receiver,
+        listener = self._factory.create_event_listener(
+            self.context.logger,
+            self.context.team,
+            [person for person, _ in subscribers],
+            self._wake_receiver,
         )
         self._listeners[key] = listener
         self._log_info(
-            "created slack listener: service=%s event_source=%s base_url=%s token_hash=%s",
-            key.service,
-            key.event_source,
-            key.base_url,
-            key.app_token_hash[:12],
+            "created chat listener: service=%s members=%s",
+            self._service,
+            ",".join(person.person_id for person, _ in subscribers),
         )
         return listener
 
-    def _make_connection_key(self, person: Person) -> tuple[SlackConnectionKey, str]:
-        if not person.has_secret("SLACK_APP_TOKEN"):
-            env_key = person.to_person_env_key("SLACK_APP_TOKEN")
-            raise ValueError(
-                f"Slack App Token is required for person '{person.person_id}'. "
-                f"Set environment variable '{env_key}'."
-            )
-        app_token = person.get_secret("SLACK_APP_TOKEN")
-        base_url = (get_chat_slack_base_url(person) or "https://slack.com/api").rstrip(
-            "/"
-        )
-        return (
-            SlackConnectionKey(
-                service="slack",
-                event_source="socket_mode",
-                app_token_hash=hashlib.sha256(app_token.encode("utf-8")).hexdigest(),
-                base_url=base_url,
-            ),
-            app_token,
-        )
-
-    def _is_processed_for_person(
-        self, person: Person, incoming: IncomingChatEvent
-    ) -> bool:
-        return self._state_store.is_processed_event(
-            incoming.service_name,
-            person.person_id,
-            incoming.channel_id,
-            incoming.event.event_id,
-        )
+    def _queue_event(self, person: Person, event: ChatEvent, participation: str) -> int:
+        """Queue ``event`` for ``person`` unless it is done; 1 when queued."""
+        args = (self._service, person.person_id, event.channel_id)
+        if self._state_store.is_processed_event(*args, event.event_id):
+            return 0
+        if is_suppressed_chat_event(event):
+            self._state_store.mark_processed_event(*args, event.event_id)
+            return 0
+        self._state_store.upsert_pending_event(*args, event, participation)
+        return 1
 
     async def _backfill_due_events(
-        self,
-        person: Person,
-        service_name: str,
-        channel_id: str,
-        policy: ChatBackfillPolicy,
+        self, person: Person, channel_id: str, policy: ChatBackfillPolicy
     ) -> int:
-        key = (service_name, person.person_id, channel_id)
+        key = (self._service, person.person_id, channel_id)
         now = time.monotonic()
         startup_due = key not in self._startup_backfilled
         periodic_due = (
@@ -615,14 +536,12 @@ class EventListenerRunner:
         if not startup_due and not periodic_due:
             return 0
         try:
-            return await self._backfill_channel_and_threads(
-                person, service_name, channel_id, policy
-            )
+            return await self._backfill_channel_and_threads(person, channel_id, policy)
         except Exception as exc:
             self._log_warning(
                 "chat backfill skipped: person=%s service=%s channel=%s error=%s",
                 person.person_id,
-                service_name,
+                self._service,
                 channel_id,
                 exc,
             )
@@ -632,46 +551,39 @@ class EventListenerRunner:
             self._last_backfill_at[key] = now
 
     async def _backfill_channel_and_threads(
-        self,
-        person: Person,
-        service_name: str,
-        channel_id: str,
-        policy: ChatBackfillPolicy,
+        self, person: Person, channel_id: str, policy: ChatBackfillPolicy
     ) -> int:
+        scope = (self._service, person.person_id, channel_id)
         person_context = self.context.clone_for(person)
         chat_service = person_context.get_chat_service()
+        # A recorded receive reset is a hard floor: never fetch or queue events
+        # at or before it, even when a watermark minus overlap reaches further.
+        cutoff = self._state_store.load_receive_cutoff(*scope[:2])
         try:
             count = await self._backfill_channel_events(
-                person, service_name, channel_id, chat_service, policy
+                person, channel_id, chat_service, policy, cutoff
             )
-            for thread_state in self._state_store.list_thread_states(
-                service_name, person.person_id, channel_id
-            ):
+            for thread_state in self._state_store.list_thread_states(*scope):
                 if thread_state.backfill_disabled_reason:
                     continue
                 try:
                     count += await self._backfill_thread_events(
                         person,
-                        service_name,
                         channel_id,
-                        thread_state.thread_ts,
+                        thread_state.thread_id,
                         chat_service,
                         policy,
+                        cutoff,
                     )
-                except SlackApiError as exc:
-                    if exc.method != "conversations.replies" or (
-                        exc.error != "thread_not_found"
-                    ):
-                        raise
+                except ChatThreadNotFoundError:
                     await self._write_backfill(
-                        (service_name, person.person_id, channel_id),
+                        scope,
                         partial(
                             self._disable_thread_backfill,
                             person,
-                            service_name,
                             channel_id,
                             thread_state,
-                            exc.error,
+                            "thread_not_found",
                         ),
                     )
             return count
@@ -681,70 +593,49 @@ class EventListenerRunner:
     async def _backfill_channel_events(
         self,
         person: Person,
-        service_name: str,
         channel_id: str,
-        chat_service: Any,
+        chat_service: ChatService,
         policy: ChatBackfillPolicy,
+        cutoff: datetime | None,
     ) -> int:
-        state = self._state_store.load_channel_cursor(
-            service_name, person.person_id, channel_id
-        )
-        oldest_ts = self._backfill_oldest_ts(state.oldest_ts, policy)
-        if oldest_ts is None:
+        scope = (self._service, person.person_id, channel_id)
+        state = self._state_store.load_channel_cursor(*scope)
+        if state.watermark:
+            since = state.watermark - timedelta(seconds=policy.overlap_seconds)
+        elif policy.startup_minutes > 0:
+            since = datetime.now(UTC) - timedelta(minutes=policy.startup_minutes)
+        else:
             return 0
-        # A recorded receive reset is a hard floor: never fetch or queue events
-        # at or before it, even when the per-channel watermark minus overlap
-        # would reach further back.
-        cutoff_ts = self._state_store.load_receive_cutoff(
-            service_name, person.person_id
-        )
-        if cutoff_ts:
-            oldest_ts = _max_slack_ts(oldest_ts, cutoff_ts) or oldest_ts
+        if cutoff:
+            since = max(since, cutoff)
         cursor: str | None = None
-        highest_ts = state.oldest_ts
+        watermark = state.watermark
         count = 0
         while not self._stop_event.is_set():
             page = await chat_service.list_channel_events(
-                channel_id,
-                cursor=cursor,
-                oldest_ts=oldest_ts,
-                limit=policy.limit,
+                channel_id, cursor=cursor, since=since, limit=policy.limit
             )
             for event in page.events:
-                if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
+                watermark = max(filter(None, (watermark, event.occurred_at)))
+                if cutoff and event.occurred_at <= cutoff:
                     continue
                 count += await self._write_backfill(
-                    (service_name, person.person_id, channel_id),
-                    partial(
-                        self._upsert_backfilled_event,
-                        service_name,
-                        person,
-                        channel_id,
-                        event,
-                        policy.participation,
-                    ),
+                    scope,
+                    partial(self._queue_event, person, event, policy.participation),
                 )
-            highest_ts = _max_slack_ts(highest_ts, page.oldest_ts)
             cursor = page.cursor
             if not cursor:
                 break
-        await self._write_backfill(
-            (service_name, person.person_id, channel_id),
-            partial(
-                self._save_backfill_watermark,
-                service_name,
-                person.person_id,
-                channel_id,
-                state,
-                highest_ts,
-            ),
-        )
+        if watermark != state.watermark:
+            state.watermark = watermark
+            await self._write_backfill(
+                scope, partial(self._state_store.save_channel_cursor, *scope, state)
+            )
         return count
 
     def _disable_thread_backfill(
         self,
         person: Person,
-        service_name: str,
         channel_id: str,
         thread_state: ThreadConversationState,
         reason: str,
@@ -753,130 +644,63 @@ class EventListenerRunner:
         thread_state.backfill_error_count += 1
         thread_state.last_backfill_error = reason
         self._state_store.save_thread_state(
-            service_name,
+            self._service,
             person.person_id,
             channel_id,
-            thread_state.thread_ts,
+            thread_state.thread_id,
             thread_state,
         )
         self._log_info(
             "chat thread backfill disabled: person=%s service=%s channel=%s thread=%s reason=%s",
             person.person_id,
-            service_name,
+            self._service,
             channel_id,
-            thread_state.thread_ts,
+            thread_state.thread_id,
             reason,
         )
 
     async def _backfill_thread_events(
         self,
         person: Person,
-        service_name: str,
         channel_id: str,
-        thread_ts: str,
-        chat_service: Any,
+        thread_id: str,
+        chat_service: ChatService,
         policy: ChatBackfillPolicy,
+        cutoff: datetime | None,
     ) -> int:
-        thread_messages = self._state_store.load_thread_messages(
-            service_name, person.person_id, channel_id, thread_ts
-        )
-        latest_message_ts = max(
-            (message.message_ts for message in thread_messages), default=thread_ts
-        )
-        oldest_ts = _slack_ts_minus_seconds(latest_message_ts, policy.overlap_seconds)
-        cutoff_ts = self._state_store.load_receive_cutoff(
-            service_name, person.person_id
-        )
+        scope = (self._service, person.person_id, channel_id)
+        cached = self._state_store.load_thread_messages(*scope, thread_id)
+        # Only what arrived since the newest message known, less the overlap;
+        # all of a thread nothing is known of yet.
+        newest = max((message.occurred_at for message in cached), default=None)
+        since = newest - timedelta(seconds=policy.overlap_seconds) if newest else None
         cursor: str | None = None
         count = 0
         while not self._stop_event.is_set():
             page = await chat_service.list_thread_events(
-                channel_id,
-                thread_ts=thread_ts,
-                cursor=cursor,
-                limit=policy.limit,
+                channel_id, thread_id=thread_id, cursor=cursor, limit=policy.limit
             )
             for event in page.events:
-                if _compare_slack_ts(event.message_ts, oldest_ts) < 0:
-                    continue
-                if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
+                if (since and event.occurred_at < since) or (
+                    cutoff and event.occurred_at <= cutoff
+                ):
                     continue
                 count += await self._write_backfill(
-                    (service_name, person.person_id, channel_id),
-                    partial(
-                        self._upsert_backfilled_event,
-                        service_name,
-                        person,
-                        channel_id,
-                        event,
-                        policy.participation,
-                    ),
+                    scope,
+                    partial(self._queue_event, person, event, policy.participation),
                 )
             cursor = page.cursor
             if not cursor:
                 break
         return count
 
-    def _upsert_backfilled_event(
-        self,
-        service_name: str,
-        person: Person,
-        channel_id: str,
-        event: ChatEvent,
-        participation: str,
-    ) -> int:
-        incoming = IncomingChatEvent(
-            service_name=service_name, channel_id=channel_id, event=event
-        )
-        if self._is_processed_for_person(person, incoming):
-            return 0
-        if is_suppressed_chat_event(event):
-            self._state_store.mark_processed_event(
-                service_name, person.person_id, channel_id, event.event_id
-            )
-            return 0
-        self._state_store.upsert_pending_event(
-            service_name, person.person_id, channel_id, event, participation
-        )
-        return 1
-
-    def _backfill_oldest_ts(
-        self, watermark_ts: str | None, policy: ChatBackfillPolicy
-    ) -> str | None:
-        if watermark_ts:
-            return _slack_ts_minus_seconds(watermark_ts, policy.overlap_seconds)
-        if policy.startup_minutes <= 0:
-            return None
-        return _format_slack_ts(time.time() - policy.startup_minutes * 60)
-
-    def _save_backfill_watermark(
-        self,
-        service_name: str,
-        person_id: str,
-        channel_id: str,
-        state: ChannelCursorState,
-        highest_ts: str | None,
-    ) -> None:
-        if not highest_ts:
-            return
-        self._state_store.save_channel_cursor(
-            service_name,
-            person_id,
-            channel_id,
-            ChannelCursorState(
-                cursor=None,
-                oldest_ts=highest_ts,
-                processed_event_ids=state.processed_event_ids,
-            ),
-        )
-
     async def _aclose_sources(self) -> None:
-        for key, subscribers in self._connection_subscriptions.items():
+        for subscribers in self._connection_subscriptions.values():
             for person, channels in subscribers:
                 for channel_id in channels:
                     try:
                         self._receive_status.save(
-                            key.service,
+                            self._service,
                             person.person_id,
                             channel_id,
                             state="unavailable",
@@ -892,7 +716,6 @@ class EventListenerRunner:
             except Exception:
                 continue
         self._listeners = {}
-        self._listener_tokens = {}
         self._subscription_channel_cache = {}
         self._last_group_log_state = None
         self._last_backfill_at = {}
@@ -938,31 +761,3 @@ def _chat_participation(value: Any) -> str:
     if participation in {"strict", "social", "muted"}:
         return participation
     return "strict"
-
-
-def _format_slack_ts(value: float) -> str:
-    return f"{max(0.0, value):.6f}"
-
-
-def _slack_ts_minus_seconds(value: str, seconds: float) -> str:
-    try:
-        return _format_slack_ts(float(value) - seconds)
-    except ValueError:
-        return value
-
-
-def _max_slack_ts(left: str | None, right: str | None) -> str | None:
-    if not left:
-        return right
-    if not right:
-        return left
-    return left if _compare_slack_ts(left, right) >= 0 else right
-
-
-def _compare_slack_ts(left: str, right: str) -> int:
-    try:
-        left_value = float(left)
-        right_value = float(right)
-    except ValueError:
-        return (left > right) - (left < right)
-    return (left_value > right_value) - (left_value < right_value)

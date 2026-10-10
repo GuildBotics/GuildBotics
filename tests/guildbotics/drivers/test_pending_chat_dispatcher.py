@@ -23,11 +23,11 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.observability.trace_status import resolve_trace_status
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
 from guildbotics.utils.correlation import current_trace
 from tests.guildbotics.command_environment_doubles import runs_as
+from tests.guildbotics.local_chat import at, chat_event
 
 
 class _FakeContext:
@@ -71,12 +71,12 @@ def attempts(monkeypatch) -> list[ChatAttempt]:
                     subject=ChatSubject(
                         service=service_name,
                         channel_id=channel_id,
-                        thread_ts=event.thread_ts,
+                        thread_id=event.thread_id,
                         event_id=event.event_id,
                         self_user_id="U_ALICE",
                     ),
-                    message_ts=event.message_ts,
-                    context_cursor=event.message_ts,
+                    message_id=event.message_id,
+                    context_cursor=event.position,
                     prompt={},
                 )
             )
@@ -94,13 +94,8 @@ def _turn(context) -> ChatTurn:
 
 
 def _event(event_id="E1", ts="100.1", thread_ts="100.1"):
-    return ChatEvent(
-        event_id=event_id,
-        channel_id="C1",
-        message_ts=ts,
-        thread_ts=thread_ts,
-        author_id="U1",
-        text="hi",
+    return chat_event(
+        ts, event_id=event_id, thread_id=thread_ts, author_id="U1", text="hi"
     )
 
 
@@ -824,13 +819,41 @@ async def test_follower_arrival_wakes_backing_off_head_once(monkeypatch, tmp_pat
     assert ran == ["EA"]
     head = store.load_pending_events("slack", "alice", "C1")[0]
     assert head.event.event_id == "EA"
-    assert head.wake_cursor == "100.3"
+    assert head.wake_cursor == _event("EB", ts="100.3").position
     assert head.next_attempt_at is not None
 
     # The same follower cannot wake the head again, even after a restart.
     restarted = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
     await restarted.process_person(person)
     assert ran == ["EA"]
+
+
+@pytest.mark.asyncio
+async def test_messages_of_one_time_run_in_the_order_of_their_ids(
+    monkeypatch, tmp_path
+):
+    """A chat may name two messages with one time: their ids order them,
+    whichever arrived first."""
+    store = FileConversationStateStore(base_dir=tmp_path)
+    same = at(100)
+    for message_id in ("m-b", "m-a"):
+        store.upsert_pending_event(
+            "slack",
+            "alice",
+            "C1",
+            chat_event(
+                message_id, event_id=message_id, thread_id=message_id, occurred_at=same
+            ),
+        )
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran)
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    person = Person(person_id="alice", name="A", is_active=True)
+
+    await dispatcher.process_person(person)
+    await dispatcher.process_person(person)
+
+    assert ran == ["m-a", "m-b"]
 
 
 @pytest.mark.asyncio

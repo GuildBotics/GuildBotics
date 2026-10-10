@@ -91,7 +91,7 @@ class ChatSubject:
 
     service: str
     channel_id: str
-    thread_ts: str
+    thread_id: str
     event_id: str
     #: The member's own user on the service, whose messages are no input.
     self_user_id: str
@@ -99,7 +99,7 @@ class ChatSubject:
     @property
     def subject_id(self) -> str:
         """The event as a run's completion names its subject."""
-        return f"{self.service}:{self.channel_id}:{self.thread_ts}:{self.event_id}"
+        return f"{self.service}:{self.channel_id}:{self.thread_id}:{self.event_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +132,7 @@ class Work:
                     subject.service,
                     subject.self_user_id,
                     subject.channel_id,
-                    subject.thread_ts,
+                    subject.thread_id,
                 )
             ),
             subject,

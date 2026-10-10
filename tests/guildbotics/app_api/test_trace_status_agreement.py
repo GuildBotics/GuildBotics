@@ -41,7 +41,7 @@ _BASE: dict[str, Any] = {
     "command": "workflows/chat_conversation_workflow",
     "attributes": {
         "slack.channel": "C1",
-        "slack.thread_ts": "100.1",
+        "slack.thread_id": "100.1",
         "github.url": "https://github.com/o/r/issues/42",
         "github.number": "42",
         "github.kind": "issue",

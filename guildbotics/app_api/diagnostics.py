@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -10,18 +9,12 @@ from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsRespo
 from guildbotics.app_api.verify import (
     resolve_default_model_provider,
 )
-from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.commands.errors import CommandError
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_profile import (
-    get_chat_slack_base_url,
-    get_chat_subscriptions,
-)
 from guildbotics.integrations.factory import configured_providers
 from guildbotics.integrations.provider import ProviderCheck
-from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -37,7 +30,6 @@ DiagnosticSection = Literal[
     "config", "members", "llm", "cli_agent", "github", "slack", "git"
 ]
 DiagnosticStatus = Literal["ok", "warning", "error"]
-SLACK_USER_ID_PATTERN = re.compile(r"^[UW][A-Z0-9]{8,}$")
 
 
 #: The bundled read-only command whose one AI CLI turn is the check: every turn
@@ -163,8 +155,7 @@ class ScenarioDiagnosticsService:
         )
         checks.extend(await self._check_llm(context, members[0]))
         checks.extend(await self._check_cli_agent(context, members))
-        checks.extend(await self._check_github(context, members))
-        checks.extend(await self._check_slack(context, members))
+        checks.extend(await self._check_providers(context, members))
         return self._response(checks, [member.person_id for member in members])
 
     async def _check_human_member(
@@ -198,40 +189,6 @@ class ScenarioDiagnosticsService:
                     "error",
                     "Human member roles are not configured.",
                     person_id=member.person_id,
-                )
-            )
-
-        slack_user_id = str(member.account_info.get("slack_user_id", "")).strip()
-        if not slack_user_id:
-            checks.append(
-                self._check(
-                    "slack",
-                    "human_slack_user_id",
-                    "warning",
-                    "Slack User ID is not configured for this human member.",
-                    person_id=member.person_id,
-                )
-            )
-        elif SLACK_USER_ID_PATTERN.fullmatch(slack_user_id):
-            checks.append(
-                self._check(
-                    "slack",
-                    "human_slack_user_id",
-                    "ok",
-                    "Slack User ID is configured.",
-                    person_id=member.person_id,
-                    target=slack_user_id,
-                )
-            )
-        else:
-            checks.append(
-                self._check(
-                    "slack",
-                    "human_slack_user_id",
-                    "error",
-                    "Slack User ID format is invalid.",
-                    person_id=member.person_id,
-                    target=slack_user_id,
                 )
             )
 
@@ -454,187 +411,34 @@ class ScenarioDiagnosticsService:
                 if temporary_directory is not None:
                     temporary_directory.cleanup()
 
-    async def _check_github(
+    async def _check_providers(
         self, context: Context, members: list[Person]
     ) -> list[DiagnosticCheck]:
         providers = configured_providers(context.team)
-        if not providers:
-            return [
+        checks = [
+            _check(check)
+            for provider in providers
+            for check in await provider.diagnose(context, members)
+        ]
+        if not any(p.code_hosting or p.ticket_manager for p in providers):
+            checks.append(
                 self._check(
                     "github",
                     "github_not_configured",
                     "ok",
                     "GitHub integration is not configured; GitHub diagnostics were skipped.",
                 )
-            ]
-        return [
-            _check(check)
-            for provider in providers
-            for check in await provider.diagnose(context, members)
-        ]
-
-    async def _check_slack(
-        self, context: Context, members: list[Person]
-    ) -> list[DiagnosticCheck]:
-        checks: list[DiagnosticCheck] = []
-        has_slack = False
-        for member in members:
-            subscriptions = [
-                sub
-                for sub in get_chat_subscriptions(member)
-                if bool(sub.get("enabled", True))
-                and str(sub.get("service", "slack")).lower() == "slack"
-            ]
-            if not subscriptions:
-                continue
-            has_slack = True
-            if not member.has_secret("SLACK_APP_TOKEN"):
-                checks.append(
-                    self._check(
-                        "slack",
-                        "slack_app_token",
-                        "error",
-                        "Slack App token is required for Socket Mode runtime.",
-                        person_id=member.person_id,
-                        target=member.to_person_env_key("SLACK_APP_TOKEN"),
-                    )
-                )
-            else:
-                checks.append(await self._check_slack_app_token(member))
-            c = context.clone_for(member)
-            try:
-                chat_service = c.get_chat_service()
-                identity = await chat_service.get_bot_identity()
-                checks.append(
-                    self._check(
-                        "slack",
-                        "slack_bot_auth",
-                        "ok",
-                        "Slack bot authentication succeeded.",
-                        person_id=member.person_id,
-                        context={"bot_user_id": identity.user_id},
-                    )
-                )
-                for sub in subscriptions:
-                    checks.append(
-                        await self._check_slack_channel(
-                            c,
-                            sub,
-                            member.person_id,
-                            identity.display_name or identity.user_id,
-                        )
-                    )
-            except Exception as exc:
-                checks.append(
-                    self._check(
-                        "slack",
-                        "slack_access",
-                        "error",
-                        self._safe_error("Slack read-only check failed", exc),
-                        person_id=member.person_id,
-                        context={"error_type": type(exc).__name__},
-                    )
-                )
-            finally:
-                await c.aclose()
-
-        if not has_slack:
+            )
+        if not any(p.chat for p in providers):
             checks.append(
                 self._check(
                     "slack",
                     "slack_not_configured",
                     "ok",
-                    "Slack channels are not configured; Slack diagnostics were skipped.",
+                    "Chat is not configured; chat diagnostics were skipped.",
                 )
             )
         return checks
-
-    async def _check_slack_app_token(self, member: Person) -> DiagnosticCheck:
-        """Validate the Socket Mode app-level token, not just its presence.
-
-        A configured-but-invalid app token (truncated, revoked, wrong app) is the
-        common cause of a member silently not receiving events: the bot token can
-        still pass ``auth.test`` while Socket Mode fails with ``invalid_auth``.
-        This probes ``apps.connections.open`` (read-only; performs no data writes,
-        the same call the event listener makes) so the broken token surfaces in
-        diagnostics instead of only in runtime logs.
-        """
-        try:
-            await probe_slack_app_token(
-                member.get_secret("SLACK_APP_TOKEN"),
-                get_chat_slack_base_url(member),
-            )
-        except Exception as exc:
-            return self._check(
-                "slack",
-                "slack_app_token_invalid",
-                "error",
-                self._safe_error("Slack App token (Socket Mode) check failed", exc),
-                person_id=member.person_id,
-                target=member.to_person_env_key("SLACK_APP_TOKEN"),
-                context={"error_type": type(exc).__name__},
-            )
-        return self._check(
-            "slack",
-            "slack_app_token",
-            "ok",
-            "Slack App token (Socket Mode) is valid.",
-            person_id=member.person_id,
-        )
-
-    async def _check_slack_channel(
-        self,
-        context: Context,
-        subscription: dict[str, Any],
-        person_id: str,
-        bot_name: str = "",
-    ) -> DiagnosticCheck:
-        chat_service = context.get_chat_service()
-        channel_id = str(subscription.get("channel_id", "") or "").strip()
-        channel_name = str(subscription.get("channel_name", "") or "").strip()
-        target = channel_id or channel_name
-        if not channel_id and channel_name:
-            channel_id = await chat_service.resolve_channel_id(channel_name) or ""
-        if not channel_id:
-            return self._check(
-                "slack",
-                "slack_channel",
-                "error",
-                "Slack channel could not be resolved.",
-                person_id=person_id,
-                target=target,
-            )
-        try:
-            await chat_service.list_channel_events(channel_id, limit=1)
-        except SlackApiError as exc:
-            if exc.error != "not_in_channel":
-                raise
-            # A bot that was never invited is the ordinary first-run state, not
-            # a credential problem, so it gets its own actionable check instead
-            # of the generic "check your tokens" failure.
-            return self._check(
-                "slack",
-                "slack_channel_not_joined",
-                "error",
-                "Slack bot has not joined the channel.",
-                person_id=person_id,
-                target=target or channel_id,
-                # Named so the GUI can spell out the exact /invite to run
-                # instead of a generic instruction.
-                context={
-                    "channel_id": channel_id,
-                    "channel": channel_name or target or channel_id,
-                    "bot_name": bot_name,
-                },
-            )
-        return self._check(
-            "slack",
-            "slack_channel_history",
-            "ok",
-            "Slack channel history was fetched.",
-            person_id=person_id,
-            target=target or channel_id,
-        )
 
     def _response(
         self, checks: list[DiagnosticCheck], active_members: list[str]

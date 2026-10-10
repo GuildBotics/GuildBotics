@@ -6,7 +6,7 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_fields,
     workflow_status_metadata,
 )
-from guildbotics.runtime.chat_service import ChatEvent
+from tests.guildbotics.local_chat import chat_event
 
 
 def test_workflow_status_metadata_builds_suppressed_payload():
@@ -54,11 +54,11 @@ def test_other_or_malformed_metadata_is_not_suppressed():
 
 
 def test_suppressed_chat_event_uses_event_metadata():
-    event = ChatEvent(
+    event = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
-        message_ts="100.1",
-        thread_ts="100.1",
+        message_id="100.1",
+        thread_id="100.1",
         author_id="U1",
         text="notice",
         metadata=workflow_status_metadata(

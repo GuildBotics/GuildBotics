@@ -15,6 +15,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from guildbotics.entities import Person, Team
+from guildbotics.integrations.event_listener import EventListener
+from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.ticket_manager import TicketManager
@@ -32,8 +34,40 @@ class ProviderCheck(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+def configured_check(
+    section: str, code: str, person: Person, key: str, target: str, configured: bool
+) -> ProviderCheck:
+    """Whether ``person`` has ``key`` configured, at ``target``, as verify says it."""
+    return ProviderCheck(
+        section=section,
+        code=code,
+        status="ok" if configured else "error",
+        message=f"{target} is configured."
+        if configured
+        else f"{target} is not configured.",
+        target=target,
+        context={"person_id": person.person_id, "key": key},
+    )
+
+
 async def _no_diagnosis(context: Context, members: list[Person]) -> list[ProviderCheck]:
     return []
+
+
+@dataclass(frozen=True)
+class Chat:
+    """What a provider's chat is made of."""
+
+    service: Callable[[Logger, Person, Team], ChatService]
+    #: The listener of one connection, for its members, which calls
+    #: ``on_activity`` when it connects, disconnects, or receives.
+    event_listener: Callable[
+        [Logger, Team, list[Person], Callable[[], None]], EventListener
+    ]
+    #: The connection a member's chat events arrive on: the members of one key
+    #: share one listener. Raises ``ChatCredentialsError`` for a member who
+    #: cannot connect.
+    listener_key: Callable[[Person, Team], str] = lambda person, team: ""
 
 
 @dataclass(frozen=True)
@@ -46,6 +80,7 @@ class Provider:
     account_info_keys: frozenset[str] = frozenset()
     code_hosting: Callable[[Logger, Person, Team], CodeHostingService] | None = None
     ticket_manager: Callable[[Logger, Person, Team], TicketManager] | None = None
+    chat: Chat | None = None
     #: Whether a member holds what the provider authenticates with.
     credentialed: Callable[[Person], bool] = lambda person: True
     #: Whether a member's configuration has what the provider needs, without

@@ -1,57 +1,34 @@
 from __future__ import annotations
 
-from guildbotics.integrations.chat_profile import (
-    get_chat_profile,
-    get_chat_slack_base_url,
-    get_chat_subscriptions,
-)
+from guildbotics.integrations.chat_profile import get_chat_subscriptions
 
 
 class _Person:
-    def __init__(self, profile=None, message_channels=None):
-        self.profile = profile
+    def __init__(self, message_channels=None):
         self.message_channels = message_channels if message_channels is not None else []
-
-
-def test_get_chat_profile_returns_empty_for_non_dict():
-    assert get_chat_profile(_Person(profile=None)) == {}
-    assert get_chat_profile(_Person(profile="x")) == {}
-    assert get_chat_profile(object()) == {}
-
-
-def test_get_chat_profile_and_collections_normalize():
-    person = _Person(profile={"chat": {"slack_base_url": " https://slack.local/api "}})
-
-    assert get_chat_profile(person) == person.profile["chat"]
-    assert get_chat_slack_base_url(person) == "https://slack.local/api"
 
 
 def test_get_chat_subscriptions_reads_message_channels():
     person = _Person(
         message_channels=[
             {
-                "service": "slack",
                 "name": "dev-chat",
                 "chat": {
                     "enabled": True,
                     "channel_id": "C1",
                     "participation": "social",
-                    "event_source": "socket_mode",
                     "startup_backfill_minutes": 60,
                     "backfill_interval_seconds": 300,
                 },
             },
-            {"service": "slack", "name": "ignored-no-chat"},
+            {"name": "ignored-no-chat"},
         ],
     )
     subs = get_chat_subscriptions(person)
     assert subs == [
         {
-            "service": "slack",
             "channel_id": "C1",
             "channel_name": "dev-chat",
-            "enabled": True,
-            "event_source": "socket_mode",
             "participation": "social",
             "startup_backfill_minutes": 60,
             "backfill_interval_seconds": 300,
@@ -59,18 +36,18 @@ def test_get_chat_subscriptions_reads_message_channels():
     ]
 
 
-def test_get_chat_subscriptions_defaults_to_polling_without_timeout():
+def test_get_chat_subscriptions_takes_the_channel_name_from_the_channel():
+    person = _Person(message_channels=[{"name": "dev-chat", "chat": {"enabled": True}}])
+    assert get_chat_subscriptions(person) == [
+        {"channel_id": "", "channel_name": "dev-chat"}
+    ]
+
+
+def test_a_channel_whose_chat_is_disabled_is_not_watched():
     person = _Person(
         message_channels=[
-            {"service": "slack", "name": "dev-chat", "chat": {"enabled": True}}
+            {"name": "quiet", "chat": {"enabled": False, "channel_id": "C9"}},
+            {"name": "dev-chat", "chat": {"channel_id": "C1"}},
         ]
     )
-    assert get_chat_subscriptions(person) == [
-        {
-            "service": "slack",
-            "channel_id": "",
-            "channel_name": "dev-chat",
-            "enabled": True,
-            "event_source": "socket_mode",
-        }
-    ]
+    assert [sub["channel_id"] for sub in get_chat_subscriptions(person)] == ["C1"]

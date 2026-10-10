@@ -38,7 +38,6 @@ from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
     InteractiveTraceSession,
 )
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 from guildbotics.workspace.identity import (
     ensure_workspace_identity,
@@ -49,6 +48,7 @@ from guildbotics.workspace.validation import (
     SharedSchemaAheadError,
     validate_shared_file,
 )
+from tests.guildbotics.local_chat import at, chat_event
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "guildbotics"
 
@@ -89,28 +89,30 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
     )
 
     store = FileConversationStateStore()
-    store.save_channel_cursor("slack", "p1", "C1", ChannelCursorState(cursor="c"))
+    store.save_channel_cursor(
+        "slack", "p1", "C1", ChannelCursorState(watermark=at(1.0))
+    )
     store.save_thread_state(
         "slack",
         "p1",
         "C1",
         "1.0",
-        ThreadConversationState(channel_id="C1", thread_ts="1.0"),
+        ThreadConversationState(channel_id="C1", thread_id="1.0"),
     )
     store.upsert_pending_event(
         "slack",
         "p1",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="e1",
             channel_id="C1",
-            message_ts="1.0",
-            thread_ts="1.0",
+            message_id="1.0",
+            thread_id="1.0",
             author_id="U1",
             text="hello",
         ),
     )
-    store.save_receive_cutoff("slack", "p1", "1.0")
+    store.save_receive_cutoff("slack", "p1", at(1.0))
 
     # Writes the document metadata, the recency list, and an audit event.
     MemberMemoryService(Person(person_id="p1", name="P")).record(
@@ -148,11 +150,11 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
         "slack",
         "p1",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="e1",
             channel_id="C1",
-            message_ts="1.0",
-            thread_ts="1.0",
+            message_id="1.0",
+            thread_id="1.0",
             author_id="U1",
             text="hi",
         ),

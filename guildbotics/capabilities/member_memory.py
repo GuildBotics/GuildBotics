@@ -48,7 +48,7 @@ ARCHIVED_DIR = "archived"
 RESERVED_DOC_IDS = {ARCHIVED_DIR}
 POLICY_BASELINE_BODY = """- Keep only reusable lessons: pitfalls, solution steps, and design rationale.
 - Do not keep trivial logs, temporary trial-and-error, or information useful only for one task.
-- Store work records tied to PRs, issues, or team-shared Slack threads in team memory so other members can discover and continue the work.
+- Store work records tied to PRs, issues, or team-shared chat threads in team memory so other members can discover and continue the work.
 - Use personal memory only for member-specific knowledge with no reuse or handoff value for other members.
 - Preserve lessons learned from failures. Store lessons that benefit the whole team in team memory.
 - Keep one topic per document. Write a summary that makes usefulness clear at a glance.
