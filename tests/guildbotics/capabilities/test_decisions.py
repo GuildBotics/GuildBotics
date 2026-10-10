@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from guildbotics.capabilities.decisions import assessment, engines
+from guildbotics.capabilities.decisions import assessment, engines, preparation
 from guildbotics.capabilities.decisions.chat_policy import (
     QUESTIONS,
     conjunction,
@@ -28,6 +28,7 @@ from guildbotics.runtime.brain import (
     ExecutionMetadata,
     public_parameters,
 )
+from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
@@ -507,7 +508,7 @@ async def test_jev_uses_latest_and_records_the_returned_version(monkeypatch):
             "usage": {"input_tokens": 12},
         }
 
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    KeyringSecretStore(get_workspace_config_dir()).set(jev.JEV_KEY, "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     await brain.run(json.dumps({"state": "test", "questions": {}}))
@@ -530,7 +531,7 @@ async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
         calls.append(args)
         raise RuntimeError("private-test-key")
 
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    KeyringSecretStore(get_workspace_config_dir()).set(jev.JEV_KEY, "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     factory = SimpleNamespace(create_brain=lambda *args, **kwargs: brain)
@@ -730,10 +731,10 @@ async def test_jev_credentials_are_fresh_and_never_fall_back_to_environment(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv(jev.JEV_KEY, "stale-secret")
-    assert not jev.credential(tmp_path)
+    assert preparation.options(tmp_path) == {"credential_present": False}
     store = KeyringSecretStore(tmp_path)
     store.set(jev.JEV_KEY, "current-secret")
-    assert jev.credential(tmp_path) == "current-secret"
+    assert preparation.options(tmp_path) == {"credential_present": True}
     store.delete(jev.JEV_KEY)
     monkeypatch.setattr(inference_host, "get_workspace_config_dir", lambda: tmp_path)
     with pytest.raises(ValueError, match="credentials_missing"):

@@ -38,6 +38,7 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
+from guildbotics.cli.member import run_in_process
 from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
@@ -53,6 +54,7 @@ from guildbotics.drivers.service_lock import (
     ServiceLockUnavailableError,
 )
 from guildbotics.entities import Person, Project, Team
+from guildbotics.environment import member_broker
 from guildbotics.environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
@@ -160,6 +162,16 @@ def _write(path: Path, content: str) -> Path:
 # ---------------------------------------------------------------------------
 # get_command_options
 # ---------------------------------------------------------------------------
+
+
+def test_the_desktop_runtime_installs_the_member_cli(monkeypatch) -> None:
+    """The member brokers of the commands it runs run member commands in the
+    Desktop's own process."""
+    monkeypatch.setattr(member_broker, "_member_cli", None)
+
+    AppRuntime(EventBus())
+
+    assert member_broker.member_cli() is run_in_process
 
 
 def test_command_options_prefers_workspace_over_home_source(

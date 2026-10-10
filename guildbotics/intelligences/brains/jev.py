@@ -1,7 +1,6 @@
 """Jev's structured question API behind the common Brain interface."""
 
 import json
-from pathlib import Path
 from typing import Any
 
 from guildbotics.intelligences.brains.inference import JevCall, inference
@@ -12,14 +11,6 @@ JEV_KEY = "TYPESAFE_API_KEY"
 JEV_MODEL = "jev-latest"
 #: What Jev's calls and their key are recorded as.
 JEV_PROVIDER = "jev"
-
-
-def credential(config_dir: Path) -> str:
-    """The workspace's Jev key: only the host holds it."""
-    # Imported here: the keychain is the host's.
-    from guildbotics.utils.secret_store import KeyringSecretStore
-
-    return KeyringSecretStore(config_dir).get(JEV_KEY) or ""
 
 
 class JevBrain(Brain):

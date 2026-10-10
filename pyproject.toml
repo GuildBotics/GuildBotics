@@ -194,6 +194,114 @@ layers = [
   "commands : intelligences : runtime : loader : entities : utils",
 ]
 
+# The host's layers, top down: each imports only those below it, and the
+# packages on one line (`|`) import none of each other. The Desktop backend
+# (app_api) runs the member CLI in its own process for the member brokers of
+# the commands it runs, so it sits above cli. The isolated environment
+# (environment) holds the member brokers; the member CLI they run is handed
+# to them by the entries above (install_member_cli).
+[[tool.importlinter.contracts]]
+id = "host-layers"
+name = "The host imports only downward"
+type = "layers"
+containers = ["guildbotics"]
+layers = [
+  "app_api",
+  "cli",
+  "drivers | setup",
+  "environment",
+  "capabilities",
+  "integrations",
+  "sync | secrets",
+  "workspace | observability | hub",
+]
+
+# Below the layers above, the records and storage, the Hub, and the sync and
+# Secret distribution built on them take from the shared packages only the
+# utilities: none of them knows the domain model, the Context, a brain, or a
+# command.
+[[tool.importlinter.contracts]]
+id = "host-foundations-build-on-utils"
+name = "workspace, observability, hub, sync and secrets import no shared package but utils"
+type = "forbidden"
+source_modules = [
+  "guildbotics.workspace",
+  "guildbotics.observability",
+  "guildbotics.hub",
+  "guildbotics.sync",
+  "guildbotics.secrets",
+]
+forbidden_modules = [
+  "guildbotics.commands",
+  "guildbotics.intelligences",
+  "guildbotics.runtime",
+  "guildbotics.loader",
+  "guildbotics.entities",
+]
+
+# Two stacks share the bottom layer: sync turns shared writes into Git work on
+# workspace storage and the records; Secret distribution reaches the Hub, which
+# holds repositories and values without knowing what they mean. Neither
+# crosses to the other.
+[[tool.importlinter.contracts]]
+id = "sync-does-not-reach-the-hub"
+name = "sync imports workspace and observability, never hub"
+type = "forbidden"
+source_modules = ["guildbotics.sync"]
+forbidden_modules = ["guildbotics.hub"]
+
+[[tool.importlinter.contracts]]
+id = "secrets-reach-only-the-hub"
+name = "secrets imports hub, never workspace or observability"
+type = "forbidden"
+source_modules = ["guildbotics.secrets"]
+forbidden_modules = ["guildbotics.workspace", "guildbotics.observability"]
+
+# The shared packages' layers, top down: the command machinery, the brains and
+# catalogs, the Context and its ports, the loaders, the domain models, the
+# utilities.
+[[tool.importlinter.contracts]]
+id = "shared-layers"
+name = "The shared packages import only downward"
+type = "layers"
+containers = ["guildbotics"]
+layers = [
+  "commands",
+  "intelligences",
+  "runtime",
+  "loader",
+  "entities",
+  "utils",
+]
+
+# Shared writes reach synchronization through the Workspace Sync Port
+# (utils/workspace_sync_port.py); importing the sync package would bring back
+# the dependency on Git the port removes. Only the composition roots import
+# it: the process entries that install the queue or run one repository
+# operation -- the Desktop backend, `guildbotics start`, the member CLI, and
+# the secret transfers (which read the workspace's Hub and push the
+# generations they publish on a device running no service).
+[[tool.importlinter.contracts]]
+id = "sync-composition-roots"
+name = "Only the composition roots import the sync package"
+type = "protected"
+protected_modules = ["guildbotics.sync"]
+allowed_importers = [
+  "guildbotics.app_api.workspace_sync",
+  "guildbotics.cli.service",
+  "guildbotics.cli.member",
+  "guildbotics.cli.secrets",
+]
+
+# One module drives the microVM SDK: the access contract is enforced by one
+# layer, and a second module importing the SDK would translate it its own way.
+[[tool.importlinter.contracts]]
+id = "one-sandbox-runtime"
+name = "Only the environment's runtime drives the microVM SDK"
+type = "protected"
+protected_modules = ["microsandbox"]
+allowed_importers = ["guildbotics.environment.runtime"]
+
 # guest: the entry the host starts in a command's microVM, the working
 # directory's copy, the AI CLI adapters and their turns, the AI CLI brain, and
 # the client of the command's window. The microVM holds no credential and no

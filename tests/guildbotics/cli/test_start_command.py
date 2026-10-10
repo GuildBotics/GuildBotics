@@ -8,7 +8,9 @@ import wakepy
 from click.testing import CliRunner
 
 from guildbotics.cli import main as cli_main
+from guildbotics.cli.member import run_in_process
 from guildbotics.drivers.service_lock import ServiceLock, set_service_keeps_awake
+from guildbotics.environment import member_broker
 from guildbotics.utils.i18n_tool import t
 
 
@@ -166,11 +168,13 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
 
 def test_start_only_scheduler(monkeypatch, tmp_path):
     created, _handlers, _order = _patch_start_dependencies(monkeypatch, tmp_path)
+    monkeypatch.setattr(member_broker, "_member_cli", None)
     runner = CliRunner()
 
     result = runner.invoke(cli_main, ["start", "--only", "scheduler"])
 
     assert result.exit_code == 0, result.output
+    assert member_broker.member_cli() is run_in_process
     assert "scheduler" in created
     assert "events" not in created
     assert created["scheduler"].start_called == 1

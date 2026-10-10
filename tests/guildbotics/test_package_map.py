@@ -12,6 +12,7 @@ libraries only the host uses its forbidden modules.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import subprocess
@@ -36,13 +37,8 @@ _ALLOWED: tuple[str, ...] = tuple(_CONTRACT["source_modules"])
 _SHARED = tuple(name for name in _ALLOWED if name != "guildbotics.guest")
 #: Third-party libraries only the host uses.
 _HOST_ONLY: set[str] = set(_CONTRACT["forbidden_modules"])
-_BRAIN_MAPPING = (
-    Path(__file__).resolve().parents[2]
-    / "guildbotics"
-    / "templates"
-    / "intelligences"
-    / "brain_mapping.yml"
-)
+_TEMPLATES = Path(__file__).resolve().parents[2] / "guildbotics" / "templates"
+_BRAIN_MAPPING = _TEMPLATES / "intelligences" / "brain_mapping.yml"
 
 #: Loads the environment's entry, every brain the bundled mapping names, every
 #: adapter, every module of the machinery, every bundled Python command the way
@@ -154,6 +150,23 @@ def test_what_runs_in_the_environment_loads_nothing_host_only() -> None:
         "guildbotics.guest.codex",
     } <= set(loaded)
     assert _host_only(loaded) == []
+
+
+def test_the_bundled_python_commands_import_nothing_host_only() -> None:
+    """import-linter does not see the bundled commands, loaded by path, and the
+    probe runs only what loading them runs: an import inside a function is
+    read here."""
+    imported: list[str] = []
+    for path in sorted(_TEMPLATES.joinpath("commands").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                # ``from guildbotics import sync`` names the package in the alias.
+                imported.extend(f"{node.module}.{alias.name}" for alias in node.names)
+
+    assert "guildbotics.commands.errors.CommandError" in imported
+    assert _host_only(imported) == []
 
 
 def test_a_completion_managed_turn_reaches_the_run_record_only_through_the_ledger() -> (

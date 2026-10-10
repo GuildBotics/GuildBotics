@@ -4,7 +4,6 @@ the client and the real window in one process, over the broker's server."""
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import logging
 import os
@@ -25,7 +24,7 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.commands.errors import CommandError
 from guildbotics.entities.team import Person
 from guildbotics.environment import command_environment as environment
-from guildbotics.environment import inference_host
+from guildbotics.environment import inference_host, member_broker
 from guildbotics.environment.contract import AccessContract
 from guildbotics.environment.host_window import (
     HostWindow,
@@ -79,7 +78,7 @@ from guildbotics.intelligences.brains.inference import (
     inference,
     install_inference,
 )
-from guildbotics.intelligences.brains.jev import JevBrain
+from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
 from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import (
     diagnostics_events,
@@ -95,9 +94,11 @@ from guildbotics.utils.correlation import (
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
     GUILDBOTICS_WORKSPACE_ROOT,
+    get_workspace_config_dir,
     get_workspace_root,
 )
 from guildbotics.utils.i18n_tool import set_language, t
+from guildbotics.utils.secret_store import KeyringSecretStore
 from tests.conftest import COMMAND_ENVIRONMENT_VARIABLES
 from tests.guildbotics.environment.contract_doubles import (
     command_at,
@@ -110,6 +111,12 @@ from tests.guildbotics.environment.test_command_environment import (
 from tests.guildbotics.intelligences.brains.test_inference import _Model
 
 _RUN = "run-1"
+
+
+def _no_command(*_args, **_kwargs) -> tuple[int, str, str]:
+    raise AssertionError("No member command should run.")
+
+
 _WORK = Work("manual", "work-1")
 
 
@@ -498,7 +505,7 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
 
 @pytest.mark.asyncio
 async def test_a_command_without_a_running_grant_answers_nothing(tmp_path):
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
     await broker.start()
     try:
         endpoint = broker.endpoint
@@ -875,7 +882,7 @@ async def _served(host) -> AsyncIterator[tuple[httpx.AsyncClient, str]]:
     token, and the window's URL."""
     import contextvars
 
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
     broker.serve(host, contextvars.copy_context())
     await broker.start()
     endpoint = broker.endpoint
@@ -919,8 +926,6 @@ async def test_the_window_answers_only_the_names_it_is_reached_by() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chunked", [False, True])
 async def test_a_call_larger_than_the_limit_is_refused(monkeypatch, chunked) -> None:
-    from guildbotics.environment import member_broker
-
     monkeypatch.setattr(member_broker, "_MAX_REQUEST_BYTES", 1024)
     body = json.dumps({"data": "x" * 4096}).encode()
 
@@ -939,8 +944,6 @@ async def test_a_call_larger_than_the_limit_is_refused(monkeypatch, chunked) -> 
 async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
     monkeypatch,
 ) -> None:
-    from guildbotics.environment import member_broker
-
     monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(member_broker, "_MAX_OUTPUT_BYTES", 64)
 
@@ -1100,7 +1103,7 @@ async def test_jev_is_asked_by_the_host(tmp_path, monkeypatch, in_the_environmen
         asked.append(payload)
         return {"model": "jev-1", "answers": {"q": 1}}
 
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    KeyringSecretStore(get_workspace_config_dir()).set(JEV_KEY, "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     async with _command(monkeypatch, tmp_path):
         in_the_environment(environment.running_command().endpoint)
@@ -1474,11 +1477,7 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
         posted.write_text("member write", encoding="utf-8")
         return 0, "", ""
 
-    monkeypatch.setattr(
-        importlib.import_module("guildbotics.cli.member"),
-        "run_in_process",
-        run_in_process,
-    )
+    monkeypatch.setattr(member_broker, "_member_cli", run_in_process)
 
     async def run_command():
         async with _command(monkeypatch, tmp_path) as command:
@@ -1536,8 +1535,6 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
     tmp_path, monkeypatch, stage
 ):
     """A timeout remains prompt, but cancellation during teardown drains it."""
-    from guildbotics.environment import member_broker
-
     started, tearing_down, torn_down = (asyncio.Event() for _ in range(3))
     release = threading.Event()
     loop = asyncio.get_running_loop()
@@ -1549,11 +1546,7 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
         posted.write_text("member write", encoding="utf-8")
         return 0, "", ""
 
-    monkeypatch.setattr(
-        importlib.import_module("guildbotics.cli.member"),
-        "run_in_process",
-        run_in_process,
-    )
+    monkeypatch.setattr(member_broker, "_member_cli", run_in_process)
     monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
 
     async def run_command():

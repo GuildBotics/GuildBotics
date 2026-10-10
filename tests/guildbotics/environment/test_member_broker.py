@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import importlib
 import json
 import logging
 import socket
@@ -20,11 +19,13 @@ from mcp.client.streamable_http import streamable_http_client
 from starlette.requests import Request
 
 from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.cli.member import run_in_process as run_member_cli
 from guildbotics.environment import member_broker
 from guildbotics.environment.loopback_server import LoopbackServer
 from guildbotics.environment.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
+    MemberCli,
     _rejection_reason,
     _ScopedTokenVerifier,
 )
@@ -35,8 +36,9 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.runtime.member_invocation import ChatSubject, MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
-#: The module, not the `member` group `guildbotics.cli` re-exports by that name.
-_MEMBER_CLI = importlib.import_module("guildbotics.cli.member")
+
+def _no_command(*_args, **_kwargs) -> tuple[int, str, str]:
+    raise AssertionError("No member command should run.")
 
 
 def _context(
@@ -54,8 +56,10 @@ def _context(
     )
 
 
-def _active_broker(context: AgentExecutionContext) -> MemberCapabilityBroker:
-    broker = MemberCapabilityBroker()
+def _active_broker(
+    context: AgentExecutionContext, run: MemberCli = _no_command
+) -> MemberCapabilityBroker:
+    broker = MemberCapabilityBroker(run)
     broker._context = context
     broker._turn_grant = "turn-1"
     return broker
@@ -79,7 +83,7 @@ def _can_bind_localhost() -> bool:
     ],
 )
 async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
-    monkeypatch, tmp_path, work: Work, run_id: str, task_run_id: str
+    tmp_path, work: Work, run_id: str, task_run_id: str
 ) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -95,9 +99,8 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
         )
         return 3, "out", "err"
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
     context = _context(tmp_path, work=work)
-    broker = _active_broker(context)
+    broker = _active_broker(context, run_in_process)
 
     result = await broker.execute(
         "turn-1", ["context", "--person", "aiko"], stdin="member input"
@@ -125,9 +128,7 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
 
 
 @pytest.mark.asyncio
-async def test_each_member_command_is_handed_the_commands_environment(
-    monkeypatch, tmp_path
-) -> None:
+async def test_each_member_command_is_handed_the_commands_environment(tmp_path) -> None:
     """For as long as the broker waits for the command, and no longer: git
     the command runs in the microVM ends when the broker stops waiting."""
     handed: list[Any] = []
@@ -140,8 +141,7 @@ async def test_each_member_command_is_handed_the_commands_environment(
         handed.append(invocation.guest)
         return 0, "", ""
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
     broker._guest = cast(Any, Guest())
     before = time.monotonic()
 
@@ -159,9 +159,7 @@ _INHERITED: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 @pytest.mark.asyncio
-async def test_member_command_starts_from_an_empty_context(
-    monkeypatch, tmp_path
-) -> None:
+async def test_member_command_starts_from_an_empty_context(tmp_path) -> None:
     """The broker's server task holds what the turn that started it had bound;
     a command must see only the invocation it is handed."""
     seen: list[str] = []
@@ -170,8 +168,7 @@ async def test_member_command_starts_from_an_empty_context(
         seen.append(_INHERITED.get())
         return 0, "", ""
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
     token = _INHERITED.set("an earlier turn")
     try:
         await broker.execute("turn-1", ["help"])
@@ -194,10 +191,9 @@ async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
             release.wait(5)
         return 0, "done", ""
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
     monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(member_broker, "_rejection_reason", lambda *_: None)
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
     try:
         timed_out = await broker.execute("turn-1", ["hang"])
         following = await broker.execute("turn-1", ["help"])
@@ -233,11 +229,10 @@ async def test_abandon_waits_for_member_writes_even_after_timeout(
             raise ValueError("worker failed")
         return 0, "done", ""
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
     monkeypatch.setattr(
         member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05 if timed_out else 30
     )
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
 
     async def host(_call, _arguments):
         return await broker.run(
@@ -336,11 +331,10 @@ async def test_queued_member_writes_follow_request_lifetime(
         writes.append("member write")
         return 0, "", ""
 
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
     monkeypatch.setattr(
         member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05 if timed_out else 30
     )
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
 
     async def host(_call, _arguments):
         return await broker.run(
@@ -438,8 +432,7 @@ async def test_cancel_calls_stops_all_queued_workers_before_yielding(
         return 0, "", ""
 
     monkeypatch.setattr(loop, "run_in_executor", enqueue)
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
-    broker = _active_broker(_context(tmp_path))
+    broker = _active_broker(_context(tmp_path), run_in_process)
     calls = [
         asyncio.create_task(
             broker.run("aiko", ["help"], MemberInvocation(), cwd=tmp_path, stdin="")
@@ -475,12 +468,9 @@ async def test_cancel_calls_stops_all_queued_workers_before_yielding(
 @pytest.mark.asyncio
 async def test_output_beyond_the_limit_is_truncated(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(member_broker, "_MAX_OUTPUT_BYTES", 4)
-    monkeypatch.setattr(
-        _MEMBER_CLI,
-        "run_in_process",
-        lambda *_args, **_kwargs: (0, "abcdef", "ab"),
+    broker = _active_broker(
+        _context(tmp_path), lambda *_args, **_kwargs: (0, "abcdef", "ab")
     )
-    broker = _active_broker(_context(tmp_path))
 
     result = await broker.execute("turn-1", ["help"])
 
@@ -510,10 +500,23 @@ def test_help_is_the_only_command_that_does_not_require_a_person() -> None:
     assert _rejection_reason(["help"], "aiko") is None
 
 
+def test_brokers_run_member_commands_only_with_an_installed_member_cli(
+    monkeypatch,
+) -> None:
+    """A process that installed none has no command environment to open."""
+    monkeypatch.setattr(member_broker, "_member_cli", None)
+
+    with pytest.raises(RuntimeError, match="No member CLI"):
+        member_broker.member_cli()
+
+    member_broker.install_member_cli(_no_command)
+    assert member_broker.member_cli() is _no_command
+
+
 @pytest.mark.asyncio
 async def test_broker_rejects_commands_outside_an_active_turn(tmp_path) -> None:
     """Rejections stay in-band; a raised MCP tool error would fail the turn."""
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
 
     result = await broker.execute("expired", ["help"])
 
@@ -524,7 +527,7 @@ async def test_broker_rejects_commands_outside_an_active_turn(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_broker_rejects_an_expired_turn_grant(tmp_path) -> None:
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
     broker._context = _context(tmp_path)
     broker._turn_grant = "current"
 
@@ -540,7 +543,7 @@ async def test_activate_normalizes_start_failure(monkeypatch, tmp_path) -> None:
         raise OSError("bind failed")
 
     monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
 
     with pytest.raises(MemberCapabilityBrokerError, match="could not start") as excinfo:
         await broker.activate(_context(tmp_path))
@@ -553,7 +556,7 @@ async def test_activate_normalizes_failed_server_task(tmp_path) -> None:
     async def fail() -> None:
         raise OSError("server failed")
 
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
     broker._server = LoopbackServer(
         cast(Any, None), asyncio.create_task(fail()), port=0
     )
@@ -580,7 +583,7 @@ async def test_the_broker_leaves_the_process_logging_as_it_was(
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(root, "level", logging.WARNING)
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(_no_command)
     context = _context(tmp_path)
     await broker.activate(context)
     await broker.deactivate(context)
@@ -628,7 +631,7 @@ def test_brokers_starting_at_once_leave_the_process_logging_as_it_was(
 async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     tmp_path,
 ) -> None:
-    broker = MemberCapabilityBroker()
+    broker = MemberCapabilityBroker(run_member_cli)
     context = _context(tmp_path)
     await broker.activate(context)
     endpoint = broker.endpoint

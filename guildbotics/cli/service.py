@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from guildbotics.cli._options import selected_workspace
+from guildbotics.cli.member import run_in_process
 from guildbotics.drivers.context import create_context
 from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
@@ -36,6 +37,7 @@ from guildbotics.drivers.service_owner import (
     prepare_service_owner as prepare_relay_service_owner,
 )
 from guildbotics.drivers.task_scheduler import TaskScheduler
+from guildbotics.environment.member_broker import install_member_cli
 from guildbotics.observability.diagnostics_events import (
     finish_system_session,
     start_system_session,
@@ -201,6 +203,7 @@ def _run_cli_background_service_session(
         owner_check=owner_check,
     )
 
+    install_member_cli(run_in_process)
     scheduler = (
         TaskScheduler(
             create_context(),

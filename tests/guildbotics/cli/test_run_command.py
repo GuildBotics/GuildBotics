@@ -12,6 +12,7 @@ from click.testing import CliRunner
 import guildbotics.cli.run as run_module
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.cli import main
+from guildbotics.cli.member import run_in_process
 from guildbotics.cli.run import _parse_command_spec
 from guildbotics.commands.errors import (
     PersonNotFoundError,
@@ -21,6 +22,7 @@ from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.drivers.member_context import resolve_person
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.environment import member_broker
 from guildbotics.intelligences.functions import to_text
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
@@ -191,7 +193,9 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
     tmp_path, monkeypatch, person_args
 ):
     """Without a matching Desktop the command runs in this process, with the
-    secrets published first and without overriding what is already set."""
+    secrets published first and without overriding what is already set, and
+    with the member CLI installed for the command's member broker."""
+    monkeypatch.setattr(member_broker, "_member_cli", None)
     monkeypatch.setattr(run_module, "selected_workspace", lambda: tmp_path)
     monkeypatch.setattr(run_module, "run_on_desktop", lambda *args: None)
     context = _get_context()
@@ -209,6 +213,7 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
 
     async def run(command, *, source):
         events.append(("run", command.command_name, source))
+        assert member_broker.member_cli() is run_in_process
         return CommandOutcome(result=None, text_output="local output")
 
     monkeypatch.setattr(run_module, "create_context", create_context)

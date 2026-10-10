@@ -21,12 +21,12 @@ import logging
 import secrets
 import threading
 import time
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -66,6 +66,42 @@ _ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", GUEST_HOST_ALIAS)
 #: What answers the command's calls: the call's name and its arguments, to
 #: its JSON result. It raises :class:`HostCallError` for a call it refuses.
 HostCalls = Callable[[str, dict[str, Any]], Coroutine[Any, Any, Any]]
+
+
+class MemberCli(Protocol):
+    """Runs one ``guildbotics member`` command in this process, as the CLI
+    would, and returns its exit code, standard output, and standard error."""
+
+    def __call__(
+        self,
+        arguments: Sequence[str],
+        invocation: MemberInvocation,
+        *,
+        cwd: Path,
+        stdin: str,
+    ) -> tuple[int, str, str]: ...
+
+
+_member_cli: MemberCli | None = None
+
+
+def install_member_cli(run: MemberCli) -> None:
+    """Make ``run`` what the process's member brokers run member commands
+    with. The member CLI is the layer above the brokers, so each host entry
+    that runs commands installs it."""
+    global _member_cli
+    _member_cli = run
+
+
+def member_cli() -> MemberCli:
+    """What the process's member brokers run member commands with.
+
+    Raises:
+        RuntimeError: If the process installed none.
+    """
+    if _member_cli is None:
+        raise RuntimeError("No member CLI is installed.")
+    return _member_cli
 
 
 class MemberCapabilityBrokerError(RuntimeError):
@@ -123,12 +159,14 @@ class _ScopedTokenVerifier(TokenVerifier):
 class MemberCapabilityBroker:
     """Expose the active turn's member CLI through authenticated localhost MCP.
 
-    ``guest`` is the microVM of the command the broker serves: each command
-    it runs is handed it, with the time the broker gives it, to run there what
-    the command's turns can write.
+    ``run`` runs each member command it is asked for. ``guest`` is the
+    microVM of the command the broker serves: each command it runs is handed
+    it, with the time the broker gives it, to run there what the command's
+    turns can write.
     """
 
-    def __init__(self, guest: EnvironmentGuest | None = None) -> None:
+    def __init__(self, run: MemberCli, guest: EnvironmentGuest | None = None) -> None:
+        self._run = run
         self._guest = guest
         self._token = secrets.token_urlsafe(32)
         self._name = f"guildbotics-member-{secrets.token_hex(6)}"
@@ -287,15 +325,12 @@ class MemberCapabilityBroker:
             return _rejected("Member command stdin is too large.")
         if reason := _rejection_reason(arguments, person_id):
             return _rejected(reason)
-        # Imported here: the member CLI is the layer above this one.
-        from guildbotics.cli.member import run_in_process
-
         if self._guest is not None:
             invocation = replace(
                 invocation,
                 guest=self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS),
             )
-        run = partial(run_in_process, arguments, invocation, cwd=cwd, stdin=stdin)
+        run = partial(self._run, arguments, invocation, cwd=cwd, stdin=stdin)
         cancelled = threading.Event()
 
         def command() -> tuple[int, str, str]:

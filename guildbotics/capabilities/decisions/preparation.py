@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from guildbotics.intelligences.brains.jev import JEV_KEY, credential
+from guildbotics.intelligences.brains.jev import JEV_KEY
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
 def options(root: Path):
-    return {"credential_present": bool(credential(root))}
+    return {"credential_present": bool(KeyringSecretStore(root).get(JEV_KEY))}
 
 
 def save_credential(root: Path, value: str):
