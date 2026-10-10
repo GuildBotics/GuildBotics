@@ -76,11 +76,14 @@ async def test_fetch_status_options_reads_live_with_member_token(
             self.client = None
             self.person = person
 
+        async def aclose(self) -> None:
+            pass
+
         async def get_statuses(self) -> list[str]:
             return ["Todo", "In Progress", "Done"]
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+        "guildbotics.setup.github_project.GitHubTicketManager", _FakeTicketManager
     )
 
     runtime = AppRuntime(EventBus())
@@ -120,6 +123,9 @@ def _patch_agent_ticket_manager(
         def __init__(self, logger: object, person: Person, team: Team) -> None:
             self.client = None
 
+        async def aclose(self) -> None:
+            pass
+
         async def get_agent_field_state(self) -> dict:
             return state
 
@@ -129,7 +135,7 @@ def _patch_agent_ticket_manager(
             return state
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+        "guildbotics.setup.github_project.GitHubTicketManager", _FakeTicketManager
     )
 
 
@@ -190,11 +196,14 @@ async def test_agent_field_skips_member_without_github_username(
             if not person.account_info.get("github_username"):
                 raise ValueError("github username required")
 
+        async def aclose(self) -> None:
+            pass
+
         async def get_agent_field_state(self) -> dict:
             return {"exists": True, "options": [], "missing": []}
 
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.GitHubTicketManager", _FakeTicketManager
+        "guildbotics.setup.github_project.GitHubTicketManager", _FakeTicketManager
     )
 
     runtime = AppRuntime(EventBus())

@@ -3,13 +3,13 @@ from collections.abc import Sequence
 from datetime import datetime
 from logging import Logger
 from typing import Any, ClassVar, cast
+from urllib.parse import urlparse
 
-from httpx import AsyncClient
+from httpx import AsyncClient, HTTPError, HTTPStatusError
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
-from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_agent_token,
@@ -18,33 +18,26 @@ from guildbotics.integrations.github.github_utils import (
     get_person_name,
     normalize_login,
     paginated_items,
-)
-from guildbotics.integrations.github.pull_request_patrol import (
-    MAX_REVIEW_ROUNDS,
-    PULL_REQUEST_QUERY,
-    REVIEW_LIMIT,
-    REVIEW_LIMIT_REASON,
-    PullRequest,
-    parse_pull_request,
-    pull_request_work,
+    parse_timestamp,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
-    CONVERT_PULL_REQUEST_TO_DRAFT,
     CREATE_PROJECT_FIELD,
     UPDATE_PROJECT_FIELD_OPTIONS,
     UPDATE_PROJECT_ITEM_STATUS,
-    configured_owner,
 )
-from guildbotics.integrations.workflow_status_comment import (
+from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
-    render_workflow_status_comment,
     suppresses_ticket_selection,
 )
+from guildbotics.integrations.repository_scope import configured_owner
+from guildbotics.runtime.code_hosting_service import ClosedItem
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.ticket_manager import TicketManager
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
+_ISSUE_PATH_PARTS = 4
 
 
 class _IncompleteGitHubCollection(RuntimeError):
@@ -818,13 +811,13 @@ class GitHubTicketManager(TicketManager):
         path reports a time, every comment is kept: an unknown request time
         must never be a reason to discard evidence and redo finished work.
         """
-        since = _parse_timestamp(assigned_at)
+        since = parse_timestamp(assigned_at)
         if since is None:
             return list(comments)
         return [
             comment
             for comment in comments
-            if (timestamp := _parse_timestamp(comment.timestamp)) is None
+            if (timestamp := parse_timestamp(comment.timestamp)) is None
             or timestamp >= since
         ]
 
@@ -952,19 +945,8 @@ class GitHubTicketManager(TicketManager):
         return None
 
     async def get_task_candidates(self) -> list[Task]:
-        """Return every currently actionable PR and issue in patrol order."""
+        """Return every currently actionable issue in patrol order."""
         candidates: list[Task] = []
-        for item in await self._search_pull_requests():
-            pull_request = await self._load_pull_request(item)
-            work = pull_request_work(pull_request, self._login)
-            if work is None:
-                continue
-            task = self._pull_request_task(pull_request, work)
-            if work == REVIEW_LIMIT:
-                await self._hand_over_at_review_limit(task)
-                continue
-            candidates.append(task)
-
         all_items = await self.get_all_tickets()
         tasks, task_metadata = self._build_project_tasks(all_items)
         ready_tasks = [task for task in tasks if task.status == Task.READY]
@@ -978,27 +960,6 @@ class GitHubTicketManager(TicketManager):
 
     async def refresh_task(self, candidate: Task) -> Task | None:
         """Re-read one patrol candidate and apply the canonical work test."""
-        if candidate.pull_request_url:
-            if candidate.number is None or not candidate.repository:
-                return None
-            pull_request = await self._load_pull_request(
-                {
-                    "number": candidate.number,
-                    "html_url": candidate.pull_request_url,
-                    "repository_url": (
-                        f"{self.base_url}/repos/{self.owner}/{candidate.repository}"
-                    ),
-                }
-            )
-            work = pull_request_work(pull_request, self._login)
-            if work is None:
-                return None
-            task = self._pull_request_task(pull_request, work)
-            if work == REVIEW_LIMIT:
-                await self._hand_over_at_review_limit(task)
-                return None
-            return task
-
         all_items = await self.get_all_tickets()
         tasks, task_metadata = self._build_project_tasks(all_items)
         for task in tasks:
@@ -1007,119 +968,6 @@ class GitHubTicketManager(TicketManager):
             assert task.id, "Task ID must be set"
             return await self._select_actionable_task(task, task_metadata[task.id])
         return None
-
-    # --------------------------------------------------------------------- #
-    #   Pull request patrol                                                 #
-    # --------------------------------------------------------------------- #
-
-    async def _search_pull_requests(self) -> list[dict[str, Any]]:
-        """Open PRs under the project owner that name this member.
-
-        Search is the one listing that needs no repository list and works for
-        both PAT and GitHub App logins (``<app>[bot]``). Three qualifiers cover
-        the two roles: written by, reviewed by, and review requested from the
-        member (the last never matches a GitHub App, which GitHub cannot
-        request a review from).
-
-        Draft PRs are left out at the search: a draft is the human's "hands
-        off" switch (the patrol flips it only to hand a PR over at the review
-        limit), so neither role acts on it until someone marks the PR ready for
-        review.
-        """
-        client = await self.login()
-        found: dict[str, dict[str, Any]] = {}
-        for qualifier in ("author", "reviewed-by", "review-requested"):
-            resp = await client.get(
-                "/search/issues",
-                params={
-                    "q": (
-                        f"is:pr is:open draft:false user:{self.owner} "
-                        f"{qualifier}:{self.username}"
-                    ),
-                    "per_page": 100,
-                    "sort": "updated",
-                    "order": "asc",
-                },
-            )
-            if resp.status_code >= HTTP_BAD_REQUEST:
-                raise RuntimeError(
-                    f"Pull request search failed ({resp.status_code}): {resp.text}"
-                )
-            for item in resp.json().get("items") or []:
-                found.setdefault(str(item.get("html_url") or ""), item)
-        return sorted(
-            found.values(), key=lambda item: str(item.get("updated_at") or "")
-        )
-
-    async def _load_pull_request(self, item: dict[str, Any]) -> PullRequest:
-        owner, _, repo = (
-            str(item.get("repository_url") or "")
-            .rpartition("/repos/")[2]
-            .partition("/")
-        )
-        data = await self._graphql(
-            PULL_REQUEST_QUERY,
-            {"owner": owner, "repo": repo, "number": int(item["number"])},
-        )
-        node = (data.get("repository") or {}).get("pullRequest")
-        if not node:
-            raise RuntimeError(f"Pull request unavailable: {item.get('html_url')}")
-        return parse_pull_request(node, repo)
-
-    def _pull_request_task(
-        self, pull_request: PullRequest, trigger_reason: str
-    ) -> Task:
-        return Task(
-            id=pull_request.node_id,
-            number=pull_request.number,
-            url=pull_request.url,
-            title=pull_request.title,
-            description=pull_request.body,
-            status=Task.IN_PROGRESS,
-            created_at=_parse_timestamp(pull_request.created_at),
-            repository=pull_request.repository,
-            assignee=self.person.person_id,
-            pull_request_url=pull_request.url,
-            trigger_reason=trigger_reason,
-        )
-
-    async def _hand_over_at_review_limit(self, task: Task) -> None:
-        """Make the PR a draft, then say on it that automatic re-review stopped.
-
-        The notice tells the human that the PR is theirs until they mark it
-        ready for review, so it is posted only once the PR is a draft. When
-        the conversion fails, a failure notice takes its place: it holds the
-        PR until someone acts on it, and the rounds stay as they are.
-        """
-        try:
-            await self._graphql(CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": task.id})
-        except Exception as exc:
-            self.logger.warning(
-                f"Could not convert {task.pull_request_url} to a draft: {exc}"
-            )
-            reason = "failed"
-            body = t(
-                "integrations.github.github_ticket_manager.review_limit_draft_failed",
-                count=MAX_REVIEW_ROUNDS,
-            )
-        else:
-            reason = REVIEW_LIMIT_REASON
-            body = t(
-                "integrations.github.github_ticket_manager.review_limit_reached",
-                count=MAX_REVIEW_ROUNDS,
-            )
-        await self.add_comment_to_ticket(
-            task,
-            render_workflow_status_comment(
-                body=body,
-                payload=workflow_status_fields(
-                    reason=reason,
-                    person_id=self.person.person_id,
-                    run_id="",
-                    subject_id=task.pull_request_url or "",
-                ),
-            ),
-        )
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
 
@@ -1162,47 +1010,120 @@ class GitHubTicketManager(TicketManager):
         )
         return True
 
-    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
-        """
-        Add a comment to an existing ticket using REST.
+    async def add_ticket(self, issue_url: str) -> str | None:
+        """Add the issue to the configured Project.
 
-        Args:
-            task (Task): The task to comment on.
-            comment (str): The comment content.
+        The member writes only to the configured owner's repositories, so an
+        issue URL names one of them as ``/<owner>/<repo>/issues/<n>``.
         """
+        if not self.project_id:
+            return None
+        parts = urlparse(issue_url).path.strip("/").split("/")
+        if len(parts) != _ISSUE_PATH_PARTS or parts[2] != "issues":
+            raise ValueError(f"Not an issue URL: {issue_url}")
+        try:
+            client = await self.login()
+            resp = await client.get(f"/repos/{parts[0]}/{parts[1]}/issues/{parts[3]}")
+            resp.raise_for_status()
+            return await self._get_project_item_id(str(resp.json()["node_id"]))
+        except (RuntimeError, HTTPError, LookupError) as exc:
+            raise MemberCapabilityError(
+                f"{issue_url} was created, but it could not be added to the"
+                f" GitHub Project: {_reason(exc)}"
+            ) from exc
+
+    async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
+        """The Project's issues and pull requests closed in ``[start, end]``,
+        with the closed pull requests of every repository the Project holds
+        items of: those reach the board only through their issue."""
+        items = await self._project_contents()
+        closed: list[ClosedItem] = []
+        for repository in sorted({_repository_name(item) for item in items} - {""}):
+            closed.extend(await self._closed_pull_requests(repository, start))
+        closed.extend(
+            item
+            for item in (_closed_item(content) for content in items)
+            if item is not None
+        )
+        return [
+            item
+            for item in closed
+            if (occurred := parse_timestamp(item.closed_at)) is not None
+            and start <= occurred <= end
+        ]
+
+    async def _project_contents(self) -> list[dict[str, Any]]:
+        query = """
+        query($proj: ID!, $cursor: String) {
+          node(id: $proj) {
+            ... on ProjectV2 {
+              items(first: 100, after: $cursor) {
+                nodes { content {
+                  __typename
+                  ... on Issue { number title url state closedAt repository { name owner { login } } }
+                  ... on PullRequest { number title url state closedAt mergedAt repository { name owner { login } } }
+                } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }
+        """
+        project = await self._project_node()
+        contents: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            data = await self._graphql(query, {"proj": project, "cursor": cursor})
+            connection = data["node"]["items"]
+            contents.extend(
+                item.get("content") or {} for item in connection.get("nodes") or []
+            )
+            if not connection["pageInfo"]["hasNextPage"]:
+                return contents
+            cursor = str(connection["pageInfo"]["endCursor"])
+
+    async def _closed_pull_requests(
+        self, repository: str, start: datetime
+    ) -> list[ClosedItem]:
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected GitHub pull request response")
+            return [item for item in payload if isinstance(item, dict)]
+
         client = await self.login()
-        assert task.id, "Task ID must be set before commenting"
-        issue_number = (
-            task.number
-            if task.number is not None
-            else await self._get_issue_number(task.id)
-        )
-        # Fetch issue to determine the author for mention
-        issue_resp = await client.get(
-            f"{self._get_issue_path(task.repository)}/{issue_number}"
-        )
-        issue_data = issue_resp.json()
-        author_login = (issue_data.get("user") or {}).get("login")
-
-        # Prepend mention to the issue author unless we are the author.
-        # Avoid adding only when the body already mentions the issue author
-        # (case-insensitive) to prevent duplicates.
-        if author_login and not self._is_me(author_login):
-            # Explicitly check if the issue author is already mentioned.
-            # GitHub usernames are case-insensitive, so we use re.IGNORECASE.
-            author_mention_re = (
-                r"(^|[^A-Za-z0-9_])@" + re.escape(author_login) + r"(?=$|[^A-Za-z0-9-])"
+        closed: list[ClosedItem] = []
+        async for pull_request in paginated_items(
+            client.get,
+            f"/repos/{repository}/pulls",
+            parse_page,
+            params={"state": "closed", "sort": "updated", "direction": "desc"},
+        ):
+            updated_at = parse_timestamp(str(pull_request.get("updated_at") or ""))
+            if updated_at is not None and updated_at < start:
+                break
+            owner, _, name = repository.partition("/")
+            item = _closed_item(
+                {
+                    "__typename": "PullRequest",
+                    "number": pull_request.get("number"),
+                    "title": pull_request.get("title"),
+                    "url": pull_request.get("html_url"),
+                    "state": "CLOSED",
+                    "closedAt": pull_request.get("closed_at"),
+                    "mergedAt": pull_request.get("merged_at"),
+                    "repository": {"name": name, "owner": {"login": owner}},
+                }
             )
-            has_author_mention = bool(
-                re.search(author_mention_re, comment, flags=re.IGNORECASE)
-            )
+            if item is not None:
+                closed.append(item)
+        return closed
 
-            if not has_author_mention:
-                comment = f"@{author_login}\n\n{comment}"
-        await client.post(
-            f"{self._get_issue_path(task.repository)}/{issue_number}/comments",
-            json={"body": comment},
-        )
+    async def aclose(self) -> None:
+        if self.client is not None:
+            await self.client.aclose()
+            self.client = None
 
     async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
         """
@@ -1380,17 +1301,6 @@ class GitHubTicketManager(TicketManager):
             await self._get_custom_fields()
 
 
-def _parse_timestamp(value: str) -> datetime | None:
-    """Parse a GitHub ISO 8601 timestamp, or None when it is absent or invalid."""
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else None
-
-
 def _latest_workflow_status_suppresses_selection(
     comments: Sequence[Message],
 ) -> bool:
@@ -1405,3 +1315,46 @@ def _latest_workflow_status_suppresses_selection(
     if status is None:
         return False
     return suppresses_ticket_selection(status)
+
+
+def _closed_item(content: dict[str, Any]) -> ClosedItem | None:
+    """The closed issue or pull request ``content`` names, if it is one."""
+    repo = _repository_name(content)
+    number = content.get("number")
+    url = str(content.get("url") or "")
+    if (
+        content.get("state") != "CLOSED"
+        or not content.get("closedAt")
+        or not repo
+        or not isinstance(number, int)
+        or number <= 0
+        or not url
+    ):
+        return None
+    merged_at = content.get("mergedAt")
+    return ClosedItem(
+        kind="pull_request" if content.get("__typename") == "PullRequest" else "issue",
+        repo=repo,
+        number=number,
+        title=str(content.get("title") or ""),
+        url=url,
+        closed_at=str(merged_at or content["closedAt"]),
+        merged=bool(merged_at),
+    )
+
+
+def _repository_name(content: dict[str, Any]) -> str:
+    repository = content.get("repository") or {}
+    owner = repository.get("owner") or {}
+    return "/".join(
+        part
+        for part in (str(owner.get("login") or ""), str(repository.get("name") or ""))
+        if part
+    )
+
+
+def _reason(exc: Exception) -> str:
+    """Why a request failed, without the response body GitHub sent."""
+    if isinstance(exc, HTTPStatusError):
+        return f"GitHub API request failed with status {exc.response.status_code}."
+    return str(exc) or type(exc).__name__

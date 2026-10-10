@@ -1,4 +1,5 @@
-"""Host-owned GitHub targets and pull-request completion readiness."""
+"""GitHub's REST client for a member, its targets, and pull-request
+completion readiness."""
 
 from __future__ import annotations
 
@@ -15,12 +16,14 @@ from guildbotics.integrations.github.actions_client import (
     GitHubActionsClientError,
 )
 from guildbotics.integrations.github.github_utils import create_github_client
-from guildbotics.integrations.github.repository_scope import configured_owner
-from guildbotics.runtime.code_hosting_service import (
+from guildbotics.integrations.repository_scope import configured_owner
+from guildbotics.runtime.code_hosting_resources import (
     MAX_PAGE_BYTES,
+    Readiness,
     ReadinessQuery,
-    RepositoryReadPage,
 )
+from guildbotics.runtime.code_hosting_service import PullRequestHead
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.utils.i18n_tool import t
 
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
@@ -50,27 +53,12 @@ _PRIMARY_FAILED_CONCLUSIONS = {
 _SUCCESS_CONCLUSIONS = {"neutral", "skipped", "success"}
 
 
-class MemberCapabilityError(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class GitHubResource:
     owner: str
     repo: str
     number: int
     kind: str
-
-    @property
-    def full_repo(self) -> str:
-        return f"{self.owner}/{self.repo}"
-
-
-@dataclass(frozen=True)
-class GitHubPullRequestHead:
-    owner: str
-    repo: str
-    branch: str
 
     @property
     def full_repo(self) -> str:
@@ -109,20 +97,20 @@ def _check_summaries(
 ) -> list[dict[str, Any]]:
     checks = [
         {
-            "name": item.get("name", ""),
-            "status": item.get("status", ""),
+            "name": str(item.get("name") or ""),
+            "status": str(item.get("status") or ""),
             "conclusion": item.get("conclusion"),
-            "details_url": item.get("details_url", ""),
+            "details_url": str(item.get("details_url") or ""),
             "source": "check_run",
         }
         for item in check_runs
     ]
     checks.extend(
         {
-            "name": item.get("context", ""),
+            "name": str(item.get("context") or ""),
             "status": "completed" if item.get("state") != "pending" else "pending",
             "conclusion": item.get("state"),
-            "details_url": item.get("target_url", ""),
+            "details_url": str(item.get("target_url") or ""),
             "source": "commit_status",
         }
         for item in statuses
@@ -238,8 +226,9 @@ def _fit_log_tails(result: dict[str, Any]) -> None:
     for item in logs:
         item["log_bytes"] = len(item["log"].encode())
         item["log"] = ""
-    page = RepositoryReadPage(items=[result], target=result["target"])
-    remaining = MAX_PAGE_BYTES - len(json.dumps(page.model_dump()).encode())
+    # The page the result is read in (RepositoryReadPage), as it serializes.
+    page = {"items": [result], "continuation": None, "target": result["target"]}
+    remaining = MAX_PAGE_BYTES - len(json.dumps(page).encode())
     if remaining < 0:
         raise MemberCapabilityError(t("integrations.repository.too_large"))
     budget = remaining // len(logs)
@@ -274,14 +263,21 @@ class GitHubPullRequests:
             await self._client.aclose()
             self._client = None
 
-    async def pr_checks(
+    async def readiness(
         self,
         url: str,
         *,
         failed_logs: bool = False,
         log_tail_bytes: int = ReadinessQuery.model_fields["log_tail_bytes"].default,
-    ) -> dict[str, Any]:
+    ) -> Readiness:
         """Return the checks for a PR head and optional failed Actions logs."""
+        return Readiness.model_validate(
+            await self._readiness(url, failed_logs, log_tail_bytes)
+        )
+
+    async def _readiness(
+        self, url: str, failed_logs: bool, log_tail_bytes: int
+    ) -> dict[str, Any]:
         ReadinessQuery(failed_logs=failed_logs, log_tail_bytes=log_tail_bytes)
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
@@ -497,9 +493,9 @@ class GitHubPullRequests:
                     "run_id": run_id,
                     "run_attempt": run_attempt,
                     "job_id": job_id,
-                    "name": job.get("name", ""),
-                    "conclusion": job.get("conclusion", ""),
-                    "html_url": job.get("html_url", ""),
+                    "name": str(job.get("name") or ""),
+                    "conclusion": str(job.get("conclusion") or ""),
+                    "html_url": str(job.get("html_url") or ""),
                     "artifact_names": artifact_names,
                     "log": tail.decode("utf-8", errors="replace"),
                     "log_bytes": len(tail),
@@ -625,7 +621,7 @@ class GitHubPullRequests:
 
     def _pull_request_head(
         self, resource: GitHubResource, pr: dict[str, Any]
-    ) -> GitHubPullRequestHead:
+    ) -> PullRequestHead:
         raw_head = pr.get("head")
         head = raw_head if isinstance(raw_head, dict) else {}
         branch = str(head.get("ref") or "")
@@ -650,7 +646,7 @@ class GitHubPullRequests:
                 raise MemberCapabilityError(
                     f"Pull request head repository not found for {resource.full_repo}#{resource.number}."
                 )
-        return GitHubPullRequestHead(owner=owner, repo=repo_name, branch=branch)
+        return PullRequestHead(owner=owner, repo=repo_name, branch=branch)
 
     def _pull_request_head_sha(
         self, resource: GitHubResource, pr: dict[str, Any]

@@ -40,8 +40,8 @@ guildbotics/
 ├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control, live state
 ├── setup/           # Workspace and member setup (setup_service, per-provider setup) used by the GUI
 ├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
-├── capabilities/    # Member-side git/github/chat/memory operations + domain events, judgments (decisions/)
-├── integrations/    # Per-kind provider selection and the receiving port; GitHub / Slack implementations
+├── capabilities/    # Member-side code-host/git/chat/memory operations + domain events, judgments (decisions/)
+├── integrations/    # Provider descriptors and per-kind selection, the write scope, the receiving port; GitHub / Slack / local (the reference provider)
 ├── observability/   # Diagnostics and activity record writers, trace status, interactive sessions
 ├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
 ├── hub/             # The bare repositories and relay a hub holds, and reaching one over OpenSSH
@@ -163,8 +163,9 @@ workflow (orchestration)
   `repository/pr_checks`): bundled Python commands combine the pages returned by
   the common code-hosting service. The existing member broker carries each read;
   the host selects fixed REST routes or GraphQL documents, validates continuations,
-  and records observed work targets. `integrations/github/pull_requests.py` owns
-  readiness, shared by the inspection, push, and completion paths. An agent already
+  and records observed work targets. The code host's `readiness()` (GitHub:
+  `integrations/github/pull_requests.py`) is the one readiness, shared by the
+  inspection, push, and completion paths. An agent already
   inside a command calls `python -m guildbotics.guest.entry <name> <args>`
   to run a child in that environment under the main command's access contract.
 
@@ -175,7 +176,7 @@ Trust rules that follow from this shape:
   evidence store are authoritative.
 - Ticket completion with `status=done` resolves the pull requests the run pushed to or opened
   (run evidence) plus, when the member authored them, the ticket PR and the PRs linked from the
-  issue timeline, then revalidates each open PR against GitHub's current state;
+  issue timeline, then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
   remains pending, the head does not contain the current base, or the head/base changes
@@ -202,7 +203,7 @@ The layer model and its guard tests are described in `AGENTS.md`
 Workflow start-up is normalized by `guildbotics/runtime/workflow_invocation.py`:
 
 ```python
-WorkflowInvocation(command, person_id, source, trigger_type, payload, idempotency_key)
+WorkflowInvocation(command, person_id, source, trigger_type, payload, run_id, work)
 # source:       routine | scheduled | event_queue | manual
 # trigger_type: ticket | chat | scheduled | generic
 ```
@@ -212,9 +213,14 @@ attributes, `Context.shared_state` injection), while discovery stays asymmetric 
 purpose:
 
 - **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine,
-  `TICKET_WORKFLOW_COMMAND`): a routine that _polls_ GitHub ProjectV2. The project board is treated
-  as a loose queue/trigger — GuildBotics does not reimplement fine-grained GitHub/git
-  operations around it, and there is no GitHub webhook receiver (local-first design).
+  `TICKET_WORKFLOW_COMMAND`): a routine that _polls_ the configured board (GitHub
+  ProjectV2) and the code host's pull requests. The board is treated as a loose
+  queue/trigger — GuildBotics does not reimplement fine-grained code-host/git
+  operations around it, and there is no webhook receiver (local-first design). The
+  candidates are the pull requests that ask something of the member
+  (`CodeHostingService.pull_request_candidates()`), then the board's tickets
+  (`TicketManager.get_task_candidates()`), and each is re-read from the port it came
+  from before it is dispatched.
   Every route that runs it — the patrol, a scheduled command, a manual run
   (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the
@@ -1400,9 +1406,17 @@ Two Person distinctions matter architecturally:
   adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
-- **New integration**: implement `TicketManager` / `ChatService` /
-  `CodeHostingService` (`runtime/`) and select it by its `project.services` name
-  in `ServiceIntegrationFactory` (`integrations/factory.py`).
+- **New integration**: implement the ports of the kinds the provider serves
+  (`CodeHostingService` with the item shapes of `runtime/code_hosting_resources.py`,
+  `TicketManager`, `ChatService`; all in `runtime/`) under
+  `integrations/<provider>/`, passing every write through `check_repository`
+  (`integrations/repository_scope.py`). Describe it with a `Provider`
+  (`integrations/provider.py`: its kinds, the secret names and `account_info` keys a
+  member needs, `verify`, `diagnose`, `credentialed`) and add it to `PROVIDERS` in
+  `integrations/factory.py`, which selects it by its `project.services` name; add the
+  package to the `providers-behind-the-factory` import contract. The ports' contract
+  tests (`tests/guildbotics/integrations/contracts/`) then run against it, and the
+  descriptor test holds its declared keys to what its package reads.
 - **New activity event/link kind**: add the recording payload (capability →
   observability), the normalizer/API model (app_api), and the frontend rendering
   (desktop) as three separate responsibilities.

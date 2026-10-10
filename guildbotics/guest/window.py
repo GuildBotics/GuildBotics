@@ -27,11 +27,11 @@ from guildbotics.runtime.chat_service import (
     ChatService,
     ChatServiceError,
 )
-from guildbotics.runtime.code_hosting_service import (
-    CodeHostingService,
+from guildbotics.runtime.code_hosting_resources import (
     RepositoryReadError,
     RepositoryReadPage,
 )
+from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.ticket_manager import TicketManager
 
@@ -78,7 +78,12 @@ class WindowCodeHostingService(CodeHostingService):
             ],
             failure=RepositoryReadError,
         )
-        return RepositoryReadPage.model_validate(result)
+        page = RepositoryReadPage.model_validate(result)
+        # What the host answered is held to the resource's schema here too: a
+        # command reads each item in its full shape, defaults included.
+        return RepositoryReadPage.of(
+            resource, page.items, continuation=page.continuation, target=page.target
+        )
 
     async def aclose(self) -> None:
         """The command owns the shared host client."""

@@ -1,5 +1,6 @@
 import importlib
 import json
+import logging
 import os
 from contextlib import ExitStack
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.github import async_client
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -151,9 +153,63 @@ class FakeContext:
         self.person = person
         self.team = Team(project=Project(name="demo"), members=[person])
         self.logger = None
+        #: The capabilities' service of the command (``_fake_capabilities``).
+        self.service = None
+        self.closed = False
 
     def clone_for(self, person):
         return FakeContext(person)
+
+    def get_code_hosting_service(self):
+        """The configured code host, as a real context makes it."""
+        if self.service is None:
+            self.service = ServiceIntegrationFactory().create_code_hosting_service(
+                logging.getLogger(__name__), self.person, self.team
+            )
+        return self.service
+
+    async def aclose(self):
+        self.closed = True
+        if self.service is not None and hasattr(self.service, "aclose"):
+            await self.service.aclose()
+
+
+#: The code-host capabilities the member CLI runs.
+_CODE_HOST_CAPABILITIES = (
+    "issue_comment",
+    "issue_create",
+    "issue_update",
+    "pr_create",
+    "pr_update",
+    "pr_comment",
+    "pr_review",
+    "pr_review_comment",
+    "pr_reply",
+    "reaction_add",
+    "artifact_download",
+    "task_completion_readiness",
+)
+
+
+def _fake_capabilities(monkeypatch, service_type):
+    """Run the CLI's code-host capabilities on ``service_type``: each command
+    is given one, which closing the command's context closes."""
+
+    def capability(name):
+        async def run(context, *args, **kwargs):
+            context.service = service_type(context.person, context.team)
+            return await getattr(context.service, name)(*args, **kwargs)
+
+        return run
+
+    for name in _CODE_HOST_CAPABILITIES:
+        monkeypatch.setattr(member_module.member_repository, name, capability(name))
+
+    async def member_context(context, check_credentials=False):
+        context.service = service_type(context.person, context.team)
+        return await context.service.context(check_credentials=check_credentials)
+
+    monkeypatch.setattr(member_module, "member_context", member_context)
 
 
 def _use_real_member_resolution(monkeypatch, *members):
@@ -371,9 +427,11 @@ def test_inspection_cli_leaves_are_removed():
 def test_repository_read_records_host_target_in_workflow_trace(
     monkeypatch, bind_invocation
 ):
-    from types import SimpleNamespace
 
-    from guildbotics.runtime.code_hosting_service import RepositoryReadPage
+    from guildbotics.runtime.code_hosting_resources import (
+        RepositoryReadPage,
+        WorkTarget,
+    )
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     bind_invocation(run_id="run-1", trace_id="trace-parent")
@@ -387,15 +445,16 @@ def test_repository_read_records_host_target_in_workflow_trace(
 
     class Service:
         async def read(self, *args, **kwargs):
-            return RepositoryReadPage(items=[{"title": target["title"]}], target=target)
+            return RepositoryReadPage(
+                items=[{"title": target["title"]}],
+                target=WorkTarget.model_validate(target),
+            )
 
         async def aclose(self):
             pass
 
     context = FakeContext(person)
-    context.integration_factory = SimpleNamespace(
-        create_code_hosting_service=lambda *_: Service()
-    )
+    context.service = Service()
     monkeypatch.setattr(member_module, "_resolve", lambda _: (context, person))
     result = CliRunner().invoke(
         member_module.member,
@@ -771,7 +830,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(member_module.member, ["context", "--person", "aiko"])
@@ -811,7 +870,7 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(member_module.member, ["context", "--person", "aiko"])
@@ -945,7 +1004,7 @@ def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_pat
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -997,7 +1056,7 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member, ["context", "--person", "aiko", "--format", "json"]
@@ -1033,7 +1092,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -1303,7 +1362,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     monkeypatch.setattr(
         member_module,
         "record_member_issue_comment_event",
@@ -1365,7 +1424,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
             "Issue title",
             "Issue body\n",
             False,
-            ["priority: high"],
+            ("priority: high",),
             True,
         ),
     ]
@@ -1400,7 +1459,7 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
         async def aclose(self):
             pass
 
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     monkeypatch.setattr(
         member_module,
         "record_member_issue_comment_event",
@@ -1513,9 +1572,11 @@ def test_member_git_publish_current_mode_uses_current_workspace_service(
     repo_path.mkdir()
     calls = {}
 
+    context = FakeContext(person)
+
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
-        return FakeContext(person), person
+        return context, person
 
     class FakeResult:
         def to_dict(self):
@@ -1537,9 +1598,6 @@ def test_member_git_publish_current_mode_uses_current_workspace_service(
             calls["message"] = message
             calls["cwd"] = cwd
             return FakeResult()
-
-        async def aclose(self):
-            calls["closed"] = True
 
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
@@ -1567,7 +1625,7 @@ def test_member_git_publish_current_mode_uses_current_workspace_service(
     assert calls["repo_path"] == repo_path
     assert calls["message"] == "publish\n"
     assert calls["cwd"].is_absolute()
-    assert calls["closed"] is True
+    assert context.closed
     assert '"status": "published"' in result.output
 
 
@@ -1579,9 +1637,11 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
     repo_path.mkdir()
     calls = {}
 
+    context = FakeContext(person)
+
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
-        return FakeContext(person), person
+        return context, person
 
     class FakeResult:
         def to_dict(self):
@@ -1603,9 +1663,6 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
             calls["workspace_mode"] = workspace_mode
             calls["cwd"] = cwd
             return FakeResult()
-
-        async def aclose(self):
-            calls["closed"] = True
 
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
@@ -1634,7 +1691,7 @@ def test_member_git_commit_current_mode_uses_current_workspace_service(
     assert calls["message"] == "commit\n"
     assert calls["workspace_mode"] == "current"
     assert calls["cwd"].is_absolute()
-    assert calls["closed"] is True
+    assert context.closed
     assert '"status": "committed"' in result.output
 
 
@@ -1800,9 +1857,11 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     repo_path.mkdir()
     calls = {}
 
+    context = FakeContext(person)
+
     def fake_resolve_member_context(identifier):
         assert identifier == "aiko"
-        return FakeContext(person), person
+        return context, person
 
     class FakeResult:
         def to_dict(self):
@@ -1830,9 +1889,6 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
             calls["cwd"] = cwd
             return FakeResult()
 
-        async def aclose(self):
-            calls["closed"] = True
-
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
@@ -1857,7 +1913,7 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert calls["repo_path"] == repo_path
     assert calls["workspace_mode"] == "current"
     assert calls["cwd"].is_absolute()
-    assert calls["closed"] is True
+    assert context.closed
     assert '"status": "pushed"' in result.output
     assert _domain_event_records("type", "person_id", "payload") == [
         {
@@ -1986,7 +2042,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -2093,7 +2149,7 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -2164,7 +2220,7 @@ def test_member_github_pr_create_passes_closes_issue(monkeypatch):
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -2372,7 +2428,7 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -2437,7 +2493,7 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -2558,7 +2614,7 @@ def test_member_github_issue_edit_on_a_closed_issue_records_no_close_activity(
         "resolve_member_context",
         lambda identifier: (FakeContext(person), person),
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     monkeypatch.setattr(
         member_activity_events,
         "record_correlated_event",
@@ -2614,7 +2670,7 @@ def test_member_github_issue_close_passes_approval_and_records_activity(monkeypa
         "resolve_member_context",
         lambda identifier: (FakeContext(person), person),
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     monkeypatch.setattr(
         member_module,
         "record_member_issue_close_event",
@@ -2646,8 +2702,8 @@ def test_member_github_issue_close_passes_approval_and_records_activity(monkeypa
         "issue_url": "https://github.com/owner/repo/issues/42",
         "body": None,
         "title": None,
-        "add_labels": ["cli"],
-        "remove_labels": [],
+        "add_labels": ("cli",),
+        "remove_labels": (),
         "state": "closed",
         "state_reason": "completed",
         "human_approved": True,
@@ -2685,7 +2741,7 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -2707,8 +2763,8 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
         "issue_url": "https://github.com/owner/repo/issues/42",
         "body": "## Summary\n\nUpdated body\n",
         "title": None,
-        "add_labels": [],
-        "remove_labels": [],
+        "add_labels": (),
+        "remove_labels": (),
         "state": None,
         "state_reason": None,
         "human_approved": False,
@@ -2747,7 +2803,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
     result = CliRunner().invoke(
         member_module.member,
@@ -2770,8 +2826,8 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
         "issue_url": "https://github.com/owner/repo/issues/42",
         "body": "",
         "title": None,
-        "add_labels": [],
-        "remove_labels": [],
+        "add_labels": (),
+        "remove_labels": (),
         "state": None,
         "state_reason": None,
         "human_approved": False,
@@ -2812,7 +2868,7 @@ def test_member_github_pr_review_reads_stdin_and_records_evidence(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -2910,7 +2966,7 @@ def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -3527,7 +3583,7 @@ def test_member_task_complete_reads_summary_from_stdin(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     TaskRunStore().append_evidence("run-1", "issue_comment", {"comment_id": 1})
     result = CliRunner().invoke(
         member_module.member,
@@ -3579,7 +3635,7 @@ def test_member_task_complete_rejects_blocked_pr_readiness(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     store = TaskRunStore()
     store.append_evidence(
         "run-1",
@@ -3644,7 +3700,7 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
     TaskRunStore().append_evidence(
         "run-1",
         "pr_create",
@@ -3782,7 +3838,7 @@ def _fake_github_service(monkeypatch, person, **results):
             return _result
 
         setattr(FakeService, name, method)
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    _fake_capabilities(monkeypatch, FakeService)
 
 
 def _work_target_records():

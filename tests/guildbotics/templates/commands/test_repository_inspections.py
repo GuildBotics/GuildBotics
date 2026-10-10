@@ -8,7 +8,7 @@ import pytest
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import load_command_metadata, parse_command_access
 from guildbotics.commands.python_command import _load_python_module
-from guildbotics.runtime.code_hosting_service import (
+from guildbotics.runtime.code_hosting_resources import (
     RepositoryReadError,
     RepositoryReadPage,
 )
@@ -291,7 +291,7 @@ async def test_command_number_errors_name_the_command_argument(name, number):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("size", ["abc", "0", "-1", "65537", "100000"])
 async def test_command_log_size_errors_explain_the_range(size):
-    from guildbotics.runtime.code_hosting_service import MAX_LOG_TAIL_BYTES
+    from guildbotics.runtime.code_hosting_resources import MAX_LOG_TAIL_BYTES
 
     service = Pages({})
     with pytest.raises(CommandError) as error:

@@ -66,11 +66,11 @@ class Task(BaseModel):
     )
     number: int | None = Field(
         default=None,
-        description="The GitHub issue/PR number, when the task originates from one.",
+        description="The issue/PR number, when the task originates from one.",
     )
     url: str | None = Field(
         default=None,
-        description="The GitHub issue/PR html URL, when the task originates from one.",
+        description="The issue/PR URL, when the task originates from one.",
     )
     trigger_reason: str | None = Field(
         default=None,
@@ -89,18 +89,12 @@ class Task(BaseModel):
             attributes["github.repo"] = self.repository
         if self.title:
             attributes["github.title"] = self.title
-        if self.pull_request_url:
-            attributes["github.kind"] = "pull_request"
-            attributes["github.url"] = self.pull_request_url
-            match = re.search(r"/pull/(\d+)", self.pull_request_url)
-            if match:
-                attributes["github.number"] = match.group(1)
-        else:
-            attributes["github.kind"] = "issue"
-            if self.url:
-                attributes["github.url"] = self.url
-            if self.number is not None:
-                attributes["github.number"] = str(self.number)
+        url = self.pull_request_url or self.url
+        attributes["github.kind"] = "pull_request" if self.pull_request_url else "issue"
+        if url:
+            attributes["github.url"] = url
+        if self.number is not None:
+            attributes["github.number"] = str(self.number)
         return attributes
 
     def __lt__(self, other: "Task") -> bool:

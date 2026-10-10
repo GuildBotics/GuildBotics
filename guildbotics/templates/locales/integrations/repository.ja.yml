@@ -1,3 +1,8 @@
 ja:
   unsupported: "リポジトリの参照には、対応する code_hosting_service（現在は github）を設定してください。"
   too_large: "取得結果がページの上限サイズを超えています。一覧では page_size を下げてください。上限を超える個別の項目は返せません。"
+  resource: "未対応の参照リソースです。対応する名前は member help で確認してください。"
+  repository: "リポジトリは URL やパスではなく owner/name 形式で指定してください。"
+  identifier: "Issue・PR・アラートの正の番号を identifier に指定してください。省略できるのは dependency_alerts のみです。"
+  parameters: "リソースの取得条件が不正です。対応する引数は member help で確認してください。"
+  continuation: "ページ送りの応答または継続指定が不正です。同じリソース・リポジトリ・識別子・取得条件を使用してください。"

@@ -84,7 +84,7 @@ from guildbotics.observability import (
     diagnostics_events,
 )
 from guildbotics.runtime.chat_service import ChatPostResult, ChatServiceError
-from guildbotics.runtime.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import RepositoryReadError
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.correlation import (
@@ -1298,9 +1298,12 @@ async def test_read_only_repository_read_uses_the_member_grant(
     from guildbotics.integrations.github import pull_requests as provider
 
     context, person = member_cli.resolve_member_context("aiko")
-    context.person = person
-    context.integration_factory = ServiceIntegrationFactory()
     context.team.project.services["code_hosting_service"] = {"name": "github"}
+    service = ServiceIntegrationFactory().create_code_hosting_service(
+        context.logger, person, context.team
+    )
+    context.get_code_hosting_service = lambda: service
+    context.aclose = service.aclose
 
     requests = []
 
@@ -1353,7 +1356,7 @@ async def test_read_only_repository_read_uses_the_member_grant(
             assert refused["exit_code"] != 0
     finally:
         lease.release()
-    assert result.items[0].id == "42"
+    assert result.items[0]["id"] == "42"
     assert len(requests) == 1
     assert requests[0].method == "GET"
 

@@ -1,3 +1,8 @@
 en:
   unsupported: "Configure a supported code_hosting_service (currently github) to read repository resources."
   too_large: "The repository response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
+  resource: "Unsupported repository read resource. See member help for the supported names."
+  repository: "Specify a repository as owner/name, without a URL or path."
+  identifier: "Use a positive issue, pull request, or alert number as identifier. Only dependency_alerts supports omitting it."
+  parameters: "Invalid resource conditions. See member help for the supported parameters."
+  continuation: "Invalid pagination response or continuation. Reuse the same resource, repository, identifier, and conditions."

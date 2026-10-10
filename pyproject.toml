@@ -293,6 +293,24 @@ allowed_importers = [
   "guildbotics.cli.secrets",
 ]
 
+# A provider is chosen in one place: integrations/factory.py picks the one
+# project.services names for each kind, and the setup of a provider prepares
+# it. Everything else reaches a provider through the ports (runtime) and the
+# provider-neutral host modules of integrations.
+[[tool.importlinter.contracts]]
+id = "providers-behind-the-factory"
+name = "Only the factory and the setup import a provider's package"
+type = "protected"
+protected_modules = [
+  "guildbotics.integrations.github",
+  "guildbotics.integrations.local",
+]
+allowed_importers = [
+  "guildbotics.integrations.factory",
+  "guildbotics.setup.github_app",
+  "guildbotics.setup.github_project",
+]
+
 # One module drives the microVM SDK: the access contract is enforced by one
 # layer, and a second module importing the SDK would translate it its own way.
 [[tool.importlinter.contracts]]

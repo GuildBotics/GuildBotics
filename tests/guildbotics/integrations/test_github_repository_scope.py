@@ -15,11 +15,14 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from guildbotics.integrations.github import async_client, github_utils, repository_scope
+from guildbotics.integrations import repository_scope
+from guildbotics.integrations.github import async_client, github_utils
 from guildbotics.integrations.github.repository_scope import (
     NODE_MUTATIONS,
     NODE_REPOSITORY,
     PROJECT_MUTATIONS,
+)
+from guildbotics.integrations.repository_scope import (
     RepositoryScopeError,
     check_repository,
 )
@@ -196,7 +199,7 @@ async def test_without_a_configured_owner_every_repository_write_is_refused(
     client = _client(monkeypatch, sent, owner="")
     try:
         await client.get("/repos/acme/demo")
-        with pytest.raises(RepositoryScopeError, match="No GitHub owner"):
+        with pytest.raises(RepositoryScopeError, match="No owner is configured"):
             await client.post("/repos/acme/demo/issues", json={})
     finally:
         await client.aclose()

@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from copy import deepcopy
 from io import BytesIO
@@ -7,15 +8,22 @@ from zipfile import ZipFile
 
 import pytest
 
-from guildbotics.capabilities.member_github import (
-    MAX_ARTIFACT_BYTES,
-    MemberCapabilityError,
-    MemberGitHubCapabilityService,
-    _append_issue_link,
-    _preserve_issue_links,
-)
+from guildbotics.capabilities import member_repository
+from guildbotics.capabilities.artifact_archive import MAX_ARTIFACT_BYTES
+from guildbotics.capabilities.member_context import member_context
 from guildbotics.entities.team import Person, Project, Role, Team
+from guildbotics.integrations.github.code_hosting_service import (
+    GitHubCodeHostingService,
+)
+from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.issue_links import (
+    append_issue_link as _append_issue_link,
+)
+from guildbotics.integrations.github.issue_links import (
+    preserve_issue_links as _preserve_issue_links,
+)
 from guildbotics.integrations.github.repository_scope import ADD_REACTION
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
@@ -24,6 +32,7 @@ from guildbotics.runtime.member_invocation import (
 )
 from guildbotics.utils.fileio import host_temporary_root
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
+from tests.guildbotics.member_services import MemberServices
 
 HTTP_BAD_REQUEST = 400
 ISSUE_NUMBER = 42
@@ -177,7 +186,26 @@ def _service(person_type="machine_user"):
         ),
         members=[person],
     )
-    return MemberGitHubCapabilityService(person, team)
+    return GitHubCodeHostingService(person, team)
+
+
+def _member(service, board=None):
+    """The member's capabilities over ``service`` (and ``board``)."""
+    return MemberServices(service.person, service.team, service, board)
+
+
+def _board(service):
+    """The configured Project, sharing the code host's client."""
+    board = GitHubTicketManager(
+        logging.getLogger(__name__), service.person, service.team
+    )
+    board.client = service._client
+    return board
+
+
+async def _checks(service, url, **kwargs):
+    """A pull request's readiness, as the member CLI prints it."""
+    return (await service.readiness(url, **kwargs)).model_dump()
 
 
 def _pull_target(number: int, title: str = "") -> dict:
@@ -225,35 +253,55 @@ def _pull_with_head(number: int, title: str) -> dict:
 
 
 def _issue_comment_call(service):
-    return service.issue_comment("https://github.com/owner/repo/issues/42", "Hi")
+    return member_repository.issue_comment(
+        _member(service), "https://github.com/owner/repo/issues/42", "Hi"
+    )
 
 
 def _pr_comment_call(service):
-    return service.pr_comment("https://github.com/owner/repo/pull/7", "Hi")
+    return member_repository.pr_comment(
+        _member(service), "https://github.com/owner/repo/pull/7", "Hi"
+    )
 
 
 def _pr_reply_call(service):
-    return service.pr_reply(
-        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    return member_repository.pr_reply(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        ROOT_REVIEW_COMMENT_ID,
+        "Fixed.",
     )
 
 
 def _pr_review_call(service):
-    return service.pr_review("https://github.com/owner/repo/pull/7", "LGTM", "approve")
+    return member_repository.pr_review(
+        _member(service), "https://github.com/owner/repo/pull/7", "LGTM", "approve"
+    )
 
 
 def _pr_review_comment_call(service):
-    return service.pr_review_comment(
-        "https://github.com/owner/repo/pull/7", "Hmm", "a.py", 12, "RIGHT", None, None
+    return member_repository.pr_review_comment(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        "Hmm",
+        "a.py",
+        12,
+        "RIGHT",
+        None,
+        None,
     )
 
 
 def _issue_create_call(service):
-    return service.issue_create("owner/repo", "T", "B", False, human_approved=True)
+    return member_repository.issue_create(
+        _member(service), "owner/repo", "T", "B", False, human_approved=True
+    )
 
 
 def _pr_create_call(service):
-    return service.pr_create("owner/repo", "feature", "main", "T", "B", "", "false")
+    return member_repository.pr_create(
+        _member(service), "owner/repo", "feature", "main", "T", "B", "", "false"
+    )
 
 
 #: Every command whose write is not idempotent: a comment, review, reply, or
@@ -303,14 +351,12 @@ async def test_pr_comment_reports_the_pull_request_it_commented_on():
     fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "Title")
     service._client = fake
 
-    result = await service.pr_comment("https://github.com/owner/repo/pull/7", "Hi")
+    result = await member_repository.pr_comment(
+        _member(service), "https://github.com/owner/repo/pull/7", "Hi"
+    )
 
     assert result["comment_id"] == REPLY_COMMENT_ID
     assert result["target"] == _pull_target(7, "Title")
-
-
-async def _someone_elses_open_pull_request(_resource):
-    return {"state": "open", "user": {"login": "someone"}}
 
 
 def test_parse_github_issue_and_pull_request_urls():
@@ -329,22 +375,19 @@ def test_commit_url_from_remote_supports_configured_github_hosts():
     service = _service()
 
     assert (
-        service.commit_url_from_remote("https://github.com/owner/repo.git", "abc123")
+        service.commit_url("https://github.com/owner/repo.git", "abc123")
         == "https://github.com/owner/repo/commit/abc123"
     )
     assert (
-        service.commit_url_from_remote("git@github.com:owner/repo.git", "abc123")
+        service.commit_url("git@github.com:owner/repo.git", "abc123")
         == "https://github.com/owner/repo/commit/abc123"
     )
     assert (
-        service.commit_url_from_remote("ssh://git@github.com/owner/repo.git", "abc123")
+        service.commit_url("ssh://git@github.com/owner/repo.git", "abc123")
         == "https://github.com/owner/repo/commit/abc123"
     )
-    assert (
-        service.commit_url_from_remote("https://gitlab.com/owner/repo.git", "abc123")
-        == ""
-    )
-    assert service.commit_url_from_remote("/tmp/remote.git", "abc123") == ""
+    assert service.commit_url("https://gitlab.com/owner/repo.git", "abc123") == ""
+    assert service.commit_url("/tmp/remote.git", "abc123") == ""
 
 
 def test_commit_url_from_remote_supports_github_enterprise_host():
@@ -362,16 +405,14 @@ def test_commit_url_from_remote_supports_github_enterprise_host():
         ),
         members=[person],
     )
-    service = MemberGitHubCapabilityService(person, team)
+    service = GitHubCodeHostingService(person, team)
 
     assert (
-        service.commit_url_from_remote("git@ghe.example.test:owner/repo.git", "abc123")
+        service.commit_url("git@ghe.example.test:owner/repo.git", "abc123")
         == "https://ghe.example.test/owner/repo/commit/abc123"
     )
     assert (
-        service.commit_url_from_remote(
-            "https://ghe.example.test/owner/repo.git", "abc123"
-        )
+        service.commit_url("https://ghe.example.test/owner/repo.git", "abc123")
         == "https://ghe.example.test/owner/repo/commit/abc123"
     )
 
@@ -403,9 +444,11 @@ async def test_context_returns_llm_ready_communication_style():
         account_info={"github_username": "yuki-bot"},
     )
     team = Team(project=Project(name="demo"), members=[person])
-    service = MemberGitHubCapabilityService(person, team)
+    service = GitHubCodeHostingService(person, team)
 
-    result = await service.context()
+    result = await member_context(
+        _member(service),
+    )
 
     assert result["speaking_style"] == "柔らかく親しみやすい日本語で話す。"
     style = result["communication_style"]
@@ -427,7 +470,7 @@ async def test_context_check_credentials_uses_rate_limit_endpoint():
     fake = FakeClient()
     service._client = fake
 
-    result = await service.context(check_credentials=True)
+    result = await member_context(_member(service), check_credentials=True)
 
     assert result["credential_status"] == "ok"
     assert [endpoint for endpoint, *_ in fake.gets] == ["/rate_limit"]
@@ -439,7 +482,9 @@ async def test_context_includes_capability_reference():
     fake = FakeClient()
     service._client = fake
 
-    result = await service.context()
+    result = await member_context(
+        _member(service),
+    )
 
     # The context carries the full capability reference (single source of truth)
     # instead of a flat command-name list, and not the old fields.
@@ -458,7 +503,9 @@ async def test_context_without_check_credentials_is_unchecked():
     fake = FakeClient()
     service._client = fake
 
-    result = await service.context()
+    result = await member_context(
+        _member(service),
+    )
 
     assert result["credential_status"] == "unchecked"
     assert fake.gets == []
@@ -475,8 +522,11 @@ async def test_pr_reply_uses_pull_replies_endpoint():
     }
     service._client = fake
 
-    result = await service.pr_reply(
-        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    result = await member_repository.pr_reply(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        ROOT_REVIEW_COMMENT_ID,
+        "Fixed.",
     )
 
     assert result["reply_comment_id"] == REPLY_COMMENT_ID
@@ -512,8 +562,8 @@ async def test_pr_review_submits_a_review_on_the_current_head(event, github_even
     }
     service._client = fake
 
-    result = await service.pr_review(
-        "https://github.com/owner/repo/pull/7", "Looks good.\n", event
+    result = await member_repository.pr_review(
+        _member(service), "https://github.com/owner/repo/pull/7", "Looks good.\n", event
     )
 
     assert result == {
@@ -538,7 +588,9 @@ async def test_pr_review_rejects_unknown_event():
     service = _service()
 
     with pytest.raises(MemberCapabilityError, match="Review event must be one of"):
-        await service.pr_review("https://github.com/owner/repo/pull/7", "x", "lgtm")
+        await member_repository.pr_review(
+            _member(service), "https://github.com/owner/repo/pull/7", "x", "lgtm"
+        )
 
 
 @pytest.mark.asyncio
@@ -550,7 +602,8 @@ async def test_pr_review_comment_posts_diff_coordinates():
     }
     service._client = fake
 
-    result = await service.pr_review_comment(
+    result = await member_repository.pr_review_comment(
+        _member(service),
         "https://github.com/owner/repo/pull/7",
         "Please simplify this branch.",
         "guildbotics/example.py",
@@ -596,7 +649,8 @@ async def test_pr_review_comment_rejects_invalid_multiline_range():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="start_side must match side"):
-        await service.pr_review_comment(
+        await member_repository.pr_review_comment(
+            _member(service),
             "https://github.com/owner/repo/pull/7",
             "Please simplify this branch.",
             "guildbotics/example.py",
@@ -609,7 +663,8 @@ async def test_pr_review_comment_rejects_invalid_multiline_range():
     with pytest.raises(
         MemberCapabilityError, match="start_line must be less than or equal to line"
     ):
-        await service.pr_review_comment(
+        await member_repository.pr_review_comment(
+            _member(service),
             "https://github.com/owner/repo/pull/7",
             "Please simplify this branch.",
             "guildbotics/example.py",
@@ -677,7 +732,8 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
     fake.contents["/repos/owner/repo/actions/jobs/90/logs"] = b"prefix\nlast line\n"
     service._client = fake
 
-    result = await service.pr_checks(
+    result = await _checks(
+        service,
         "https://github.com/owner/repo/pull/7",
         failed_logs=True,
         log_tail_bytes=10,
@@ -736,7 +792,7 @@ async def test_pr_checks_reports_no_checks():
     )
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    result = await _checks(service, "https://github.com/owner/repo/pull/7")
 
     assert result["rollup"] == "no_checks"
     assert result["checks"] == []
@@ -774,7 +830,7 @@ async def test_pr_checks_waits_when_checks_have_not_registered_for_the_head():
     )
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    result = await _checks(service, "https://github.com/owner/repo/pull/7")
 
     assert result["rollup"] == "no_checks"
     assert result["checks_expected"] is True
@@ -819,18 +875,34 @@ async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
     service._client = fake
 
     async def fake_failed_action_logs(*_args):
-        return [{"run_id": 9, "log": "failure"}]
+        return [
+            {
+                "run_id": 9,
+                "run_attempt": 1,
+                "job_id": 3,
+                "name": "test",
+                "conclusion": "failure",
+                "html_url": "",
+                "artifact_names": [],
+                "log": "failure",
+                "log_bytes": 7,
+                "tail_limit_bytes": 7,
+                "truncated": False,
+            }
+        ]
 
     monkeypatch.setattr(service, "_failed_action_logs", fake_failed_action_logs)
 
-    result = await service.pr_checks(
-        "https://github.com/owner/repo/pull/7", failed_logs=True
+    result = await _checks(
+        service, "https://github.com/owner/repo/pull/7", failed_logs=True
     )
 
     assert result["readiness"] == "not_applicable"
     assert result["rollup"] == "failure"
     assert result["checks"][0]["conclusion"] == "failure"
-    assert result["failed_logs"] == [{"run_id": 9, "log": "failure", "log_bytes": 7}]
+    assert [(log["run_id"], log["log"]) for log in result["failed_logs"]] == [
+        (9, "failure")
+    ]
     assert result["completion_blockers"] == []
     assert not any(
         "/branches/" in endpoint or "/compare/" in endpoint
@@ -868,7 +940,7 @@ async def test_pr_checks_is_ready_after_true_base_integration_and_successful_ci(
     )
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    result = await _checks(service, "https://github.com/owner/repo/pull/7")
 
     assert result["rollup"] == "success"
     assert result["behind_by"] == 0
@@ -921,7 +993,7 @@ async def test_pr_checks_blocks_a_head_that_changes_during_readiness_check():
     )
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    result = await _checks(service, "https://github.com/owner/repo/pull/7")
 
     assert result["head_sha"] == "old-head"
     assert result["current_head_sha"] == "new-head"
@@ -963,7 +1035,7 @@ async def test_pr_checks_blocks_a_base_that_changes_during_readiness_check():
     ]
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    result = await _checks(service, "https://github.com/owner/repo/pull/7")
 
     assert result["base_sha"] == "base-one"
     assert result["current_base_sha"] == "base-two"
@@ -972,343 +1044,67 @@ async def test_pr_checks_blocks_a_base_that_changes_during_readiness_check():
 
 
 @pytest.mark.asyncio
-async def test_open_pr_checks_resolves_the_pushed_branch_and_returns_readiness():
+async def test_open_pull_requests_asks_for_the_pushed_branch_of_the_remote():
     service = _service()
     fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls": [
-                {
-                    "number": 7,
-                    "html_url": "https://github.com/owner/repo/pull/7",
-                }
-            ],
-            "/repos/owner/repo/pulls/7": {
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "base123", "ref": "main"},
-            },
-            "/repos/owner/repo/compare/base123...abc123": {"behind_by": 1},
-            "/repos/owner/repo/commits/abc123/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "in_progress",
-                        "conclusion": None,
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-        }
-    )
+    fake.get_payloads["/repos/owner/repo/pulls"] = [
+        {"number": 7, "html_url": "https://github.com/owner/repo/pull/7"},
+        {"number": 0},
+    ]
     service._client = fake
 
-    result = await service.open_pr_checks("git@github.com:owner/repo.git", "feature")
+    urls = await service.open_pull_requests("git@github.com:owner/repo.git", "feature")
 
-    assert fake.gets[0] == (
-        "/repos/owner/repo/pulls",
-        {"state": "open", "head": "owner:feature"},
-        None,
-    )
-    assert result[0]["readiness"] == "blocked"
-    assert [item["code"] for item in result[0]["completion_blockers"]] == [
-        "base_out_of_date",
-        "checks_pending",
+    assert fake.gets == [
+        ("/repos/owner/repo/pulls", {"state": "open", "head": "owner:feature"}, None)
     ]
-    assert set(result[0]) == {"pr_url", "readiness", "completion_blockers"}
+    assert urls == ["https://github.com/owner/repo/pull/7"]
+    assert await service.open_pull_requests("git@gitlab.com:o/r.git", "x") == []
 
 
 @pytest.mark.asyncio
-async def test_task_completion_revalidates_prs_from_ticket_and_run_evidence(
-    monkeypatch,
-):
+async def test_linked_pull_requests_are_the_pull_requests_of_the_issue_timeline():
     service = _service()
-    calls = []
-
-    async def fake_pr_checks(url, **_kwargs):
-        calls.append(url)
-        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
-
-    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
-    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
-    evidence = [
-        {
-            "payload": {
-                "pr_url": "https://github.com/owner/repo/pull/8",
-            }
-        },
-        {
-            "payload": {
-                "pull_requests": [
-                    {"pr_url": "https://github.com/owner/repo/pull/9"},
-                    {"pr_url": "https://github.com/owner/repo/pull/8"},
-                ]
-            }
-        },
+    fake = FakeClient()
+    pull = {"html_url": "https://github.com/owner/repo/pull/7", "pull_request": {}}
+    issue = {"html_url": "https://github.com/owner/repo/issues/9"}
+    fake.get_payloads["/repos/owner/repo/issues/1/timeline"] = [
+        {"source": {"issue": pull}},
+        {"source": {"issue": issue}},
+        {"source": {"issue": pull}},
+        {"event": "labeled"},
     ]
+    service._client = fake
 
-    results = await service.task_completion_readiness(
-        "https://github.com/owner/repo/pull/7", evidence
-    )
-
-    assert calls == [
-        "https://github.com/owner/repo/pull/7",
-        "https://github.com/owner/repo/pull/8",
-        "https://github.com/owner/repo/pull/9",
-    ]
-    assert len(results) == 3
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("code", "message"),
-    [
-        ("base_out_of_date", "The PR head is 1 commit(s) behind its base."),
-        ("checks_pending", "CI checks are still pending."),
-        ("checks_failed", "CI checks are failing."),
-        ("head_changed", "The PR head changed while readiness was being checked."),
-    ],
-)
-async def test_task_completion_rejects_every_readiness_blocker(
-    monkeypatch, code, message
-):
-    service = _service()
-
-    async def fake_pr_checks(url, **_kwargs):
-        return {
-            "pr_url": url,
-            "readiness": "blocked",
-            "completion_blockers": [{"code": code, "message": message}],
-        }
-
-    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
-    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
-
-    async def fake_linked_pull_request_urls(_resource):
-        return []
-
-    monkeypatch.setattr(
-        service, "_linked_pull_request_urls", fake_linked_pull_request_urls
-    )
-
-    with pytest.raises(MemberCapabilityError, match=re.escape(message)):
-        await service.task_completion_readiness(
-            "https://github.com/owner/repo/issues/1",
-            [
-                {
-                    "payload": {
-                        "pr_url": "https://github.com/owner/repo/pull/7",
-                    }
-                }
-            ],
-        )
-
-
-@pytest.mark.asyncio
-async def test_task_completion_adds_pull_requests_linked_from_an_issue(monkeypatch):
-    service = _service()
-    calls = []
-
-    async def fake_linked_pull_request_urls(resource):
-        assert resource.kind == "issue"
-        return ["https://github.com/owner/repo/pull/7"]
-
-    async def fake_pr_checks(url, **_kwargs):
-        calls.append(url)
-        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
-
-    monkeypatch.setattr(
-        service, "_linked_pull_request_urls", fake_linked_pull_request_urls
-    )
-    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
-    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
-
-    results = await service.task_completion_readiness(
-        "https://github.com/owner/repo/issues/1", []
-    )
-
-    assert calls == ["https://github.com/owner/repo/pull/7"]
-    assert len(results) == 1
+    assert await service.linked_pull_requests(
+        "https://github.com/owner/repo/issues/1"
+    ) == ["https://github.com/owner/repo/pull/7"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("after_page", [False, True])
-async def test_task_completion_rejects_incomplete_issue_timeline(after_page):
+async def test_linked_pull_requests_refuse_an_incomplete_issue_timeline(after_page):
     from guildbotics.integrations.github.github_utils import GITHUB_PAGE_SIZE
 
     service = _service()
     fake = FakeClient()
     endpoint = "/repos/owner/repo/issues/1/timeline"
+    event = {
+        "source": {
+            "issue": {
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "pull_request": {},
+            }
+        }
+    }
     fake.get_sequences[endpoint] = (
-        [
-            [
-                {
-                    "source": {
-                        "issue": {
-                            "html_url": "https://github.com/owner/repo/pull/7",
-                            "pull_request": {},
-                        }
-                    }
-                }
-            ]
-            * GITHUB_PAGE_SIZE
-        ]
-        if after_page
-        else []
+        [[event] * GITHUB_PAGE_SIZE] if after_page else []
     ) + [[]]
     fake.get_status_sequences[endpoint] = ([200] if after_page else []) + [403]
     service._client = fake
     with pytest.raises(MemberCapabilityError):
-        await service.task_completion_readiness(
-            "https://github.com/owner/repo/issues/1", []
-        )
+        await service.linked_pull_requests("https://github.com/owner/repo/issues/1")
     assert len(fake.gets) == (2 if after_page else 1)
-
-
-@pytest.mark.asyncio
-async def test_task_completion_checks_only_open_pull_requests_from_issue_timeline():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/issues/1/timeline": [
-                {
-                    "source": {
-                        "issue": {
-                            "html_url": "https://github.com/owner/repo/pull/7",
-                            "pull_request": {},
-                        }
-                    }
-                },
-                {
-                    "source": {
-                        "issue": {
-                            "html_url": "https://github.com/owner/repo/pull/8",
-                            "pull_request": {},
-                        }
-                    }
-                },
-            ],
-            "/repos/owner/repo/pulls/7": {
-                "state": "closed",
-                "merged_at": "2026-09-17T00:00:00Z",
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {
-                    "sha": "merged-head",
-                    "ref": "merged",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "old-base", "ref": "deleted-base"},
-            },
-            "/repos/owner/repo/pulls/8": {
-                "state": "open",
-                "user": {"login": "bot"},
-                "html_url": "https://github.com/owner/repo/pull/8",
-                "head": {
-                    "sha": "open-head",
-                    "ref": "open",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "base123", "ref": "main"},
-            },
-            "/repos/owner/repo/compare/base123...open-head": {"behind_by": 0},
-            "/repos/owner/repo/commits/open-head/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/open-head/status": {"statuses": []},
-        }
-    )
-    service._client = fake
-
-    results = await service.task_completion_readiness(
-        "https://github.com/owner/repo/issues/1", []
-    )
-
-    assert [result["pr_number"] for result in results] == [8]
-    endpoints = [endpoint for endpoint, _params, _headers in fake.gets]
-    assert not any(
-        "merged-head" in endpoint or "deleted-base" in endpoint
-        for endpoint in endpoints
-    )
-
-
-@pytest.mark.asyncio
-async def test_task_completion_skips_reviewed_prs_the_member_did_not_write(
-    monkeypatch,
-):
-    """A reviewer completes on someone else's PR; only PRs it pushed to gate."""
-    service = _service()
-    calls = []
-
-    async def fake_pr_checks(url, **_kwargs):
-        calls.append(url)
-        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
-
-    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
-    monkeypatch.setattr(service, "_pull_request", _someone_elses_open_pull_request)
-
-    async def fake_linked_pull_request_urls(_resource):
-        return ["https://github.com/owner/repo/pull/9"]
-
-    monkeypatch.setattr(
-        service, "_linked_pull_request_urls", fake_linked_pull_request_urls
-    )
-
-    assert (
-        await service.task_completion_readiness(
-            "https://github.com/owner/repo/pull/7", []
-        )
-        == []
-    )
-    assert (
-        await service.task_completion_readiness(
-            "https://github.com/owner/repo/issues/1", []
-        )
-        == []
-    )
-    results = await service.task_completion_readiness(
-        "https://github.com/owner/repo/pull/7",
-        [{"payload": {"pr_url": "https://github.com/owner/repo/pull/8"}}],
-    )
-
-    assert calls == ["https://github.com/owner/repo/pull/8"]
-    assert len(results) == 1
-
-
-@pytest.mark.asyncio
-async def test_task_completion_accepts_non_url_ticket_identifiers(monkeypatch):
-    service = _service()
-
-    async def fake_pr_checks(url, **_kwargs):
-        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
-
-    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
-    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
-
-    results = await service.task_completion_readiness(
-        "task:123",
-        [
-            {
-                "payload": {
-                    "pr_url": "https://github.com/owner/repo/pull/7",
-                }
-            }
-        ],
-    )
-
-    assert [result["pr_url"] for result in results] == [
-        "https://github.com/owner/repo/pull/7"
-    ]
 
 
 @pytest.mark.asyncio
@@ -1327,7 +1123,7 @@ async def test_pr_checks_reports_permission_failure():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="approve the permission update"):
-        await service.pr_checks("https://github.com/owner/repo/pull/7")
+        await _checks(service, "https://github.com/owner/repo/pull/7")
 
 
 def _artifact_zip(files: dict[str, bytes]) -> bytes:
@@ -1369,8 +1165,11 @@ async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
     )
     service._client = fake
 
-    result = await service.artifact_download(
-        "https://github.com/owner/repo/pull/7", "playwright-report", tmp_path
+    result = await member_repository.artifact_download(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        "playwright-report",
+        tmp_path,
     )
 
     assert result["run_id"] == 9
@@ -1398,8 +1197,11 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
     destination = tmp_path / "artifact"
 
     with pytest.raises(MemberCapabilityError, match="ask a human to retrieve it"):
-        await service.artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "large", destination
+        await member_repository.artifact_download(
+            _member(service),
+            "https://github.com/owner/repo/actions/runs/9",
+            "large",
+            destination,
         )
 
     assert list(destination.rglob("*")) == []
@@ -1425,8 +1227,11 @@ async def test_artifact_download_rejects_path_traversal(tmp_path):
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="unsafe path"):
-        await service.artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "unsafe", tmp_path
+        await member_repository.artifact_download(
+            _member(service),
+            "https://github.com/owner/repo/actions/runs/9",
+            "unsafe",
+            tmp_path,
         )
 
     assert not (tmp_path.parent / "outside.txt").exists()
@@ -1443,8 +1248,11 @@ async def test_pr_reply_allows_outdated_thread():
     }
     service._client = fake
 
-    result = await service.pr_reply(
-        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    result = await member_repository.pr_reply(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        ROOT_REVIEW_COMMENT_ID,
+        "Fixed.",
     )
 
     assert result["reply_comment_id"] == REPLY_COMMENT_ID
@@ -1468,8 +1276,11 @@ async def test_pr_reply_allows_resolved_thread():
     }
     service._client = fake
 
-    result = await service.pr_reply(
-        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    result = await member_repository.pr_reply(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        ROOT_REVIEW_COMMENT_ID,
+        "Fixed.",
     )
 
     assert result["reply_comment_id"] == REPLY_COMMENT_ID
@@ -1509,7 +1320,9 @@ async def test_reply_requires_the_requested_root_comment_on_this_pr(root):
     fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = root
     service._client = fake
     with pytest.raises(MemberCapabilityError, match="not replyable"):
-        await service.pr_reply("https://github.com/owner/repo/pull/7", 101, "Fixed")
+        await member_repository.pr_reply(
+            _member(service), "https://github.com/owner/repo/pull/7", 101, "Fixed"
+        )
     assert not fake.posts
 
 
@@ -1528,10 +1341,16 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
             {"data": {"addProjectV2ItemById": {"item": {"id": "PROJECT_ITEM_node"}}}},
         ]
     )
+    fake.get_payloads["/repos/owner/repo/issues/43"] = {"node_id": "ISSUE_node"}
     service._client = fake
 
-    result = await service.issue_create(
-        "repo", "Follow-up", "Body", True, human_approved=True
+    result = await member_repository.issue_create(
+        _member(service, _board(service)),
+        "repo",
+        "Follow-up",
+        "Body",
+        True,
+        human_approved=True,
     )
 
     assert result == {
@@ -1569,8 +1388,8 @@ async def test_issue_comment_returns_issue_and_comment_activity_fields():
     }
     service._client = fake
 
-    result = await service.issue_comment(
-        "https://github.com/owner/repo/issues/42", "Comment"
+    result = await member_repository.issue_comment(
+        _member(service), "https://github.com/owner/repo/issues/42", "Comment"
     )
 
     assert result == {
@@ -1599,8 +1418,8 @@ async def test_issue_update_patches_only_body_and_returns_updated_issue():
     }
     service._client = fake
 
-    result = await service.issue_update(
-        "https://github.com/owner/repo/issues/42", "Updated body"
+    result = await member_repository.issue_update(
+        _member(service), "https://github.com/owner/repo/issues/42", "Updated body"
     )
 
     assert result == {
@@ -1631,8 +1450,8 @@ async def test_issue_update_normalizes_null_response_body(requested_body):
     }
     service._client = fake
 
-    result = await service.issue_update(
-        "https://github.com/owner/repo/issues/42", requested_body
+    result = await member_repository.issue_update(
+        _member(service), "https://github.com/owner/repo/issues/42", requested_body
     )
 
     assert result["body"] == ""
@@ -1648,7 +1467,9 @@ async def test_issue_create_without_human_approval_is_refused_before_any_call():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_create("repo", "Follow-up", "Body", False)
+        await member_repository.issue_create(
+            _member(service), "repo", "Follow-up", "Body", False
+        )
 
     assert "requires a human instruction or approval" in str(error.value)
     assert fake.posts == []
@@ -1669,7 +1490,8 @@ async def test_issue_create_sends_repository_labels_with_their_defined_casing():
     }
     service._client = fake
 
-    result = await service.issue_create(
+    result = await member_repository.issue_create(
+        _member(service),
         "repo",
         "Follow-up",
         "Body",
@@ -1694,7 +1516,8 @@ async def test_issue_create_rejects_a_label_the_repository_does_not_define():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_create(
+        await member_repository.issue_create(
+            _member(service),
             "repo",
             "Follow-up",
             "Body",
@@ -1724,7 +1547,8 @@ async def test_issue_update_closes_the_issue_with_its_state_reason():
     }
     service._client = fake
 
-    result = await service.issue_update(
+    result = await member_repository.issue_update(
+        _member(service),
         "https://github.com/owner/repo/issues/42",
         state="closed",
         state_reason="not_planned",
@@ -1759,7 +1583,8 @@ async def test_issue_update_reports_a_re_close_as_an_unchanged_state():
     }
     service._client = fake
 
-    result = await service.issue_update(
+    result = await member_repository.issue_update(
+        _member(service),
         "https://github.com/owner/repo/issues/42",
         state="closed",
         human_approved=True,
@@ -1777,8 +1602,8 @@ async def test_issue_update_state_change_without_human_approval_is_refused(state
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_update(
-            "https://github.com/owner/repo/issues/42", state=state
+        await member_repository.issue_update(
+            _member(service), "https://github.com/owner/repo/issues/42", state=state
         )
 
     assert f"Changing the issue state to '{state}'" in str(error.value)
@@ -1799,8 +1624,10 @@ async def test_issue_update_removing_a_label_skips_the_repository_label_lookup()
     }
     service._client = fake
 
-    result = await service.issue_update(
-        "https://github.com/owner/repo/issues/42", remove_labels=["docs"]
+    result = await member_repository.issue_update(
+        _member(service),
+        "https://github.com/owner/repo/issues/42",
+        remove_labels=["docs"],
     )
 
     # Nothing is validated against the repository vocabulary when only
@@ -1833,7 +1660,8 @@ async def test_issue_update_changes_labels_through_the_dedicated_label_endpoints
     }
     service._client = fake
 
-    result = await service.issue_update(
+    result = await member_repository.issue_update(
+        _member(service),
         "https://github.com/owner/repo/issues/42",
         add_labels=["Priority: High"],
         remove_labels=["docs"],
@@ -1872,7 +1700,8 @@ async def test_issue_update_patches_fields_before_labels_and_refetches_the_resul
     }
     service._client = fake
 
-    result = await service.issue_update(
+    result = await member_repository.issue_update(
+        _member(service),
         "https://github.com/owner/repo/issues/42",
         title="New title",
         add_labels=["cli"],
@@ -1898,7 +1727,8 @@ async def test_issue_update_leaves_labels_untouched_when_the_field_patch_fails()
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="status 400"):
-        await service.issue_update(
+        await member_repository.issue_update(
+            _member(service),
             "https://github.com/owner/repo/issues/42",
             body="Body",
             add_labels=["cli"],
@@ -1923,8 +1753,10 @@ async def test_issue_update_trims_label_names_and_skips_empty_ones():
     }
     service._client = fake
 
-    await service.issue_update(
-        "https://github.com/owner/repo/issues/42", remove_labels=["  docs  ", ""]
+    await member_repository.issue_update(
+        _member(service),
+        "https://github.com/owner/repo/issues/42",
+        remove_labels=["  docs  ", ""],
     )
 
     assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
@@ -1937,8 +1769,10 @@ async def test_issue_update_with_only_blank_labels_is_refused():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_update(
-            "https://github.com/owner/repo/issues/42", remove_labels=["   "]
+        await member_repository.issue_update(
+            _member(service),
+            "https://github.com/owner/repo/issues/42",
+            remove_labels=["   "],
         )
 
     assert "at least one of body, title, labels, or state" in str(error.value)
@@ -1961,8 +1795,10 @@ async def test_issue_update_tolerates_removing_a_label_the_issue_does_not_carry(
     }
     service._client = fake
 
-    result = await service.issue_update(
-        "https://github.com/owner/repo/issues/42", remove_labels=["priority: high"]
+    result = await member_repository.issue_update(
+        _member(service),
+        "https://github.com/owner/repo/issues/42",
+        remove_labels=["priority: high"],
     )
 
     assert fake.deletes == [(endpoint, None)]
@@ -1977,8 +1813,10 @@ async def test_issue_update_rejects_a_label_the_repository_does_not_define():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_update(
-            "https://github.com/owner/repo/issues/42", add_labels=["blocker"]
+        await member_repository.issue_update(
+            _member(service),
+            "https://github.com/owner/repo/issues/42",
+            add_labels=["blocker"],
         )
 
     assert "Ask a human to add the label" in str(error.value)
@@ -1992,7 +1830,9 @@ async def test_issue_update_without_any_requested_change_is_refused():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.issue_update("https://github.com/owner/repo/issues/42")
+        await member_repository.issue_update(
+            _member(service), "https://github.com/owner/repo/issues/42"
+        )
 
     assert "at least one of body, title, labels, or state" in str(error.value)
     assert fake.patches == []
@@ -2010,8 +1850,8 @@ async def test_pr_update_replaces_the_title_without_touching_the_body():
     }
     service._client = fake
 
-    result = await service.pr_update(
-        "https://github.com/owner/repo/pull/7", title="New title"
+    result = await member_repository.pr_update(
+        _member(service), "https://github.com/owner/repo/pull/7", title="New title"
     )
 
     assert fake.patches == [("/repos/owner/repo/pulls/7", {"title": "New title"}, None)]
@@ -2027,7 +1867,9 @@ async def test_pr_update_without_any_requested_change_is_refused():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError) as error:
-        await service.pr_update("https://github.com/owner/repo/pull/7")
+        await member_repository.pr_update(
+            _member(service), "https://github.com/owner/repo/pull/7"
+        )
 
     assert "pr update needs a body or a title." in str(error.value)
     assert fake.patches == []
@@ -2047,7 +1889,7 @@ async def test_issue_update_rejects_invalid_or_non_issue_url(url, error):
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match=error):
-        await service.issue_update(url, "Body")
+        await member_repository.issue_update(_member(service), url, "Body")
 
     assert fake.patches == []
 
@@ -2062,7 +1904,9 @@ async def test_issue_update_propagates_github_api_error():
     with pytest.raises(
         MemberCapabilityError, match="GitHub API request failed with status 400"
     ):
-        await service.issue_update("https://github.com/owner/repo/issues/42", "Body")
+        await member_repository.issue_update(
+            _member(service), "https://github.com/owner/repo/issues/42", "Body"
+        )
 
     assert fake.patches == [("/repos/owner/repo/issues/42", {"body": "Body"}, None)]
 
@@ -2079,7 +1923,8 @@ async def test_pr_create_uses_explicit_base_branch():
     }
     service._client = fake
 
-    result = await service.pr_create(
+    result = await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "ticket-driven-workflow",
@@ -2132,7 +1977,8 @@ async def test_pr_create_opens_a_draft_when_draft_is_true():
     }
     service._client = fake
 
-    result = await service.pr_create(
+    result = await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "main",
@@ -2159,7 +2005,8 @@ async def test_pr_create_uses_default_branch_when_base_is_empty():
     }
     service._client = fake
 
-    result = await service.pr_create(
+    result = await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "",
@@ -2194,7 +2041,8 @@ async def test_pr_create_returns_matching_open_pr_without_updating_it():
     ]
     service._client = fake
 
-    result = await service.pr_create(
+    result = await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "main",
@@ -2397,7 +2245,8 @@ async def test_pr_create_appends_refs_when_issue_url_is_set():
     }
     service._client = fake
 
-    await service.pr_create(
+    await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "ticket-driven-workflow",
@@ -2422,7 +2271,8 @@ async def test_pr_create_appends_closes_when_closes_issue_is_true():
     }
     service._client = fake
 
-    await service.pr_create(
+    await member_repository.pr_create(
+        _member(service),
         "owner/repo",
         "feature",
         "main",
@@ -2454,8 +2304,11 @@ async def test_pr_update_preserves_existing_issue_links(body, expected):
     }
     service._client = fake
 
-    result = await service.pr_update(
-        "https://github.com/owner/repo/pull/7", body, title="New title"
+    result = await member_repository.pr_update(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        body,
+        title="New title",
     )
 
     assert result["body"] == expected
@@ -2488,8 +2341,8 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
     }
     service._client = fake
 
-    result = await service.pr_update(
-        "https://github.com/owner/repo/pull/7", "Updated body"
+    result = await member_repository.pr_update(
+        _member(service), "https://github.com/owner/repo/pull/7", "Updated body"
     )
 
     assert result == {
@@ -2517,8 +2370,8 @@ async def test_pr_update_normalizes_null_response_body(requested_body):
     }
     service._client = fake
 
-    result = await service.pr_update(
-        "https://github.com/owner/repo/pull/7", requested_body
+    result = await member_repository.pr_update(
+        _member(service), "https://github.com/owner/repo/pull/7", requested_body
     )
 
     assert result["body"] == ""
@@ -2541,7 +2394,7 @@ async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match=error):
-        await service.pr_update(url, "Body")
+        await member_repository.pr_update(_member(service), url, "Body")
 
     assert fake.patches == []
 
@@ -2557,7 +2410,9 @@ async def test_pr_update_propagates_github_api_error():
     with pytest.raises(
         MemberCapabilityError, match="GitHub API request failed with status 400"
     ):
-        await service.pr_update("https://github.com/owner/repo/pull/7", "Body")
+        await member_repository.pr_update(
+            _member(service), "https://github.com/owner/repo/pull/7", "Body"
+        )
 
     assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": "Body"}, None)]
 
@@ -2570,8 +2425,11 @@ async def test_pr_update_drop_issue_links_replaces_body_verbatim(body):
     fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Closes #42"}
     service._client = fake
 
-    result = await service.pr_update(
-        "https://github.com/owner/repo/pull/7", body, drop_issue_links=True
+    result = await member_repository.pr_update(
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        body,
+        drop_issue_links=True,
     )
 
     assert result["body"] == body
@@ -2587,7 +2445,9 @@ async def test_pr_update_refuses_to_patch_when_existing_body_cannot_be_read():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="GitHub API request failed"):
-        await service.pr_update("https://github.com/owner/repo/pull/7", "New")
+        await member_repository.pr_update(
+            _member(service), "https://github.com/owner/repo/pull/7", "New"
+        )
 
     assert fake.patches == []
 
@@ -2599,8 +2459,11 @@ async def test_pr_update_drop_issue_links_requires_replacement_body():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="requires a body"):
-        await service.pr_update(
-            "https://github.com/owner/repo/pull/7", title="New", drop_issue_links=True
+        await member_repository.pr_update(
+            _member(service),
+            "https://github.com/owner/repo/pull/7",
+            title="New",
+            drop_issue_links=True,
         )
 
     assert fake.gets == fake.patches == []
@@ -2612,7 +2475,9 @@ async def test_reaction_add_uses_target_specific_endpoint():
     fake = FakeClient()
     service._client = fake
 
-    result = await service.reaction_add("owner/repo", "pr-review-comment", 101, "+1")
+    result = await member_repository.reaction_add(
+        _member(service), "owner/repo", "pr-review-comment", 101, "+1"
+    )
 
     assert result == {"reaction_id": 10, "content": "+1", "comment_id": 101}
     assert fake.posts == [
@@ -2633,7 +2498,9 @@ async def test_reaction_on_a_review_body_goes_through_graphql():
     fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
     service._client = fake
 
-    result = await service.reaction_add("owner/repo", "pr-review", 55, "+1", 7)
+    result = await member_repository.reaction_add(
+        _member(service), "owner/repo", "pr-review", 55, "+1", 7
+    )
 
     assert result == {"content": "+1", "comment_id": 55}
     assert fake.history == [
@@ -2653,7 +2520,9 @@ async def test_reaction_on_a_review_body_needs_the_pr_number():
     service._client = fake
 
     with pytest.raises(MemberCapabilityError, match="PR number"):
-        await service.reaction_add("owner/repo", "pr-review", 55, "+1")
+        await member_repository.reaction_add(
+            _member(service), "owner/repo", "pr-review", 55, "+1"
+        )
 
     assert fake.history == []
 
@@ -2691,7 +2560,7 @@ class _Guest:
         return self.result
 
 
-def _artifact_service(content: bytes) -> MemberGitHubCapabilityService:
+def _artifact_service(content: bytes) -> GitHubCodeHostingService:
     service = _service()
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
@@ -2721,8 +2590,11 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     destination.symlink_to(outside, target_is_directory=True)
 
     with member_invocation_scope(MemberInvocation(guest=guest)):
-        result = await _artifact_service(archive).artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "report", destination
+        result = await member_repository.artifact_download(
+            _member(_artifact_service(archive)),
+            "https://github.com/owner/repo/actions/runs/9",
+            "report",
+            destination,
         )
 
     [run] = guest.runs
@@ -2753,8 +2625,11 @@ async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
         member_invocation_scope(MemberInvocation(guest=guest)),
         pytest.raises(MemberCapabilityError, match="unsafe path: ../x"),
     ):
-        await _artifact_service(_artifact_zip({"../x": b""})).artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        await member_repository.artifact_download(
+            _member(_artifact_service(_artifact_zip({"../x": b""}))),
+            "https://github.com/owner/repo/actions/runs/9",
+            "report",
+            tmp_path,
         )
 
 
@@ -2779,8 +2654,11 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
         member_invocation_scope(MemberInvocation(guest=guest)),
         pytest.raises(MemberCapabilityError, match=message),
     ):
-        await _artifact_service(_artifact_zip({"a": b""})).artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        await member_repository.artifact_download(
+            _member(_artifact_service(_artifact_zip({"a": b""}))),
+            "https://github.com/owner/repo/actions/runs/9",
+            "report",
+            tmp_path,
         )
 
 
@@ -2791,8 +2669,79 @@ async def test_what_the_environment_answers_decides_nothing_else(tmp_path):
     guest = _Guest(GuestResult(0, json.dumps(answer).encode(), b""))
 
     with member_invocation_scope(MemberInvocation(guest=guest)):
-        result = await _artifact_service(_artifact_zip({"a": b""})).artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        result = await member_repository.artifact_download(
+            _member(_artifact_service(_artifact_zip({"a": b""}))),
+            "https://github.com/owner/repo/actions/runs/9",
+            "report",
+            tmp_path,
         )
 
     assert (result["repo"], result["run_id"]) == ("owner/repo", 9)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("author", "body", "addressed"),
+    [
+        ("human", "Run failed.", True),
+        ("bot", "Run failed.", False),
+        ("Human", "@human Run failed.", False),
+    ],
+)
+async def test_a_status_comment_carries_its_marker_and_addresses_the_author(
+    author, body, addressed
+):
+    """The patrol reads the marker back; the author is told, once, unless the
+    member is the author."""
+    from guildbotics.integrations.chat_workflow_status import workflow_status_fields
+    from guildbotics.integrations.github.workflow_status_comment import (
+        parse_workflow_status_comment,
+    )
+
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "title": "T",
+        "user": {"login": author},
+    }
+    service._client = fake
+    status = workflow_status_fields(reason="failed", person_id="aiko", run_id="r1")
+
+    await service.comment(
+        "https://github.com/owner/repo/issues/42", body, status=status
+    )
+    await service.comment("https://github.com/owner/repo/issues/42", body)
+
+    [(_, with_status, _), (_, plain, _)] = fake.posts
+    parsed = parse_workflow_status_comment(with_status["body"])
+    assert parsed is not None and (parsed.reason, parsed.run_id) == ("failed", "r1")
+    assert with_status["body"].startswith(f"@{author}\n\n") is addressed
+    assert body in with_status["body"]
+    assert plain == {"body": body}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_board_add_is_reported_after_the_issue_was_created():
+    """The issue exists; the member is told the Project add failed, in one
+    line the member CLI shows, never GitHub's raw errors as a traceback."""
+    service = _service()
+    fake = FakeClient()
+    fake.post_payloads["/repos/owner/repo/issues"] = {
+        "number": 43,
+        "html_url": "https://github.com/owner/repo/issues/43",
+    }
+    fake.get_payloads["/repos/owner/repo/issues/43"] = {"node_id": "ISSUE_node"}
+    fake.graphql_payloads.append({"errors": [{"message": "no such project"}]})
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="could not be added"):
+        await member_repository.issue_create(
+            _member(service, _board(service)),
+            "repo",
+            "Follow-up",
+            "Body",
+            True,
+            human_approved=True,
+        )
+    assert fake.posts[0][0] == "/repos/owner/repo/issues"

@@ -23,10 +23,8 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_notice_text,
 )
 from guildbotics.entities import Person, Task
+from guildbotics.entities.team import Service
 from guildbotics.integrations.chat_workflow_status import workflow_status_fields
-from guildbotics.integrations.workflow_status_comment import (
-    render_workflow_status_comment,
-)
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.ticket_manager import TicketManager
@@ -50,11 +48,17 @@ class TicketSelector:
         self._source = source
 
     async def candidates(self, person: Person) -> list[Task]:
-        """List actionable ticket work in patrol order."""
+        """List actionable ticket work in patrol order: the pull requests
+        first, then the board's tickets."""
         context = self._context.clone_for(person)
         try:
             ticket_manager = context.get_ticket_manager()
-            return await ticket_manager.get_task_candidates()
+            pull_requests = (
+                await context.get_code_hosting_service().pull_request_candidates()
+                if _has_code_host(context)
+                else []
+            )
+            return [*pull_requests, *await ticket_manager.get_task_candidates()]
         finally:
             await context.aclose()
 
@@ -65,7 +69,11 @@ class TicketSelector:
         context = self._context.clone_for(person)
         try:
             ticket_manager = context.get_ticket_manager()
-            task = await ticket_manager.refresh_task(candidate)
+            task = await (
+                context.get_code_hosting_service().refresh_pull_request(candidate)
+                if candidate.pull_request_url
+                else ticket_manager.refresh_task(candidate)
+            )
             if task is None:
                 return None
             return await self._invocation(person, ticket_manager, task)
@@ -132,9 +140,7 @@ class TicketSelector:
                     )
                 )
             except Exception as exc:
-                notice = await self._settle_failure(
-                    context, ticket_manager, invocation, task, run_id, exc
-                )
+                notice = await self._settle_failure(context, invocation, run_id, exc)
                 if notice is None:
                     raise
                 return notice
@@ -144,9 +150,7 @@ class TicketSelector:
     async def _settle_failure(
         self,
         context: Context,
-        ticket_manager: TicketManager,
         invocation: WorkflowInvocation,
-        task: Task,
         run_id: str,
         exc: Exception,
     ) -> str | None:
@@ -178,8 +182,8 @@ class TicketSelector:
                 retry_after_text=rate_limit.retry_after_text,
             )
         with suppress(Exception):
-            await ticket_manager.add_comment_to_ticket(
-                task, render_workflow_status_comment(body=body, payload=payload)
+            await context.get_code_hosting_service().comment(
+                ticket_url, body, status=payload
             )
         if rate_limit is None:
             return None
@@ -203,16 +207,18 @@ class TicketSelector:
             "pull_request_url": task.pull_request_url or "",
             "trigger_reason": task.trigger_reason or "",
         }
-        idempotency_key = f"github:ticket:{person.person_id}:{ticket_url}:{task.pull_request_url or ''}:{task.trigger_reason or ''}"
         return WorkflowInvocation(
             command=TICKET_WORKFLOW_COMMAND,
             person_id=person.person_id,
             source=self._source,
             trigger_type="ticket",
             payload=payload,
-            idempotency_key=idempotency_key,
             work=Work.of_ticket(ticket_url),
         )
+
+
+def _has_code_host(context: Context) -> bool:
+    return context.team.project.is_available_service(Service.CODE_HOSTING_SERVICE)
 
 
 def _max_agent_attempts() -> int:

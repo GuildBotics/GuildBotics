@@ -1,9 +1,4 @@
 ja:
-  resource: "未対応の参照リソースです。対応する名前は member help で確認してください。"
-  repository: "リポジトリは URL やパスではなく owner/name 形式で指定してください。"
-  identifier: "Issue・PR・アラートの正の番号を identifier に指定してください。省略できるのは dependency_alerts のみです。"
-  parameters: "リソースの取得条件が不正です。対応する引数は member help で確認してください。"
-  continuation: "ページ送りの応答または継続指定が不正です。同じリソース・リポジトリ・識別子・取得条件を使用してください。"
   too_large: "GitHub の応答がページ上限を超えました。一覧では page_size を減らしてください。個別項目が上限を超える場合は返せません。"
   response: "GitHub の応答形式が不正なため、ページを取得できませんでした。"
   rate_limit: "GitHub がリクエストを制限しました。時間をおいて再試行してください。ページは未取得です。"

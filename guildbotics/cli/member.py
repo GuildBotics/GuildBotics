@@ -17,6 +17,7 @@ from uuid import uuid4
 import click
 from pydantic import ValidationError
 
+from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.chat_updates import (
     ChatUpdatesRequired,
     check_chat_updates,
@@ -33,11 +34,8 @@ from guildbotics.capabilities.member_activity_events import (
     record_member_work_target,
 )
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
+from guildbotics.capabilities.member_context import member_context
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
-from guildbotics.capabilities.member_github import (
-    MemberCapabilityError,
-    MemberGitHubCapabilityService,
-)
 from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
@@ -46,7 +44,6 @@ from guildbotics.capabilities.member_reference import (
     capability_reference_text,
     command_summary,
 )
-from guildbotics.capabilities.member_repository import read_repository
 from guildbotics.capabilities.task_runs import (
     RunStore,
     TaskRunError,
@@ -66,7 +63,8 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.drivers.context import resolve_member_context
-from guildbotics.integrations.github.repository_scope import RepositoryScopeError
+from guildbotics.entities.team import Person
+from guildbotics.integrations.repository_scope import RepositoryScopeError
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
@@ -75,7 +73,10 @@ from guildbotics.observability.interactive_sessions import (
     interactive_host,
     interactive_thread_key,
 )
-from guildbotics.runtime.code_hosting_service import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.code_hosting_service import ReactionTarget, ReviewEvent
+from guildbotics.runtime.context import Context
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
@@ -718,11 +719,10 @@ async def _context_cmd(
     person: str, check_credentials: bool, output_format: str
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await service.context(check_credentials=check_credentials)
+        result = await member_context(context, check_credentials)
     finally:
-        await service.aclose()
+        await context.aclose()
     if check_credentials and (
         member_person.has_secret("SLACK_BOT_TOKEN")
         or member_person.has_secret("SLACK_APP_TOKEN")
@@ -1301,13 +1301,13 @@ async def _git_prepare(
     branch: str | None,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
-    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    service = _git_service(context, member_person)
     try:
         return await service.prepare(
             issue_url=issue_url, pr_url=pr_url, repo=repo, branch=branch
         )
     finally:
-        await service.aclose()
+        await context.aclose()
 
 
 @git.command(name="commit")
@@ -1346,7 +1346,7 @@ async def _git_commit(
     task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
-    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    service = _git_service(context, member_person)
     try:
         result = await service.commit(
             repo_path=repo_path,
@@ -1358,7 +1358,7 @@ async def _git_commit(
         TaskRunStore().append_evidence(task_run_id, "git_commit", payload)
         return payload
     finally:
-        await service.aclose()
+        await context.aclose()
 
 
 @git.command(name="push")
@@ -1388,7 +1388,7 @@ async def _git_push(
     task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
-    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    service = _git_service(context, member_person)
     try:
         result = await service.push(
             repo_path=repo_path,
@@ -1400,7 +1400,7 @@ async def _git_push(
         record_member_push_event(member_person, payload)
         return payload
     finally:
-        await service.aclose()
+        await context.aclose()
 
 
 @git.command(name="publish")
@@ -1439,7 +1439,7 @@ async def _git_publish(
     task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
-    service = MemberGitWorkspaceService(member_person, context.team, context.logger)
+    service = _git_service(context, member_person)
     try:
         if workspace_mode == "current":
             result = await service.publish_current_workspace(
@@ -1452,7 +1452,7 @@ async def _git_publish(
         record_member_push_event(member_person, payload)
         return payload
     finally:
-        await service.aclose()
+        await context.aclose()
 
 
 def _reject_current_workspace_mode_in_task_run(
@@ -1483,23 +1483,22 @@ def github() -> None:
 
 async def _github(
     person: str,
-    action: Callable[[MemberGitHubCapabilityService], Awaitable[dict[str, Any]]],
+    action: Callable[[Context], Awaitable[dict[str, Any]]],
     *,
     evidence: str = "",
     then: Callable[[Any, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run one GitHub capability and record the PR / issue it worked on.
+    """Run one code-host capability and record the PR / issue it worked on.
 
     Every issue and pull request command declares its target here, in one
     place, so the trace the command runs inside is titled by whichever item
     a command touched (or read) first.
     """
     context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
     try:
-        result = await action(service)
+        result = await action(context)
     finally:
-        await service.aclose()
+        await context.aclose()
     if evidence:
         TaskRunStore().append_evidence(current_task_run_id(), evidence, result)
     target = result.get("target")
@@ -1510,6 +1509,12 @@ async def _github(
     if then is not None:
         then(member_person, result)
     return result
+
+
+def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
+    return MemberGitWorkspaceService(
+        person, context.team, context.get_code_hosting_service, context.logger
+    )
 
 
 @github.group()
@@ -1560,14 +1565,16 @@ def repository_read(
         raise click.BadParameter(
             "Expected a JSON object.", param_hint="--params"
         ) from None
-    context, _ = _resolve(person)
-    return read_repository(
-        context,
-        resource,
-        repo,
-        identifier=identifier,
-        parameters=conditions,
-        continuation=continuation,
+    return _github(
+        person,
+        lambda context: member_repository.read_repository(
+            context,
+            resource,
+            repo,
+            identifier=identifier,
+            parameters=conditions,
+            continuation=continuation,
+        ),
     )
 
 
@@ -1584,7 +1591,7 @@ def issue_comment(
     body = _read_stdin("issue comment body")
     return _github(
         person,
-        lambda service: service.issue_comment(issue_url, body),
+        lambda context: member_repository.issue_comment(context, issue_url, body),
         evidence="issue_comment",
         then=record_member_issue_comment_event,
     )
@@ -1621,8 +1628,8 @@ def issue_create(
     body = _read_stdin("issue body")
     return _github(
         person,
-        lambda service: service.issue_create(
-            repo, title, body, add_to_project, list(labels), human_approved
+        lambda context: member_repository.issue_create(
+            context, repo, title, body, add_to_project, labels, human_approved
         ),
         evidence="issue_create",
         then=record_member_issue_create_event,
@@ -1681,12 +1688,13 @@ def issue_update(
     new_title = _validate_title(title) if title is not None else None
     return _github(
         person,
-        lambda service: service.issue_update(
+        lambda context: member_repository.issue_update(
+            context,
             issue_url,
             body=body,
             title=new_title,
-            add_labels=list(add_labels),
-            remove_labels=list(remove_labels),
+            add_labels=add_labels,
+            remove_labels=remove_labels,
             state=state,
             state_reason=state_reason,
             human_approved=human_approved,
@@ -1750,8 +1758,8 @@ def pr_create(
     body = _read_stdin("pull request body")
     return _github(
         person,
-        lambda service: service.pr_create(
-            repo, head, base, title, body, issue_url, draft, closes_issue
+        lambda context: member_repository.pr_create(
+            context, repo, head, base, title, body, issue_url, draft, closes_issue
         ),
         evidence="pr_create",
         then=lambda member, result: record_member_pr_create_event(
@@ -1799,8 +1807,12 @@ def pr_update(
     new_title = _validate_title(title) if title is not None else None
     return _github(
         person,
-        lambda service: service.pr_update(
-            pr_url, body=body, title=new_title, drop_issue_links=drop_issue_links
+        lambda context: member_repository.pr_update(
+            context,
+            pr_url,
+            body=body,
+            title=new_title,
+            drop_issue_links=drop_issue_links,
         ),
         evidence="pr_update",
     )
@@ -1815,7 +1827,7 @@ def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request comment body")
     return _github(
         person,
-        lambda service: service.pr_comment(pr_url, body),
+        lambda context: member_repository.pr_comment(context, pr_url, body),
         evidence="pr_comment",
     )
 
@@ -1835,7 +1847,9 @@ def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _Comm
     body = _read_stdin("pull request review body")
     return _github(
         person,
-        lambda service: service.pr_review(pr_url, body, event),
+        lambda context: member_repository.pr_review(
+            context, pr_url, body, cast(ReviewEvent, event)
+        ),
         evidence="pr_review",
     )
 
@@ -1887,8 +1901,8 @@ def pr_review_comment(
     body = _read_stdin("pull request review comment body")
     return _github(
         person,
-        lambda service: service.pr_review_comment(
-            pr_url, body, file_path, line, side, start_line, start_side
+        lambda context: member_repository.pr_review_comment(
+            context, pr_url, body, file_path, line, side, start_line, start_side
         ),
         evidence="pr_review_comment",
     )
@@ -1914,7 +1928,9 @@ def pr_reply(
     body = _read_stdin("pull request reply body")
     return _github(
         person,
-        lambda service: service.pr_reply(pr_url, reply_target_id, body),
+        lambda context: member_repository.pr_reply(
+            context, pr_url, reply_target_id, body
+        ),
         evidence="pr_reply",
     )
 
@@ -1958,7 +1974,9 @@ def artifact_download(
 ) -> _CommandWork:
     return _github(
         person,
-        lambda service: service.artifact_download(target_url, name, dest),
+        lambda context: member_repository.artifact_download(
+            context, target_url, name, dest
+        ),
     )
 
 
@@ -2007,27 +2025,18 @@ def reaction_add(
     reaction_content: str,
     output_format: str,
 ) -> _CommandWork:
-    return _reaction_add(person, repo, target, comment_id, pr_number, reaction_content)
-
-
-async def _reaction_add(
-    person: str,
-    repo: str,
-    target: str,
-    comment_id: int,
-    pr_number: int | None,
-    reaction_content: str,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.reaction_add(
-            repo, target, comment_id, reaction_content, pr_number
-        )
-        TaskRunStore().append_evidence(current_task_run_id(), "reaction_add", result)
-        return result
-    finally:
-        await service.aclose()
+    return _github(
+        person,
+        lambda context: member_repository.reaction_add(
+            context,
+            repo,
+            cast(ReactionTarget, target),
+            comment_id,
+            reaction_content,
+            pr_number,
+        ),
+        evidence="reaction_add",
+    )
 
 
 @member.group()
@@ -2054,17 +2063,16 @@ def task_complete(person: str, status: str, output_format: str) -> _CommandWork:
 async def _task_complete(
     person: str, run_id: str, ticket_url: str, status: str, summary: str
 ) -> dict[str, Any]:
-    context, member_person = _resolve(person)
+    context, _ = _resolve(person)
     store = TaskRunStore()
     readiness: list[dict[str, Any]] = []
     if status == "done":
-        service = MemberGitHubCapabilityService(member_person, context.team)
         try:
-            readiness = await service.task_completion_readiness(
-                ticket_url, store.evidence(run_id)
+            readiness = await member_repository.task_completion_readiness(
+                context, ticket_url, store.evidence(run_id)
             )
         finally:
-            await service.aclose()
+            await context.aclose()
     payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
     if status == "done":
         payload["pr_readiness"] = readiness

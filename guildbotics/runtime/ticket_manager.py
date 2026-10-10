@@ -1,18 +1,21 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from logging import Logger
 
 from guildbotics.entities import Person, Task, Team
+from guildbotics.runtime.code_hosting_service import ClosedItem
 
 
 class TicketManager(ABC):
+    """The board a member takes tickets from.
+
+    The tickets themselves (issues, their comments) are the code host's
+    (:class:`~guildbotics.runtime.code_hosting_service.CodeHostingService`);
+    the board knows which of them are in which lane and whose they are.
+    """
+
     def __init__(self, logger: Logger, person: Person, team: Team):
         """
-        Initialize the ticket manager.
-        This class is designed to be subclassed for different ticket management systems.
-        It provides an interface for creating, closing, and retrieving tickets.
-        Subclasses should implement the abstract methods to define
-        how to manage tickets in the specific system.
-
         Args:
             logger (Logger): Logger instance for logging messages.
             person (Person): The person associated with the ticket manager.
@@ -24,13 +27,11 @@ class TicketManager(ABC):
 
     @abstractmethod
     async def get_task_candidates(self) -> list[Task]:
-        """Return actionable tasks in patrol order."""
-        pass
+        """Return the member's actionable tickets in patrol order."""
 
     @abstractmethod
     async def refresh_task(self, task: Task) -> Task | None:
         """Re-read one candidate immediately before it is dispatched."""
-        pass
 
     @abstractmethod
     async def move_ticket(self, task: Task, new_status: str) -> bool:
@@ -47,18 +48,6 @@ class TicketManager(ABC):
                 resolved). Callers should not assume the new status took effect
                 when this returns False.
         """
-        pass
-
-    @abstractmethod
-    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
-        """
-        Add a comment to an existing ticket.
-
-        Args:
-            task (Task): The task representing the ticket to which the comment will be added.
-            comment (str): The comment to add to the ticket.
-        """
-        pass
 
     @abstractmethod
     async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
@@ -72,4 +61,16 @@ class TicketManager(ABC):
         Returns:
             str: The URL for the task.
         """
-        pass
+
+    @abstractmethod
+    async def add_ticket(self, issue_url: str) -> str | None:
+        """Put the issue on the board; the board's id of it, or ``None`` when
+        no board is configured to put it on."""
+
+    @abstractmethod
+    async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
+        """The board's work closed between ``start`` and ``end``."""
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Release resources owned by this manager."""

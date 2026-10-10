@@ -14,18 +14,13 @@ from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.commands.errors import CommandError
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.entities.message import Message
-from guildbotics.entities.team import Person, Service
+from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_profile import (
     get_chat_slack_base_url,
     get_chat_subscriptions,
 )
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
-from guildbotics.integrations.github.github_utils import (
-    GitHubAppAuth,
-    get_agent_token,
-    get_github_account_type,
-    get_github_username,
-)
+from guildbotics.integrations.factory import configured_providers
+from guildbotics.integrations.provider import ProviderCheck
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
@@ -240,75 +235,10 @@ class ScenarioDiagnosticsService:
                 )
             )
 
-        username = get_github_username(member)
-        if not username:
-            checks.append(
-                self._check(
-                    "github",
-                    "human_github_user",
-                    "error",
-                    "GitHub username is not configured for this human member.",
-                    person_id=member.person_id,
-                )
+        for provider in configured_providers(context.team):
+            checks.extend(
+                _check(check) for check in await provider.diagnose(context, [member])
             )
-            return checks
-
-        project = context.team.project
-        if not (
-            project.is_available_service(Service.TICKET_MANAGER)
-            or project.is_available_service(Service.CODE_HOSTING_SERVICE)
-        ):
-            checks.append(
-                self._check(
-                    "github",
-                    "human_github_user",
-                    "ok",
-                    "GitHub username is configured; GitHub integration is not configured, so live resolution was skipped.",
-                    person_id=member.person_id,
-                    target=username,
-                )
-            )
-            return checks
-
-        c = context.clone_for(member)
-        try:
-            ticket_manager = cast(GitHubTicketManager, c.get_ticket_manager())
-            if await ticket_manager.is_assignable_user(username):
-                checks.append(
-                    self._check(
-                        "github",
-                        "human_github_user",
-                        "ok",
-                        "GitHub username resolved to an assignable user account.",
-                        person_id=member.person_id,
-                        target=username,
-                    )
-                )
-            else:
-                checks.append(
-                    self._check(
-                        "github",
-                        "human_github_user",
-                        "error",
-                        "GitHub username could not be resolved as an assignable user account.",
-                        person_id=member.person_id,
-                        target=username,
-                    )
-                )
-        except Exception as exc:
-            checks.append(
-                self._check(
-                    "github",
-                    "human_github_user",
-                    "error",
-                    self._safe_error("GitHub user account check failed", exc),
-                    person_id=member.person_id,
-                    target=username,
-                    context={"error_type": type(exc).__name__},
-                )
-            )
-        finally:
-            await c.aclose()
         return checks
 
     def _target_members(self, context: Context, person_id: str | None) -> list[Person]:
@@ -527,11 +457,8 @@ class ScenarioDiagnosticsService:
     async def _check_github(
         self, context: Context, members: list[Person]
     ) -> list[DiagnosticCheck]:
-        project = context.team.project
-        if not (
-            project.is_available_service(Service.TICKET_MANAGER)
-            or project.is_available_service(Service.CODE_HOSTING_SERVICE)
-        ):
+        providers = configured_providers(context.team)
+        if not providers:
             return [
                 self._check(
                     "github",
@@ -540,152 +467,11 @@ class ScenarioDiagnosticsService:
                     "GitHub integration is not configured; GitHub diagnostics were skipped.",
                 )
             ]
-
-        checks: list[DiagnosticCheck] = []
-        lane_checked = False
-        for member in members:
-            c = context.clone_for(member)
-            try:
-                if project.is_available_service(Service.TICKET_MANAGER):
-                    ticket_manager = cast(GitHubTicketManager, c.get_ticket_manager())
-                    statuses = await ticket_manager.get_statuses()
-                    checks.append(
-                        self._check(
-                            "github",
-                            "github_project_access",
-                            "ok",
-                            "GitHub project status options were fetched.",
-                            person_id=member.person_id,
-                            context={"status_count": len(statuses)},
-                        )
-                    )
-                    if not lane_checked:
-                        checks.extend(
-                            self._check_lane_mapping(ticket_manager, statuses)
-                        )
-                        lane_checked = True
-                    checks.append(
-                        await self._check_agent_assignment(ticket_manager, member)
-                    )
-            except Exception as exc:
-                checks.append(
-                    self._check(
-                        "github",
-                        "github_access",
-                        "error",
-                        self._safe_error("GitHub read-only check failed", exc),
-                        person_id=member.person_id,
-                        context={"error_type": type(exc).__name__},
-                    )
-                )
-            finally:
-                await c.aclose()
-        return checks
-
-    def _check_lane_mapping(
-        self, ticket_manager: GitHubTicketManager, statuses: list[str]
-    ) -> list[DiagnosticCheck]:
-        """Validate that the configured ready/done lanes exist on the board.
-
-        The working lane is optional: a missing working lane is reported as a
-        warning (tickets simply are not moved on start), never an error.
-        """
-        status_set = set(statuses)
-        lane_map = ticket_manager.lane_map
-        ready = lane_map.get(GitHubTicketManager.LANE_READY)
-        done = lane_map.get(GitHubTicketManager.LANE_DONE)
-        working = lane_map.get(GitHubTicketManager.LANE_WORKING)
-
-        checks: list[DiagnosticCheck] = []
-        missing = [name for name in (ready, done) if name and name not in status_set]
-        if missing:
-            checks.append(
-                self._check(
-                    "github",
-                    "github_lane_missing",
-                    "error",
-                    "Required workflow lanes are missing from the GitHub Project "
-                    f"status options: {', '.join(missing)}.",
-                    context={"missing": missing, "available": sorted(status_set)},
-                )
-            )
-        else:
-            checks.append(
-                self._check(
-                    "github",
-                    "github_lane_mapping",
-                    "ok",
-                    "Ready and done lanes exist in the GitHub Project.",
-                    context={"ready": ready, "done": done},
-                )
-            )
-        if working and working not in status_set:
-            checks.append(
-                self._check(
-                    "github",
-                    "github_working_lane_missing",
-                    "warning",
-                    f"Configured working lane '{working}' is not a GitHub Project "
-                    "status; tickets will not be moved to a working lane on start.",
-                    context={"working": working},
-                )
-            )
-        return checks
-
-    async def _check_agent_assignment(
-        self, ticket_manager: GitHubTicketManager, member: Person
-    ) -> DiagnosticCheck:
-        """Verify each member can receive ticket assignments.
-
-        A member whose GitHub username resolves to a real user account needs
-        nothing else. Otherwise the remediation depends on the member type: human
-        members are assigned through GitHub assignees, so a human whose username
-        does not resolve has a misconfigured username (the ``Agent`` field does
-        not apply to them). Non-human identities (GitHub Apps, machine users) are
-        assigned through the project's ``Agent`` field and need a matching option.
-        """
-        username = get_github_username(member)
-        if username and await ticket_manager.is_assignable_user(username):
-            return self._check(
-                "github",
-                "github_agent_assignment",
-                "ok",
-                "Member resolves to a GitHub user account; the Agent field is not required.",
-                person_id=member.person_id,
-                context={"github_username": username},
-            )
-
-        if get_github_account_type(member) in ("", GitHubAppAuth.HUMAN):
-            return self._check(
-                "github",
-                "github_member_not_assignable",
-                "error",
-                "Member's GitHub username could not be resolved to a user "
-                "account; check the configured GitHub username.",
-                person_id=member.person_id,
-                context={"github_username": username},
-            )
-
-        token = get_agent_token(member)
-        options = await ticket_manager.get_agent_field_options()
-        if token in options:
-            return self._check(
-                "github",
-                "github_agent_assignment",
-                "ok",
-                "Member is assigned through the project's Agent field option.",
-                person_id=member.person_id,
-                context={"agent_option": token},
-            )
-        return self._check(
-            "github",
-            "github_agent_field_required",
-            "error",
-            "Member does not resolve to a GitHub user and has no Agent field "
-            "option; set the Agent field for this member.",
-            person_id=member.person_id,
-            context={"agent_option": token},
-        )
+        return [
+            _check(check)
+            for provider in providers
+            for check in await provider.diagnose(context, members)
+        ]
 
     async def _check_slack(
         self, context: Context, members: list[Person]
@@ -910,3 +696,7 @@ class ScenarioDiagnosticsService:
         if len(text) <= limit:
             return text
         return f"{text[:limit]}..."
+
+
+def _check(check: ProviderCheck) -> DiagnosticCheck:
+    return DiagnosticCheck.model_validate(check.model_dump())

@@ -1,6 +1,7 @@
 import datetime as dt
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime
 from typing import Any, ClassVar
 
 import httpx
@@ -339,3 +340,14 @@ def get_author_type(person: Person, username: str) -> str:
     ):
         return Message.ASSISTANT
     return Message.USER
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    """Parse a GitHub ISO 8601 timestamp, or None when it is absent or invalid."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else None

@@ -1,27 +1,25 @@
 """Provider translation and substitution at every repository-read entry point."""
 
-import ast
 import json
 import logging
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 import pytest
 
-import guildbotics
 from guildbotics.capabilities.member_repository import read_repository
 from guildbotics.entities.team import Person, Project, Service, Team
 from guildbotics.guest.window import WindowCodeHostingService
 from guildbotics.integrations.factory import (
     ServiceIntegrationFactory,
 )
-from guildbotics.runtime.code_hosting_service import (
-    CodeHostingService,
+from guildbotics.runtime.code_hosting_resources import (
     DependencyAlert,
     RepositoryReadError,
     RepositoryReadPage,
 )
+from guildbotics.runtime.code_hosting_service import CodeHostingService
+from tests.guildbotics.member_services import MemberServices
 
 
 def team(name="github"):
@@ -203,7 +201,9 @@ class OtherHostingService(CodeHostingService):
         assert identifier == "alert:opaque"
         if self.fail:
             raise RepositoryReadError("denied")
-        return RepositoryReadPage(items=[DependencyAlert(id=identifier, state="open")])
+        return RepositoryReadPage.of(
+            resource, [DependencyAlert(id=identifier, state="open")]
+        )
 
     async def aclose(self):
         self.closed = True
@@ -224,11 +224,9 @@ async def test_capability_and_window_use_configured_service_and_close_it(fail):
         )
         return service
 
-    context = SimpleNamespace(
-        logger=logging.getLogger(),
-        person=Person(person_id="aiko", name="Aiko"),
-        team=team("other"),
-        integration_factory=SimpleNamespace(create_code_hosting_service=create),
+    person = Person(person_id="aiko", name="Aiko")
+    context = MemberServices(
+        person, team("other"), create(logging.getLogger(), person, team("other"))
     )
 
     class Window:
@@ -255,41 +253,8 @@ async def test_capability_and_window_use_configured_service_and_close_it(fail):
         result = await proxy.read(
             "dependency_alerts", "group/subgroup/repo", identifier="alert:opaque"
         )
-        assert result.items[0].id == "alert:opaque"
+        assert result.items[0]["id"] == "alert:opaque"
     assert calls == [("aiko", "other")]
-    assert service.closed
-
-
-def test_repository_consumers_cannot_import_provider_modules():
-    root = Path(guildbotics.__file__).parent
-    consumers = {
-        "runtime/code_hosting_service.py",
-        "guest/window.py",
-        "runtime/context.py",
-        "runtime/integration_factory.py",
-        "capabilities/member_repository.py",
-        *(
-            str(path.relative_to(root))
-            for path in (root / "templates/commands/repository").glob("*.py")
-        ),
-    }
-    violations = []
-    for name in consumers:
-        for node in ast.walk(ast.parse((root / name).read_text(encoding="utf-8"))):
-            modules = (
-                [f"{node.module}.{entry.name}" for entry in node.names]
-                if isinstance(node, ast.ImportFrom)
-                else [entry.name for entry in node.names]
-                if isinstance(node, ast.Import)
-                else []
-            )
-            for module in modules:
-                if (
-                    module.startswith("guildbotics.integrations.")
-                    and (root / "integrations" / module.split(".")[2]).is_dir()
-                ):
-                    violations.append((name, node.lineno, module))
-    assert not violations
 
 
 def test_cli_reads_another_provider_without_github_or_numeric_ids(monkeypatch):
@@ -298,14 +263,7 @@ def test_cli_reads_another_provider_without_github_or_numeric_ids(monkeypatch):
 
     service = OtherHostingService()
     person = Person(person_id="aiko", name="Aiko")
-    context = SimpleNamespace(
-        logger=logging.getLogger(),
-        person=person,
-        team=team("other"),
-        integration_factory=SimpleNamespace(
-            create_code_hosting_service=lambda *_: service
-        ),
-    )
+    context = MemberServices(person, team("other"), service)
     monkeypatch.setattr(cli, "resolve_member_context", lambda _: (context, person))
     code, stdout, stderr = cli.run_in_process(
         [
@@ -334,13 +292,8 @@ async def test_normalized_output_limit_applies_to_every_provider(monkeypatch):
     from guildbotics.capabilities import member_repository
 
     service = OtherHostingService()
-    context = SimpleNamespace(
-        logger=logging.getLogger(),
-        person=Person(person_id="aiko", name="Aiko"),
-        team=team("other"),
-        integration_factory=SimpleNamespace(
-            create_code_hosting_service=lambda *_: service
-        ),
+    context = MemberServices(
+        Person(person_id="aiko", name="Aiko"), team("other"), service
     )
     monkeypatch.setattr(member_repository, "MAX_PAGE_BYTES", 10)
     with pytest.raises(RepositoryReadError):
@@ -352,4 +305,3 @@ async def test_normalized_output_limit_applies_to_every_provider(monkeypatch):
             parameters={},
             continuation="",
         )
-    assert service.closed

@@ -1,9 +1,4 @@
 en:
-  resource: "Unsupported repository read resource. See member help for the supported names."
-  repository: "Specify a repository as owner/name, without a URL or path."
-  identifier: "Use a positive issue, pull request, or alert number as identifier. Only dependency_alerts supports omitting it."
-  parameters: "Invalid resource conditions. See member help for the supported parameters."
-  continuation: "Invalid pagination response or continuation. Reuse the same resource, repository, identifier, and conditions."
   too_large: "The GitHub response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
   response: "GitHub returned an invalid response; no page was accepted."
   rate_limit: "GitHub rate-limited the request. Wait before retrying; no page was retrieved."

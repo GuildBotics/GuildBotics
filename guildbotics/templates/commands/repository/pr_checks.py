@@ -4,7 +4,7 @@ from typing import Any
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.repository import RepositoryReader, display, flag
-from guildbotics.runtime.code_hosting_service import (
+from guildbotics.runtime.code_hosting_resources import (
     MAX_LOG_TAIL_BYTES,
     ReadinessQuery,
 )

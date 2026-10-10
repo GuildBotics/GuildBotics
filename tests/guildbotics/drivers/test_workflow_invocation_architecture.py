@@ -81,14 +81,12 @@ def test_workflow_invocation_dataclass():
         source="routine",
         trigger_type="ticket",
         payload={"foo": "bar"},
-        idempotency_key="key",
     )
     assert inv.command == "test_command"
     assert inv.person_id == "alice"
     assert inv.source == "routine"
     assert inv.trigger_type == "ticket"
     assert inv.payload == {"foo": "bar"}
-    assert inv.idempotency_key == "key"
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ from guildbotics.environment.toolchain import (
     EnvironmentResources,
     ToolchainDeclaration,
 )
+from guildbotics.integrations.provider import ProviderCheck
 from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     CliAgentUsageSnapshot,
 )
@@ -1070,14 +1071,8 @@ class VerifyResponse(BaseModel):
     errors: list[VerifyCheck]
 
 
-class DiagnosticCheck(BaseModel):
+class DiagnosticCheck(ProviderCheck):
     section: Literal["config", "members", "llm", "cli_agent", "github", "slack", "git"]
-    code: str
-    status: Literal["ok", "warning", "error"]
-    message: str
-    target: str = ""
-    person_id: str = ""
-    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScenarioDiagnosticsResponse(BaseModel):

@@ -41,7 +41,6 @@ class WorkflowInvocation:
     source: WorkflowSource
     trigger_type: WorkflowTriggerType
     payload: dict[str, Any] = field(default_factory=dict)
-    idempotency_key: str = ""
     run_id: str = ""
     work: Work | None = None
 

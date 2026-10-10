@@ -24,7 +24,7 @@ from guildbotics.integrations.github.pull_request_patrol import (
     pull_request_work,
     review_rounds,
 )
-from guildbotics.integrations.workflow_status_comment import (
+from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
 )
 

@@ -41,13 +41,18 @@ class DummyTicketManager(TicketManager):
         """No-op move ticket."""
         return False
 
-    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
-        """No-op add comment."""
-        return None
-
     async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
         """No-op get URL."""
         return ""
+
+    async def add_ticket(self, issue_url: str) -> str | None:
+        return None
+
+    async def closed_since(self, start, end) -> list:
+        return []
+
+    async def aclose(self) -> None:
+        return None
 
 
 class DummyIntegrationFactory(IntegrationFactory):
@@ -240,3 +245,30 @@ def test_every_context_reads_the_team_anew():
     assert CONFIGURED_TEAM.loads == 2
     assert clone.team is edited
     assert clone.language_code == "ja"
+
+
+@pytest.mark.asyncio
+async def test_closing_the_context_closes_the_board_it_made():
+    closed: list[str] = []
+
+    class _Board(DummyTicketManager):
+        async def aclose(self) -> None:
+            closed.append("board")
+
+    class _Factory(DummyIntegrationFactory):
+        def create_ticket_manager(self, logger, person, team):
+            return _Board(logger, person, team)
+
+    context = make_context(
+        _make_team(),
+        _Factory(),
+        DummyBrainFactory(),
+        "",
+        Person(person_id="p1", name="Tester"),
+    )
+    first = context.get_ticket_manager()
+
+    await context.aclose()
+
+    assert closed == ["board"]
+    assert context.get_ticket_manager() is not first

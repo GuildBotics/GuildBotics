@@ -1,17 +1,14 @@
-"""Which GitHub repositories a member writes to.
+"""Which GitHub requests a member's client may send.
 
-A fine-grained token or a GitHub App limited to selected repositories does not
-draw this line: GitHub accepts issues, comments, reviews, and reactions on any
-public repository from them. So GuildBotics draws it itself. A member writes
-only to repositories of the owner the project is configured with, and every
-request of a member's GitHub client passes the judgment here before it is
-sent (``get_async_client``), as does every push of a member's git.
+Every request of a member's GitHub client passes the judgment here before it
+is sent (``get_async_client``): a write goes only to repositories of the
+configured owner (:mod:`guildbotics.integrations.repository_scope`).
 
 Reads are not limited by owner, but nothing is sent to a host other than the
 client's API. A GraphQL write names a node rather than a repository, so the
-gate reads where that node lives before it lets the write through. What is not recognized as a read or as a write to the
-configured owner is refused, so a new kind of write is refused until it is
-classified here.
+gate reads where that node lives before it lets the write through. What is not
+recognized as a read or as a write to the configured owner is refused, so a
+new kind of write is refused until it is classified here.
 """
 
 from __future__ import annotations
@@ -21,11 +18,7 @@ import re
 
 import httpx
 
-from guildbotics.entities.team import Project, Service
-from guildbotics.observability.diagnostics_events import record_correlated_event
-
-#: An owner or repository name as a URL of the code host carries it.
-NAME = re.compile(r"[A-Za-z0-9_.-]+")
+from guildbotics.integrations.repository_scope import in_scope, refuse
 
 ADD_PROJECT_ITEM = """
 mutation($proj: ID!, $content: ID!) {
@@ -141,27 +134,6 @@ _TOKEN_RENEWAL = re.compile(r"/app/installations/[0-9]+/access_tokens")
 _REPOSITORY_PATH_MIN_SEGMENTS = 4
 
 
-class RepositoryScopeError(RuntimeError):
-    """A write outside the repositories of the configured owner."""
-
-
-def configured_owner(project: Project) -> str:
-    """The owner whose repositories the project's members write to."""
-    code = project.get_service_config(Service.CODE_HOSTING_SERVICE)
-    ticket = project.get_service_config(Service.TICKET_MANAGER)
-    return str(code.get("owner") or ticket.get("owner") or "")
-
-
-def check_repository(scope: str, owner: str, repository: str) -> None:
-    """Refuse a write to ``owner/repository`` unless ``scope`` owns it.
-
-    Raises:
-        RepositoryScopeError: If the repository is not the configured owner's.
-    """
-    if not _in_scope(scope, owner, repository):
-        _refuse(scope, "/".join(name for name in (owner, repository) if name))
-
-
 async def check_request(
     scope: str, base_url: httpx.URL, request: httpx.Request, client: httpx.AsyncClient
 ) -> None:
@@ -180,7 +152,7 @@ async def check_request(
             outside the configured owner.
     """
     if (request.url.scheme, request.url.netloc) != (base_url.scheme, base_url.netloc):
-        _refuse(scope, f"{request.method} {request.url.scheme}://{request.url.host}")
+        refuse(scope, f"{request.method} {request.url.scheme}://{request.url.host}")
     if request.method in _READ_METHODS:
         return
     path = request.url.raw_path.decode("ascii").split("?", 1)[0]
@@ -196,21 +168,10 @@ async def check_request(
         permitted = (
             len(segments) >= _REPOSITORY_PATH_MIN_SEGMENTS
             and segments[:2] == ["", "repos"]
-            and _in_scope(scope, segments[2], segments[3])
+            and in_scope(scope, segments[2], segments[3])
         )
     if not permitted:
-        _refuse(scope, f"{request.method} {path}")
-
-
-def _in_scope(scope: str, owner: str, repository: str) -> bool:
-    return (
-        bool(scope)
-        and all(
-            NAME.fullmatch(name) and name not in {".", ".."}
-            for name in (owner, repository)
-        )
-        and owner.casefold() == scope.casefold()
-    )
+        refuse(scope, f"{request.method} {path}")
 
 
 async def _graphql_permitted(
@@ -241,20 +202,5 @@ async def _node_in_scope(scope: str, node: str, client: httpx.AsyncClient) -> bo
     return (
         isinstance(owner, str)
         and isinstance(name, str)
-        and _in_scope(scope, owner, name)
-    )
-
-
-def _refuse(scope: str, target: str) -> None:
-    record_correlated_event(
-        event_type="github.scope_refused",
-        default_source="github",
-        attributes={"github.scope_owner": scope},
-        payload={"target": target, "scope_owner": scope},
-    )
-    raise RepositoryScopeError(
-        f"GitHub writes are limited to repositories of '{scope}', "
-        f"the owner the project is configured with: refused {target}."
-        if scope
-        else f"No GitHub owner is configured for the project: refused {target}."
+        and in_scope(scope, owner, name)
     )

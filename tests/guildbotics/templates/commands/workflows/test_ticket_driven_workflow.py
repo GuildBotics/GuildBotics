@@ -5,18 +5,27 @@ status comments of a failed or rate-limited run belong to the host's
 ``TicketSelector`` (``tests/guildbotics/drivers/test_ticket_selector.py``).
 """
 
+import asyncio
+import importlib
 from pathlib import Path
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.drivers.ticket_selector import TicketSelector
+from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
+from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language
+from tests.guildbotics.local_code_host import issue, item, local_member
 
 ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
 PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"
@@ -127,3 +136,91 @@ async def test_workflow_passes_pull_request_work_type(trigger_reason, work_type)
     # branch instead of a fresh ticket/<n> branch.
     assert kwargs["prepare_command"].endswith(f"--pr-url {PR_URL}")
     assert "--issue-url" not in kwargs["prepare_command"]
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_board(
+    monkeypatch, tmp_path
+):
+    """One round of the ticket workflow on the local code host and board: the
+    host selects the member's ready ticket and moves it to the working lane,
+    the turn answers on it with the member's commands, and its completion is
+    accepted against the ticket."""
+    member_cli = importlib.import_module("guildbotics.cli.member")
+    member = local_member()
+    url = issue(1, title="Fix login", lane=Task.READY, assignees=["aiko"])
+    monkeypatch.setattr(
+        member_cli, "resolve_member_context", lambda _: (member, member.person)
+    )
+    monkeypatch.setattr(member_cli, "prepare_commit_and_push_once", lambda: None)
+    lanes: list[str] = []
+
+    class _Selection:
+        """The member's context as the host's selection clones it."""
+
+        person = member.person
+        team = member.team
+
+        def clone_for(self, person):
+            return self
+
+        def get_ticket_manager(self):
+            return member.board
+
+        def get_code_hosting_service(self):
+            return member.code
+
+        async def aclose(self):
+            pass
+
+    class _Turn(_Context):
+        """The workflow's context; its one turn is the member's commands."""
+
+        async def invoke(self, command_name: str, **kwargs):
+            lanes.append(item(url)["lane"])
+            invocation = MemberInvocation(
+                task_run_id=run.run_id,
+                work=run.work,
+                lease=PersonExecutionLease("aiko", tmp_path),
+            )
+            for arguments, stdin in [
+                (
+                    ["github", "issue", "comment", "--url", kwargs["ticket_url"]],
+                    "Done.",
+                ),
+                (["task", "complete", "--status", "done"], "Fixed the login."),
+            ]:
+                # As the member broker runs it: on a worker thread of its own.
+                code, stdout, stderr = await asyncio.to_thread(
+                    member_cli.run_in_process,
+                    [*arguments, "--person", "aiko", "--content-stdin"],
+                    invocation,
+                    cwd=tmp_path,
+                    stdin=stdin,
+                )
+                assert (code, stderr) == (0, ""), stdout
+            return AgentResponse(status=AgentResponse.DONE, message="done")
+
+    async def run_workflow(invocation):
+        nonlocal run
+        run = invocation
+        context = _Turn()
+        context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
+        return await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
+
+    run = None
+    with trace_scope("routine", trace_id="run-1", person_id="aiko"):
+        RunStore().start_record(
+            "run-1", work_kind="ticket", execution_mode="autonomous", member_id="aiko"
+        )
+        response = await TicketSelector(_Selection()).run_next(  # type: ignore[arg-type]
+            member.person, run_workflow
+        )
+
+    assert response.status == AgentResponse.DONE
+    assert lanes == [Task.IN_PROGRESS]
+    assert run.payload["ticket_url"] == url
+    assert [c["body"] for c in item(url)["comments"]] == ["Done."]
+    assert RunStore().status("run-1").to_dict()["status"] == "done"
+    # Answered by the member, the ticket waits for someone else.
+    assert await member.board.get_task_candidates() == []
