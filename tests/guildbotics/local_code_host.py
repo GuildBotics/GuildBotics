@@ -3,6 +3,7 @@ puts there for them (``guildbotics.integrations.local``)."""
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -81,8 +82,16 @@ def item(url: str) -> dict[str, Any]:
     return store.load(ref.owner, ref.repo, ref.number)
 
 
+def write(owner: str, repo: str, item: dict[str, Any]) -> None:
+    """Put ``item`` among the files of ``owner/repo``, as someone editing them
+    would: no member writes it, so no member's scope applies."""
+    path = store.item_path(owner, repo, item["number"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(item), encoding="utf-8")
+
+
 def _save(number: int, kind: str, fields: dict[str, Any]) -> str:
-    store.save(
+    write(
         OWNER,
         REPO,
         {

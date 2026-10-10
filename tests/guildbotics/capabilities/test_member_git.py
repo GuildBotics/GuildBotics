@@ -40,6 +40,7 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from tests.git_seed import WorkerGitSeed
+from tests.guildbotics.local_code_host import write
 
 GUEST_MARK = "GUILDBOTICS_TEST_GUEST"
 _ISSUE = "local://owner/repo/issues/1"
@@ -174,7 +175,7 @@ class _Member:
 
     def pull_request(self, number: int, head: str, head_repo: str = "") -> str:
         """Open ``#<number>`` of owner/repo from ``head`` (of ``head_repo``)."""
-        store.save(
+        write(
             "owner",
             "repo",
             {
@@ -1084,7 +1085,10 @@ async def test_the_host_takes_only_the_branch_of_what_a_clone_sends(
 @pytest.mark.asyncio
 async def test_a_prepare_that_failed_leaves_where_the_clone_pushes(member, tmp_path):
     await member.prepare()
-    member.remotes["contributor"].rename(tmp_path / "gone.git")
+    # The fork still names its default branch, but its commits are gone.
+    objects = member.remotes["contributor"] / "objects"
+    objects.rename(tmp_path / "gone")
+    (objects / "pack").mkdir(parents=True)
     pr_url = member.pull_request(7, "feature", "contributor/repo")
     with pytest.raises(MemberCapabilityError, match="git fetch failed"):
         await member.prepare(pr_url=pr_url)

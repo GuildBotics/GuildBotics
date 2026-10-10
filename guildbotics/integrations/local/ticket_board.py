@@ -53,7 +53,7 @@ class LocalTicketManager(TicketManager):
         ref = store.locate(task.url, "issue")
         item = store.load(ref.owner, ref.repo, ref.number)
         item["lane"] = new_status
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return True
 
     async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
@@ -64,7 +64,7 @@ class LocalTicketManager(TicketManager):
         ref = store.locate(issue_url, "issue")
         item = store.load(ref.owner, ref.repo, ref.number)
         item["lane"] = item.get("lane") or Task.NEW
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return ref.url
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:

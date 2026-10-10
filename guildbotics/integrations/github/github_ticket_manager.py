@@ -1,6 +1,7 @@
 import re
 from collections.abc import Sequence
 from datetime import datetime
+from functools import cached_property
 from logging import Logger
 from typing import Any, ClassVar, cast
 from urllib.parse import urlparse
@@ -72,8 +73,6 @@ class GitHubTicketManager(TicketManager):
         self.project_id = str(config["project_id"])
         self.url = str(config["url"])
         self.client: AsyncClient | None = None
-        self.username = get_github_username(person, strict=True)
-        self._login = normalize_login(self.username) if self.username else ""
         self._mention_token = get_agent_token(person)
 
         self.lane_map = self._load_lane_map(cast(dict | None, config.get("lane_map")))
@@ -620,6 +619,12 @@ class GitHubTicketManager(TicketManager):
                 break
             cursor = payload["pageInfo"]["endCursor"]
         return all_items
+
+    @cached_property
+    def _login(self) -> str:
+        """The member's login, read only by what decides the member's work:
+        reading the board's closed work needs no one's identity."""
+        return normalize_login(get_github_username(self.person, strict=True))
 
     def _is_me(self, login: str) -> bool:
         """Whether a login from either GitHub API names this member."""

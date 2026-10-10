@@ -3,7 +3,8 @@
 The same steps run against each provider: a ticket assigned to the member in
 the ready lane is a candidate, moves to the working lane, and is re-read as
 work still to do there; an issue is put on the board; the board's closed work
-is listed for the activity history.
+is listed for the activity history. Moving or adding another owner's issue is
+refused before it is written, as every write outside the configured owner is.
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ import pytest_asyncio
 
 from guildbotics.entities.task import Task
 from guildbotics.integrations.factory import PROVIDERS
-from tests.guildbotics.integrations.contracts.providers import REPO, Harness, harness
+from tests.guildbotics.integrations.contracts.providers import (
+    OWNER,
+    REPO,
+    Harness,
+    harness,
+)
 
 
 @pytest_asyncio.fixture(
@@ -94,3 +100,19 @@ async def test_the_boards_closed_work_is_listed(board: Harness):
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_the_board_does_not_write_another_owners_issue(board: Harness):
+    """The board keeps another owner's issue in that owner's repository (local)
+    or records itself in its timeline (GitHub), so moving or adding it writes
+    outside the configured owner."""
+    before = len(board.writes)
+    refused = f"Writes are limited to repositories of '{OWNER}'"
+
+    with pytest.raises(RuntimeError, match=refused):
+        await board.board.move_ticket(board.theirs, Task.IN_PROGRESS)
+    with pytest.raises(RuntimeError, match=refused):
+        await board.board.add_ticket(board.theirs.url or "")
+
+    assert board.writes[before:] == []

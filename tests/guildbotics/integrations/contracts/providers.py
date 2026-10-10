@@ -5,6 +5,9 @@ project owned by ``acme``, and what a contract cannot do through the ports --
 a branch on the remote, an assignment on the board, the URL of an item of
 another owner. GitHub answers from :class:`GitHubDouble`, a GitHub that keeps
 what it is sent; ``local`` keeps its files under the test's workspace.
+
+Each provider also holds issue #1 of ``other-owner/demo``, with comment 1:
+someone else's, readable, and not the member's to write to.
 """
 
 from __future__ import annotations
@@ -25,12 +28,15 @@ from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.github import async_client, github_utils
+from guildbotics.integrations.github.repository_scope import NODE_REPOSITORY
 from guildbotics.integrations.local import store
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_manager import TicketManager
+from tests.guildbotics.local_code_host import write
 
 OWNER = "acme"
 REPO = f"{OWNER}/demo"
+THEIRS = "other-owner/demo"
 MEMBER = "aiko"
 LOGIN = "aiko-gh"
 API = "https://api.github.com"
@@ -43,10 +49,14 @@ class Harness:
     board: TicketManager
     #: Make ``branch`` of acme/demo's remote one commit ahead of ``main``.
     branch: Callable[[str], None]
+    #: Delete ``branch`` of acme/demo's remote.
+    delete_branch: Callable[[str], None]
     #: Put the issue in the board's ready lane, assigned to the member.
     assign: Callable[[str], None]
     #: The URL of ``kind`` ``number`` of ``owner/repo``.
     url: Callable[[str, str, str, int], str]
+    #: Issue #1 of ``THEIRS``, as the board's ticket.
+    theirs: Task
     #: The writes that reached the provider, as ``"<what> <where>"``.
     writes: list[str] = field(default_factory=list)
 
@@ -116,18 +126,41 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         _git(seed, "commit", "-q", "-m", name)
         _git(seed, "push", "-q", str(bare), name)
 
+    def delete_branch(name: str) -> None:
+        _git(seed, "push", "-q", str(bare), "--delete", name)
+        _git(seed, "branch", "-q", "-D", name)
+
     def assign(url: str) -> None:
         ref = store.locate(url, "issue")
         item = store.load(ref.owner, ref.repo, ref.number)
         item.update(lane=Task.READY, assignees=[MEMBER])
-        store.save(ref.owner, ref.repo, item)
+        write(ref.owner, ref.repo, item)
+
+    owner, repo = THEIRS.split("/")
+    theirs: dict[str, Any] = {
+        "kind": "issue",
+        "number": 1,
+        "title": "Theirs",
+        "body": "",
+        "state": "open",
+        "author": "them",
+        "labels": [],
+        "assignees": [],
+        "lane": Task.READY,
+        "created_at": store.now(),
+        "closed_at": None,
+        "comments": [
+            {"id": 1, "author": "them", "body": "Hi", "created_at": store.now()}
+        ],
+    }
+    write(owner, repo, theirs)
 
     writes: list[str] = []
     save = store.save
 
-    def saved(owner: str, repo: str, item: dict[str, Any]) -> None:
+    def saved(project: Project, owner: str, repo: str, item: dict[str, Any]) -> None:
+        save(project, owner, repo, item)
         writes.append(f"save {owner}/{repo}")
-        save(owner, repo, item)
 
     monkeypatch.setattr(store, "save", saved)
     code, board = _services("local")
@@ -136,8 +169,10 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         code,
         board,
         branch,
+        delete_branch,
         assign,
         lambda owner, repo, kind, number: store.url(owner, repo, kind, number),  # type: ignore[arg-type]
+        store.task(owner, repo, theirs, Task.READY),
         writes,
     )
 
@@ -163,6 +198,34 @@ def _git(cwd: Path, *args: str) -> None:
 
 def _github(tmp_path: Path, monkeypatch) -> Harness:
     double = GitHubDouble()
+    serve(double, monkeypatch)
+    code, board = _services("github")
+    theirs = f"https://github.com/{THEIRS}/issues/1"
+    return Harness(
+        "github",
+        code,
+        board,
+        double.branch,
+        double.branches.pop,
+        double.assign,
+        lambda owner, repo, kind, number: (
+            f"https://github.com/{owner}/{repo}/"
+            f"{'pull' if kind == 'pull_request' else 'issues'}/{number}"
+        ),
+        Task(
+            id=_THEIR_NODE,
+            url=theirs,
+            title="Theirs",
+            description="",
+            status=Task.READY,
+        ),
+        double.writes,
+    )
+
+
+def serve(double: GitHubDouble, monkeypatch) -> None:
+    """Have every member's GitHub client, gate included, talk to ``double``,
+    with a token for ``MEMBER``."""
 
     async def create(person, base_url, owner):
         client = async_client.get_async_client(
@@ -177,19 +240,10 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
             f"guildbotics.integrations.github.{module}.create_github_client", create
         )
     monkeypatch.setenv(f"{MEMBER.upper()}_GITHUB_ACCESS_TOKEN", "token")
-    code, board = _services("github")
-    return Harness(
-        "github",
-        code,
-        board,
-        double.branch,
-        double.assign,
-        lambda owner, repo, kind, number: (
-            f"https://github.com/{owner}/{repo}/"
-            f"{'pull' if kind == 'pull_request' else 'issues'}/{number}"
-        ),
-        double.writes,
-    )
+
+
+#: The node of issue #1 of ``THEIRS``.
+_THEIR_NODE = "THEIRS"
 
 
 class GitHubDouble:
@@ -215,10 +269,12 @@ class GitHubDouble:
         self.board[number] = "Todo"
 
     def respond(self, request: httpx.Request) -> httpx.Response:
-        if request.method != "GET":
-            self.writes.append(f"{request.method} {request.url.path}")
         path = request.url.path
         body = json.loads(request.content) if request.content else {}
+        if request.method != "GET" and (
+            path != "/graphql" or "mutation" in body["query"]
+        ):
+            self.writes.append(f"{request.method} {path}")
         if path == "/graphql":
             return httpx.Response(200, json={"data": self._graphql(body)})
         if path == "/rate_limit":
@@ -231,7 +287,12 @@ class GitHubDouble:
             # Another owner's repository: readable, and empty.
             if request.method != "GET":
                 return httpx.Response(404, json={"message": "Not Found"})
-            issue = {"number": 1, "title": "Theirs", "user": {"login": "them"}}
+            issue = {
+                "number": 1,
+                "node_id": _THEIR_NODE,
+                "title": "Theirs",
+                "user": {"login": "them"},
+            }
             answers = {"": {"default_branch": "main"}, "/pulls": [], "/issues/1": issue}
             if route not in answers:
                 return httpx.Response(404, json={"message": "Not Found"})
@@ -292,7 +353,8 @@ class GitHubDouble:
         if match := re.fullmatch(r"/pulls/(\d+)/comments/(\d+)/replies", route):
             return self._entry(body)
         if match := re.fullmatch(r"/branches/(.+)", route):
-            return {"commit": {"sha": self.branches[match.group(1)]}}
+            sha = self.branches.get(match.group(1))
+            return None if sha is None else {"commit": {"sha": sha}}
         if re.fullmatch(r"/compare/.+", route):
             return {"behind_by": 0}
         if re.fullmatch(r"/commits/[^/]+/check-runs", route):
@@ -349,6 +411,11 @@ class GitHubDouble:
 
     def _graphql(self, body: dict) -> dict[str, Any]:
         query, variables = body["query"], body.get("variables") or {}
+        if query == NODE_REPOSITORY:
+            owner, name = (THEIRS if variables["id"] == _THEIR_NODE else REPO).split(
+                "/"
+            )
+            return {"node": {"repository": {"name": name, "owner": {"login": owner}}}}
         if "projectV2(number" in query:
             return {"organization": {"projectV2": {"id": "PROJECT"}}}
         if "addProjectV2ItemById" in query:

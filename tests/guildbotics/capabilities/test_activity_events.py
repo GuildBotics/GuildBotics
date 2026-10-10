@@ -9,8 +9,15 @@ from guildbotics.capabilities.activity_events import (
     refresh_activity_events,
 )
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.local import store
 from guildbotics.observability.activity_event_store import ActivityEventStore
+from tests.guildbotics.integrations.contracts.providers import (
+    MEMBER,
+    OWNER,
+    REPO,
+    GitHubDouble,
+    serve,
+)
+from tests.guildbotics.local_code_host import write
 
 START = datetime(2026, 7, 10, tzinfo=UTC)
 END = datetime(2026, 7, 11, tzinfo=UTC)
@@ -24,7 +31,7 @@ def _team(board: str = "local") -> Team:
 
 
 def _closed(number: int, kind: str, closed_at: str, merged: bool = False) -> None:
-    store.save(
+    write(
         "acme",
         "demo",
         {
@@ -62,6 +69,38 @@ async def test_closed_board_work_is_recorded_once_with_its_activity():
     assert merged["payload"]["pull_request"]["merged"] is True
     assert merged["attributes"]["github.url"] == "local://acme/demo/pull/7"
     assert merged["person_id"] == ""
+
+
+@pytest.mark.asyncio
+async def test_the_github_board_is_read_with_a_credential_alone(monkeypatch):
+    """Listing closed work decides nobody's work, so a member's credential is
+    enough to read it: the member needs no ``github_username``."""
+    double = GitHubDouble()
+    serve(double, monkeypatch)
+    double._new("issue", {"title": "Done"}).update(
+        state="closed", closed_at="2026-07-10T01:00:00Z"
+    )
+    double.board[1] = "Done"
+    team = Team(
+        project=Project(
+            services={
+                "ticket_manager": {
+                    "name": "github",
+                    "owner": OWNER,
+                    "project_id": "1",
+                    "url": f"https://github.com/orgs/{OWNER}/projects/1",
+                }
+            }
+        ),
+        members=[
+            Person(person_id="nobody", name="Nobody"),
+            Person(person_id=MEMBER, name="Aiko", person_type="agent"),
+        ],
+    )
+
+    assert await refresh_activity_events(team, START, END) == 1
+    [record] = ActivityEventStore().records_between(START, END)
+    assert record["attributes"]["github.activity_id"] == f"issue:{REPO}:1:closed"
 
 
 @pytest.mark.asyncio

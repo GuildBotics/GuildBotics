@@ -103,7 +103,12 @@ mutation($pullRequest: ID!) {
 
 #: The GraphQL writes that name a node in some repository, each with the
 #: variable that carries the node: the gate reads where the node lives first.
-NODE_MUTATIONS = {ADD_REACTION: "subject", CONVERT_PULL_REQUEST_TO_DRAFT: "pullRequest"}
+#: Adding an issue to the Project is one: the issue records it in its timeline.
+NODE_MUTATIONS = {
+    ADD_PROJECT_ITEM: "content",
+    ADD_REACTION: "subject",
+    CONVERT_PULL_REQUEST_TO_DRAFT: "pullRequest",
+}
 
 #: Where the node of a ``NODE_MUTATIONS`` write lives, read before it is sent.
 NODE_REPOSITORY = """
@@ -119,7 +124,6 @@ query($id: ID!) {
 #: only mutation documents GuildBotics sends, so they are matched as written.
 PROJECT_MUTATIONS = frozenset(
     {
-        ADD_PROJECT_ITEM,
         UPDATE_PROJECT_ITEM_STATUS,
         UPDATE_PROJECT_FIELD_OPTIONS,
         CREATE_PROJECT_FIELD,

@@ -234,3 +234,50 @@ async def test_open_pull_request_readiness_skips_what_is_not_open(member):
     assert await member_repository.open_pull_request_readiness(
         member.code, remote, "feature"
     ) == [{"pr_url": url, "readiness": "ready", "completion_blockers": []}]
+
+
+@pytest.mark.asyncio
+async def test_a_remote_git_cannot_read_is_a_failure_not_an_answer(member):
+    """What the code host says of its remote comes from git, or not at all."""
+    import subprocess
+
+    with pytest.raises(MemberCapabilityError, match="no remote repository"):
+        await member.code.default_branch("owner", "repo")
+    _remote_with()
+    bare = store.bare("owner", "repo")
+    sha = store.git("owner", "repo", "rev-parse", "HEAD")
+    subprocess.run(
+        ["git", "update-ref", "--no-deref", "HEAD", sha], cwd=bare, check=True
+    )
+
+    with pytest.raises(MemberCapabilityError, match="git symbolic-ref failed"):
+        await member.code.default_branch("owner", "repo")
+
+
+@pytest.mark.asyncio
+async def test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled(member):
+    """A fork that is gone has no head: one such pull request is no failure of
+    the whole patrol, and still reads as itself."""
+    _remote_with()
+    url = pull_request(5, "feature", author="them", head_repo="contributor/repo")
+    store.item_path("owner", "repo", 5).write_text(
+        store.item_path("owner", "repo", 5)
+        .read_text(encoding="utf-8")
+        .replace('"reviewers": []', '"reviewers": ["aiko"]'),
+        encoding="utf-8",
+    )
+
+    [task] = await member.code.pull_request_candidates()
+    page = await member_repository.read_repository(
+        member,
+        "pull_requests",
+        "owner/repo",
+        identifier="5",
+        parameters={},
+        continuation="",
+    )
+
+    assert (task.pull_request_url, task.trigger_reason) == (url, "pull_request_review")
+    assert page["items"][0]["head_sha"] == ""
+    with pytest.raises(MemberCapabilityError, match="head commit not found"):
+        await member.code.readiness(url)

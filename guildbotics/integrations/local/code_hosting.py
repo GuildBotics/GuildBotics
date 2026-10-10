@@ -19,10 +19,6 @@ from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.local import store
-from guildbotics.integrations.repository_scope import (
-    check_repository,
-    configured_owner,
-)
 from guildbotics.runtime.code_hosting_resources import (
     DETAIL_RESOURCES,
     CompletionBlocker,
@@ -235,10 +231,10 @@ class LocalCodeHostingService(CodeHostingService):
         kind: ItemKind | None = None,
         status: dict[str, object] | None = None,
     ) -> CommentWritten:
-        ref, item = self._writable(url, kind)
+        ref, item = self._item(url, kind)
         comment = self._entry(ref, {"body": body.rstrip(), "status": status})
         item.setdefault("comments", []).append(comment)
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return CommentWritten(
             comment_id=comment["id"],
             html_url=f"{ref.url}#comment-{comment['id']}",
@@ -250,10 +246,10 @@ class LocalCodeHostingService(CodeHostingService):
     async def create_issue(
         self, repo: str, title: str, body: str, labels: Sequence[str]
     ) -> IssueCreated:
-        owner, name = self._writable_repository(repo)
+        owner, name = store.split(repo)
         item = self._new_item(owner, name, "issue", title, body)
         item["labels"] = self._defined_labels(owner, name, labels)
-        store.save(owner, name, item)
+        store.save(self.team.project, owner, name, item)
         target = _target(owner, name, item)
         return IssueCreated(
             issue_number=item["number"],
@@ -275,7 +271,7 @@ class LocalCodeHostingService(CodeHostingService):
         state: str | None,
         state_reason: str | None,
     ) -> IssueUpdated:
-        ref, item = self._writable(url, "issue")
+        ref, item = self._item(url, "issue")
         additions = self._defined_labels(ref.owner, ref.repo, add_labels)
         state_changed = state is not None and item["state"] != state
         for key, value in (("body", body), ("title", title), ("state", state)):
@@ -285,7 +281,7 @@ class LocalCodeHostingService(CodeHostingService):
             item["closed_at"] = store.now() if state == "closed" else None
         labels = [label for label in item["labels"] if label not in remove_labels]
         item["labels"] = labels + [label for label in additions if label not in labels]
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return IssueUpdated(
             issue_number=ref.number,
             issue_url=ref.url,
@@ -320,7 +316,7 @@ class LocalCodeHostingService(CodeHostingService):
         issue_url: str,
         closes_issue: bool,
     ) -> PullRequestCreated:
-        owner, name = self._writable_repository(repo)
+        owner, name = store.split(repo)
         base = base.strip() or await self.default_branch(owner, name)
         item = next(
             (
@@ -345,7 +341,7 @@ class LocalCodeHostingService(CodeHostingService):
                 review_comments=[],
                 issue=store.locate(issue_url, "issue").number if issue_url else None,
             )
-            store.save(owner, name, item)
+            store.save(self.team.project, owner, name, item)
         return PullRequestCreated(
             pr_number=item["number"],
             pr_url=_target(owner, name, item).html_url,
@@ -364,13 +360,13 @@ class LocalCodeHostingService(CodeHostingService):
         title: str | None,
         drop_issue_links: bool,
     ) -> PullRequestUpdated:
-        ref, item = self._writable(url, "pull_request")
+        ref, item = self._item(url, "pull_request")
         if drop_issue_links:
             item["issue"] = None
         for key, value in (("body", body), ("title", title)):
             if value is not None:
                 item[key] = value
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return PullRequestUpdated(
             pr_number=ref.number,
             pr_url=ref.url,
@@ -380,7 +376,7 @@ class LocalCodeHostingService(CodeHostingService):
         )
 
     async def review(self, url: str, body: str, event: ReviewEvent) -> ReviewSubmitted:
-        ref, item = self._writable(url, "pull_request")
+        ref, item = self._item(url, "pull_request")
         review = self._entry(
             ref,
             {
@@ -391,7 +387,7 @@ class LocalCodeHostingService(CodeHostingService):
         )
         review["submitted_at"] = review.pop("created_at")
         item["reviews"].append(review)
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return ReviewSubmitted(
             review_id=review["id"],
             html_url=None,
@@ -411,7 +407,7 @@ class LocalCodeHostingService(CodeHostingService):
         start_line: int | None,
         start_side: str | None,
     ) -> ReviewCommentWritten:
-        ref, item = self._writable(url, "pull_request")
+        ref, item = self._item(url, "pull_request")
         comment = self._entry(
             ref,
             {
@@ -426,7 +422,7 @@ class LocalCodeHostingService(CodeHostingService):
             },
         )
         item["review_comments"].append(comment)
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return ReviewCommentWritten(
             review_comment_id=comment["id"],
             html_url=None,
@@ -438,7 +434,7 @@ class LocalCodeHostingService(CodeHostingService):
         )
 
     async def reply(self, url: str, reply_target_id: int, body: str) -> ReplyWritten:
-        ref, item = self._writable(url, "pull_request")
+        ref, item = self._item(url, "pull_request")
         root = next(
             (
                 comment
@@ -460,7 +456,7 @@ class LocalCodeHostingService(CodeHostingService):
             },
         )
         item["review_comments"].append(reply)
-        store.save(ref.owner, ref.repo, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return ReplyWritten(
             reply_comment_id=reply["id"],
             html_url=None,
@@ -476,7 +472,7 @@ class LocalCodeHostingService(CodeHostingService):
         reaction: str,
         pr_number: int | None = None,
     ) -> ReactionAdded:
-        owner, name = self._writable_repository(repo)
+        owner, name = store.split(repo)
         key = {
             "issue-comment": "comments",
             "pr-review-comment": "review_comments",
@@ -490,7 +486,7 @@ class LocalCodeHostingService(CodeHostingService):
         entry.setdefault("reactions", []).append(
             {"author": self.person.person_id, "content": reaction}
         )
-        store.save(owner, name, item)
+        store.save(self.team.project, owner, name, item)
         return ReactionAdded(content=reaction, comment_id=comment_id)
 
     async def readiness(
@@ -536,14 +532,16 @@ class LocalCodeHostingService(CodeHostingService):
                 readiness="not_applicable",
                 completion_blockers=[],
             )
-        base_sha = store.git(
-            ref.owner, ref.repo, "rev-parse", f"refs/heads/{item['base']}"
-        )
+        base_sha = store.branch_tip(ref.owner, ref.repo, item["base"])
+        if not base_sha:
+            raise MemberCapabilityError(
+                f"Base branch '{item['base']}' not found for "
+                f"{ref.full_repo}#{ref.number}."
+            )
         behind_by = int(
             store.git(
                 ref.owner, ref.repo, "rev-list", "--count", f"{head_sha}..{base_sha}"
             )
-            or 0
         )
         blockers = []
         if behind_by:
@@ -614,7 +612,7 @@ class LocalCodeHostingService(CodeHostingService):
         return store.bare(owner, repo).as_uri()
 
     async def default_branch(self, owner: str, repo: str) -> str:
-        return store.git(owner, repo, "symbolic-ref", "--short", "HEAD") or "main"
+        return store.git(owner, repo, "symbolic-ref", "--short", "HEAD")
 
     async def pull_request_head(self, url: str) -> PullRequestHead:
         ref = store.locate(url, "pull_request")
@@ -698,16 +696,8 @@ class LocalCodeHostingService(CodeHostingService):
 
     # -- writes -------------------------------------------------------------
 
-    def _writable_repository(self, repo: str) -> tuple[str, str]:
-        owner, name = store.split(repo)
-        check_repository(configured_owner(self.team.project), owner, name)
-        return owner, name
-
-    def _writable(
-        self, url: str, kind: ItemKind | None
-    ) -> tuple[ItemRef, dict[str, Any]]:
+    def _item(self, url: str, kind: ItemKind | None) -> tuple[ItemRef, dict[str, Any]]:
         ref = store.locate(url, kind)
-        check_repository(configured_owner(self.team.project), ref.owner, ref.repo)
         return ref, store.load(ref.owner, ref.repo, ref.number)
 
     def _new_item(
@@ -784,4 +774,4 @@ def _threads(item: dict[str, Any]) -> list[tuple[dict, list[dict]]]:
 def _head_sha(owner: str, repo: str, item: dict[str, Any]) -> str:
     """The commit the pull request's head branch is at; empty if it is gone."""
     head_owner, head_repo = store.split(item.get("head_repo") or f"{owner}/{repo}")
-    return store.git(head_owner, head_repo, "rev-parse", f"refs/heads/{item['head']}")
+    return store.branch_tip(head_owner, head_repo, item["head"])

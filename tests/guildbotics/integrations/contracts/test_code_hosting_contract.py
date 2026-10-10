@@ -2,12 +2,14 @@
 
 The same steps run against each provider: what a member writes reads back
 the same way, a write outside the configured owner is refused before it is
-made, a pull request whose head is current with passing CI is ready, and the
-git remote names the repository it is the remote of.
+made, a pull request whose head is current with passing CI is ready (and one
+whose base cannot be read is not judged at all), and the git remote names the
+repository it is the remote of.
 """
 
 from __future__ import annotations
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -15,9 +17,11 @@ from guildbotics.entities.message import Message
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.repository_scope import RepositoryScopeError
 from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.integration_factory import MemberCapabilityError
 from tests.guildbotics.integrations.contracts.providers import (
     OWNER,
     REPO,
+    THEIRS,
     Harness,
     harness,
 )
@@ -115,7 +119,7 @@ async def test_an_issue_closes_once(host: Harness):
 
 @pytest.mark.asyncio
 async def test_writes_outside_the_configured_owner_are_refused(host: Harness):
-    elsewhere = "other-owner/demo"
+    elsewhere = THEIRS
     before = len(host.writes)
 
     with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
@@ -134,7 +138,7 @@ async def test_writes_outside_the_configured_owner_are_refused(host: Harness):
     with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
         await host.code.add_reaction(elsewhere, "issue-comment", 1, "eyes")
     with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.comment(host.url("other-owner", "demo", "issue", 1), "Hi")
+        await host.code.comment(host.theirs.url or "", "Hi")
 
     # None of them reached the provider; reads are not limited by owner.
     assert host.writes[before:] == []
@@ -184,6 +188,30 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
         Message.ASSISTANT,
     )
     assert code.locate(created.pr_url, "pull_request").url == created.pr_url
+
+
+@pytest.mark.asyncio
+async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
+    """Readiness answers only from a base it read: a base it cannot read is no
+    base without commits ahead of the head."""
+    host.branch("release")
+    host.branch("ticket/1")
+    created = await host.code.create_pull_request(
+        REPO,
+        "ticket/1",
+        "release",
+        "Fix",
+        "",
+        draft=False,
+        issue_url="",
+        closes_issue=False,
+    )
+    host.delete_branch("release")
+    host.branch("release/next")  # a branch below the base's name is not the base
+
+    # GitHub's client raises the HTTP error its response hook makes.
+    with pytest.raises((MemberCapabilityError, httpx.HTTPStatusError)):
+        await host.code.readiness(created.pr_url)
 
 
 @pytest.mark.asyncio

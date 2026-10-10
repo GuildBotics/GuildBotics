@@ -11,6 +11,9 @@ and review comments one id sequence per repository, as on a hosted code host.
 
 An item is addressed by ``local://<owner>/<repo>/issues/<n>`` or
 ``local://<owner>/<repo>/pull/<n>``.
+
+Every write of the code host and the board is a :func:`save`, which refuses a
+repository outside the project's configured owner.
 """
 
 from __future__ import annotations
@@ -24,7 +27,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from guildbotics.entities import Task
-from guildbotics.integrations.repository_scope import NAME
+from guildbotics.entities.team import Project
+from guildbotics.integrations.repository_scope import (
+    NAME,
+    check_repository,
+    configured_owner,
+)
 from guildbotics.runtime.code_hosting_service import ItemKind, ItemRef
 from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.utils.fileio import get_workspace_local_path
@@ -129,7 +137,13 @@ def items(owner: str, repo: str) -> list[dict[str, Any]]:
     )
 
 
-def save(owner: str, repo: str, item: dict[str, Any]) -> None:
+def save(project: Project, owner: str, repo: str, item: dict[str, Any]) -> None:
+    """Write ``item`` of ``owner/repo`` for a member of ``project``.
+
+    Raises:
+        RepositoryScopeError: If the repository is not the configured owner's.
+    """
+    check_repository(configured_owner(project), owner, repo)
     path = item_path(owner, repo, item["number"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -195,10 +209,13 @@ def task(
 
 
 def git(owner: str, repo: str, *args: str) -> str:
-    """What git prints in the repository's bare repository; empty if it fails
-    or there is none."""
+    """What git prints in the repository's bare repository.
+
+    Raises:
+        MemberCapabilityError: If there is none, or git fails.
+    """
     if not bare(owner, repo).is_dir():
-        return ""
+        raise MemberCapabilityError(f"{owner}/{repo} has no remote repository.")
     ran = subprocess.run(
         ["git", *args],
         cwd=bare(owner, repo),
@@ -206,7 +223,33 @@ def git(owner: str, repo: str, *args: str) -> str:
         check=False,
         text=True,
     )
-    return ran.stdout.strip() if ran.returncode == 0 else ""
+    if ran.returncode != 0:
+        raise MemberCapabilityError(
+            f"git {args[0]} failed in {owner}/{repo}: {ran.stderr.strip()}"
+        )
+    return ran.stdout.strip()
+
+
+def branch_tip(owner: str, repo: str, branch: str) -> str:
+    """The commit ``branch`` of the remote is at; empty if it has no such
+    branch, as a remote that is not there (a deleted fork) has none.
+
+    Raises:
+        MemberCapabilityError: If the remote cannot be read.
+    """
+    if not bare(owner, repo).is_dir():
+        return ""
+    ref = f"refs/heads/{branch}"
+    # The pattern also matches the refs below it (``refs/heads/<branch>/x``).
+    listed = git(owner, repo, "for-each-ref", "--format=%(objectname) %(refname)", ref)
+    return next(
+        (
+            sha
+            for sha, _, name in (line.partition(" ") for line in listed.splitlines())
+            if name == ref
+        ),
+        "",
+    )
 
 
 def _valid(name: str) -> bool:
