@@ -55,7 +55,8 @@ def _command(
 def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
     """A provider runs as its turn's process in the command's microVM,
     started through the turn: the turn is the one place in the guest that
-    starts a process, and the host starts none of its own."""
+    starts a provider, and the host starts none of its own. The copy of the
+    working directory starts git alone, to list what it copies."""
     runtime_dir = Path(guest.__file__).parent
     starting = [
         path.name
@@ -67,7 +68,7 @@ def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
         )
     ]
 
-    assert starting == ["turn.py"]
+    assert sorted(starting) == ["turn.py", "worktree_copy.py"]
 
 
 def test_no_adapter_decides_what_a_read_only_turn_may_do() -> None:

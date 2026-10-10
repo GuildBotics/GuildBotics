@@ -54,13 +54,15 @@ class _Guest:
 def repository(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     for name, content in {
+        ".gitignore": "target/\n",
         "a.txt": "a",
         "src/b.py": "b",
         "gone.txt": "g",
-        ".git/config": "[core]\n",
     }.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(content, encoding="utf-8")
+    for args in (["init", "-q"], ["add", "."]):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
     return root
 
 
@@ -101,8 +103,12 @@ async def test_what_the_command_changed_in_its_copy_is_written_back(
     (copy_root / "gone.txt").unlink()
     (copy_root / "new" / "deep").mkdir(parents=True)
     (copy_root / "new" / "deep" / "n.txt").write_text("n", encoding="utf-8")
+    # What the command built is no change.
+    (copy_root / "target").mkdir()
+    (copy_root / "target" / "out").write_text("o", encoding="utf-8")
     # What the command writes through the gitfile is no file of the copy.
     (copy_root / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    config = (repository / ".git" / "config").read_bytes()
 
     await worktree.write_back(object(), copied)
 
@@ -110,7 +116,8 @@ async def test_what_the_command_changed_in_its_copy_is_written_back(
     assert not (repository / "gone.txt").exists()
     assert (repository / "new" / "deep" / "n.txt").read_text(encoding="utf-8") == "n"
     assert (repository / "src" / "b.py").read_text(encoding="utf-8") == "b"
-    assert (repository / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
+    assert not (repository / "target").exists()
+    assert (repository / ".git" / "config").read_bytes() == config
 
 
 @pytest.mark.asyncio
@@ -186,7 +193,7 @@ async def test_a_change_that_is_no_regular_file_inside_is_refused_whole(
     )
     assert (repository / "a.txt").read_text(encoding="utf-8") == "a"
     assert not (tmp_path / "outside.txt").exists()
-    assert not (repository / ".git" / "hooks").exists()
+    assert not (repository / ".git" / "hooks" / "pre-commit").exists()
 
 
 @pytest.mark.asyncio

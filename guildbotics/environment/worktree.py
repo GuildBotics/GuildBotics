@@ -117,7 +117,11 @@ async def write_back(environment: AgentEnvironment, worktree: Worktree) -> None:
         try:
             result = await guest.run_here(
                 guest.python(
-                    _MODULE, "changes", worktree.guest, *worktree.copy.excluded
+                    _MODULE,
+                    "changes",
+                    WORKTREE_SOURCE,
+                    worktree.guest,
+                    *worktree.copy.excluded,
                 ),
                 cwd="/",
                 env={},
