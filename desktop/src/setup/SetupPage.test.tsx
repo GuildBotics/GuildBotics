@@ -5004,7 +5004,7 @@ describe("IntelligenceEditor (team default)", () => {
         brain_mapping: [
           {
             name: "chat_decision",
-            brain_class: "guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+            brain_class: "guildbotics.guest.cli_agent.CliAgentBrain",
             engine: "cli",
             target: "default",
           },

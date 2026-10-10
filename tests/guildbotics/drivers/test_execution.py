@@ -12,8 +12,8 @@ from guildbotics.drivers.execution import (
     WorkRejectedError,
 )
 from guildbotics.entities.task_run import TASK_RUN_TERMINAL_STATES
-from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 

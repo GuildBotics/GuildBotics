@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.models import RejectedChangeModel
+from guildbotics.drivers.live_state import LiveState
 from guildbotics.hub.host import hub_root
-from guildbotics.runtime.live_state import LiveState
 from guildbotics.sync import (
     activation,
     current_sync_manager,

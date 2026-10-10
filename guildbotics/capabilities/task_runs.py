@@ -20,8 +20,8 @@ from guildbotics.entities.task_run import (
     TaskRunRecord,
     TaskRunResult,
 )
-from guildbotics.observability import current_trace
 from guildbotics.runtime.member_invocation import current_member_invocation
+from guildbotics.utils.correlation import current_trace
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock

@@ -7,12 +7,12 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from guildbotics.intelligences.brains.inference import AgnoCall, inference
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.effort import resolve_effort, validate_effort_overlay
-from guildbotics.observability import span_scope
 from guildbotics.runtime.brain import (
     Brain,
     ExecutionMetadata,
     public_parameters,
 )
+from guildbotics.utils.correlation import span_scope
 from guildbotics.utils.fileio import (
     get_person_config_path,
     get_template_path,

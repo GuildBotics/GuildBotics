@@ -11,12 +11,12 @@ from typing import Any
 
 import httpx
 
+from guildbotics.integrations.event_listener import EventListener, IncomingChatEvent
 from guildbotics.integrations.slack.auth_errors import (
     is_slack_auth_error,
     slack_api_error,
 )
 from guildbotics.integrations.slack.message_events import chat_event
-from guildbotics.runtime.event_listener import EventListener, IncomingChatEvent
 
 
 # Slack error codes that will not recover by reconnecting with the same token.

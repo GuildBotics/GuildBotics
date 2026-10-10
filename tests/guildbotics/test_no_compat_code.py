@@ -49,7 +49,7 @@ _CODEMIRROR_LEGACY_MODES = (
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
-        "guildbotics/intelligences/agent_runtime/codex.py",
+        "guildbotics/guest/codex.py",
         "_LEGACY_APPROVAL_METHODS",
         _CODEX_PROTOCOL,
     ),

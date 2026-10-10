@@ -27,11 +27,11 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
 )
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentBrain,
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.intelligences.brains.factory import cli_agent_of, command_config
 from guildbotics.intelligences.brains.inference import InferenceFailure
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.intelligences.functions import talk_as
@@ -417,19 +417,24 @@ class ScenarioDiagnosticsService:
                 "Reply with exactly OK. Do not create, modify, delete, "
                 "or inspect unrelated files."
             )
-            brain = c.get_brain(_CLI_AGENT_CHECK_COMMAND, None, None)
-            if not isinstance(brain, CliAgentBrain):
+            brain = command_config(
+                member.person_id,
+                _CLI_AGENT_CHECK_COMMAND,
+                c.team.project.get_language_code(),
+            ).get("brain", "default")
+            tool = cli_agent_of(member.person_id, brain)
+            if tool is None:
                 return [
                     self._check(
                         "cli_agent",
                         "cli_agent_brain",
                         "error",
-                        "Configured CLI diagnostics brain is not CliAgentBrain.",
+                        "Configured CLI diagnostics brain runs no AI CLI tool.",
                         person_id=member.person_id,
-                        context={"brain_type": type(brain).__name__},
+                        context={"brain": brain},
                     )
                 ]
-            target = brain.executable_info.adapter
+            target = tool
             temporary_directory = tempfile.TemporaryDirectory(
                 prefix="guildbotics-diagnostics-cli-"
             )

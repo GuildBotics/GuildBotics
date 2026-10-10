@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.drivers.relay_runtime import RelayRuntime
 from guildbotics.hub.connection import HubLocation
 from guildbotics.hub.relay import live_root
 from guildbotics.hub.relay_client import HubRelayClient
-from guildbotics.runtime.relay_runtime import RelayRuntime
 from guildbotics.sync import activation, current_sync_manager
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.workspace_sync_port import (

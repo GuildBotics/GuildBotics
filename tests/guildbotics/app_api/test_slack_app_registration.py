@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
+from guildbotics.integrations.slack import app_manifest
 from guildbotics.setup import slack_app
 from guildbotics.setup.setup_service import SimplePersonSetupService
-from guildbotics.integrations.slack import app_manifest
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400

@@ -63,6 +63,9 @@ jobs:
       - name: Run Pylint duplicate-code
         run: uv run --no-sync pylint guildbotics
 
+      - name: Check the package map
+        run: uv run --no-sync lint-imports
+
       - name: Run tests
         run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
 

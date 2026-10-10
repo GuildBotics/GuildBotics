@@ -8,14 +8,14 @@ from datetime import datetime
 from typing import Any, Literal
 
 from guildbotics.capabilities.task_runs import RunStore, trace_stamp
+from guildbotics.drivers.live_state import LivePresentation, LiveStatePort
+from guildbotics.drivers.trace_presentations import normalize_trace_presentation
 from guildbotics.entities.task_run import TaskRunExecutionMode, TaskRunRecord
-from guildbotics.observability import new_id
-from guildbotics.runtime.live_state import LivePresentation, LiveStatePort
 from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
 )
-from guildbotics.runtime.trace_presentations import normalize_trace_presentation
+from guildbotics.utils.correlation import new_id
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import ChangeSet, await_shared_change

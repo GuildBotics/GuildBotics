@@ -16,17 +16,19 @@ from typing import Any
 
 import pytest
 
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
 )
 from guildbotics.commands.errors import CommandError
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.validation import CommandValidationError
 from guildbotics.drivers import command_runner
 from guildbotics.drivers.command_runner import PreparedCommand, prepare_command
-from guildbotics.intelligences.troubleshooting import TroubleshootingResult
-from guildbotics.observability import TraceContext
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.utils.correlation import TraceContext
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
     ScriptedAgent,
@@ -304,7 +306,7 @@ async def test_the_cli_agent_check_is_one_read_only_turn_of_its_command(
 ) -> None:
     """What the tool did reaches the check through the command that ran it."""
     from guildbotics.app_api.diagnostics import _run_cli_agent_check
-    from guildbotics.intelligences.brains.cli_agent import (
+    from guildbotics.intelligences.agent_runtime.models import (
         CliAgentExecutionError,
         CliAgentExecutionResult,
     )

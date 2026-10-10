@@ -80,9 +80,7 @@ def _restore_active_workspace() -> Path:
     workspace-shaped ``GUILDBOTICS_CONFIG_DIR``) wins over the persisted
     active workspace, matching the CLI resolution order.
     """
-    from guildbotics.intelligences.agent_environment.contract import (
-        validate_workspace_location,
-    )
+    from guildbotics.environment.contract import validate_workspace_location
 
     startup_cwd = Path.cwd()
     if has_explicit_workspace_source():

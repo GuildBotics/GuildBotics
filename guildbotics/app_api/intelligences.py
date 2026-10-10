@@ -13,7 +13,7 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
     AccessContractError,
@@ -26,11 +26,16 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_shared_grants,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.toolchain import (
     TOOLCHAIN_PATH,
     ToolchainDeclaration,
     ToolchainError,
     parse_toolchain,
+)
+from guildbotics.intelligences.brains.factory import (
+    AGNO_BRAIN_CLASS,
+    CLI_BRAIN_CLASS,
+    JEV_BRAIN_CLASS,
 )
 from guildbotics.intelligences.brains.jev import JEV_MODEL
 from guildbotics.intelligences.cli_agents import (
@@ -52,10 +57,6 @@ from guildbotics.setup.setup_service import (
 )
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 from guildbotics.utils.person_id import person_config_directory
-
-AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
-CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
-JEV_BRAIN_CLASS = "guildbotics.intelligences.brains.jev.JevBrain"
 
 
 def intelligence_config_dir(person_id: str | None) -> str:

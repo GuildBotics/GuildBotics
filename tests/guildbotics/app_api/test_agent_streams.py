@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
-from guildbotics.intelligences.agent_runtime.diagnostics import MAX_MESSAGE
+from guildbotics.environment.diagnostics import MAX_MESSAGE
 
 
 def _assistant(name: str, message: str = "", span_id: str = "span-1") -> dict[str, Any]:

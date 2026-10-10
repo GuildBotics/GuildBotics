@@ -9,9 +9,12 @@ from agno.agent import Agent
 from agno.run.base import RunStatus
 from pydantic import BaseModel, ValidationError
 
-from guildbotics.intelligences.brains import agno_agent, inference_host
-from guildbotics.intelligences.brains import span_summary
+from guildbotics.environment import inference_host, span_summary
+from guildbotics.intelligences.brains import agno_agent
 from tests.guildbotics.slot_mappings import use_model_slots
+
+#: The brains here run as on the host, calling the inference APIs themselves.
+pytestmark = pytest.mark.usefixtures("direct_inference")
 
 
 @pytest.mark.asyncio
@@ -59,7 +62,7 @@ async def test_agno_agent_records_request_response_and_span(
         "instantiate_class",
         lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
-    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
+    monkeypatch.setattr("agno.agent.Agent", FakeAgent)
 
     brain = agno_agent.AgnoAgentDefaultBrain(
         "p1",
@@ -118,7 +121,7 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
         "instantiate_class",
         lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
-    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
+    monkeypatch.setattr("agno.agent.Agent", FakeAgent)
 
     brain = agno_agent.AgnoAgentDefaultBrain(
         "p1",
@@ -169,7 +172,7 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
         "instantiate_class",
         lambda *args, **kwargs: SimpleNamespace(ainvoke=None),
     )
-    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
+    monkeypatch.setattr("agno.agent.Agent", FakeAgent)
 
     brain = agno_agent.AgnoAgentDefaultBrain(
         "p1", "functions/reply", logger=logging.getLogger("test")
@@ -232,7 +235,7 @@ async def _run_with_effort(
         span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
     )
     monkeypatch.setattr(inference_host, "instantiate_class", fake_instantiate)
-    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
+    monkeypatch.setattr("agno.agent.Agent", FakeAgent)
 
     brain = agno_agent.AgnoAgentDefaultBrain(
         "p1",

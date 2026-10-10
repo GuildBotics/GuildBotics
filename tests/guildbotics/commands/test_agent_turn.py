@@ -10,7 +10,7 @@ from guildbotics.commands.agent_turn import CompletionRetryExhausted, run_agent_
 from guildbotics.commands.errors import CommandError
 from guildbotics.drivers import command_runner
 from guildbotics.drivers.command_runner import HostRunLedger
-from guildbotics.intelligences.brains.cli_agent import (
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )

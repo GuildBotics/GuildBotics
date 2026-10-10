@@ -7,8 +7,6 @@ from pydantic import ValidationError
 
 from guildbotics.app_api import intelligences as intelligences_module
 from guildbotics.app_api.intelligences import (
-    AGNO_BRAIN_CLASS,
-    CLI_BRAIN_CLASS,
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import (
@@ -17,18 +15,22 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.setup.setup_service import SetupServiceError
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
     SharedGrants,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
 )
+from guildbotics.intelligences.brains.factory import (
+    AGNO_BRAIN_CLASS,
+    CLI_BRAIN_CLASS,
+)
+from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 
@@ -811,14 +813,14 @@ def test_an_emptied_native_effort_is_not_refilled_by_the_template(
     tmp_path: Path, monkeypatch
 ) -> None:
     """The runtime resolves the emptied override, not the template's mapping."""
-    from guildbotics.intelligences.brains import cli_agent
+    from guildbotics.intelligences import cli_agents
 
     agent_file = _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
     _write_yaml(agent_file, {"effort": {"high": {"effort": "high"}}})
     IntelligenceConfigService().update_config(_team_update_request(tmp_path))
 
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    resolved = cli_agent.get_cli_agent_mapping("alice")
+    resolved = cli_agents.get_cli_agent_mapping("alice")
 
     assert resolved["default"].effort == {}
 

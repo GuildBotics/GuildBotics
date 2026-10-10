@@ -27,7 +27,6 @@ from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
 )
-from guildbotics.observability import require_trace, set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.ticket_manager import TicketManager
@@ -36,6 +35,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
     WorkflowSource,
 )
+from guildbotics.utils.correlation import require_trace, set_attributes
 from guildbotics.utils.i18n_tool import t
 
 TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"

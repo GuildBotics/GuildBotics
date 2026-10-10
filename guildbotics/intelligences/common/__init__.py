@@ -64,7 +64,9 @@ def find_cli_agent_execution_error(
     exc: BaseException, *, category: str = ""
 ) -> BaseException | None:
     """Find a CliAgentExecutionError through common wrapper exception chains."""
-    from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
+    from guildbotics.intelligences.agent_runtime.models import (
+        CliAgentExecutionError,
+    )
 
     seen: set[int] = set()
     stack: list[BaseException] = [exc]

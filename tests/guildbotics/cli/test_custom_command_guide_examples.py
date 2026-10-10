@@ -15,7 +15,6 @@ from tests.guildbotics.runtime.test_context import (
     DummyIntegrationFactory,
 )
 
-
 #: The commands the host starts run in this process.
 pytestmark = pytest.mark.usefixtures(
     "configured_team", "commands_in_process", "in_trace"

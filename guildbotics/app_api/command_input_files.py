@@ -15,7 +15,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.contract import (
     AccessContractError,
     grant_spelling,
     load_local_grants,
@@ -24,7 +24,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
     validate_mount_source,
 )
-from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.environment.spec import guest_path
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     unlock_file,

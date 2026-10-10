@@ -9,7 +9,6 @@ from guildbotics.integrations.github.actions_client import (
     _raise_for_status,
 )
 
-
 HTTP_FOUND = 302
 
 

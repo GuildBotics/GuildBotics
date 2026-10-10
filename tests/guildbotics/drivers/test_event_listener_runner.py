@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import threading
 import types
 import uuid
@@ -16,21 +15,18 @@ from guildbotics.drivers.event_listener_runner import (
     SlackConnectionKey,
 )
 from guildbotics.entities.team import Person
+from guildbotics.integrations.chat_state_store import (
+    ChannelCursorState,
+    ThreadMessageState,
+)
+from guildbotics.integrations.event_listener import IncomingChatEvent
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
     ChatIdentity,
     ChatPostResult,
-)
-from guildbotics.integrations.chat_state_store import (
-    ChannelCursorState,
-    ThreadMessageState,
-)
-from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.slack.slack_chat_service import SlackApiError
-from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import (
-    IncomingChatEvent,
 )
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY

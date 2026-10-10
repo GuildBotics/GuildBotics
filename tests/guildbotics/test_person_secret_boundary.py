@@ -73,7 +73,7 @@ STORE_ELSEWHERE = {
         "LLM provider API keys named by the project setup"
     ),
     ("intelligences/brains/jev.py", "credential"): "the workspace's Jev key",
-    ("intelligences/decisions/preparation.py", "save_credential"): (
+    ("capabilities/decisions/preparation.py", "save_credential"): (
         "the workspace's Jev key"
     ),
     ("observability/diagnostics_events.py", "load_required_io_redaction_values"): (

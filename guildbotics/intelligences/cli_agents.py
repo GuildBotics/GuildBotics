@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import re
-from pathlib import PureWindowsPath
+from dataclasses import dataclass, field
+from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from guildbotics.utils.fileio import get_config_path, load_yaml_file
+from guildbotics.intelligences.effort import validate_effort_overlay
+from guildbotics.utils.fileio import (
+    get_config_path,
+    get_person_config_path,
+    load_person_slot_mapping,
+    load_yaml_file,
+)
 
 #: Every AI CLI tool lives at ``cli_agents/<tool>/default.yml`` and a slot may
 #: add ``cli_agents/<tool>/<slot>.yml`` beside it -- the same two-level shape
@@ -736,3 +743,80 @@ def resolve_default_cli_agent() -> str:
 
     tool = cli_agent_name_from_path(default_file)
     return tool if any(agent.name == tool for agent in CLI_AGENTS) else ""
+
+
+@dataclass(frozen=True)
+class ExecutableInfo:
+    """The AI CLI tool a brain slot runs, and the settings it runs it with.
+
+    ``adapter`` is the tool's catalog name, which is also the name of the native
+    adapter that drives it. ``effort`` maps an effort level to provider-specific
+    settings; only the common ``model`` key is understood by the core, every
+    other key being validated by the adapter. ``parameters`` are the settings
+    that always apply, whatever effort was asked for, with the effort overlay
+    merged on top -- the same way a model definition's ``parameters`` relate to
+    its ``effort``.
+    """
+
+    adapter: str = ""
+    effort: dict[str, dict] = field(default_factory=dict)
+    parameters: dict = field(default_factory=dict)
+
+
+def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
+    """Return the person's AI CLI slots, read from configuration each call.
+
+    The mapping is loaded and not stored, so the next brain sees a file that
+    changed after the previous brain was built.
+
+    Args:
+        person_id (str): The person whose ``cli_agent_mapping.yml`` to read.
+
+    Returns:
+        dict[str, ExecutableInfo]: Slot name to the tool and its settings.
+    """
+    mapping = load_person_slot_mapping(person_id, "intelligences/cli_agent_mapping.yml")
+    cli_agent_mapping = {}
+    for slot, definition_path in mapping.items():
+        path = str(definition_path)
+        adapter = require_cli_agent_path(path, where=f"AI CLI tool slot '{slot}'")
+        definition = _cli_agent_definition(person_id, path)
+        cli_agent_mapping[slot] = ExecutableInfo(
+            adapter=adapter,
+            effort=validate_effort_overlay(
+                definition.get("effort"), where=f"AI CLI tool '{slot}'"
+            ),
+            parameters=_parameters_of(definition),
+        )
+    return cli_agent_mapping
+
+
+def _cli_agent_definition(person_id: str, definition_path: str) -> dict:
+    """Read a definition, filling absent keys from its tool's own default.
+
+    Slots live at ``cli_agents/<tool>/<slot>.yml`` beside the tool's
+    ``default.yml``, the same shape model definitions use, so a slot states only
+    what it changes and inherits the rest.
+    """
+    data = _yaml_dict(
+        get_person_config_path(person_id, f"intelligences/{definition_path}")
+    )
+    tool_default = cli_agent_default_path(cli_agent_name_from_path(definition_path))
+    if tool_default != definition_path:
+        inherited = _yaml_dict(
+            get_person_config_path(person_id, f"intelligences/{tool_default}")
+        )
+        data = {**inherited, **data}
+    return data
+
+
+def _yaml_dict(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    data = load_yaml_file(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _parameters_of(definition: dict) -> dict:
+    parameters = definition.get("parameters")
+    return dict(parameters) if isinstance(parameters, dict) else {}

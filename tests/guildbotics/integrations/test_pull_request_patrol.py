@@ -16,7 +16,6 @@ from guildbotics.integrations.github.pull_request_patrol import (
     FEEDBACK,
     MAX_REVIEW_ROUNDS,
     PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
-    PULL_REQUEST_FEEDBACK_SOURCES,
     PULL_REQUEST_QUERY,
     REVIEW,
     REVIEW_LIMIT,

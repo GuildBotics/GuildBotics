@@ -4,21 +4,21 @@ from pathlib import Path
 import httpx
 import pytest
 
+from guildbotics.integrations.github.app_manifest import (
+    AppInstallation,
+    AppManifestConversion,
+)
 from guildbotics.setup import github_app
 from guildbotics.setup.github_app import (
-    GitHubAppRegistrationService,
     STATUS_CONVERTED,
     STATUS_INSTALLED,
     STATUS_PENDING,
+    GitHubAppRegistrationService,
 )
 from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SetupServiceError,
     SimplePersonSetupService,
-)
-from guildbotics.integrations.github.app_manifest import (
-    AppInstallation,
-    AppManifestConversion,
 )
 
 CALLBACK_URL = "http://127.0.0.1:8765/github-app/registrations/callback"

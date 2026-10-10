@@ -71,7 +71,7 @@ The contract suite checks the gateway routes, stand-in formats, refresh,
 credential protection, GuildBotics, and member git inside the microVM:
 
 ```bash
-D=tests/guildbotics/intelligences/agent_environment
+D=tests/guildbotics/environment
 GUILDBOTICS_CONTRACT_PROBE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
   $D/test_provider_contracts.py $D/test_credential_boundary.py \
   $D/test_guildbotics_in_environment.py $D/test_member_git_in_environment.py
@@ -81,7 +81,7 @@ The smoke commands check a turn and resume for each selected tool. Copilot's
 checks also observe `account.getQuota`; Antigravity's observe `/usage`:
 
 ```bash
-S=tests/guildbotics/intelligences/agent_runtime/smoke
+S=tests/guildbotics/guest/smoke
 GUILDBOTICS_GROK_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs $S/test_grok_smoke.py
 GUILDBOTICS_COPILOT_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
   $S/test_copilot_smoke.py $S/test_copilot_usage_smoke.py

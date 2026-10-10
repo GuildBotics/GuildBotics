@@ -4,9 +4,9 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
+from guildbotics.integrations.slack import app_manifest, slack_chat_service
 from guildbotics.setup import slack_app
 from guildbotics.setup.setup_service import SetupServiceError
-from guildbotics.integrations.slack import app_manifest, slack_chat_service
 
 BOT_TOKEN = "xoxb-valid"
 APP_TOKEN = "xapp-valid"

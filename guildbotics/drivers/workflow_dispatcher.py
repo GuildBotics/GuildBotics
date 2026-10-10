@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from guildbotics.drivers.command_runner import prepare_host_command, run_in_environment
 from guildbotics.entities.team import Person
-from guildbotics.observability import set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
+from guildbotics.utils.correlation import set_attributes
 
 
 class WorkflowDispatcher:

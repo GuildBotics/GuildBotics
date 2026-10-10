@@ -126,9 +126,7 @@ def apply_workspace_option(
         click.ClickException: If the requested workspace does not exist.
     """
     try:
-        from guildbotics.intelligences.agent_environment.contract import (
-            validate_workspace_location,
-        )
+        from guildbotics.environment.contract import validate_workspace_location
 
         candidate = workspace_dir
         if candidate is None:

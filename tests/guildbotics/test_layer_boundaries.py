@@ -208,7 +208,7 @@ def test_every_declared_sync_composition_root_installs_the_queue() -> None:
 #: The one module that drives the sandbox runtime. The contract is enforced by
 #: exactly one layer, so an adapter that imported the SDK itself would be a
 #: second one, translating the contract its own way.
-AGENT_ENVIRONMENT_RUNTIME = Path("intelligences/agent_environment/runtime.py")
+AGENT_ENVIRONMENT_RUNTIME = Path("environment/runtime.py")
 
 
 def test_only_the_agent_environment_runtime_drives_the_sandbox_sdk() -> None:

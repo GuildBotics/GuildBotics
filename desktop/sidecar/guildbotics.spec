@@ -26,8 +26,8 @@
 #   beside its templates, besides being compiled into the PYZ: every agent
 #   environment microVM mounts this directory read-only and runs GuildBotics'
 #   own code from it with the Python the snapshot installs
-#   (`agent_runtime/environment.py`). The dependencies it runs with,
-#   `agent_environment/requirements.txt`, are package data too.
+#   (`environment/command_environment.py`). The dependencies it runs with,
+#   `environment/requirements.txt`, are package data too.
 # - `weasyprint` is intentionally NOT bundled. `ToPdfCommand` imports it lazily
 #   and raises a friendly `CommandError` when its native libraries are missing,
 #   so the sidecar stays buildable without GTK/Pango/Cairo. The agent
@@ -70,7 +70,7 @@ for pkg in (
     "tzdata",
     # The agent environment runtime: the wheel carries msb and libkrunfw under
     # `microsandbox/_bundled`, which GuildBotics copies to a fixed path on
-    # first use (`agent_environment/runtime.py`).
+    # first use (`environment/runtime.py`).
     "microsandbox",
     # Keeps the machine awake (`utils/keep_awake.py`); it loads its Linux
     # D-Bus adapter lazily, through the package's module `__getattr__`.

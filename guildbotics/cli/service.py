@@ -14,32 +14,31 @@ from guildbotics.cli._options import selected_workspace
 from guildbotics.drivers.context import create_context
 from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
-from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.observability import new_id
-from guildbotics.observability.diagnostics_events import (
-    finish_system_session,
-    start_system_session,
-)
-from guildbotics.runtime.live_state import LiveStatePort
-from guildbotics.runtime.relay_runtime import RelayRuntime
-from guildbotics.runtime.service_control import (
+from guildbotics.drivers.live_state import LiveStatePort
+from guildbotics.drivers.relay_runtime import RelayRuntime
+from guildbotics.drivers.service_control import (
     ServiceControlWatcher,
     StopStage,
     clear_stop_request,
     write_stop_request,
 )
-from guildbotics.runtime.service_lock import (
+from guildbotics.drivers.service_lock import (
     ServiceLock,
     ServiceLockMetadata,
     ServiceLockUnavailableError,
     inspect_service_lock,
 )
-from guildbotics.runtime.service_owner import (
+from guildbotics.drivers.service_owner import (
     ServiceOwnerError,
     create_relay_runtime,
 )
-from guildbotics.runtime.service_owner import (
+from guildbotics.drivers.service_owner import (
     prepare_service_owner as prepare_relay_service_owner,
+)
+from guildbotics.drivers.task_scheduler import TaskScheduler
+from guildbotics.observability.diagnostics_events import (
+    finish_system_session,
+    start_system_session,
 )
 from guildbotics.sync.activation import (
     activate_workspace_sync,
@@ -47,6 +46,7 @@ from guildbotics.sync.activation import (
 )
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils.correlation import new_id
 from guildbotics.utils.fileio import get_machine_state_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger

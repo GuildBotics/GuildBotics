@@ -11,18 +11,17 @@ import pytest
 
 import guildbotics
 from guildbotics.capabilities.member_repository import read_repository
+from guildbotics.entities.team import Person, Project, Service, Team
+from guildbotics.guest.window import WindowCodeHostingService
 from guildbotics.integrations.factory import (
     ServiceIntegrationFactory,
 )
-from guildbotics.entities.team import Person, Project, Service, Team
 from guildbotics.runtime.code_hosting_service import (
     CodeHostingService,
     DependencyAlert,
     RepositoryReadError,
     RepositoryReadPage,
 )
-from guildbotics.integrations.github import code_hosting_service as github
-from guildbotics.integrations.window import WindowCodeHostingService
 
 
 def team(name="github"):
@@ -265,7 +264,7 @@ def test_repository_consumers_cannot_import_provider_modules():
     root = Path(guildbotics.__file__).parent
     consumers = {
         "runtime/code_hosting_service.py",
-        "integrations/window.py",
+        "guest/window.py",
         "runtime/context.py",
         "runtime/integration_factory.py",
         "capabilities/member_repository.py",

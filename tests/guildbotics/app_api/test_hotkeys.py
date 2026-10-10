@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.utils.workspace_sync_port import shared_relative_path
 from guildbotics.app_api.hotkeys import (
     hotkeys_file,
     load_hotkeys,
@@ -16,6 +15,7 @@ from guildbotics.app_api.hotkeys import (
 )
 from guildbotics.app_api.models import HotkeySettings
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_template_path
+from guildbotics.utils.workspace_sync_port import shared_relative_path
 from tests.guildbotics.app_api.test_api import RuntimeStub
 
 

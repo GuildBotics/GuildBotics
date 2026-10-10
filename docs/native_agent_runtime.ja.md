@@ -80,7 +80,7 @@ GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコー�
 `/opt/guildbotics/venv`にPython 3.12（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
 入れます）と固定した依存を入れ、`to_pdf`が使うWeasyPrintのネイティブライブラリ（Pango）と、欧文・
 日本語のフォント（`fonts-dejavu-core`、`fonts-noto-cjk`）を`apt-get`で入れます。依存の一覧は
-`guildbotics/intelligences/agent_environment/requirements.txt`で、`uv.lock`からhostでしか使わない
+`guildbotics/environment/requirements.txt`で、`uv.lock`からhostでしか使わない
 `microsandbox`を除いて書き出したものです（`uv.lock`を変えたら書き出し直します。書き出しの
 コマンドは、ずれを検出するテスト`test_requirements.py`が失敗時に表示します）。snapshotの名前は
 各ビルド手順の中身から作るので、依存の一覧を変えるとsnapshotは古い扱いになり、再ビルドされます。
@@ -382,10 +382,10 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
 `GUILDBOTICS_CONTRACT_PROBE=1`と、snapshotのあるワークスペースの`GUILDBOTICS_CONFIG_DIR`を付け、
 `-p no:xdist`で実行します。この合成の秘密を使うテストは、端末の外へ何も送りません。
 
-- `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`：接続先の契約。
+- `tests/guildbotics/environment/test_provider_contracts.py`：接続先の契約。
   本番の置換用の値と設定で、どの要求がゲートウェイへ届き、置換用の値がほかのどこへも運ばれないか。
   refreshの起こし方
-- `tests/guildbotics/intelligences/agent_environment/test_credential_boundary.py`：保護境界。
+- `tests/guildbotics/environment/test_credential_boundary.py`：保護境界。
   turnのmicroVMの全ファイルと全プロセスに実値が無いこと、実トークンを折り返すupstreamを相手にしても
   応答に実値が無いこと、ログインを持つ環境の動作中にディスク上の書き込み層とログへ実値が書かれないこと
   （電源断で残るもの）、cancel・timeout・GuildBoticsのprocessのkillで環境が残らないこと、snapshotに
@@ -739,7 +739,7 @@ Antigravityでは、終端の`result`イベントで判定します。`status`�
 
 2026-10-02に1.2.13で観測した利用枠切れは、上流の429応答に
 `RetryInfo.retryDelay: "93454.995843114s"` があっても約9秒で終端イベントを返しました。
-この応答を保存した [fixture](../tests/guildbotics/intelligences/agent_runtime/fixtures/antigravity_quota_1_2_13.json)
+この応答を保存した [fixture](../tests/guildbotics/guest/fixtures/antigravity_quota_1_2_13.json)
 で分類を検証し、任意実行のprovider接続テストでは同じ429応答を返して30秒以内の終了を確認します。
 再生時は、絶対時刻の `quotaResetTimeStamp` だけを現在時刻と記録された `retryDelay` の和に置き換え、
 日付が進んでも利用枠の復帰を待つ応答として検証します。採取したfixture自体は変更しません。

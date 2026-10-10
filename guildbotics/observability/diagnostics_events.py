@@ -10,12 +10,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from guildbotics.observability import correlation_fields
 from guildbotics.observability.activity_event_store import (
     ActivityEventStore,
     is_domain_activity_event,
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.utils.correlation import correlation_fields
 from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_redaction import workspace_secret_values

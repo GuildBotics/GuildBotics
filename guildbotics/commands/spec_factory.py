@@ -19,7 +19,9 @@ from guildbotics.commands.metadata import (
 )
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.registry import find_command_class, get_command_types
-from guildbotics.intelligences.agent_runtime.host_client import admits
+from guildbotics.intelligences.agent_runtime.wire import (
+    admits,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import get_placeholders_from_args

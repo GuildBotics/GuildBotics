@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from guildbotics.entities import Person, Project, Team
-from guildbotics.observability import correlation_fields
+from guildbotics.utils.correlation import correlation_fields
 
 
 class ScriptedAgent:

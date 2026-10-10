@@ -3,7 +3,7 @@ default:
   args:
     model: default
 agent:
-  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain
+  class: guildbotics.guest.cli_agent.CliAgentBrain
   args:
     cli_agent: default
 chat_decision:

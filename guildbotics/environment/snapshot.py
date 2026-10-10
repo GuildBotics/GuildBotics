@@ -1,0 +1,419 @@
+"""The snapshot every turn boots from: built from the declaration, named after it.
+
+A device holds one snapshot per workspace, under the workspace's device-local
+directory. Its name is a digest of everything that went into it -- the base
+image (the recipe's pinned tag, or the digest of the image this device holds
+under the declared reference, which is what the build starts from) and every
+build step's script, which carry the provider CLIs at the versions GuildBotics
+pins and the Python dependencies pinned in :data:`REQUIREMENTS` -- so a
+snapshot built from an older recipe or image is recognised by its name alone
+and rebuilt.
+
+Beside the provider CLIs, the build puts in what GuildBotics' own code runs
+with inside the microVM: CPython :data:`PYTHON_VERSION` in :data:`VENV` with
+the pinned dependencies, and the native libraries and fonts WeasyPrint draws
+PDFs with. The code itself is not in the snapshot; every turn's microVM mounts
+the running process's own (``environment.command_environment``).
+
+The build is not interactive, so the CLI, the Desktop, and the background
+service all run the same one. Logging in to a provider is a separate,
+interactive step (:mod:`.provider_state`) whose result lives outside the
+snapshot.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import shlex
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from logging import Logger
+from pathlib import Path, PurePosixPath
+from typing import Literal
+
+from guildbotics.environment import runtime
+from guildbotics.environment.image import (
+    IMAGE,
+    ImageStatus,
+    image_status,
+)
+from guildbotics.environment.runtime import (
+    AgentEnvironmentError,
+    BuildStep,
+)
+from guildbotics.environment.spec import guest_home
+from guildbotics.environment.toolchain import (
+    ToolchainDeclaration,
+    ToolchainError,
+    load_toolchain,
+    upstream_nameservers,
+)
+from guildbotics.intelligences.cli_agents import CLI_AGENTS
+from guildbotics.utils.advisory_lock import (
+    LockTimeoutError,
+    held_lock,
+    lock_file_nonblocking,
+    open_lock_file,
+    unlock_file,
+)
+from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.i18n_tool import t
+
+#: uv, available to agents as the default image's Python toolchain; installed
+#: from its release archive because that image has no Python of its own.
+UV_VERSION = "0.12.10"
+#: The Python GuildBotics' own code runs with inside the microVM, and where
+#: its environment is. uv keeps the interpreters it installs under
+#: ``/opt/uv/python`` (not the home, which turns bind over); an image that
+#: already has this version on its PATH is used as it is.
+PYTHON_VERSION = "3.12"
+VENV = "/opt/guildbotics/venv"
+#: Where every microVM has the running process's own ``guildbotics`` package
+#: (the checkout run from, or this build's own bundle), read-only. Only
+#: :data:`VENV` finds it there, through a ``.pth`` the build writes: nothing
+#: in a process's environment points at it, so a project a turn works on --
+#: GuildBotics' own checkout among them -- imports its own code. A place of
+#: GuildBotics' own rather than the host's path, so it never lands inside a
+#: directory of the user's that a turn works in.
+CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
+#: The dependencies of GuildBotics installed into :data:`VENV`: ``uv.lock``
+#: exported without what only the host uses (see the test that regenerates
+#: it). Its content is part of the build step, so a change rebuilds.
+REQUIREMENTS = Path(__file__).with_name("requirements.txt")
+#: What WeasyPrint loads to draw a PDF (``to_pdf``), and fonts for Latin and
+#: CJK text: without them Japanese renders as empty boxes.
+PDF_PACKAGES = (
+    "libpango-1.0-0",
+    "libpangoft2-1.0-0",
+    "libharfbuzz-subset0",
+    "fontconfig",
+    "fonts-dejavu-core",
+    "fonts-noto-cjk",
+)
+
+SNAPSHOT_PREFIX = "guildbotics-"
+_LOCK_FILE = "build.lock"
+_FAILED_SUFFIX = ".failed"
+#: How often the background service compares the snapshot to the declaration.
+UPKEEP_INTERVAL_SECONDS = 30.0
+#: A build that has not finished by then has stalled -- on a pull, a fetch
+#: -- and is failed rather than left holding the lock for good.
+BUILD_TIMEOUT_SECONDS = 30 * 60.0
+
+SnapshotState = Literal["missing", "stale", "building", "failed", "ready"]
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotStatus:
+    """Whether the snapshot the declaration asks for exists on this device.
+
+    ``ready``: it does. ``stale``: only one built from another declaration
+    does. ``building``: a build holds the lock. ``failed``: the last build of
+    this very declaration failed, with ``detail`` saying how; nothing
+    rebuilds it until the declaration changes or someone builds by hand.
+    ``missing``: there is nothing.
+    """
+
+    state: SnapshotState
+    name: str
+    path: Path
+    detail: str = ""
+
+
+def snapshots_dir(workspace_root: Path | None = None) -> Path:
+    """Where this device keeps the workspace's snapshots."""
+    return get_workspace_local_path(
+        "agent_environment", "snapshots", workspace_root=workspace_root
+    )
+
+
+def provisioned_packages() -> dict[str, str]:
+    """The provider CLIs the snapshot installs from npm, by tool name."""
+    return {
+        agent.name: agent.provision.package
+        for agent in CLI_AGENTS
+        if agent.provision.package
+    }
+
+
+def provisioned_installs() -> dict[str, str]:
+    """The provider CLIs the snapshot installs by their own script, by tool name."""
+    return {
+        agent.name: agent.provision.install
+        for agent in CLI_AGENTS
+        if agent.provision.install
+    }
+
+
+def snapshot_name(image: ImageStatus) -> str:
+    """The name of the snapshot this device needs for ``image``.
+
+    ``image`` is the declared base image as this device holds it: the
+    snapshot is built from what is held, so that is what names it.
+    """
+    recipe = {
+        "image": image.held if image.declared else IMAGE,
+        "steps": [[step.label, step.script] for step in build_steps()],
+    }
+    encoded = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
+    return SNAPSHOT_PREFIX + hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def build_steps() -> tuple[BuildStep, ...]:
+    """The scripts that install GuildBotics' Python environment and the
+    provider CLIs into the base image."""
+    steps = [BuildStep("home", 'install -d -m 0700 "$HOME"')]
+    archive = "uv-${arch}-unknown-linux-gnu"
+    steps.append(
+        BuildStep(
+            "uv",
+            'arch="$(uname -m)"\n'
+            "curl -fsSL "
+            f'"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{archive}.tar.gz"'
+            " | tar -xz -C /usr/local/bin --strip-components=1"
+            f' "{archive}/uv" "{archive}/uvx"\n'
+            "uv --version",
+        )
+    )
+    steps.append(
+        BuildStep(
+            "pdf",
+            "apt-get update\n"
+            f"apt-get install -y --no-install-recommends {_args(list(PDF_PACKAGES))}\n"
+            "rm -rf /var/lib/apt/lists/*",
+        )
+    )
+    steps.append(
+        BuildStep(
+            "python",
+            "export UV_PYTHON_INSTALL_DIR=/opt/uv/python\n"
+            f"uv venv --no-cache --python {PYTHON_VERSION} {VENV}\n"
+            f"cat > {VENV}/requirements.txt <<'REQUIREMENTS'\n"
+            f"{REQUIREMENTS.read_text(encoding='utf-8').rstrip()}\n"
+            "REQUIREMENTS\n"
+            f"uv pip install --no-cache --python {VENV}"
+            f" -r {VENV}/requirements.txt\n"
+            f"echo {CODE_ROOT}"
+            f" > {VENV}/lib/python{PYTHON_VERSION}/site-packages/guildbotics.pth\n"
+            f"{VENV}/bin/python -c 'import weasyprint'",
+        )
+    )
+    steps.append(
+        BuildStep(
+            "npm",
+            f"npm install -g {_args(list(provisioned_packages().values()))}\n"
+            "npm cache clean --force",
+        )
+    )
+    steps.extend(
+        BuildStep(name, script) for name, script in provisioned_installs().items()
+    )
+    # Last, so an image that lost git on the way is refused: member git runs
+    # every git of the member's clones in the environment.
+    steps.append(BuildStep("git", "git --version"))
+    return tuple(steps)
+
+
+def _args(specs: list[str]) -> str:
+    return " ".join(shlex.quote(spec) for spec in specs)
+
+
+def snapshot_status(
+    image: ImageStatus,
+    workspace_root: Path | None = None,
+) -> SnapshotStatus:
+    """Compare the snapshot recipe with what this device holds."""
+    name = snapshot_name(image)
+    directory = snapshots_dir(workspace_root)
+    path = directory / name
+    if _building(directory):
+        return SnapshotStatus("building", name, path)
+    failed = directory / (name + _FAILED_SUFFIX)
+    if failed.is_file():
+        return SnapshotStatus(
+            "failed", name, path, failed.read_text(encoding="utf-8").strip()
+        )
+    if path.is_dir():
+        return SnapshotStatus("ready", name, path)
+    if _snapshots_in(directory):
+        return SnapshotStatus("stale", name, path)
+    return SnapshotStatus("missing", name, path)
+
+
+def _building(directory: Path) -> bool:
+    """Whether a build holds the directory's lock, in this process or another."""
+    lock = directory / _LOCK_FILE
+    if not lock.exists():
+        return False
+    handle = open_lock_file(lock)
+    try:
+        try:
+            lock_file_nonblocking(handle)
+        except BlockingIOError:
+            return True
+        unlock_file(handle)
+        return False
+    finally:
+        handle.close()
+
+
+def _snapshots_in(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob(f"{SNAPSHOT_PREFIX}*") if p.is_dir())
+
+
+async def build_snapshot(
+    declaration: ToolchainDeclaration,
+    *,
+    on_line: Callable[[str], None],
+    workspace_root: Path | None = None,
+    home: Path | None = None,
+) -> SnapshotStatus:
+    """Build the snapshot the declaration asks for and drop the ones it does not.
+
+    Raises:
+        AgentEnvironmentError: When this device holds no image under the
+            declared reference, another build of this workspace holds the
+            lock, or the build itself fails. A failed build leaves its
+            reason beside the snapshots, where :func:`snapshot_status`
+            reports it until the declaration changes.
+        ToolchainError: When the declaration's resolvers cannot be read
+            on this device.
+    """
+    nameservers = upstream_nameservers(declaration.dns)
+    image = image_status(declaration)
+    if image.refusal:
+        raise AgentEnvironmentError(image.refusal)
+    if image.warning:
+        on_line(f"[image] {image.warning}")
+    expected = snapshot_name(image)
+    directory = snapshots_dir(workspace_root)
+    directory.mkdir(parents=True, exist_ok=True)
+    failed = directory / (expected + _FAILED_SUFFIX)
+
+    def name(digest: str) -> str:
+        # The runtime read the reference itself; the name follows what it
+        # found, so a reference re-tagged by a concurrent load cannot leave
+        # one image's content under another's name.
+        return snapshot_name(replace(image, held=digest) if digest else image)
+
+    try:
+        with held_lock(directory / _LOCK_FILE, timeout=0):
+            failed.unlink(missing_ok=True)
+            try:
+                path = await asyncio.wait_for(
+                    runtime.build_snapshot(
+                        name,
+                        dest_dir=directory,
+                        image=image.reference or IMAGE,
+                        pull=not image.declared,
+                        home=guest_home(home),
+                        steps=build_steps(),
+                        nameservers=nameservers,
+                        memory_mib=declaration.resources.memory_mib,
+                        cpus=declaration.resources.cpus,
+                        on_line=on_line,
+                    ),
+                    BUILD_TIMEOUT_SECONDS,
+                )
+            except (AgentEnvironmentError, TimeoutError) as exc:
+                reason = (
+                    str(exc)
+                    if isinstance(exc, AgentEnvironmentError)
+                    else t(
+                        "intelligences.agent_environment.snapshot.build_timeout",
+                        minutes=int(BUILD_TIMEOUT_SECONDS // 60),
+                    )
+                )
+                failed.write_text(f"{reason}\n", encoding="utf-8")
+                raise AgentEnvironmentError(reason) from exc
+            for other in _snapshots_in(directory):
+                if other.name != path.name:
+                    await runtime.remove_snapshot(other)
+            for marker in directory.glob(f"{SNAPSHOT_PREFIX}*{_FAILED_SUFFIX}"):
+                marker.unlink()
+            return SnapshotStatus("ready", path.name, path)
+    except LockTimeoutError as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.snapshot.build_running")
+        ) from exc
+
+
+async def remove_snapshots(workspace_root: Path | None = None) -> list[str]:
+    """Delete every snapshot of the workspace on this device; returns their names."""
+    directory = snapshots_dir(workspace_root)
+    removed = []
+    for path in _snapshots_in(directory):
+        await runtime.remove_snapshot(path)
+        removed.append(path.name)
+    for marker in directory.glob(f"{SNAPSHOT_PREFIX}*{_FAILED_SUFFIX}"):
+        marker.unlink()
+    return removed
+
+
+class SnapshotUpkeep(threading.Thread):
+    """Keep this device's snapshot matching the declaration while the service runs.
+
+    A declaration edited here, or arriving from another device through
+    synchronization, is rebuilt without anyone asking, so the next turn boots
+    from it. A build already running elsewhere, and one that failed for this
+    same declaration, are left alone: the failure stays on the device's
+    status until the declaration changes or someone builds by hand. The
+    thread is a daemon and is never joined, so a build in progress does not
+    hold up the service's shutdown; the runtime discards the half-built
+    sandbox when the process ends.
+    """
+
+    def __init__(
+        self,
+        stop: threading.Event,
+        log: Logger,
+        *,
+        interval: float = UPKEEP_INTERVAL_SECONDS,
+    ) -> None:
+        super().__init__(name="guildbotics-agent-environment-upkeep", daemon=True)
+        self._stop = stop
+        self._log = log
+        self._interval = interval
+        self._reported = ""
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            self.once()
+            self._stop.wait(self._interval)
+
+    def once(self) -> None:
+        """Build the snapshot if the declaration asks for one this device lacks."""
+        health = runtime.doctor()
+        if not health.available:
+            self._report(f"The agent environment cannot be built here: {health.reason}")
+            return
+        try:
+            declaration = load_toolchain()
+        except (ToolchainError, OSError) as exc:
+            self._report(f"The agent environment declaration cannot be read: {exc}")
+            return
+        image = image_status(declaration)
+        if image.refusal:
+            self._report(f"The agent environment cannot be built here: {image.refusal}")
+            return
+        status = snapshot_status(image)
+        if status.state not in ("missing", "stale"):
+            return
+        self._log.info("Building the agent environment %s...", status.name)
+        try:
+            asyncio.run(build_snapshot(declaration, on_line=self._log.info))
+        except AgentEnvironmentError as exc:
+            self._log.error("The agent environment build failed: %s", exc)
+        else:
+            self._log.info("The agent environment %s is ready.", status.name)
+
+    def _report(self, message: str) -> None:
+        """Warn once per distinct reason, not once per interval."""
+        if message != self._reported:
+            self._reported = message
+            self._log.warning(message)

@@ -41,7 +41,6 @@ from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.inference_failures import latest_inference_failures
-from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
@@ -129,7 +128,6 @@ from guildbotics.commands.errors import (
 )
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
-    CommandAccess,
     command_entries,
     default_command_label,
     load_command_metadata,
@@ -153,36 +151,46 @@ from guildbotics.drivers.execution import (
     TaskRunCoordinator,
     WorkRejectedError,
 )
+from guildbotics.drivers.live_state import LiveStatePort
+from guildbotics.drivers.member_context import resolve_person
+from guildbotics.drivers.service_lock import (
+    ServiceLockUnavailableError,
+    service_keeps_awake,
+    set_service_keeps_awake,
+)
+from guildbotics.drivers.trace_presentations import normalize_trace_presentation
 from guildbotics.entities import Person, Project, Service, Team
-from guildbotics.integrations.chat_profile import get_chat_subscriptions
-from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
-from guildbotics.intelligences.agent_environment.contract import (
+from guildbotics.environment.command_environment import inspected_directories
+from guildbotics.environment.contract import (
     AccessContractError,
     exchange_dir,
     validate_workspace_location,
 )
-from guildbotics.intelligences.agent_environment.runtime import (
+from guildbotics.environment.runtime import (
     AgentEnvironmentError,
     doctor,
 )
-from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
-from guildbotics.intelligences.agent_environment.status import (
+from guildbotics.environment.snapshot import build_snapshot
+from guildbotics.environment.status import (
     DeviceStatus,
     device_status,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
+from guildbotics.environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
 )
-from guildbotics.intelligences.agent_runtime.environment import inspected_directories
-from guildbotics.intelligences.brains.cli_agent import (
+from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
-    get_cli_agent_mapping,
 )
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.intelligences.brains.factory import cli_agent_of
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
-from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
@@ -196,20 +204,13 @@ from guildbotics.observability.session_transcripts import (
 )
 from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
-from guildbotics.runtime.live_state import LiveStatePort
-from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.service_lock import (
-    ServiceLockUnavailableError,
-    service_keeps_awake,
-    set_service_keeps_awake,
-)
-from guildbotics.runtime.trace_presentations import normalize_trace_presentation
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.setup.setup_service import (
     PersonConfigSummary,
     SimplePersonSetupService,
 )
+from guildbotics.utils.correlation import new_id, trace_scope
 from guildbotics.utils.env_loader import (
     HOME_ENV_PROTECTED_KEYS,
     apply_debug_env_to_process,
@@ -222,7 +223,6 @@ from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     apply_workspace_root,
     get_machine_state_root,
-    get_person_config_path,
     get_primary_config_dir,
     get_primary_config_path,
     get_template_path,
@@ -2142,28 +2142,12 @@ def _brain_requirement_kind(brain_value: object, context: Context) -> _Need | No
         return None
 
     try:
-        mapping = load_yaml_file(
-            get_person_config_path(
-                context.person.person_id, "intelligences/brain_mapping.yml"
-            )
-        )
+        tool = cli_agent_of(context.person.person_id, brain)
     except Exception:
-        mapping = {}
-    brain_config = mapping.get(brain, {}) if isinstance(mapping, dict) else {}
-    if isinstance(brain_config, dict) and brain_config.get("class") == CLI_BRAIN_CLASS:
-        return ("cli_agent", _cli_agent_tool(brain_config, context))
-    return ("llm", "")
-
-
-def _cli_agent_tool(brain_config: dict, context: Context) -> str:
-    """The tool a CLI brain runs as this member, or "" when its slot does not
-    resolve (the turn then says why)."""
-    args = brain_config.get("args")
-    slot = args.get("cli_agent", "default") if isinstance(args, dict) else "default"
-    try:
-        return get_cli_agent_mapping(context.person.person_id)[str(slot)].adapter
-    except Exception:
-        return ""
+        # A mapping that does not load names no need: running the command
+        # says why it cannot run.
+        return None
+    return ("llm", "") if tool is None else ("cli_agent", tool)
 
 
 def _child_command_requirement_kinds(
@@ -2531,7 +2515,7 @@ def _assistant_cwd(name: str) -> Path:
     """Where a Desktop assistant's turns work: its own directory under
     ``.guildbotics/local/work``."""
     cwd = get_workspace_work_path(name, workspace_root=get_workspace_root())
-    from guildbotics.intelligences.agent_environment.contract import (
+    from guildbotics.environment.contract import (
         protected_paths,
         validate_mount_source,
     )

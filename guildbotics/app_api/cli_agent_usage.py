@@ -16,8 +16,8 @@ from datetime import UTC, datetime
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import CliAgentUsageCheck, CliAgentUsageResponse
-from guildbotics.intelligences.agent_environment.provider_state import has_credentials
-from guildbotics.intelligences.agent_runtime.usage import (
+from guildbotics.environment.provider_state import has_credentials
+from guildbotics.environment.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
     read_cli_agent_usage,

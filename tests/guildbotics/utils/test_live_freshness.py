@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from guildbotics.drivers import relay_runtime
 from guildbotics.hub import relay
-from guildbotics.runtime import relay_runtime
 from guildbotics.utils.live_freshness import (
     LIVE_CLOCK_SKEW_SECONDS,
     LIVE_DELAY_SECONDS,

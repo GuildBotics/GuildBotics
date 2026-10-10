@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 import guildbotics.cli.run as run_module
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.cli import main
 from guildbotics.cli.run import _parse_command_spec
 from guildbotics.commands.errors import (
@@ -17,13 +18,11 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.command_runner import prepare_command, run_main_command
+from guildbotics.drivers.member_context import resolve_person
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.intelligences.functions import to_text
-from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.workflow_invocation import (
@@ -31,6 +30,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
 )
 from guildbotics.utils import local_api
+from guildbotics.utils.correlation import current_trace, set_attributes
 from guildbotics.utils.local_api import (
     PROOF_PATH,
     TOKEN_HEADER,
@@ -44,7 +44,6 @@ from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
 )
-
 
 #: The commands the host starts run in this process.
 pytestmark = pytest.mark.usefixtures("configured_team", "commands_in_process")

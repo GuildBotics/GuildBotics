@@ -22,6 +22,10 @@ from guildbotics.integrations.chat_state_store import (
     ThreadConversationState,
 )
 from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
+from guildbotics.integrations.event_listener import (
+    EventListener,
+    IncomingChatEvent,
+)
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.integrations.slack.slack_socket_listener import (
@@ -29,10 +33,6 @@ from guildbotics.integrations.slack.slack_socket_listener import (
 )
 from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import (
-    EventListener,
-    IncomingChatEvent,
-)
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
 SubscriptionSignature = tuple[tuple[tuple[str, str], ...], ...]

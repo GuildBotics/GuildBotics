@@ -21,7 +21,7 @@ from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import TaskRunCoordinator, WorkRejectedError
 from guildbotics.drivers.utils import command_boundary
-from guildbotics.observability import trace_scope
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.env_loader import load_guildbotics_env
 
 

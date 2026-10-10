@@ -81,6 +81,7 @@ def test_failed_keychain_write_does_not_advance_generation(
     monkeypatch,
 ):
     from keyring.errors import KeyringError
+
     from guildbotics.utils.keychain import SecretStoreError
 
     _store(workspace_id, "A_TOKEN", 0, 1, "first")

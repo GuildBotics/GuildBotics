@@ -11,17 +11,11 @@ from guildbotics.capabilities.chat_selection import (
     ChatAttempt,
     ChatSelector,
 )
+from guildbotics.capabilities.decisions.models import Selection
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.agent_turn import run_agent_turn
 from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.entities.team import Person, Role
-from guildbotics.runtime.chat_service import (
-    ChatEvent,
-    ChatEventPage,
-    ChatIdentity,
-    ChatPostResult,
-)
 from guildbotics.integrations.chat_state_store import (
     ThreadContextUnavailableError,
     ThreadConversationState,
@@ -29,14 +23,21 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
     ThreadSystemNoticeState,
 )
+from guildbotics.integrations.event_listener import IncomingChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.brains.cli_agent import (
+from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
-from guildbotics.intelligences.decisions.models import Selection
-from guildbotics.observability import trace_scope
-from guildbotics.runtime.event_listener import IncomingChatEvent
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
+from guildbotics.runtime.chat_service import (
+    ChatEvent,
+    ChatEventPage,
+    ChatIdentity,
+    ChatPostResult,
+)
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
@@ -49,6 +50,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.command_environment_doubles import runs_as
 

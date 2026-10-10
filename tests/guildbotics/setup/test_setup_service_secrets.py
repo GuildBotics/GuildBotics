@@ -19,11 +19,11 @@ from guildbotics.setup.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import (
     SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
 )
-from guildbotics.utils.keychain import SecretStoreError
 
 
 def _project_input(config_dir: Path, **overrides):

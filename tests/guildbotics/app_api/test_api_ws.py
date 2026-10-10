@@ -25,8 +25,8 @@ from websockets.sync.client import connect
 
 from guildbotics.app_api.api import _stream, create_app
 from guildbotics.app_api.events import EventBus
-from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
 
 POLICY_VIOLATION_CLOSE_CODE = 1008

@@ -9,8 +9,8 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import load_command_metadata, parse_command_access
 from guildbotics.commands.python_command import _load_python_module
 from guildbotics.runtime.code_hosting_service import (
-    RepositoryReadPage,
     RepositoryReadError,
+    RepositoryReadPage,
 )
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t

@@ -102,7 +102,7 @@ when it has one, otherwise installed by uv under `/opt/uv/python`) and the
 pinned dependencies, and `apt-get` installs WeasyPrint's native libraries
 (Pango) for `to_pdf` with fonts for Latin and Japanese text
 (`fonts-dejavu-core`, `fonts-noto-cjk`). The dependency list is
-`guildbotics/intelligences/agent_environment/requirements.txt`, exported
+`guildbotics/environment/requirements.txt`, exported
 from `uv.lock` without `microsandbox`, which only the host uses (export it
 again after changing `uv.lock`; the drift test `test_requirements.py`
 prints the command when it fails). The snapshot is named after the content
@@ -488,10 +488,10 @@ the human watching. Run the tests on a device with a snapshot, with
 `GUILDBOTICS_CONTRACT_PROBE=1`, `GUILDBOTICS_CONFIG_DIR` at a workspace with the snapshot,
 and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret tests.
 
-- `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`: the
+- `tests/guildbotics/environment/test_provider_contracts.py`: the
   connection contracts. With the production stand-in and settings, which requests reach the
   gateway, that the stand-in is carried nowhere else, and how a refresh is made.
-- `tests/guildbotics/intelligences/agent_environment/test_credential_boundary.py`: the
+- `tests/guildbotics/environment/test_credential_boundary.py`: the
   protection boundary. No real value in any file or process of a turn's microVM; none in an
   answer, even from an upstream that echoes the real token; none written to the writable
   layer or logs on the disk while an environment that holds the login runs (what a power cut
@@ -878,7 +878,7 @@ authentication, protocol, and process failures do.
 On 2026-10-02, a real quota exhaustion on 1.2.13 returned a terminal event in about
 nine seconds despite an upstream 429 containing
 `RetryInfo.retryDelay: "93454.995843114s"`. The captured
-[fixture](../tests/guildbotics/intelligences/agent_runtime/fixtures/antigravity_quota_1_2_13.json)
+[fixture](../tests/guildbotics/guest/fixtures/antigravity_quota_1_2_13.json)
 tests classification, and the opt-in provider contract test replays that 429 and
 requires termination within 30 seconds. Replay rebases only the absolute
 `quotaResetTimeStamp` to the current time plus the captured `retryDelay`, keeping

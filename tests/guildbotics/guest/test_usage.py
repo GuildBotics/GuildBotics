@@ -1,0 +1,1342 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from guildbotics.environment import usage as usage_module
+from guildbotics.environment.usage import (
+    CLI_AGENT_USAGE_READERS,
+    CliAgentUsageError,
+    read_antigravity_usage,
+    read_claude_usage,
+    read_codex_usage,
+    read_copilot_usage,
+    read_grok_usage,
+)
+from guildbotics.intelligences.agent_runtime import usage_snapshots
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    parse_antigravity_usage,
+    parse_claude_usage,
+    parse_codex_rate_limits,
+    parse_copilot_quota,
+    parse_grok_billing,
+)
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_ANTIGRAVITY_USAGE_FIXTURE = json.loads(
+    (_FIXTURES / "antigravity_usage_1_2_5.json").read_text(encoding="utf-8")
+)
+#: Measured on GitHub Copilot CLI 1.0.86 (``account.getQuota``), anonymized.
+_COPILOT_QUOTA_FIXTURE = json.loads(
+    (_FIXTURES / "copilot_quota_1_0_86.json").read_text(encoding="utf-8")
+)
+_GROK_ZERO_USAGE_FIXTURE = json.loads(
+    (
+        Path(__file__).parent
+        / "fixtures"
+        / "grok_billing_unified_weekly_zero_1_0_34.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+def test_parse_codex_rate_limits_reads_camel_case_buckets() -> None:
+    # The duration field name has changed across codex versions; one window
+    # uses the current name and the other a legacy alias.
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "primary": {
+                        "usedPercent": 42.5,
+                        "resetsAt": 2_000_000_000,
+                        "windowDurationMins": 300,
+                    },
+                    "secondary": {
+                        "usedPercent": 78,
+                        "resetsAt": 2_000_500_000,
+                        "windowMinutes": 10_080,
+                    },
+                }
+            }
+        }
+    )
+
+    assert snapshot.agent == "codex"
+    assert not snapshot.limit_reached
+    assert [window.window for window in snapshot.windows] == ["primary", "secondary"]
+    primary = snapshot.windows[0]
+    assert primary.used_percent == 42.5
+    assert primary.resets_at == "2033-05-18T03:33:20+00:00"
+    assert primary.window_minutes == 300
+    assert primary.label == ""
+    assert snapshot.windows[1].window_minutes == 10_080
+    assert snapshot.windows[1].label == ""
+    assert snapshot.checked_at
+
+
+def test_parse_codex_rate_limits_reads_snake_case_flat_shape() -> None:
+    snapshot = parse_codex_rate_limits(
+        {"rate_limits": {"primary": {"used_percent": 100, "resets_at": 2_000_000_000}}}
+    )
+
+    assert snapshot.limit_reached
+    assert snapshot.windows[0].used_percent == 100
+    assert snapshot.windows[0].window_minutes is None
+
+
+def test_parse_codex_rate_limits_labels_extra_buckets() -> None:
+    # Codex App Server reports a separate weekly quota (gpt-reserve) alongside
+    # the main 5h/1w windows. Same duration is not a duplicate; the extra
+    # bucket's limitName must survive so the UI can tell the two 1w meters
+    # apart. Extra buckets may arrive first in the payload; the main windows
+    # still lead the snapshot so the compact meters stay 5h, 1w, then extras.
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "base_model_inference": {
+                    "limitId": "base_model_inference",
+                    "limitName": "gpt-reserve",
+                    "primary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 10_080,
+                        "resetsAt": 1_788_427_524,
+                    },
+                    "secondary": None,
+                },
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": None,
+                    "primary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1_787_840_724,
+                    },
+                    "secondary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 10_080,
+                        "resetsAt": 1_788_427_524,
+                    },
+                },
+            }
+        }
+    )
+
+    assert [
+        (window.window, window.window_minutes, window.label)
+        for window in snapshot.windows
+    ] == [
+        ("primary", 300, ""),
+        ("secondary", 10_080, ""),
+        ("primary", 10_080, "gpt-reserve"),
+    ]
+
+
+def test_parse_codex_rate_limits_uses_limit_id_when_name_missing() -> None:
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "primary": {"usedPercent": 10, "windowDurationMins": 300},
+                },
+                "base_model_inference": {
+                    "limitName": None,
+                    "primary": {"usedPercent": 20, "windowDurationMins": 10_080},
+                },
+            }
+        }
+    )
+
+    assert [window.label for window in snapshot.windows] == [
+        "",
+        "base_model_inference",
+    ]
+
+
+def test_parse_codex_rate_limits_honors_reached_type_flag() -> None:
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "rateLimitReachedType": "primary",
+                    "primary": {"usedPercent": 55},
+                }
+            }
+        }
+    )
+
+    assert snapshot.limit_reached
+
+
+def test_parse_codex_rate_limits_drops_unparseable_reset_values() -> None:
+    # Anything that is neither epoch seconds nor an ISO timestamp must not
+    # leak to the UI as a bogus date string.
+    bad = parse_codex_rate_limits(
+        {"rate_limits": {"primary": {"used_percent": 10, "resets_at": "bad"}}}
+    )
+    assert bad.windows[0].resets_at == ""
+
+    iso = parse_codex_rate_limits(
+        {
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 10,
+                    "resets_at": "2026-07-18T05:00:00+00:00",
+                }
+            }
+        }
+    )
+    assert iso.windows[0].resets_at == "2026-07-18T05:00:00+00:00"
+
+
+def test_parse_codex_rate_limits_tolerates_empty_and_malformed_input() -> None:
+    for raw in ({}, {"rate_limits": {}}, {"rateLimitsByLimitId": {"x": "bad"}}, None):
+        snapshot = parse_codex_rate_limits(raw)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+_GROK_BILLING = {
+    "config": {
+        "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-08-07T07:37:18.756767+00:00",
+            "end": "2026-08-14T07:37:18.756767+00:00",
+        },
+        "creditUsagePercent": 37.5,
+        "onDemandCap": {"val": 0},
+        "onDemandUsed": {"val": 0},
+        "prepaidBalance": {"val": 0},
+        "isUnifiedBillingUser": True,
+        "billingPeriodStart": "2026-08-07T07:37:18.756767+00:00",
+        "billingPeriodEnd": "2026-08-14T07:37:18.756767+00:00",
+    },
+    "subscription_tier": "SuperGrok Lite",
+}
+
+
+def test_parse_grok_billing_reads_subscription_window() -> None:
+    snapshot = parse_grok_billing(
+        _GROK_BILLING, {"authenticated": True, "meta": {"gate": None}}
+    )
+
+    assert snapshot.agent == "grok"
+    assert not snapshot.limit_reached
+    assert len(snapshot.windows) == 1
+    window = snapshot.windows[0]
+    assert window.window == "subscription"
+    assert window.used_percent == 37.5
+    assert window.resets_at == "2026-08-14T07:37:18.756767+00:00"
+    assert window.window_minutes == 10_080
+    assert snapshot.checked_at
+
+
+@pytest.mark.parametrize("gate", [None, "", {}])
+def test_parse_grok_billing_normalizes_omitted_unified_weekly_zero(gate: Any) -> None:
+    subscription = {
+        **_GROK_ZERO_USAGE_FIXTURE["subscription"],
+        "meta": {"gate": gate},
+    }
+    snapshot = parse_grok_billing(
+        _GROK_ZERO_USAGE_FIXTURE["billing"],
+        subscription,
+    )
+
+    assert not snapshot.limit_reached
+    assert len(snapshot.windows) == 1
+    window = snapshot.windows[0]
+    assert window.window == "subscription"
+    assert window.used_percent == 0
+    assert window.resets_at == "2026-09-25T07:37:18.756767+00:00"
+    assert window.window_minutes == 10_080
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("subscription", "authenticated", False),
+        ("subscription", "authenticated", None),
+        ("subscription_meta", "gate", {"reason": "usage_limit"}),
+        ("config", "isUnifiedBillingUser", False),
+        ("config", "isUnifiedBillingUser", None),
+        ("period", "type", "USAGE_PERIOD_TYPE_MONTHLY"),
+        ("period", "start", None),
+        ("period", "start", "bad"),
+        ("period", "end", None),
+        ("period", "end", "bad"),
+        ("period", "end", "2026-09-18T07:37:18.756767+00:00"),
+    ],
+)
+def test_parse_grok_billing_does_not_infer_zero_without_all_evidence(
+    section: str, key: str, value: Any
+) -> None:
+    billing = json.loads(json.dumps(_GROK_ZERO_USAGE_FIXTURE["billing"]))
+    subscription = json.loads(json.dumps(_GROK_ZERO_USAGE_FIXTURE["subscription"]))
+    target = {
+        "subscription": subscription,
+        "subscription_meta": subscription["meta"],
+        "config": billing["config"],
+        "period": billing["config"]["currentPeriod"],
+    }[section]
+    if value is None:
+        target.pop(key)
+    else:
+        target[key] = value
+
+    snapshot = parse_grok_billing(billing, subscription)
+
+    assert snapshot.windows == []
+    assert snapshot.limit_reached is (section == "subscription_meta")
+
+
+@pytest.mark.parametrize(
+    ("used_percent", "limit_reached"),
+    [(0, False), (100, True), (125.5, True)],
+)
+def test_parse_grok_billing_accepts_subscription_percent_boundaries(
+    used_percent: float, limit_reached: bool
+) -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "creditUsagePercent": used_percent,
+        }
+    }
+
+    snapshot = parse_grok_billing(billing, {})
+
+    assert snapshot.windows[0].used_percent == used_percent
+    assert snapshot.limit_reached is limit_reached
+
+
+@pytest.mark.parametrize(
+    "used_percent", [None, "bad", -1, True, float("nan"), float("inf")]
+)
+def test_parse_grok_billing_drops_explicit_null_or_invalid_subscription_percent(
+    used_percent: Any,
+) -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "creditUsagePercent": used_percent,
+            "onDemandCap": {"val": 100},
+            "onDemandUsed": {"val": 50},
+        }
+    }
+
+    snapshot = parse_grok_billing(billing, _GROK_ZERO_USAGE_FIXTURE["subscription"])
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+def test_parse_grok_billing_preserves_gate_without_subscription_percent() -> None:
+    snapshot = parse_grok_billing(
+        {"config": {"currentPeriod": _GROK_BILLING["config"]["currentPeriod"]}},
+        {"authenticated": True, "meta": {"gate": {"reason": "usage_limit"}}},
+    )
+
+    assert snapshot.windows == []
+    assert snapshot.limit_reached
+
+
+def test_parse_grok_billing_keeps_percent_without_period() -> None:
+    snapshot = parse_grok_billing({"config": {"creditUsagePercent": 12.5}}, {})
+
+    assert len(snapshot.windows) == 1
+    assert snapshot.windows[0].used_percent == 12.5
+    assert snapshot.windows[0].resets_at == ""
+    assert snapshot.windows[0].window_minutes is None
+
+
+def test_parse_grok_billing_reports_on_demand_credit_percent() -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "onDemandCap": {"val": 200},
+            "onDemandUsed": {"val": 51},
+        }
+    }
+    snapshot = parse_grok_billing(billing, {})
+
+    on_demand = snapshot.windows[1]
+    assert on_demand.window == "on_demand"
+    assert on_demand.used_percent == 25.5
+    assert not snapshot.limit_reached
+
+
+def test_parse_grok_billing_marks_limit_on_gate_or_exhausted_credits() -> None:
+    gated = parse_grok_billing(
+        _GROK_BILLING,
+        {"authenticated": True, "meta": {"gate": {"reason": "usage_limit"}}},
+    )
+    assert gated.limit_reached
+
+    exhausted = parse_grok_billing(
+        {
+            "config": {
+                **_GROK_BILLING["config"],
+                "onDemandCap": {"val": 100},
+                "onDemandUsed": {"val": 100},
+            }
+        },
+        {},
+    )
+    assert exhausted.limit_reached
+
+
+def test_parse_grok_billing_tolerates_empty_and_malformed_input() -> None:
+    for billing, subscription in ((None, None), ({}, {}), ({"config": "bad"}, "bad")):
+        snapshot = parse_grok_billing(billing, subscription)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+# Verbatim shape of the `claude -p /usage` result text on 2.1.263; the trailing
+# contribution section must not produce windows.
+_CLAUDE_USAGE_TEXT = """\
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)
+Current week (all models): 56% used · resets Aug 8, 10am (Asia/Tokyo)
+Current week (Fable): 59% used · resets Aug 8, 10am (Asia/Tokyo)
+Extra budget: 5% used
+
+What's contributing to your limits usage?
+Last 24h · 313 requests · 7 sessions
+  51% of your usage was at >150k context
+"""
+
+_CLAUDE_NOW = datetime(2026, 8, 7, 22, 0, 0, tzinfo=UTC)
+
+
+def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
+    snapshot = parse_claude_usage(_CLAUDE_USAGE_TEXT, now=_CLAUDE_NOW)
+
+    assert snapshot.agent == "claude"
+    assert not snapshot.limit_reached
+    assert [
+        (window.window, window.used_percent, window.label)
+        for window in snapshot.windows
+    ] == [
+        ("session", 24.0, ""),
+        ("week", 56.0, ""),
+        ("current_week_fable", 59.0, "Fable"),
+        ("extra_budget", 5.0, "Extra budget"),
+    ]
+    session, week, fable, extra = snapshot.windows
+    assert session.resets_at == "2026-08-08T11:10:00+09:00"
+    assert session.window_minutes == 300
+    assert week.resets_at == "2026-08-08T10:00:00+09:00"
+    assert week.window_minutes == 10_080
+    assert fable.resets_at == "2026-08-08T10:00:00+09:00"
+    assert fable.window_minutes == 10_080
+    # A budget line whose period is unknown reports none rather than a guess.
+    assert (extra.resets_at, extra.window_minutes) == ("", None)
+    assert snapshot.checked_at
+
+
+def test_parse_claude_usage_marks_limit_at_full_window() -> None:
+    snapshot = parse_claude_usage(
+        "Current session: 100% used · resets Aug 8, 11:10am (Asia/Tokyo)",
+        now=_CLAUDE_NOW,
+    )
+    assert snapshot.limit_reached
+
+
+def test_parse_claude_usage_drops_unusable_reset_times() -> None:
+    # A missing timezone or an unknown one makes the instant ambiguous, and a
+    # malformed phrase must not survive as a bogus timestamp.
+    for reset in ("Aug 8, 11:10am", "Aug 8, 11:10am (Mars/Olympus)", "tomorrow"):
+        snapshot = parse_claude_usage(
+            f"Current session: 10% used · resets {reset}", now=_CLAUDE_NOW
+        )
+        assert snapshot.windows[0].resets_at == ""
+        assert snapshot.windows[0].used_percent == 10.0
+
+
+def test_parse_claude_usage_rolls_reset_into_next_year() -> None:
+    snapshot = parse_claude_usage(
+        "Current week (all models): 12% used · resets Jan 2, 12am (UTC)",
+        now=datetime(2026, 12, 30, 12, 0, 0, tzinfo=UTC),
+    )
+    assert snapshot.windows[0].resets_at == "2027-01-02T00:00:00+00:00"
+
+
+def test_parse_claude_usage_tolerates_empty_and_malformed_input() -> None:
+    for raw in ("", "no usage here", None, {"unexpected": "shape"}):
+        snapshot = parse_claude_usage(raw, now=_CLAUDE_NOW)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+def test_parse_antigravity_usage_reads_measured_model_group_windows() -> None:
+    snapshot = parse_antigravity_usage(_ANTIGRAVITY_USAGE_FIXTURE)
+
+    assert snapshot.agent == "antigravity"
+    assert snapshot.limit_reached
+    assert [
+        (
+            window.window,
+            round(window.used_percent, 4),
+            window.window_minutes,
+            window.label,
+            window.resets_at,
+        )
+        for window in snapshot.windows
+    ] == [
+        (
+            "weekly",
+            6.22,
+            10_080,
+            "Gemini models",
+            "2026-09-25T07:50:32+00:00",
+        ),
+        (
+            "5h",
+            37.5,
+            300,
+            "Gemini models",
+            "2026-09-18T15:07:00+00:00",
+        ),
+        (
+            "weekly",
+            0.0,
+            10_080,
+            "Claude and GPT models",
+            "2026-09-25T07:50:32+00:00",
+        ),
+        (
+            "5h",
+            100.0,
+            300,
+            "Claude and GPT models",
+            "2026-09-18T15:07:00+00:00",
+        ),
+    ]
+    assert snapshot.checked_at
+
+
+@pytest.mark.parametrize("remaining", [0, 0.0, 1, 1.0, 0.5])
+def test_parse_antigravity_usage_accepts_remaining_fraction_boundaries(
+    remaining: float,
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload({"remaining_fraction": remaining})
+    )
+
+    window = snapshot.windows[0]
+    assert window.used_percent == pytest.approx((1.0 - remaining) * 100.0)
+    assert snapshot.limit_reached is (remaining == 0)
+
+
+@pytest.mark.parametrize(
+    "remaining",
+    [None, "bad", True, False, -0.1, 1.1, float("nan"), float("inf"), float("-inf")],
+)
+def test_parse_antigravity_usage_drops_unusable_remaining_fraction(
+    remaining: Any,
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload({"remaining_fraction": remaining})
+    )
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+@pytest.mark.parametrize(
+    ("window", "group_name", "window_minutes", "label"),
+    [
+        ("weekly", "Gemini models", 10_080, "Gemini models"),
+        ("5h", "Gemini models", 300, "Gemini models"),
+        ("daily", "Gemini models", None, "Gemini models (daily)"),
+        ("monthly", "Gemini models", None, "Gemini models (monthly)"),
+        ("daily", "", None, "daily"),
+    ],
+)
+def test_parse_antigravity_usage_folds_unknown_window_into_label(
+    window: str, group_name: str, window_minutes: int | None, label: str
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload(
+            {"window": window, "remaining_fraction": 0.5},
+            group_name=group_name,
+        )
+    )
+
+    parsed = snapshot.windows[0]
+    assert parsed.window == window
+    assert parsed.window_minutes == window_minutes
+    assert parsed.label == label
+
+
+def test_parse_antigravity_usage_keeps_same_period_windows_under_group_labels() -> None:
+    snapshot = parse_antigravity_usage(_ANTIGRAVITY_USAGE_FIXTURE)
+    weekly = [window for window in snapshot.windows if window.window == "weekly"]
+    five_hour = [window for window in snapshot.windows if window.window == "5h"]
+
+    assert [window.label for window in weekly] == [
+        "Gemini models",
+        "Claude and GPT models",
+    ]
+    assert [window.label for window in five_hour] == [
+        "Gemini models",
+        "Claude and GPT models",
+    ]
+
+
+def test_parse_antigravity_usage_ignores_text_and_malformed_payloads() -> None:
+    for raw in (
+        "",
+        "Gemini models\tweekly\t0.9\t2026-09-25T07:50:32Z",
+        "remaining_fraction=0.5",
+        None,
+        {"command": {"data": {"groups": "bad"}}},
+        {"groups": [{"name": "Gemini models", "buckets": []}]},
+    ):
+        snapshot = parse_antigravity_usage(raw)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+def _antigravity_payload(
+    bucket: dict[str, Any], group_name: str = "Gemini models"
+) -> dict[str, Any]:
+    group: dict[str, Any] = {"buckets": [{"window": "weekly", **bucket}]}
+    if group_name:
+        group["name"] = group_name
+    return {
+        "status": "SUCCESS",
+        "command": {"data": {"groups": [group]}},
+    }
+
+
+class _Writer:
+    def __init__(self, process: _Process) -> None:
+        self.process = process
+
+    def write(self, data: bytes) -> None:
+        for line in data.splitlines():
+            self.process.handle(json.loads(line))
+
+    async def drain(self) -> None:
+        return None
+
+
+class _Process:
+    """Fake ``codex app-server`` speaking just enough JSONL RPC for the probe."""
+
+    def __init__(self, rate_limits: dict[str, Any] | None = None, error: Any = None):
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _Writer(self)
+        self.returncode: int | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.rate_limits = rate_limits if rate_limits is not None else {}
+        self.error = error
+
+    def handle(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+        if "method" not in message or "id" not in message:
+            return
+        request_id = message["id"]
+        if message["method"] == "initialize":
+            self._feed({"jsonrpc": "2.0", "id": request_id, "result": {}})
+            self._feed({"jsonrpc": "2.0", "method": "loginStatus", "params": {}})
+        elif message["method"] == "account/rateLimits/read":
+            if self.error is not None:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "error": self.error})
+            else:
+                self._feed(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {"rateLimits": self.rate_limits},
+                    }
+                )
+
+    def _feed(self, message: dict[str, Any]) -> None:
+        self.stdout.feed_data(json.dumps(message).encode() + b"\n")
+
+
+@pytest.mark.asyncio
+async def test_read_codex_usage_probes_app_server(
+    monkeypatch, fake_environment
+) -> None:
+    process = _Process(
+        rate_limits={"primary": {"usedPercent": 12.0, "resetsAt": 2_000_000_000}}
+    )
+
+    async def create_process(*args, **_kwargs):
+        assert args[:2] == ("codex", "app-server")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_codex_usage()
+
+    assert [message.get("method") for message in process.messages] == [
+        "initialize",
+        "initialized",
+        "account/rateLimits/read",
+    ]
+    assert snapshot.windows[0].used_percent == 12.0
+    assert not snapshot.limit_reached
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_codex_usage_raises_on_rpc_error(
+    monkeypatch, fake_environment
+) -> None:
+    process = _Process(error={"code": -32601, "message": "method not found"})
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_codex_usage()
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_probe_environment_boot_fails_in_bounded_time(monkeypatch):
+    async def stall(_tool):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(usage_module, "start_probe_environment", stall)
+    monkeypatch.setattr(usage_module, "PROBE_START_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(CliAgentUsageError, match="did not start in time"):
+        await read_codex_usage()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_probe_start_releases_the_environment(
+    monkeypatch, fake_environment
+) -> None:
+    starting = asyncio.Event()
+
+    async def create_process(*_args, **_kwargs):
+        starting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    probe = asyncio.create_task(read_codex_usage())
+    await starting.wait()
+    probe.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await probe
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_codex_usage_raises_when_stream_closes(
+    monkeypatch, fake_environment
+) -> None:
+    process = _Process()
+    process.stdout.feed_eof()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_codex_usage()
+
+
+@pytest.mark.asyncio
+async def test_read_codex_usage_raises_when_start_fails(monkeypatch) -> None:
+    async def create_process(*_args, **_kwargs):
+        raise OSError("missing binary")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_codex_usage()
+
+
+class _GrokProcess:
+    """Fake ``grok agent stdio`` speaking just enough ACP for the probe."""
+
+    def __init__(self, auth_error: Any = None):
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _Writer(self)
+        self.returncode: int | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.auth_error = auth_error
+
+    def handle(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+        if "method" not in message or "id" not in message:
+            return
+        request_id = message["id"]
+        method = message["method"]
+        if method == "initialize":
+            # Grok interleaves private notifications with responses; the
+            # probe must skip them.
+            self._feed(
+                {"jsonrpc": "2.0", "method": "_x.ai/settings/update", "params": {}}
+            )
+            self._feed(
+                {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": 1}}
+            )
+        elif method == "authenticate":
+            if self.auth_error is not None:
+                self._feed(
+                    {"jsonrpc": "2.0", "id": request_id, "error": self.auth_error}
+                )
+            else:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        elif method == "_x.ai/billing":
+            self._feed({"jsonrpc": "2.0", "id": request_id, "result": _GROK_BILLING})
+        elif method == "_x.ai/auth/check_subscription":
+            self._feed(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"authenticated": True, "meta": {"gate": None}},
+                }
+            )
+
+    def _feed(self, message: dict[str, Any]) -> None:
+        self.stdout.feed_data(json.dumps(message).encode() + b"\n")
+
+
+@pytest.mark.asyncio
+async def test_read_grok_usage_probes_agent_stdio(
+    monkeypatch, fake_environment
+) -> None:
+    process = _GrokProcess()
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("grok", "--no-auto-update", "agent", "stdio")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_grok_usage()
+
+    assert [message.get("method") for message in process.messages] == [
+        "initialize",
+        "authenticate",
+        "_x.ai/billing",
+        "_x.ai/auth/check_subscription",
+    ]
+    assert process.messages[1]["params"] == {"methodId": "cached_token"}
+    assert snapshot.agent == "grok"
+    assert snapshot.windows[0].used_percent == 37.5
+    assert snapshot.windows[0].resets_at == "2026-08-14T07:37:18.756767+00:00"
+    assert not snapshot.limit_reached
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_grok_usage_raises_without_saved_login(
+    monkeypatch, fake_environment
+) -> None:
+    process = _GrokProcess(auth_error={"code": -32000, "message": "not logged in"})
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_grok_usage()
+    assert fake_environment.started[-1].closed
+
+
+class _ClaudeProcess:
+    """Fake ``claude -p /usage`` returning one JSON document on stdout."""
+
+    def __init__(self, payload: Any):
+        self.payload = payload
+        self.returncode: int | None = None
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.returncode = 0
+        raw = (
+            self.payload
+            if isinstance(self.payload, bytes)
+            else json.dumps(self.payload).encode()
+        )
+        return raw, b""
+
+
+@pytest.mark.asyncio
+async def test_read_claude_usage_probes_print_mode(
+    monkeypatch, fake_environment
+) -> None:
+    process = _ClaudeProcess(
+        {"is_error": False, "num_turns": 0, "result": _CLAUDE_USAGE_TEXT}
+    )
+
+    async def create_process(*args, **_kwargs):
+        assert args == (
+            "claude",
+            "-p",
+            "/usage",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+        )
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_claude_usage()
+
+    assert snapshot.agent == "claude"
+    assert snapshot.windows[0].used_percent == 24.0
+    assert [window.window for window in snapshot.windows] == [
+        "session",
+        "week",
+        "current_week_fable",
+        "extra_budget",
+    ]
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_claude_usage_raises_on_error_or_empty_panel(
+    monkeypatch, fake_environment
+) -> None:
+    # An error result, a panel without usage lines (e.g. API-key auth), and
+    # non-JSON output must all surface as CliAgentUsageError.
+    for payload in (
+        {"is_error": True, "result": "Not available"},
+        {"is_error": False, "result": "No usage panel"},
+        b"claude exploded",
+    ):
+        process = _ClaudeProcess(payload)
+
+        async def create_process(*_args, **_kwargs):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+        with pytest.raises(CliAgentUsageError):
+            await read_claude_usage()
+        assert fake_environment.started[-1].closed
+
+
+class _AntigravityProcess:
+    """Fake ``agy -p /usage`` returning one JSON document on stdout."""
+
+    def __init__(self, payload: Any, returncode: int = 0):
+        self.payload = payload
+        self.returncode: int | None = None
+        self._exit = returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.returncode = self._exit
+        raw = (
+            self.payload
+            if isinstance(self.payload, bytes)
+            else json.dumps(self.payload).encode()
+        )
+        return raw, b""
+
+
+@pytest.mark.asyncio
+async def test_read_antigravity_usage_probes_print_mode(
+    monkeypatch, fake_environment
+) -> None:
+    process = _AntigravityProcess(_ANTIGRAVITY_USAGE_FIXTURE)
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("agy", "-p", "/usage", "--output-format", "json")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_antigravity_usage()
+
+    assert snapshot.agent == "antigravity"
+    assert snapshot.windows[0].label == "Gemini models"
+    assert snapshot.windows[-1].used_percent == 100.0
+    assert snapshot.limit_reached
+    assert fake_environment.started[-1].closed
+    assert fake_environment.started[-1].tool == "antigravity"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,returncode",
+    [
+        ({"status": "ERROR", "error": "UNAUTHENTICATED"}, 0),
+        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 1),
+        (b"agy exploded", 0),
+        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 0),
+    ],
+)
+async def test_read_antigravity_usage_raises_on_auth_exit_json_or_empty(
+    monkeypatch, fake_environment, payload, returncode
+) -> None:
+    process = _AntigravityProcess(payload, returncode=returncode)
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_antigravity_usage()
+    assert fake_environment.started[-1].closed
+
+
+def test_parse_copilot_quota_reads_measured_snapshots() -> None:
+    now = datetime(2026, 9, 18, 23, 42, 5, tzinfo=UTC)
+    snapshot = parse_copilot_quota(_COPILOT_QUOTA_FIXTURE, now=now)
+
+    # Unlimited chat / completions have no meter; only the finite budget shows.
+    assert snapshot.agent == "copilot"
+    assert [
+        (w.window, w.used_percent, w.resets_at, w.window_minutes, w.label)
+        for w in snapshot.windows
+    ] == [
+        (
+            "premium_interactions",
+            30.0,
+            "2026-10-01T00:00:00-07:00",
+            None,
+            "premium_interactions",
+        )
+    ]
+    assert not snapshot.limit_reached
+    assert snapshot.checked_at == now.isoformat()
+
+
+@pytest.mark.parametrize(
+    ("remaining", "used", "limit_reached"),
+    [(0, 100.0, True), (100, 0.0, False), (68.5, 31.5, False)],
+)
+def test_parse_copilot_quota_accepts_remaining_percentage_boundaries(
+    remaining, used, limit_reached
+) -> None:
+    snapshot = parse_copilot_quota(_copilot_payload(remainingPercentage=remaining))
+
+    assert [w.used_percent for w in snapshot.windows] == [used]
+    assert snapshot.limit_reached is limit_reached
+
+
+@pytest.mark.parametrize(
+    "remaining", [None, "abc", float("nan"), float("inf"), -1, 100.5, True]
+)
+def test_parse_copilot_quota_drops_unusable_remaining_percentage(remaining) -> None:
+    payload = _copilot_payload(remainingPercentage=remaining)
+    if remaining is None:
+        del payload["quotaSnapshots"]["premium_interactions"]["remainingPercentage"]
+
+    assert parse_copilot_quota(payload).windows == []
+
+
+@pytest.mark.parametrize(
+    "entitlement",
+    [
+        {"isUnlimitedEntitlement": True, "entitlementRequests": 0},
+        {"isUnlimitedEntitlement": False, "entitlementRequests": -1},
+    ],
+)
+def test_parse_copilot_quota_skips_unlimited_entitlements(entitlement) -> None:
+    assert parse_copilot_quota(_copilot_payload(**entitlement)).windows == []
+
+
+def test_parse_copilot_quota_drops_a_reset_that_has_already_passed() -> None:
+    """The account API has answered every snapshot with the request's own
+    instant as `resetDate` (measured 2026-09-19, in the API's -07:00). A
+    reset that is not ahead names no coming reset: the row keeps its usage
+    and loses the date, while a reset still ahead is kept as it is."""
+    now = datetime(2026, 9, 18, 23, 42, 5, tzinfo=UTC)
+
+    passed = parse_copilot_quota(
+        _copilot_payload(resetDate="2026-09-18T16:42:00.213-07:00"), now=now
+    )
+    coming = parse_copilot_quota(
+        _copilot_payload(resetDate="2026-10-01T00:00:00.000-07:00"), now=now
+    )
+
+    assert [(w.window, w.resets_at) for w in passed.windows] == [
+        ("premium_interactions", "")
+    ]
+    assert passed.checked_at == now.isoformat()
+    assert [w.resets_at for w in coming.windows] == ["2026-10-01T00:00:00-07:00"]
+
+
+def test_parse_copilot_quota_keeps_unknown_quota_keys_and_missing_reset() -> None:
+    payload = _copilot_payload(key="new_budget", resetDate=None)
+    del payload["quotaSnapshots"]["new_budget"]["resetDate"]
+
+    snapshot = parse_copilot_quota(payload)
+
+    assert [(w.window, w.label, w.resets_at) for w in snapshot.windows] == [
+        ("new_budget", "new_budget", "")
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"quotaSnapshots": []},
+        {"quotaSnapshots": {"chat": "text", "": {"remainingPercentage": 5}}},
+    ],
+)
+def test_parse_copilot_quota_tolerates_empty_and_malformed_input(payload) -> None:
+    snapshot = parse_copilot_quota(payload)
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+def _copilot_payload(key: str = "premium_interactions", **fields: Any) -> dict:
+    entry = {
+        "isUnlimitedEntitlement": False,
+        "entitlementRequests": 300,
+        "usedRequests": 90,
+        "remainingPercentage": 70,
+        "resetDate": "2026-10-01T00:00:00-07:00",
+        **fields,
+    }
+    return {"quotaSnapshots": {key: entry}}
+
+
+class _FramedWriter:
+    """Fake stdin that parses ``Content-Length`` frames into messages."""
+
+    def __init__(self, process: _CopilotProcess) -> None:
+        self.process = process
+        self.buffer = b""
+
+    def write(self, data: bytes) -> None:
+        self.buffer += data
+        while True:
+            header, separator, rest = self.buffer.partition(b"\r\n\r\n")
+            if not separator:
+                return
+            name, _, length = header.partition(b":")
+            assert name == b"Content-Length", header
+            body, self.buffer = rest[: int(length)], rest[int(length) :]
+            self.process.handle(json.loads(body))
+
+    async def drain(self) -> None:
+        return None
+
+
+class _CopilotProcess:
+    """Fake ``copilot --headless --stdio`` speaking the Copilot SDK protocol."""
+
+    def __init__(self, quota: dict[str, Any] | None = None, error: Any = None) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _FramedWriter(self)
+        self.returncode: int | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.quota = _COPILOT_QUOTA_FIXTURE if quota is None else quota
+        self.error = error
+
+    def handle(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+        if "method" not in message or "id" not in message:
+            return
+        request_id = message["id"]
+        if message["method"] == "connect":
+            # The server may interleave notifications; the probe must skip them.
+            self._feed({"jsonrpc": "2.0", "method": "session.event", "params": {}})
+            self._feed(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"ok": True, "protocolVersion": 3, "version": "1.0.86"},
+                }
+            )
+        elif message["method"] == "account.getQuota":
+            if self.error is not None:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "error": self.error})
+            else:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "result": self.quota})
+
+    def _feed(self, message: dict[str, Any]) -> None:
+        body = json.dumps(message).encode()
+        self.stdout.feed_data(b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_probes_sdk_server(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("copilot", "--headless", "--stdio", "--no-auto-update")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_copilot_usage()
+
+    assert [message["method"] for message in process.messages] == [
+        "connect",
+        "account.getQuota",
+    ]
+    assert process.messages[0]["params"]["supportedTaskKinds"] == []
+    assert [(w.window, w.used_percent) for w in snapshot.windows] == [
+        ("premium_interactions", 30.0)
+    ]
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": -32601, "message": "Unhandled method account.getQuota"},
+        {"code": -32603, "message": "Selected authentication is no longer available"},
+    ],
+)
+async def test_read_copilot_usage_raises_on_rpc_error(
+    monkeypatch, fake_environment, error
+) -> None:
+    process = _CopilotProcess(error=error)
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match=error["message"]):
+        await read_copilot_usage()
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_raises_when_stream_closes(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.stdout.feed_eof()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="closed the stream"):
+        await read_copilot_usage()
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_raises_when_server_stays_silent(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="did not answer in time"):
+        await read_copilot_usage(timeout=0.05)
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_rejects_malformed_frame_header(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+    process.stdout.feed_data(b"Content-Length: many\r\n\r\n{}")
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="Malformed frame header"):
+        await read_copilot_usage()
+
+
+def test_usage_reader_registry_covers_supported_tools() -> None:
+    assert {
+        "antigravity": read_antigravity_usage,
+        "claude": read_claude_usage,
+        "codex": read_codex_usage,
+        "copilot": read_copilot_usage,
+        "grok": read_grok_usage,
+    } == CLI_AGENT_USAGE_READERS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
+@pytest.mark.parametrize("outcome", ["windows", "limit", "empty", "error"])
+async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
+    monkeypatch, name, outcome
+):
+    from guildbotics.environment import provider_state
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    tool = cli_agent_info(name)
+    provider_state.record_authentication_outcome(tool, failed=True)
+
+    async def read():
+        if outcome == "error":
+            raise CliAgentUsageError("connection failed")
+        return usage_snapshots.CliAgentUsageSnapshot(
+            agent=name,
+            windows=[usage_snapshots.CliAgentUsageWindow("primary", 12)]
+            if outcome == "windows"
+            else [],
+            limit_reached=outcome == "limit",
+        )
+
+    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
+    succeeded = outcome in {"windows", "limit"}
+    if not succeeded:
+        with pytest.raises(CliAgentUsageError):
+            await usage_module.read_cli_agent_usage(name)
+    else:
+        await usage_module.read_cli_agent_usage(name)
+    assert provider_state.authentication_failed(tool) is not succeeded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
+async def test_what_a_tool_says_of_its_usage_is_told_with_its_login_masked(
+    monkeypatch, name
+):
+    """Every tool's usage is read where its login is held: whatever it, or
+    its provider through it, says of a failure is told with the login masked,
+    and nothing of the unmasked text goes along."""
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    async def read():
+        raise CliAgentUsageError("refused SECRET-459")
+
+    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
+    monkeypatch.setattr(
+        usage_module,
+        "masked",
+        lambda tool, text: f"{tool.name}:{text.replace('SECRET-459', '***')}",
+    )
+
+    with pytest.raises(CliAgentUsageError) as failed:
+        await usage_module.read_cli_agent_usage(name)
+
+    assert str(failed.value) == f"{cli_agent_info(name).name}:refused ***"
+    assert failed.value.__cause__ is None and failed.value.__suppress_context__

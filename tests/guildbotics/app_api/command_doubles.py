@@ -15,8 +15,10 @@ from typing import Any
 import pytest
 
 from guildbotics.app_api import runtime as runtime_module
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 
 
 @dataclass

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -295,3 +299,192 @@ class AgentAdapter(Protocol):
     async def interrupt(self) -> None: ...
 
     async def close(self) -> None: ...
+
+
+_HOURS_PER_HALF_DAY = 12
+_MAX_24_HOUR = 23
+_MAX_MINUTE = 59
+_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+@dataclass(frozen=True)
+class CliAgentExecutionResult:
+    stdout: str
+    stderr: str
+    returncode: int
+    error_category: str = ""
+    error_details: dict[str, str] = field(default_factory=dict)
+    provider_session_id: str = ""
+    provider_turn_id: str = ""
+    finish_reason: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
+    #: What the turn really ran with, as reported by the adapter. Both are empty
+    #: when the provider names neither and the adapter imposed neither.
+    model: str = ""
+    effort: str = ""
+
+
+class CliAgentExecutionError(RuntimeError):
+    """A turn of an AI CLI tool that produced no usable response.
+
+    The message names the tool and carries the reason as the runtime stated
+    it. It claims no exit code: the brain never observes the tool's process,
+    only the adapter does, and an adapter that saw one exit puts the code in
+    its own words. Most failures reach here without any process at all (the
+    device refused the turn, the tool is not logged in, the session is gone),
+    so ``returncode`` is only the failed / finished distinction.
+    """
+
+    def __init__(
+        self,
+        *,
+        cli_agent: str,
+        result: CliAgentExecutionResult,
+        message: str | None = None,
+    ) -> None:
+        self.cli_agent = cli_agent
+        self.result = result
+        self.category = result.error_category
+        self.details = dict(result.error_details)
+        detail = result.stderr or result.stdout or "no output"
+        super().__init__(message or f"AI CLI tool '{cli_agent}' failed: {detail}")
+
+
+def normalize_cli_agent_retry_after(
+    retry_after_text: str = "",
+    retry_after_timezone: str = "",
+) -> str:
+    text = retry_after_text.strip()
+    timezone_text = retry_after_timezone.strip()
+    if not text:
+        return ""
+    timezone = _zoneinfo_or_local(timezone_text)
+    relative = _parse_relative_retry_delta(text)
+    if relative is not None:
+        return (datetime.now().astimezone() + relative).isoformat(timespec="seconds")
+    parsed_datetime = _parse_retry_datetime(text, timezone)
+    if parsed_datetime is not None:
+        return parsed_datetime.isoformat(timespec="seconds")
+    parsed_time = _parse_retry_time(text)
+    if parsed_time is None:
+        return ""
+    hour, minute = parsed_time
+    now = datetime.now(timezone)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate.isoformat(timespec="seconds")
+
+
+def _zoneinfo_or_local(timezone_text: str) -> Any:
+    if timezone_text:
+        with suppress(ZoneInfoNotFoundError):
+            return ZoneInfo(timezone_text)
+    return datetime.now().astimezone().tzinfo
+
+
+def _parse_relative_retry_delta(text: str) -> timedelta | None:
+    normalized = text.strip()
+    if not re.search(r"\b(?:please wait|resets in)\b", normalized, re.IGNORECASE):
+        return None
+    matches = list(
+        re.finditer(
+            r"(?P<value>\d+)\s*"
+            r"(?P<unit>seconds?|minutes?|hours?|[smh])(?=\d|\b)",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+    if not matches:
+        return None
+    seconds = 0
+    for match in matches:
+        value = int(match.group("value"))
+        unit = match.group("unit").lower()
+        if unit.startswith("s"):
+            seconds += value
+        elif unit.startswith("m"):
+            seconds += value * 60
+        else:
+            seconds += value * 60 * 60
+    return timedelta(seconds=seconds)
+
+
+def _parse_retry_datetime(text: str, timezone: Any) -> datetime | None:
+    match = re.search(
+        r"(?:try again at|reset on)\s+"
+        r"(?P<month>[A-Za-z]+)\s+"
+        r"(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+"
+        r"(?P<year>\d{4})\s+(?:at\s+)?"
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*"
+        r"(?P<ampm>am|pm)",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    month = _MONTHS.get(match.group("month").lower())
+    if month is None:
+        return None
+    parsed_time = _parse_retry_time(
+        f"{match.group('hour')}:{match.group('minute')} {match.group('ampm')}"
+    )
+    if parsed_time is None:
+        return None
+    hour, minute = parsed_time
+    try:
+        return datetime(
+            int(match.group("year")),
+            month,
+            int(match.group("day")),
+            hour,
+            minute,
+            tzinfo=timezone,
+        )
+    except ValueError:
+        return None
+
+
+def _parse_retry_time(text: str) -> tuple[int, int] | None:
+    match = re.search(
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>am|pm)?",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    ampm = (match.group("ampm") or "").lower()
+    if ampm:
+        if hour == _HOURS_PER_HALF_DAY:
+            hour = 0
+        if ampm == "pm":
+            hour += _HOURS_PER_HALF_DAY
+    if not 0 <= hour <= _MAX_24_HOUR or not 0 <= minute <= _MAX_MINUTE:
+        return None
+    return hour, minute

@@ -13,26 +13,30 @@ import httpx
 import pytest
 from agno.run.base import RunStatus
 
-from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
+from guildbotics.capabilities.decisions import engines
+from guildbotics.capabilities.decisions.chat_policy import QUESTIONS
+from guildbotics.capabilities.decisions.models import DecisionConfig
+from guildbotics.environment import (
+    inference_host,
+    span_summary,
+)
+from guildbotics.environment.inference_host import DirectInference
 from guildbotics.intelligences import functions
 from guildbotics.intelligences.brains import (
     agno_agent,
-    inference_host,
     jev,
-    span_summary,
 )
+from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.brains.inference import (
     AgnoCall,
     InferenceFailure,
-    inference,
 )
-from guildbotics.intelligences.brains.inference_host import DirectInference
-from guildbotics.intelligences.decisions import engines
-from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
-from guildbotics.intelligences.decisions.models import DecisionConfig
 from guildbotics.intelligences.effort import ResolvedEffort
 from tests.conftest import FakeContext
 from tests.guildbotics.slot_mappings import use_model_slots
+
+#: The brains here run as on the host, calling the inference APIs themselves.
+pytestmark = pytest.mark.usefixtures("direct_inference")
 
 
 @pytest.mark.asyncio
@@ -55,12 +59,15 @@ async def test_window_inference_failure_contract(method, category, message, deta
     from unittest.mock import AsyncMock
 
     from guildbotics.commands.errors import CommandError
-    from guildbotics.intelligences.agent_runtime.host_client import HostCallError
-    from guildbotics.intelligences.brains.inference import AgnoCall, JevCall, _Window
+    from guildbotics.guest.window import WindowInference
+    from guildbotics.intelligences.agent_runtime.wire import (
+        HostCallError,
+    )
+    from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
     from guildbotics.intelligences.effort import ResolvedEffort
 
     error = HostCallError(category, message, details)
-    window = _Window(SimpleNamespace(acall=AsyncMock(side_effect=error)))
+    window = WindowInference(SimpleNamespace(acall=AsyncMock(side_effect=error)))
     call = (
         window.agno(
             "aiko",
@@ -121,7 +128,7 @@ class _Model:
                     content=answer, metrics=None, status=RunStatus.completed
                 )
 
-        monkeypatch.setattr(inference_host, "Agent", Agent)
+        monkeypatch.setattr("agno.agent.Agent", Agent)
         monkeypatch.setattr(
             inference_host,
             "instantiate_class",
@@ -150,10 +157,6 @@ class _Context(FakeContext):
         return ConfiguredBrainFactory().create_brain(
             self.person.person_id, name, "en", self.logger, config, class_resolver
         )
-
-
-def test_the_host_calls_the_apis_itself() -> None:
-    assert isinstance(inference(), DirectInference)
 
 
 @pytest.mark.asyncio
@@ -511,7 +514,7 @@ async def test_a_run_the_provider_did_not_refuse_tells_no_reason(
         "instantiate_class",
         lambda *args, **kwargs: SimpleNamespace(ainvoke=ainvoke),
     )
-    monkeypatch.setattr(inference_host, "Agent", Agent)
+    monkeypatch.setattr("agno.agent.Agent", Agent)
     spans: list[dict[str, Any]] = []
     monkeypatch.setattr(
         span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)

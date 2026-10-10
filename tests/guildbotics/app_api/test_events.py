@@ -12,7 +12,7 @@ from guildbotics.app_api.events import (
     EventBus,
     EventBusLogHandler,
 )
-from guildbotics.observability import trace_scope
+from guildbotics.utils.correlation import trace_scope
 
 EXPECTED_HISTORY_LEN = 3
 

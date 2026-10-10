@@ -6,11 +6,9 @@ import pytest
 
 from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api import verify as verify_module
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironmentHealth,
-)
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
-from guildbotics.intelligences.agent_environment.status import (
+from guildbotics.environment.runtime import AgentEnvironmentHealth
+from guildbotics.environment.snapshot import SnapshotStatus
+from guildbotics.environment.status import (
     DeviceStatus,
     DnsStatus,
     ToolStatus,

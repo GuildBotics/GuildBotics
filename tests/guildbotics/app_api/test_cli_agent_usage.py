@@ -6,7 +6,8 @@ import pytest
 from guildbotics.app_api import cli_agent_usage as module
 from guildbotics.app_api.cli_agent_usage import CliAgentUsageCache
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
+from guildbotics.environment import usage
+from guildbotics.intelligences.agent_runtime import usage_snapshots
 
 pytestmark = pytest.mark.asyncio
 

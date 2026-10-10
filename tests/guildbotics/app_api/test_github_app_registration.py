@@ -5,14 +5,14 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
+from guildbotics.integrations.github.app_manifest import (
+    AppInstallation,
+    AppManifestConversion,
+)
 from guildbotics.setup import github_app
 from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SimplePersonSetupService,
-)
-from guildbotics.integrations.github.app_manifest import (
-    AppInstallation,
-    AppManifestConversion,
 )
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError

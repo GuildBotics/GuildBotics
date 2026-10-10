@@ -3,9 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.command_runner import host_command_cwd
 from guildbotics.drivers.utils import run_command
+from guildbotics.intelligences.agent_runtime.wire import (
+    CommandAccess,
+)
 from tests.guildbotics.command_environment_doubles import runs_as
 
 
@@ -124,7 +126,7 @@ async def test_command_failure_preserves_structured_authentication_cause(
 ):
     from guildbotics.commands.errors import CommandError
     from guildbotics.drivers.utils import run_with_logging
-    from guildbotics.intelligences.brains.cli_agent import (
+    from guildbotics.intelligences.agent_runtime.models import (
         CliAgentExecutionError,
         CliAgentExecutionResult,
     )

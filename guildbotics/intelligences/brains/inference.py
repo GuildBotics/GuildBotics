@@ -4,7 +4,7 @@ A brain that calls an external API with a key (the agno model of a slot, Jev)
 expands its template and reads the result wherever it runs, but the call
 itself is made on the host, where the key is: the process has one way to it
 (:func:`inference`). On the host that is the call itself
-(:mod:`~guildbotics.intelligences.brains.inference_host`); inside a command's
+(:mod:`~guildbotics.environment.inference_host`); inside a command's
 isolated environment it is the command's window to the host, which answers it
 under the command's grant.
 
@@ -19,14 +19,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from guildbotics.commands.errors import CommandError
-from guildbotics.intelligences.agent_runtime.host_client import (
-    HostCallError,
-    HostClient,
-    command_window,
-)
 from guildbotics.intelligences.effort import ResolvedEffort
-from guildbotics.observability import SpanContext
+from guildbotics.utils.correlation import SpanContext
 from guildbotics.utils.i18n_tool import t
 
 #: Why a provider refused an inference call (the provider catalog decides).
@@ -141,46 +135,23 @@ class Inference(Protocol):
         ...
 
 
+_installed: Inference | None = None
+
+
+def install_inference(implementation: Inference) -> None:
+    """Make ``implementation`` the process's way to the external inference
+    APIs: the calls themselves on the host, the command's window inside its
+    isolated environment. Each place that builds a context installs its own."""
+    global _installed
+    _installed = implementation
+
+
 def inference() -> Inference:
-    """The process's way to the external inference APIs: the command's window
-    inside its isolated environment, the calls themselves on the host."""
-    window = command_window()
-    if window is not None:
-        return _Window(window)
-    # Imported here: the environment never holds what the calls need.
-    from guildbotics.intelligences.brains.inference_host import DirectInference
+    """The process's way to the external inference APIs.
 
-    return DirectInference()
-
-
-class _Window:
-    """The inference calls, answered by the host under the command's grant."""
-
-    def __init__(self, client: HostClient) -> None:
-        self._client = client
-
-    async def agno(self, person_id: str, call: AgnoCall) -> AgnoAnswer:
-        answer = await self._call(
-            "agno",
-            person_id=person_id,
-            # A value JSON cannot carry reaches the prompt as its text.
-            call=call.model_dump(mode="json", fallback=str),
-        )
-        return AgnoAnswer.model_validate(answer)
-
-    async def jev(self, call: JevCall) -> dict[str, Any]:
-        return dict(await self._call("jev", call=call.model_dump(mode="json")))
-
-    async def _call(self, name: str, **arguments: Any) -> Any:
-        """Preserve the host's safe failure message, including window failures.
-
-        Raises:
-            CommandError: If the host reports that the call failed.
-            HostCallError: If the window refused the call or is unavailable.
-        """
-        try:
-            return await self._client.acall(name, **arguments)
-        except HostCallError as exc:
-            if exc.category != "failed":
-                raise
-            raise CommandError(str(exc)) from exc
+    Raises:
+        RuntimeError: If the process installed none.
+    """
+    if _installed is None:
+        raise RuntimeError("No inference implementation is installed.")
+    return _installed

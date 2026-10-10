@@ -363,7 +363,7 @@ guildbotics run repository/pr_inspect --person alice repo=org/repo number=43 inc
 guildbotics run repository/pr_checks --person alice repo=org/repo number=43 failed_logs=true log_tail_bytes=65536
 ```
 
-結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`python -m guildbotics.runtime.command_entry repository/pr_inspect repo=org/repo number=43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", repo="org/repo", number="43")` でも呼べます。
+結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`python -m guildbotics.guest.entry repository/pr_inspect repo=org/repo number=43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", repo="org/repo", number="43")` でも呼べます。
 
 各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。Project のフィールドは 1 項目 100 件までで、超過もエラーです。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member repository read` でページごとに確認してください。
 

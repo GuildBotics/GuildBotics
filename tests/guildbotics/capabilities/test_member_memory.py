@@ -11,11 +11,11 @@ from guildbotics.capabilities.member_memory import (
 )
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.entities.team import Person
-from guildbotics.observability import trace_scope
 from guildbotics.runtime.member_invocation import (
     MemberInvocation,
     member_invocation_scope,
 )
+from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     dump_yaml,

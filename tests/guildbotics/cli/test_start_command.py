@@ -8,7 +8,7 @@ import wakepy
 from click.testing import CliRunner
 
 from guildbotics.cli import main as cli_main
-from guildbotics.runtime.service_lock import ServiceLock, set_service_keeps_awake
+from guildbotics.drivers.service_lock import ServiceLock, set_service_keeps_awake
 from guildbotics.utils.i18n_tool import t
 
 

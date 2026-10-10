@@ -29,11 +29,11 @@ import click
 import pytest
 
 from guildbotics.cli.member import member
-from guildbotics.intelligences.agent_runtime.host_window import _CALLS, HostWindow
+from guildbotics.environment.host_window import _CALLS, HostWindow
 
 GRANT, MEMBER, SERVICE, CONTENT = "grant", "member", "service", "content"
 
-_BROKER = "guildbotics.intelligences.agent_runtime.member_broker._rejection_reason"
+_BROKER = "guildbotics.environment.member_broker._rejection_reason"
 _HOST_PATH = "guildbotics.cli.member._HostPath"
 _MEMORY = "guildbotics.capabilities.member_memory.MemberMemoryService._scope_dir"
 _GITHUB = "guildbotics.integrations.github.repository_scope.check_request"
@@ -43,9 +43,7 @@ _GITHUB_READ = (
 _SLACK = "The member's Slack bot reaches only the channels it was invited to."
 #: Why a service bounds what no function of GuildBotics checks.
 _SERVICE_RATIONALES = frozenset({_GITHUB_READ, _SLACK})
-_CONVERSATION = (
-    "guildbotics.intelligences.agent_runtime.host_window.HostWindow._check_conversation"
-)
+_CONVERSATION = "guildbotics.environment.host_window.HostWindow._check_conversation"
 
 _CHAT_TARGETS = frozenset(
     {
@@ -245,16 +243,16 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
 WINDOW_ARGUMENTS: dict[tuple[str, str], tuple[str, str]] = {
     ("begin_turn", "tool"): (
         GRANT,
-        "guildbotics.intelligences.agent_runtime.environment.start_turn_environment",
+        "guildbotics.environment.command_environment.start_turn_environment",
     ),
     ("begin_turn", "cwd"): (
         GRANT,
-        "guildbotics.intelligences.agent_runtime.environment._SharedEnvironment._admit",
+        "guildbotics.environment.command_environment._SharedEnvironment._admit",
     ),
     ("begin_turn", "participant_labels"): (CONTENT, ""),
     ("end_turn", "turn_grant"): (
         GRANT,
-        "guildbotics.intelligences.agent_runtime.host_window.HostWindow.end_turn",
+        "guildbotics.environment.host_window.HostWindow.end_turn",
     ),
     ("resolve", "key"): (GRANT, _CONVERSATION),
     ("resolve", "policy"): (CONTENT, ""),
@@ -271,7 +269,7 @@ WINDOW_ARGUMENTS: dict[tuple[str, str], tuple[str, str]] = {
     ("member", "stdin"): (CONTENT, ""),
     ("agno", "person_id"): (
         GRANT,
-        "guildbotics.intelligences.agent_runtime.host_window.HostWindow.agno",
+        "guildbotics.environment.host_window.HostWindow.agno",
     ),
     ("agno", "call"): (CONTENT, ""),
     ("jev", "call"): (CONTENT, ""),

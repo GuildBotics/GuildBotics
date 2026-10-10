@@ -20,10 +20,10 @@ from guildbotics.drivers.execution import (
     ExecutionCoordinator,
     TaskRunCoordinator,
 )
+from guildbotics.drivers.service_lock import ServiceLock
 from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.observability import new_id
 from guildbotics.runtime import Context
-from guildbotics.runtime.service_lock import ServiceLock
+from guildbotics.utils.correlation import new_id
 
 RuntimeTarget = Literal["scheduler", "events"]
 RuntimeState = Literal["starting", "running", "stopping", "stopped", "failed"]
