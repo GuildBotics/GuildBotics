@@ -585,7 +585,7 @@ def test_an_unreadable_device_identity_fails_before_any_document_is_written(
 def test_baseline_policy_defines_memory_scope(person: Person) -> None:
     body = MemberMemoryService(person).load_pinned()[0]["body"]
 
-    assert "PRs, issues, or team-shared Slack threads in team memory" in body
+    assert "PRs, issues, or team-shared chat threads in team memory" in body
     assert "personal memory only for member-specific knowledge" in body
 
 

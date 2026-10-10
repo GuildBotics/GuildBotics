@@ -6,33 +6,22 @@ from typing import Any
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.utils import stringify_output
 from guildbotics.runtime.chat_service import ChatService, ChatServiceError
-from guildbotics.utils.i18n_tool import t
 
 
 async def main(
     context: Any,
     *,
-    service: str = "slack",
     channel_id: str = "",
     channel_name: str = "",
     command: str = "",
 ) -> str:
-    """Run a GuildBotics command and post its output to a chat channel.
+    """Run a GuildBotics command and post its output to the project's chat.
 
     Raises:
-        CommandError: If the service is unsupported, the channel cannot be
-            resolved, the command cannot be split, or chat reports a failure.
-            An empty command output is not a failure: nothing is posted.
+        CommandError: If the channel cannot be resolved, the command cannot be
+            split, or chat reports a failure. An empty command output is not a
+            failure: nothing is posted.
     """
-    service_name = str(service).strip().lower()
-    if service_name != "slack":
-        raise CommandError(
-            t(
-                "commands.workflows.chat_post_command.unsupported_service",
-                service=service,
-            )
-        )
-
     chat_service = context.get_chat_service()
     resolved_channel_id = await _resolve_channel_id(
         chat_service,
@@ -71,7 +60,6 @@ async def _resolve_channel_id(
     if not resolved:
         raise CommandError(
             f"Chat channel was not found: {channel_name} (check the channel "
-            "name, the bot's channel membership, and the Slack scopes "
-            "channels:read/groups:read)"
+            "name and that the member's chat credential can read it)"
         )
     return resolved

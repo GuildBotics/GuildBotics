@@ -777,30 +777,16 @@ def _normalize_native_retry_after(details: dict[str, str]) -> None:
 def _cursor_relation(current: str, persisted: str) -> str:
     """Relate a turn's context cursor to the persisted session watermark.
 
-    Returns ``newer`` / ``equal`` / ``older`` for orderable cursors. Cursors
-    that cannot be ordered safely (either side missing, or non-numeric and not
-    identical) are ``unknown`` and must never be treated as a continuation.
+    Cursors are chat message positions, which order as text. Returns
+    ``newer`` / ``equal`` / ``older``, or ``unknown`` when either side is
+    missing, which must never be treated as a continuation.
     """
     if not current or not persisted:
         return "unknown"
-    try:
-        current_parts = tuple(int(part) for part in current.split("."))
-        persisted_parts = tuple(int(part) for part in persisted.split("."))
-    except ValueError:
-        return "equal" if current == persisted else "unknown"
-    if current_parts > persisted_parts:
+    if current > persisted:
         return "newer"
-    if current_parts == persisted_parts:
-        return "equal"
-    return "older"
+    return "equal" if current == persisted else "older"
 
 
 def _cursor_is_before(candidate: str, current: str) -> bool:
-    if not candidate or not current:
-        return False
-    try:
-        candidate_parts = tuple(int(part) for part in candidate.split("."))
-        current_parts = tuple(int(part) for part in current.split("."))
-    except ValueError:
-        return candidate != current
-    return candidate_parts < current_parts
+    return bool(candidate and current) and candidate < current

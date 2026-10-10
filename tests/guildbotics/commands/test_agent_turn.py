@@ -82,7 +82,7 @@ async def test_turn_accepts_a_chat_completion_on_the_same_boundary(tmp_path):
 
     async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         contexts.append(context)
-        store.append_evidence("run-chat", "chat_reply", {"message_ts": "1.2"})
+        store.append_evidence("run-chat", "chat_reply", {"message_id": "1.2"})
         store.complete_run(
             "run-chat",
             "done",
@@ -277,7 +277,7 @@ async def test_turn_rereads_chat_evidence_for_every_attempt(tmp_path):
     async def invoke(context: dict[str, Any], parameters: dict[str, str]) -> str:
         seen.append(json.loads(parameters["previous_attempt_evidence"]))
         if len(seen) == 1:
-            store.append_evidence("run-chat", "chat_reply", {"message_ts": "1.2"})
+            store.append_evidence("run-chat", "chat_reply", {"message_id": "1.2"})
         else:
             store.complete_run(
                 "run-chat",

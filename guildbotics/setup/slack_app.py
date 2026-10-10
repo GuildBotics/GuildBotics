@@ -16,13 +16,13 @@ import logging
 import httpx
 from pydantic import BaseModel
 
-from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
     SlackChatService,
+    probe_app_token,
 )
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.runtime.chat_service import ChatServiceError
 from guildbotics.setup.setup_service import SetupServiceError
 
 BOT_TOKEN_PREFIX = "xoxb-"
@@ -260,8 +260,8 @@ async def _verify_app_token(
         result.app_token_error = error
         return
     try:
-        await probe_slack_app_token(token, base_url, transport=transport)
-    except MemberCapabilityError as exc:
+        await probe_app_token(token, base_url, transport=transport)
+    except ChatServiceError as exc:
         result.app_token_error = str(exc)
         return
     except (httpx.HTTPError, ValueError) as exc:

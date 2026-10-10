@@ -4,8 +4,6 @@ Both act on the chat run of the current member invocation: its source thread
 is the run's work as the host settled it, never what the run recorded.
 """
 
-from dataclasses import asdict
-from decimal import Decimal
 from typing import Any
 
 from guildbotics.capabilities.chat_batch import chat_batch_event_ids
@@ -54,14 +52,14 @@ def _pending(
         (
             item.event
             for item in store.load_pending_events(*scope)
-            if item.event.thread_ts == subject.thread_ts
+            if item.event.thread_id == subject.thread_id
             and item.event.event_id not in delivered
             and item.event.author_id != subject.self_user_id
             and not item.event.is_edit_or_delete
             and not is_suppressed_chat_event(item.event)
             and item.event.event_id not in processed
         ),
-        key=lambda event: Decimal(event.message_ts),
+        key=lambda event: event.position,
     )
 
 
@@ -90,7 +88,7 @@ def check_chat_updates(person_id: str) -> dict[str, Any]:
         "run_id": run_id,
         "service": subject.service,
         "channel_id": subject.channel_id,
-        "thread_ts": subject.thread_ts,
+        "thread_id": subject.thread_id,
     }
     receive_state = _receive_state(person_id, subject)
     if receive_state != "ready":
@@ -107,7 +105,7 @@ def check_chat_updates(person_id: str) -> dict[str, Any]:
     return {
         **result,
         "status": "new_messages" if events else "up_to_date",
-        "messages": [asdict(event) for event in events],
+        "messages": [event.payload() for event in events],
     }
 
 
@@ -116,7 +114,7 @@ def noop_payload(subject: ChatSubject, reason: str) -> dict[str, Any]:
     return {
         "service": subject.service,
         "channel_id": subject.channel_id,
-        "thread_ts": subject.thread_ts,
+        "thread_id": subject.thread_id,
         "event_id": subject.event_id,
         "reason": reason,
         "noop": True,

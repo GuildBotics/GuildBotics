@@ -94,7 +94,7 @@ class PendingChatDispatcher:
                 self._state_store.load_pending_events(
                     service, person.person_id, channel_id
                 ),
-                key=lambda pending: _message_order_key(pending.event.message_ts),
+                key=lambda pending: pending.event.position,
             )
             for thread_events in _thread_groups(pending_events):
                 for pending in thread_events:
@@ -137,16 +137,13 @@ class PendingChatDispatcher:
             return False
         follower_cursor = max(
             (
-                pending.event.message_ts
+                pending.event.position
                 for pending in thread_events
                 if pending is not head
             ),
-            key=_message_order_key,
             default="",
         )
-        if not follower_cursor or _message_order_key(
-            follower_cursor
-        ) <= _message_order_key(head.wake_cursor):
+        if follower_cursor <= head.wake_cursor:
             return False
         head.wake_cursor = follower_cursor
         head.next_attempt_at = None
@@ -230,8 +227,8 @@ class PendingChatDispatcher:
                 "service_run_id": self._service_run_id,
                 "event.provider": service,
                 "slack.channel": channel_id,
-                "slack.thread_ts": pending.event.thread_ts,
-                "slack.ts": pending.event.message_ts,
+                "slack.thread_ts": pending.event.thread_id,
+                "slack.ts": pending.event.message_id,
                 "event_id": event_id,
             },
         ) as trace:
@@ -423,20 +420,11 @@ class PendingChatDispatcher:
 
 
 def _thread_groups(events: list[PendingChatEvent]) -> list[list[PendingChatEvent]]:
-    """Group message-ts-ordered events by thread, oldest thread first."""
+    """Group position-ordered events by thread, oldest thread first."""
     groups: dict[str, list[PendingChatEvent]] = {}
     for pending in events:
-        key = pending.event.thread_ts or pending.event.message_ts
-        groups.setdefault(key, []).append(pending)
+        groups.setdefault(pending.event.thread_id, []).append(pending)
     return list(groups.values())
-
-
-def _message_order_key(message_ts: str) -> tuple[int, ...]:
-    """Numeric ordering key for Slack-style timestamps; unparsable sorts first."""
-    try:
-        return tuple(int(part) for part in message_ts.split("."))
-    except ValueError:
-        return ()
 
 
 def _is_due(pending: PendingChatEvent) -> bool:

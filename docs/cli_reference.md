@@ -53,7 +53,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
 | [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
-| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect Slack channel or thread messages for interactive decisions. |
+| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect chat channel or thread messages for interactive decisions. |
 | [`guildbotics member chat inspect channel`](#guildbotics-member-chat-inspect-channel) | Read recent channel messages. |
 | [`guildbotics member chat inspect thread`](#guildbotics-member-chat-inspect-thread) | Read a thread before replying or reacting. |
 | [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
@@ -669,7 +669,7 @@ guildbotics member chat [OPTIONS] COMMAND [ARGS]...
 | --- | --- |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
 | [`guildbotics member chat identity`](#guildbotics-member-chat-identity) | Show the member's chat identity. |
-| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect Slack channel or thread messages for interactive decisions. |
+| [`guildbotics member chat inspect`](#guildbotics-member-chat-inspect) | Inspect chat channel or thread messages for interactive decisions. |
 | [`guildbotics member chat noop`](#guildbotics-member-chat-noop) | Record a deliberate no-op for the chat run's event. |
 | [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
 | [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
@@ -705,13 +705,12 @@ guildbotics member chat identity [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics member chat inspect`
 
-Inspect Slack channel or thread messages for interactive decisions.
+Inspect chat channel or thread messages for interactive decisions.
 
 ```text
 guildbotics member chat inspect [OPTIONS] COMMAND [ARGS]...
@@ -737,11 +736,10 @@ guildbotics member chat inspect channel [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--oldest-ts TEXT` | Only include messages at or after this timestamp. [default: ""] |
-| `--latest-ts TEXT` | Only include messages at or before this timestamp. [default: ""] |
+| `--since TEXT` | Only include messages that occurred at or after this time (ISO 8601; local time without an offset). |
+| `--until TEXT` | Only include messages that occurred at or before this time (ISO 8601; local time without an offset). |
 | `--limit INTEGER RANGE` | Maximum number of messages. [default: 50; 1\<=x\<=200] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -757,11 +755,10 @@ guildbotics member chat inspect thread [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--thread-ts TEXT` | Thread timestamp (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
+| `--thread-id TEXT` | Thread id (with --channel-id). [default: ""] |
+| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --thread-id). [default: ""] |
 | `--limit INTEGER RANGE` | Maximum number of messages. [default: 100; 1\<=x\<=200] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -793,7 +790,6 @@ guildbotics member chat post [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
@@ -828,11 +824,10 @@ guildbotics member chat reaction add [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--message-ts TEXT` | Message timestamp (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
+| `--message-id TEXT` | Message id (with --channel-id). [default: ""] |
+| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --message-id). [default: ""] |
 | `--reaction [ack\|agree\|celebrate\|support]` | Semantic reaction to add. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -848,11 +843,10 @@ guildbotics member chat reply [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
-| `--thread-ts TEXT` | Thread timestamp (with --channel-id). [default: ""] |
-| `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
+| `--thread-id TEXT` | Thread id (with --channel-id). [default: ""] |
+| `--message-url TEXT` | Chat message URL (alternative to --channel-id with --thread-id). [default: ""] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -869,7 +863,6 @@ guildbotics member chat resolve-channel [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--service [slack]` | Chat service to use. [default: slack] |
 | `--channel-name TEXT` | Channel name to resolve. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

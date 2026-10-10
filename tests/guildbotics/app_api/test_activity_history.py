@@ -34,7 +34,7 @@ CHAT_ATTRIBUTES = {
     "service_run_id": "scheduler-run",
     "event.provider": "slack",
     "slack.channel": "C1",
-    "slack.thread_ts": "100.1",
+    "slack.thread_id": "100.1",
     "event_id": "E1",
 }
 TICKET_ATTRIBUTES = {

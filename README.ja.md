@@ -925,6 +925,7 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `services.ticket_manager`: GitHub Projects 設定
 - `services.ticket_manager.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
 - `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
+- `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 
 **メンバー設定** (`team/members/<person_id>/person.yml`):
 
@@ -934,7 +935,7 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `profile.roles`: 役割の割り当て
 - `routine_commands`: デフォルトルーチンコマンドの上書き
 - `task_schedules`: cron ベースのスケジュールコマンド
-- `message_channels`: 監視対象チャネル設定（`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`）
+- `message_channels`: 監視対象チャネル設定（`chat.enabled`, `channel_id`/`name`）。プロジェクトのチャットサービスのチャネル
 - `profile.character`: 興味・嗜好・会話参加方針などのプロフィール
 
 **LLM / AI CLI ツール設定**:

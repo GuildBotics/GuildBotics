@@ -141,8 +141,8 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert open_calls["count"] >= EXPECTED_RECONNECT_ATTEMPTS
     assert ws1.closed is True
     assert ws2.closed is True
-    assert [item.event.event_id for item in drained] == ["C1:100.1"]
-    assert drained[0].event.metadata["event_type"] == "guildbotics.workflow_status"
+    assert [item.event_id for item in drained] == ["C1:100.1"]
+    assert drained[0].metadata["event_type"] == "guildbotics.workflow_status"
     assert any("env-1" in msg for msg in ws1.sent)
     assert activity[:2] == [True, True]  # Connected, then received an event.
     assert False in activity
@@ -297,7 +297,5 @@ def test_to_incoming_event_keeps_conversational_subtypes():
         },
     }
 
-    assert listener._to_incoming_event(bot_message).event.is_bot_message is True
-    assert (
-        listener._to_incoming_event(file_share).event.text == "please check this file"
-    )
+    assert listener._to_incoming_event(bot_message).is_bot_message is True
+    assert listener._to_incoming_event(file_share).text == "please check this file"

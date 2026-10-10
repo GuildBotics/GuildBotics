@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.intelligences.effort import normalize_effort
-from guildbotics.runtime.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent, message_position
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
@@ -95,8 +96,7 @@ class FileConversationStateStore(ConversationStateStore):
 
     def _cursor_payload(self, state: ChannelCursorState) -> dict:
         return {
-            "cursor": state.cursor,
-            "oldest_ts": state.oldest_ts,
+            "watermark": _iso(state.watermark),
             "processed_event_ids": _dedupe_keep_order(state.processed_event_ids)[
                 -self._max_processed_events :
             ],
@@ -131,30 +131,30 @@ class FileConversationStateStore(ConversationStateStore):
             self._remove_pending_events(service, person_id, channel_id, set(event_ids))
 
     def load_thread_state(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> ThreadConversationState:
-        data = self._read_thread_payload(service, person_id, channel_id, thread_ts)
-        return _thread_state_from(data, channel_id=channel_id, thread_ts=thread_ts)
+        data = self._read_thread_payload(service, person_id, channel_id, thread_id)
+        return _thread_state_from(data, channel_id=channel_id, thread_id=thread_id)
 
     def save_thread_state(
         self,
         service: str,
         person_id: str,
         channel_id: str,
-        thread_ts: str,
+        thread_id: str,
         state: ThreadConversationState,
     ) -> None:
         payload = asdict(state)
         payload["participants"] = sorted(state.participants)
         self._write_json(
-            self._thread_file(service, person_id, channel_id, thread_ts), payload
+            self._thread_file(service, person_id, channel_id, thread_id), payload
         )
 
     def load_thread_messages(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> list[ThreadMessageState]:
         data = self._read_json(
-            self._thread_cache_file(service, person_id, channel_id, thread_ts)
+            self._thread_cache_file(service, person_id, channel_id, thread_id)
         )
         raw_items = data.get("messages") or []
         if not isinstance(raw_items, list):
@@ -163,14 +163,16 @@ class FileConversationStateStore(ConversationStateStore):
         for item in raw_items:
             if not isinstance(item, dict):
                 continue
-            message_ts = _to_str_or_none(item.get("message_ts"))
-            if not message_ts:
+            message_id = _to_str_or_none(item.get("message_id"))
+            occurred_at = _to_datetime_or_none(item.get("occurred_at"))
+            if not message_id or occurred_at is None:
                 continue
             out.append(
                 ThreadMessageState(
                     channel_id=str(item.get("channel_id", channel_id)),
-                    thread_ts=str(item.get("thread_ts", thread_ts)),
-                    message_ts=message_ts,
+                    thread_id=str(item.get("thread_id", thread_id)),
+                    message_id=message_id,
+                    occurred_at=occurred_at,
                     author_id=_to_str_or_none(item.get("author_id")),
                     text=str(item.get("text", "") or ""),
                     mentions=[str(x) for x in (item.get("mentions") or []) if str(x)],
@@ -188,9 +190,9 @@ class FileConversationStateStore(ConversationStateStore):
         out: list[ThreadConversationState] = []
         with self._lock:
             for path in sorted(thread_dir.glob("*.json")):
-                thread_ts = path.stem
+                thread_id = path.stem
                 state = self.load_thread_state(
-                    service, person_id, channel_id, thread_ts
+                    service, person_id, channel_id, thread_id
                 )
                 out.append(state)
         return out
@@ -200,19 +202,20 @@ class FileConversationStateStore(ConversationStateStore):
         service: str,
         person_id: str,
         channel_id: str,
-        thread_ts: str,
+        thread_id: str,
         message: ThreadMessageState,
     ) -> None:
         item = {
             "channel_id": message.channel_id,
-            "thread_ts": message.thread_ts,
-            "message_ts": message.message_ts,
+            "thread_id": message.thread_id,
+            "message_id": message.message_id,
+            "occurred_at": message.occurred_at.isoformat(),
             "author_id": message.author_id,
             "text": message.text,
             "mentions": [str(x) for x in message.mentions if str(x)],
             "is_bot_message": bool(message.is_bot_message),
         }
-        path = self._thread_cache_file(service, person_id, channel_id, thread_ts)
+        path = self._thread_cache_file(service, person_id, channel_id, thread_id)
         # The message cache is device-local, so the in-process lock is the only
         # thing that can be writing it and its span ends here. Taking the shared
         # lock around it as well would put this method's two halves in the
@@ -227,15 +230,14 @@ class FileConversationStateStore(ConversationStateStore):
             for raw in raw_items:
                 if not isinstance(raw, dict):
                     continue
-                raw_ts = _to_str_or_none(raw.get("message_ts"))
-                if raw_ts == message.message_ts:
+                if _to_str_or_none(raw.get("message_id")) == message.message_id:
                     merged.append(item)
                     replaced = True
                 else:
                     merged.append(raw)
             if not replaced:
                 merged.append(item)
-            merged.sort(key=lambda x: str(x.get("message_ts", "")))
+            merged.sort(key=_position)
             self._write_json(path, {"messages": merged[-self._max_thread_messages :]})
         # The shared thread state is what makes the thread discoverable
         # (list_thread_states, backfill, handoff to another device). Only its
@@ -243,8 +245,8 @@ class FileConversationStateStore(ConversationStateStore):
         # span that writes: answered a moment before the queue adopts a hub's
         # richer version of the same thread, this would replace it with a stub.
         self._update_json(
-            self._thread_file(service, person_id, channel_id, thread_ts),
-            lambda data: data or {"channel_id": channel_id, "thread_ts": thread_ts},
+            self._thread_file(service, person_id, channel_id, thread_id),
+            lambda data: data or {"channel_id": channel_id, "thread_id": thread_id},
         )
 
     def load_pending_events(
@@ -343,7 +345,7 @@ class FileConversationStateStore(ConversationStateStore):
                 merged.append(raw)
         if not replaced:
             merged.append(addition())
-        merged.sort(key=lambda x: str(x.get("message_ts", "")))
+        merged.sort(key=_position)
         return {**data, "events": merged[-self._max_processed_events :]}
 
     def remove_pending_event(
@@ -410,15 +412,17 @@ class FileConversationStateStore(ConversationStateStore):
                         found.add(path.name)
             return sorted(found)
 
-    def load_receive_cutoff(self, service: str, person_id: str) -> str | None:
+    def load_receive_cutoff(self, service: str, person_id: str) -> datetime | None:
         with self._lock:
             data = self._read_json(self._receive_cutoff_file(service, person_id))
-            return _to_str_or_none(data.get("cutoff_ts"))
+            return _to_datetime_or_none(data.get("cutoff"))
 
-    def save_receive_cutoff(self, service: str, person_id: str, cutoff_ts: str) -> None:
+    def save_receive_cutoff(
+        self, service: str, person_id: str, cutoff: datetime
+    ) -> None:
         self._write_json(
             self._receive_cutoff_file(service, person_id),
-            {"cutoff_ts": cutoff_ts},
+            {"cutoff": cutoff.isoformat()},
         )
 
     def clear_channel_receive_backlog(
@@ -472,26 +476,26 @@ class FileConversationStateStore(ConversationStateStore):
         )
 
     def _thread_file(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> Path:
         return (
             self._root(service, person_id)
             / "threads"
             / _safe_segment(channel_id)
-            / f"{_safe_segment(thread_ts)}.json"
+            / f"{_safe_segment(thread_id)}.json"
         )
 
     def _cache_root(self, service: str, person_id: str) -> Path:
         return self._cache_dir / _safe_segment(service) / _safe_segment(person_id)
 
     def _thread_cache_file(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> Path:
         return (
             self._cache_root(service, person_id)
             / "threads"
             / _safe_segment(channel_id)
-            / f"{_safe_segment(thread_ts)}.json"
+            / f"{_safe_segment(thread_id)}.json"
         )
 
     def _pending_events_file(
@@ -504,10 +508,10 @@ class FileConversationStateStore(ConversationStateStore):
         )
 
     def _read_thread_payload(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> dict:
         return self._read_json(
-            self._thread_file(service, person_id, channel_id, thread_ts)
+            self._thread_file(service, person_id, channel_id, thread_id)
         )
 
     def _read_json(self, path: Path) -> dict:
@@ -588,17 +592,16 @@ def _channel_cursor_from(data: dict) -> ChannelCursorState:
     if not isinstance(processed, list):
         processed = []
     return ChannelCursorState(
-        cursor=_to_str_or_none(data.get("cursor")),
-        oldest_ts=_to_str_or_none(data.get("oldest_ts")),
+        watermark=_to_datetime_or_none(data.get("watermark")),
         processed_event_ids=[str(item) for item in processed if str(item)],
     )
 
 
 def _thread_state_from(
-    data: dict, *, channel_id: str, thread_ts: str
+    data: dict, *, channel_id: str, thread_id: str
 ) -> ThreadConversationState:
     if not data:
-        return ThreadConversationState(channel_id=channel_id, thread_ts=thread_ts)
+        return ThreadConversationState(channel_id=channel_id, thread_id=thread_id)
     participants = data.get("participants") or []
     if not isinstance(participants, list):
         participants = []
@@ -610,7 +613,7 @@ def _thread_state_from(
         system_notices = []
     return ThreadConversationState(
         channel_id=str(data.get("channel_id", channel_id)),
-        thread_ts=str(data.get("thread_ts", thread_ts)),
+        thread_id=str(data.get("thread_id", thread_id)),
         participants={str(item) for item in participants if str(item)},
         thread_topic=str(data.get("thread_topic", "") or ""),
         latest_focus=str(data.get("latest_focus", "") or ""),
@@ -618,7 +621,7 @@ def _thread_state_from(
             ThreadHandoffState(
                 person_id=str(item.get("person_id", "") or ""),
                 roles=[str(role) for role in item.get("roles", []) if str(role)],
-                message_ts=str(item.get("message_ts", "") or ""),
+                message_id=str(item.get("message_id", "") or ""),
                 text=str(item.get("text", "") or ""),
                 thread_topic=str(item.get("thread_topic", "") or ""),
                 latest_focus=str(item.get("latest_focus", "") or ""),
@@ -632,7 +635,7 @@ def _thread_state_from(
                 reason=str(item.get("reason", "failed") or "failed"),
                 person_id=str(item.get("person_id", "") or ""),
                 source_event_id=str(item.get("source_event_id", "") or ""),
-                message_ts=str(item.get("message_ts", "") or ""),
+                message_id=str(item.get("message_id", "") or ""),
                 run_id=str(item.get("run_id", "") or ""),
                 retry_after_at=str(item.get("retry_after_at", "") or ""),
                 retry_after_text=str(item.get("retry_after_text", "") or ""),
@@ -661,6 +664,25 @@ def _to_str_or_none(value: object) -> str | None:
         return None
     text = str(value)
     return text if text != "" else None
+
+
+def _to_datetime_or_none(value: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _position(item: dict) -> str:
+    """Where a stored message stands in its channel's order."""
+    occurred_at = _to_datetime_or_none(item.get("occurred_at"))
+    if occurred_at is None:
+        return ""
+    return message_position(occurred_at, str(item.get("message_id", "")))
 
 
 def _to_non_negative_int(value: object) -> int:

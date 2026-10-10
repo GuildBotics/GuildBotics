@@ -25,6 +25,7 @@ from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.utils import workspace_sync_port
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.workspace.identity import ensure_device_identity
+from tests.guildbotics.local_chat import at
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 
@@ -68,7 +69,7 @@ def test_conversation_control_state_is_announced_but_the_cache_is_not(
     )
 
     store.save_channel_cursor(
-        "slack", "aiko", "C1", ChannelCursorState(cursor="cur-1", oldest_ts="1.0")
+        "slack", "aiko", "C1", ChannelCursorState(watermark=at(1.0))
     )
     # This writes the device-local message cache and the shared thread state
     # that makes the thread discoverable after a handoff.
@@ -86,7 +87,7 @@ def test_conversation_control_state_is_announced_but_the_cache_is_not(
 def test_removing_conversation_state_announces_a_delete(port: RecordingPort) -> None:
     store = FileConversationStateStore(base_dir=get_workspace_state_path("chat_state"))
     store.save_channel_cursor(
-        "slack", "aiko", "C1", ChannelCursorState(cursor="cur-1", oldest_ts="1.0")
+        "slack", "aiko", "C1", ChannelCursorState(watermark=at(1.0))
     )
     port.changes.clear()
 
@@ -185,8 +186,9 @@ def test_a_workspace_local_write_never_reaches_the_queue(
 def _thread_message() -> ThreadMessageState:
     return ThreadMessageState(
         channel_id="C1",
-        thread_ts="T1",
-        message_ts="1.0",
+        thread_id="T1",
+        message_id="1.0",
+        occurred_at=at(1.0),
         author_id="U1",
         text="hello",
     )

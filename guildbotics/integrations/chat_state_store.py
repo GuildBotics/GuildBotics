@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from guildbotics.integrations.chat_workflow_status import (
     normalize_workflow_status_metadata,
 )
-from guildbotics.runtime.chat_service import ChatEvent
+from guildbotics.runtime.chat_service import ChatEvent, message_position
 
 
 @dataclass(slots=True)
 class ChannelCursorState:
-    cursor: str | None = None
-    oldest_ts: str | None = None
+    #: When the newest message backfill has read occurred.
+    watermark: datetime | None = None
     processed_event_ids: list[str] = field(default_factory=list)
 
 
@@ -21,7 +22,7 @@ class ChannelCursorState:
 class ThreadHandoffState:
     person_id: str
     roles: list[str] = field(default_factory=list)
-    message_ts: str = ""
+    message_id: str = ""
     text: str = ""
     thread_topic: str = ""
     latest_focus: str = ""
@@ -33,7 +34,7 @@ class ThreadSystemNoticeState:
     person_id: str
     source_event_id: str
     reason: str = "failed"
-    message_ts: str = ""
+    message_id: str = ""
     run_id: str = ""
     retry_after_at: str = ""
     retry_after_text: str = ""
@@ -43,7 +44,7 @@ class ThreadSystemNoticeState:
 @dataclass(slots=True)
 class ThreadConversationState:
     channel_id: str
-    thread_ts: str
+    thread_id: str
     participants: set[str] = field(default_factory=set)  # person_id
     thread_topic: str = ""
     latest_focus: str = ""
@@ -58,12 +59,17 @@ class ThreadConversationState:
 @dataclass(slots=True)
 class ThreadMessageState:
     channel_id: str
-    thread_ts: str
-    message_ts: str
+    thread_id: str
+    message_id: str
+    occurred_at: datetime
     author_id: str | None
     text: str
     mentions: list[str] = field(default_factory=list)
     is_bot_message: bool = False
+
+    @property
+    def position(self) -> str:
+        return message_position(self.occurred_at, self.message_id)
 
 
 @dataclass(slots=True)
@@ -107,7 +113,7 @@ class PendingChatEvent:
             )
         required = {
             name: _optional_text(item.get(name))
-            for name in ("event_id", "message_ts", "thread_ts")
+            for name in ("event_id", "message_id", "thread_id", "occurred_at")
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
@@ -121,8 +127,9 @@ class PendingChatEvent:
             event=ChatEvent(
                 event_id=required["event_id"] or "",
                 channel_id=str(item.get("channel_id", default_channel_id)),
-                message_ts=required["message_ts"] or "",
-                thread_ts=required["thread_ts"] or "",
+                message_id=required["message_id"] or "",
+                thread_id=required["thread_id"] or "",
+                occurred_at=datetime.fromisoformat(required["occurred_at"] or ""),
                 author_id=_optional_text(item.get("author_id")),
                 text=str(item.get("text", "") or ""),
                 mentions=[str(value) for value in mentions if str(value)],
@@ -148,8 +155,9 @@ class PendingChatEvent:
         return {
             "event_id": event.event_id,
             "channel_id": event.channel_id,
-            "message_ts": event.message_ts,
-            "thread_ts": event.thread_ts,
+            "message_id": event.message_id,
+            "thread_id": event.thread_id,
+            "occurred_at": event.occurred_at.isoformat(),
             "author_id": event.author_id,
             "text": event.text,
             "mentions": [str(value) for value in event.mentions if str(value)],
@@ -231,7 +239,7 @@ class ConversationStateStore(ABC):
 
     @abstractmethod
     def load_thread_state(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> ThreadConversationState:
         """Load per-thread conversation state."""
 
@@ -241,14 +249,14 @@ class ConversationStateStore(ABC):
         service: str,
         person_id: str,
         channel_id: str,
-        thread_ts: str,
+        thread_id: str,
         state: ThreadConversationState,
     ) -> None:
         """Persist per-thread conversation state."""
 
     @abstractmethod
     def load_thread_messages(
-        self, service: str, person_id: str, channel_id: str, thread_ts: str
+        self, service: str, person_id: str, channel_id: str, thread_id: str
     ) -> list[ThreadMessageState]:
         """Load locally cached messages observed in a thread."""
 
@@ -264,7 +272,7 @@ class ConversationStateStore(ABC):
         service: str,
         person_id: str,
         channel_id: str,
-        thread_ts: str,
+        thread_id: str,
         message: ThreadMessageState,
     ) -> None:
         """Append or update a locally cached thread message."""
@@ -314,8 +322,8 @@ class ConversationStateStore(ABC):
         events, or tracked threads) for a person on a service."""
 
     @abstractmethod
-    def load_receive_cutoff(self, service: str, person_id: str) -> str | None:
-        """Load the receive cutoff ts, or None when no reset has been recorded.
+    def load_receive_cutoff(self, service: str, person_id: str) -> datetime | None:
+        """Load the receive cutoff, or None when no reset has been recorded.
 
         Backfill treats this as a hard floor: messages at or before it are never
         re-fetched, regardless of per-channel watermark or overlap. It applies to
@@ -324,8 +332,10 @@ class ConversationStateStore(ABC):
         """
 
     @abstractmethod
-    def save_receive_cutoff(self, service: str, person_id: str, cutoff_ts: str) -> None:
-        """Persist the receive cutoff ts for a person on a service."""
+    def save_receive_cutoff(
+        self, service: str, person_id: str, cutoff: datetime
+    ) -> None:
+        """Persist the receive cutoff for a person on a service."""
 
     @abstractmethod
     def clear_channel_receive_backlog(

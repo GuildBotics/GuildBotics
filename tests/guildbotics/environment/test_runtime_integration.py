@@ -23,6 +23,7 @@ from tests.guildbotics.environment.window_doubles import (
     WindowDouble,
     enter_command,
 )
+from tests.guildbotics.local_chat import position
 from tests.guildbotics.slot_mappings import use_cli_agent_slots
 
 
@@ -120,19 +121,19 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     doing("chat", "slack:bot:C1:100.1")
     snapshot = [
         {
-            "timestamp": "99.1",
+            "timestamp": position(99.1),
             "author": "user",
             "author_type": "user",
             "content": "older-message",
         },
         {
-            "timestamp": "100.1",
+            "timestamp": position(100.1),
             "author": "user",
             "author_type": "user",
             "content": "first-message",
         },
         {
-            "timestamp": "101.1",
+            "timestamp": position(101.1),
             "author": "user",
             "author_type": "user",
             "content": "second-message",
@@ -141,7 +142,7 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     state = {
         "agent_execution_context": {
             "resume_policy": "auto",
-            "context_cursor": "100.1",
+            "context_cursor": position(100.1),
             "rebuild_context": json.dumps(snapshot),
             "rebuild_context_complete": True,
             "continuation_input": "continue-only",
@@ -151,7 +152,7 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     await brain.run_with_execution_details(
         "first-turn", cwd=tmp_path, session_state=state
     )
-    state["agent_execution_context"]["context_cursor"] = "101.1"
+    state["agent_execution_context"]["context_cursor"] = position(101.1)
     await brain.run_with_execution_details(
         "second-turn", cwd=tmp_path, session_state=state
     )
@@ -197,7 +198,7 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
         session_state={
             "agent_execution_context": {
                 "resume_policy": "auto",
-                "context_cursor": "100.1",
+                "context_cursor": position(100.1),
                 "rebuild_context": "[]",
                 "rebuild_context_complete": False,
             }
@@ -391,13 +392,13 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     key = ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1")
     record = ConversationStore(tmp_path).resolve(key, ResumePolicy.AUTO)
     record.provider_session_id = "thread-1"
-    record.context_cursor = "99.1"
+    record.context_cursor = position(99.1)
     ConversationStore(tmp_path).save(record)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     doing("chat", "slack:bot:C1:100.1")
     execution_context = {
         "resume_policy": "auto",
-        "context_cursor": "100.1",
+        "context_cursor": position(100.1),
         "continuation_input": "continue-only",
         "attempt": 1,
     }
@@ -421,7 +422,7 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     assert "continue-only" not in adapter.prompts[1]
     persisted = ConversationStore(tmp_path).load(key)
     assert persisted is not None
-    assert persisted.context_cursor == "100.1"
+    assert persisted.context_cursor == position(100.1)
 
 
 class _CrashedAdapter(_Adapter):
@@ -561,11 +562,11 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
     state = {
         "agent_execution_context": {
             "resume_policy": "auto",
-            "context_cursor": "100.1",
+            "context_cursor": position(100.1),
             "rebuild_context": json.dumps(
                 [
                     {
-                        "timestamp": "99.1",
+                        "timestamp": position(99.1),
                         "author": "user",
                         "author_type": "user",
                         "content": "rebuild-me",
@@ -745,11 +746,11 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     key = _seed_chat_record(
-        tmp_path, cursor="200.1", last_run_id="run-B", last_event_id="EB"
+        tmp_path, cursor=position(200.1), last_run_id="run-B", last_event_id="EB"
     )
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor=position(100.1))
 
     # The overtaken event is re-fed with full context on a fresh session; the
     # generic continuation prompt (which would let the agent mistake run-B's
@@ -764,15 +765,15 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
     ]
     assert len(rejections) == 1
     assert rejections[0].details["reason"] == "cursor_regression"
-    assert rejections[0].details["current_cursor"] == "100.1"
-    assert rejections[0].details["persisted_cursor"] == "200.1"
+    assert rejections[0].details["current_cursor"] == position(100.1)
+    assert rejections[0].details["persisted_cursor"] == position(200.1)
     assert rejections[0].details["run_id"] == "run-A"
     assert rejections[0].details["last_run_id"] == "run-B"
     persisted = ConversationStore(tmp_path).load(key)
     assert persisted is not None
     assert persisted.generation == 1
     assert persisted.rotation_reason == "cursor_regression"
-    assert persisted.context_cursor == "100.1"
+    assert persisted.context_cursor == position(100.1)
     assert persisted.last_run_id == "run-A"
     assert persisted.last_event_id == "EA"
 
@@ -791,10 +792,12 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
         return adapter
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
-    _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA")
+    _seed_chat_record(
+        tmp_path, cursor=position(100.1), last_run_id="run-A", last_event_id="EA"
+    )
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor=position(100.1))
 
     assert result.returncode == 0
     assert 'mode="continuation"' in adapter.prompts[0]
@@ -818,10 +821,12 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
         return adapter
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
-    _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB")
+    _seed_chat_record(
+        tmp_path, cursor=position(100.1), last_run_id="run-B", last_event_id="EB"
+    )
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor=position(100.1))
 
     assert result.returncode == 0
     assert 'mode="full"' in adapter.prompts[0]
@@ -845,10 +850,10 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
         return adapter
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
-    key = _seed_chat_record(tmp_path, cursor="100.1")
+    key = _seed_chat_record(tmp_path, cursor=position(100.1))
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
-    result = await _run_chat_turn(brain, tmp_path, doing, cursor="100.1")
+    result = await _run_chat_turn(brain, tmp_path, doing, cursor=position(100.1))
 
     # A record predating run/event identity cannot prove the session targeted
     # this run, so it is rotated instead of continued.
@@ -884,7 +889,7 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     doing("chat", "slack:bot:C1:100.1", "batch-1")
     configured = {
         "resume_policy": "auto",
-        "context_cursor": "100.1",
+        "context_cursor": position(100.1),
         "event_id": "E1",
         "rebuild_context": "[]",
         "rebuild_context_complete": True,
@@ -897,14 +902,17 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     doing("chat", "slack:bot:C1:100.1", "batch-2")
     configured.update(
         {
-            "context_cursor": "105.1",
+            "context_cursor": position(105.1),
             "event_id": "E3",
             "rebuild_context": json.dumps(
                 [
-                    {"timestamp": "100.1", "content": "already delivered"},
-                    {"timestamp": "102.1", "content": "discussion between B and C"},
-                    {"timestamp": "104.1", "content": "additional context"},
-                    {"timestamp": "107.1", "content": "future request"},
+                    {"timestamp": position(100.1), "content": "already delivered"},
+                    {
+                        "timestamp": position(102.1),
+                        "content": "discussion between B and C",
+                    },
+                    {"timestamp": position(104.1), "content": "additional context"},
+                    {"timestamp": position(107.1), "content": "future request"},
                 ]
             ),
         }

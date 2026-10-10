@@ -154,7 +154,7 @@ Posts at fixed times are made by running `workflows/chat_post_command` on a sche
 Under **Setup → Members → Patrol**, press **Add schedule**, switch the command field to **Custom**, and enter a command line such as the following. Set the time with the Hourly / Daily / Weekly presets or a **Detailed schedule**.
 
 ```text
-workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 An example of the command that generates the body (an AI news digest):
@@ -168,12 +168,22 @@ guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Ge
 Running the whole thing including the post, once, by hand:
 
 ```bash
-guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+guildbotics run workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 If the channel is not specified or `channel_name` cannot be resolved (check the channel name, the bot's channel membership, and the `channels:read` / `groups:read` scopes), or `command` is empty or has unbalanced quotes, the run fails and is recorded as failed. When the command produces empty output, nothing is posted and the run succeeds.
 
 ## `person.yml` Reference
+
+The project's chat is Slack when `team/project.yml` names it, which the desktop app's project setup writes:
+
+```yaml
+# team/project.yml
+services:
+  chat_service:
+    name: slack
+    # base_url: https://slack.com/api   # only to reach Slack through a proxy
+```
 
 The Slack settings you save in the desktop app are written to `team/members/<person_id>/person.yml` in the following form. On a server without the GUI, edit this file directly.
 
@@ -184,8 +194,7 @@ name: Alice
 is_active: true
 
 message_channels:
-  - service: slack
-    name: dev-chat
+  - name: dev-chat
     chat:
       enabled: true
       participation: strict
@@ -193,14 +202,14 @@ message_channels:
       backfill_interval_seconds: 300
 
 task_schedules:
-  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
+  - command: 'workflows/chat_post_command channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
     schedules:
       - "0 9 * * 1-5"
 ```
 
 Key points:
 
-- Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched
+- Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched on the project's chat (`services.chat_service`)
 - `chat.participation` corresponds to **When to join** in the GUI. `strict` (default) handles explicit mentions and follow-ups in threads it was already invited to, `social` also allows natural participation without a mention in casual channels, and `muted` handles explicit mentions only
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
 - `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine
@@ -212,10 +221,10 @@ The Bot Token and App-Level Token are not stored in `person.yml`. They are passe
 You can also post replies and reactions as a member directly from the CLI.
 
 ```bash
-guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --content-stdin <<'EOF'
+guildbotics member chat reply --person alice --channel-id C0123456789 --thread-id 1777554000.000000 --content-stdin <<'EOF'
 A reply body containing `$HOME`, backticks (`command`), and `$(command)` literally
 EOF
-guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
+guildbotics member chat reaction add --person alice --channel-id C0123456789 --message-id 1777554000.000000 --reaction ack
 ```
 
 ## How Chat Handling Works Internally

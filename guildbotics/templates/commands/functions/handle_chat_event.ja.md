@@ -17,8 +17,8 @@ Slack thread の文脈を理解し、割り当てられた GuildBotics member �
 - Service: {service_name}
 - Channel ID: {channel_id}
 - Event ID: {event_id}
-- Message TS: {message_ts}
-- Thread TS: {thread_ts}
+- Message ID: {message_id}
+- Thread ID: {thread_id}
 - Chat participation policy: {chat_participation}
 - プロジェクトのデフォルト言語: {language}
 - Member workspace: {member_workspace}
@@ -72,17 +72,17 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 </before_publication>
 
 <instructions>
-1. `guildbotics_thread_context` の mode に従って thread 文脈を読み、`inspect_required` の場合だけ `guildbotics member chat inspect thread --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts}` を実行してください。
+1. `guildbotics_thread_context` の mode に従って thread 文脈を読み、`inspect_required` の場合だけ `guildbotics member chat inspect thread --person {person_id} --channel-id {channel_id} --thread-id {thread_id}` を実行してください。
 2. `inspect_required` で `inspect thread` が失敗した場合は Slack へ投稿・reaction せず、safe summary を書いて status `blocked` で complete してください。
-3. この run の memory source key は、組み立て可能なら thread permalink、そうでなければ `{thread_ts}` です。
+3. この run の memory source key は、組み立て可能なら thread permalink、そうでなければ `{thread_id}` です。
 4. 未処理メッセージ全体、inspect 結果、previous thread context、取得した memory を読んで、次のいずれか 1 つを選んでください: reply / reaction-only / no-op / asking / blocked。
 5. chat participation policy は次のように解釈してください: `strict` はメンションされた、または既に thread に呼ばれている時だけ参加します。`social` は雑談チャネル向けに未メンションの自然参加を許しますが、短く、低頻度で、会話を主導しすぎないでください。`muted` は明示メンション時だけ workflow が届く想定なので、明示的に依頼された文脈として扱ってください。
 6. member context の `roles` に含まれる常設 role の観点で新しい価値を足せる場合だけ reply してください。既に同じ観点が出ている、単なる同意・感謝・了解で足りる、自分の role 外で確信が低い、他 member の発言へ毎回補足するだけになる場合は reaction-only または no-op を強く優先してください。
 7. `social` では本文返信をさらに控えめにしてください。その member の character または role が自然に呼ばれている時だけ短く reply し、それ以外は no-op または軽い reaction を優先してください。
 8. 自分の role 外の観点が必要な場合は、`handoff_candidates` で該当 role を持つ member を探し、必要な観点と理由を短く述べて `mention` 値(例: `@person_id`)で話を振ってください。`previous_thread_context.handoffs` を考慮し、強い理由がない限り同じ thread で同じ member / role を繰り返し呼ばないでください。
-9. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --service {service_name} --channel-id {channel_id} --thread-ts {thread_ts} --content-file <file>` を実行し、本文全体を member capabilities の一時ファイル契約に従って渡してください。
+9. 本文返信が自然なら `guildbotics member chat reply --person {person_id} --channel-id {channel_id} --thread-id {thread_id} --content-file <file>` を実行し、本文全体を member capabilities の一時ファイル契約に従って渡してください。
 10. channel への通常投稿が必要な場合だけ `guildbotics member chat post` を使ってください。incoming thread への通常応答は原則 reply を使ってください。
-11. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --service {service_name} --channel-id {channel_id} --message-ts {message_ts} --reaction ack|agree|celebrate|support` を実行してください。
+11. reaction-only が自然なら `guildbotics member chat reaction add --person {person_id} --channel-id {channel_id} --message-id {message_id} --reaction ack|agree|celebrate|support` を実行してください。
 12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --content-file <file>` を実行し、理由を member capabilities の一時ファイル契約に従って渡してください。
 13. 追加情報が必要な場合は、まずこの thread への reply として質問を投稿してから、status `asking` で complete してください。
 14. 自律 workflow で policy 変更が必要だと判断した場合は、Slack thread へ reply/post で提案し、直接 update しないでください。

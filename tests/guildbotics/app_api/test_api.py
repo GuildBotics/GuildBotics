@@ -65,7 +65,6 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.setup.setup_service import (
     GitHubUserReference,
     SetupServiceError,
@@ -83,6 +82,7 @@ from tests.guildbotics.app_api.command_doubles import (
     RunContext,
     stub_commands,
 )
+from tests.guildbotics.local_chat import at, chat_event
 
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
@@ -122,7 +122,8 @@ def _chat_person(
 
 
 def _chat_context(members: list[Any]) -> Any:
-    team = type("TeamStub", (), {"members": members})()
+    project = Project(services={"chat_service": {"name": "slack"}})
+    team = type("TeamStub", (), {"members": members, "project": project})()
     return type("ContextStub", (), {"team": team})()
 
 
@@ -3117,17 +3118,17 @@ def test_chat_receive_state_reset_ignores_past_for_active_members(
 
     seed = FileConversationStateStore()
     seed.save_channel_cursor(
-        "slack", "alice", "C1", ChannelCursorState(oldest_ts="1.0")
+        "slack", "alice", "C1", ChannelCursorState(watermark=at(1.0))
     )
     seed.upsert_pending_event(
         "slack",
         "alice",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="C1:1",
             channel_id="C1",
-            message_ts="1.0",
-            thread_ts="1.0",
+            message_id="1.0",
+            thread_id="1.0",
             author_id="U1",
             text="old",
         ),
@@ -3143,7 +3144,7 @@ def test_chat_receive_state_reset_ignores_past_for_active_members(
     # A hard receive cutoff at "now" is recorded for the active member.
     cutoff = reloaded.load_receive_cutoff("slack", "alice")
     assert cutoff is not None
-    assert float(cutoff) > 1.0
+    assert cutoff > at(1.0)
     # Inactive members are never touched.
     assert reloaded.load_receive_cutoff("slack", "carol") is None
 
