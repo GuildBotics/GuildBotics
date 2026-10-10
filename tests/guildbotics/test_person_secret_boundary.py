@@ -72,8 +72,11 @@ STORE_ELSEWHERE = {
     ("setup/setup_service.py", "SimpleProjectSetupService.write_project"): (
         "LLM provider API keys named by the project setup"
     ),
-    ("intelligences/brains/jev.py", "credential"): "the workspace's Jev key",
+    ("capabilities/decisions/preparation.py", "options"): "the workspace's Jev key",
     ("capabilities/decisions/preparation.py", "save_credential"): (
+        "the workspace's Jev key"
+    ),
+    ("environment/inference_host.py", "DirectInference.jev"): (
         "the workspace's Jev key"
     ),
     ("observability/diagnostics_events.py", "load_required_io_redaction_values"): (

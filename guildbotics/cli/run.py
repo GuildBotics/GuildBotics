@@ -11,6 +11,7 @@ import click
 
 from guildbotics.cli._options import selected_workspace
 from guildbotics.cli.desktop_commands import run_on_desktop
+from guildbotics.cli.member import run_in_process
 from guildbotics.commands.errors import (
     CommandError,
     PersonExecutionNotAllowedError,
@@ -21,6 +22,7 @@ from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import TaskRunCoordinator, WorkRejectedError
 from guildbotics.drivers.utils import command_boundary
+from guildbotics.environment.member_broker import install_member_cli
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.env_loader import load_guildbotics_env
 
@@ -90,6 +92,7 @@ async def _run_custom_command(
     command declares itself read-only, the member's execution lease."""
     command_name, inline_person = _parse_command_spec(command_spec)
     context = create_context(message)
+    install_member_cli(run_in_process)
     identifier = person_option or inline_person
 
     try:

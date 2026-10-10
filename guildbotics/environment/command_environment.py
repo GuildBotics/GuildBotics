@@ -67,6 +67,7 @@ from guildbotics.environment.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
     MemberCommandResult,
+    member_cli,
 )
 from guildbotics.environment.provider_state import (
     LentLogin,
@@ -455,7 +456,8 @@ class _SharedEnvironment:
         self._where = where
         self._environment: AgentEnvironment | None = None
         self._broker = MemberCapabilityBroker(
-            EnvironmentGuest(asyncio.get_running_loop(), lambda: self._environment)
+            member_cli(),
+            EnvironmentGuest(asyncio.get_running_loop(), lambda: self._environment),
         )
         self._turn = asyncio.Lock()
         #: The microVM's mounts, by where it spells them, and whether work may

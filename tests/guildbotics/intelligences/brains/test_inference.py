@@ -32,6 +32,8 @@ from guildbotics.intelligences.brains.inference import (
     InferenceFailure,
 )
 from guildbotics.intelligences.effort import ResolvedEffort
+from guildbotics.utils.fileio import get_workspace_config_dir
+from guildbotics.utils.secret_store import KeyringSecretStore
 from tests.conftest import FakeContext
 from tests.guildbotics.slot_mappings import use_model_slots
 
@@ -213,7 +215,7 @@ async def test_jev_is_asked_with_the_workspace_key(monkeypatch) -> None:
         asked.append((key, method, path, payload))
         return {"model": "jev-1", "answers": {}, "usage": {"input_tokens": 3}}
 
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "jev-key")
+    KeyringSecretStore(get_workspace_config_dir()).set(jev.JEV_KEY, "jev-key")
     monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("p1", "chat_decision", logging.getLogger("test"))
 
@@ -435,8 +437,8 @@ async def test_a_jev_refusal_is_raised_with_why(monkeypatch) -> None:
             response=httpx.Response(401, text="Invalid key jev-key-0123456789"),
         )
 
-    monkeypatch.setattr(
-        inference_host, "credential", lambda _root: "jev-key-0123456789"
+    KeyringSecretStore(get_workspace_config_dir()).set(
+        jev.JEV_KEY, "jev-key-0123456789"
     )
     monkeypatch.setattr(inference_host, "request", request)
     spans: list[dict[str, Any]] = []
@@ -466,7 +468,6 @@ async def test_a_jev_refusal_is_raised_with_why(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_a_workspace_without_the_jev_key_records_no_call(monkeypatch) -> None:
     """Nothing was asked, so nothing says the provider refused the key."""
-    monkeypatch.setattr(inference_host, "credential", lambda _root: "")
     spans: list[dict[str, Any]] = []
     monkeypatch.setattr(
         span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)

@@ -110,6 +110,7 @@ from guildbotics.capabilities.member_memory_audit import (
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.cli.member import run_in_process
 from guildbotics.commands.authoring import CommandAuthoringResult
 from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.discovery import (
@@ -166,6 +167,7 @@ from guildbotics.environment.contract import (
     exchange_dir,
     validate_workspace_location,
 )
+from guildbotics.environment.member_broker import install_member_cli
 from guildbotics.environment.runtime import (
     AgentEnvironmentError,
     doctor,
@@ -317,6 +319,7 @@ class AppRuntime:
         load_workspace_environment: bool = False,
         workspace_problem: str = "",
     ) -> None:
+        install_member_cli(run_in_process)
         self._event_bus = event_bus
         self.workspace_problem = workspace_problem
         self._diagnostics_store = diagnostics_store

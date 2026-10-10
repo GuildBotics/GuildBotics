@@ -32,7 +32,7 @@ from guildbotics.intelligences.brains.inference import (
     InferenceFailure,
     JevCall,
 )
-from guildbotics.intelligences.brains.jev import JEV_PROVIDER, credential
+from guildbotics.intelligences.brains.jev import JEV_KEY, JEV_PROVIDER
 from guildbotics.intelligences.effort import effort_diagnostics, effort_settings
 from guildbotics.intelligences.llm_providers import classify_failure, provider_of
 from guildbotics.observability.diagnostics_events import record_correlated_io
@@ -41,6 +41,7 @@ from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.import_utils import instantiate_class
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.rate_limiter import acquire
+from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_redaction import redact_for_sharing
 
 if TYPE_CHECKING:
@@ -184,7 +185,7 @@ class DirectInference:
 
         A workspace without the key asks nothing, so it records no call.
         """
-        key = credential(get_workspace_config_dir())
+        key = KeyringSecretStore(get_workspace_config_dir()).get(JEV_KEY)
         if not key:
             raise ValueError("credentials_missing")
         with bind_span(call.span) if call.span else nullcontext():

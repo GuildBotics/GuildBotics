@@ -1,236 +1,53 @@
-"""Guard the layered architecture of the ``guildbotics`` package.
+"""Guard the boundaries of the ``guildbotics`` package that are not import
+directions.
 
-``guildbotics.app_api`` is the desktop-facing API layer that sits on top of
-the core packages (capabilities, drivers, intelligences, observability, ...).
-Core modules therefore must never import from ``guildbotics.app_api``; domain
-knowledge needed by both sides belongs in the core layer, with ``app_api``
-converting it into API response models.
-
-``guildbotics.observability`` is a recording foundation and may only depend on
-``guildbotics.utils``.
-
-``guildbotics.workspace`` owns workspace storage -- identity, shared-record
-schemas, and config revisions -- and sits below the capability, driver, and API
-layers, so it may depend only on ``guildbotics.utils`` and ``guildbotics.entities``.
-
-``guildbotics.hub`` owns the machine that hosts synchronization repositories and
-how a device reaches one over OpenSSH. It knows nothing about what those
-repositories contain, so it may depend only on ``guildbotics.utils``.
-
-``guildbotics.secrets`` distributes secret values between devices. It sits on
-top of ``guildbotics.hub`` (how a device reaches the machine holding them) and
-``guildbotics.utils`` (this machine's own store), and below the CLI and the API
-layer, so it may depend only on those two.
-
-``guildbotics.sync`` turns announced shared writes into Git work. It sits above
-workspace storage and observability and below everything else: capabilities,
-drivers, integrations, and the API layer must reach it only through the
-Workspace Sync Port, never by importing it. The exception is the composition
-roots below, which are the process entry points that install the queue -- one
-per long-lived process. Wiring an implementation is what a composition root is
-for; reaching around the port from anywhere else is what the rule forbids.
+Which package may import which is the import-linter configuration in
+``pyproject.toml``, checked by ``lint-imports``. What it does not check is
+here: that each module a ``protected`` contract allows still imports what it
+protects, and that a native provider's wire protocol stays out of the API
+layer and the frontend.
 """
 
 from __future__ import annotations
 
-import ast
+import tomllib
 from pathlib import Path
+
+import grimp
+import pytest
 
 import guildbotics
 
 PACKAGE_ROOT = Path(guildbotics.__file__).parent
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
+_PROTECTED = [
+    contract
+    for contract in tomllib.loads(
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["importlinter"]["contracts"]
+    if contract["type"] == "protected"
+]
 
 
-def _imports_by_module(subpackage: str, inside: bool) -> dict[Path, set[str]]:
-    """Collect guildbotics imports per module, inside or outside ``subpackage``."""
-    imports: dict[Path, set[str]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        relative = path.relative_to(PACKAGE_ROOT)
-        if (relative.parts[0] == subpackage) != inside:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        modules: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                modules.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                # ``from guildbotics import sync`` names the subpackage in the
-                # alias rather than in the module, so both are recorded; a rule
-                # that only read the module would let that form through.
-                modules.add(node.module)
-                modules.update(f"{node.module}.{alias.name}" for alias in node.names)
-        imports[relative] = {
-            module for module in modules if module.startswith("guildbotics")
-        }
-    return imports
-
-
-def _matches(module: str, packages: tuple[str, ...]) -> bool:
-    return any(
-        module == package or module.startswith(f"{package}.") for package in packages
-    )
-
-
-def test_core_modules_do_not_import_app_api() -> None:
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("app_api", inside=False).items()
-        for module in sorted(modules)
-        if _matches(module, ("guildbotics.app_api",))
-    ]
-    assert offenders == []
-
-
-def test_observability_depends_only_on_utils() -> None:
-    allowed = ("guildbotics.observability", "guildbotics.utils")
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module(
-            "observability", inside=True
-        ).items()
-        for module in sorted(modules)
-        if not _matches(module, allowed)
-    ]
-    assert offenders == []
-
-
-def test_workspace_storage_depends_only_on_utils_and_entities() -> None:
-    allowed = (
-        "guildbotics.workspace",
-        "guildbotics.utils",
-        "guildbotics.entities",
-    )
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("workspace", inside=True).items()
-        for module in sorted(modules)
-        if not _matches(module, allowed)
-    ]
-    assert offenders == []
-
-
-def test_hub_depends_only_on_utils() -> None:
-    allowed = ("guildbotics.hub", "guildbotics.utils")
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("hub", inside=True).items()
-        for module in sorted(modules)
-        if not _matches(module, allowed)
-    ]
-    assert offenders == []
-
-
-def test_secret_distribution_depends_only_on_the_hub_and_utils() -> None:
-    allowed = ("guildbotics.secrets", "guildbotics.hub", "guildbotics.utils")
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("secrets", inside=True).items()
-        for module in sorted(modules)
-        if not _matches(module, allowed)
-    ]
-    assert offenders == []
-
-
-def test_the_hub_does_not_depend_on_secret_distribution() -> None:
-    """The hub holds values; deciding which to move is the layer above it."""
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("hub", inside=True).items()
-        for module in sorted(modules)
-        if _matches(module, ("guildbotics.secrets",))
-    ]
-    assert offenders == []
-
-
-def test_sync_depends_only_on_storage_and_recording() -> None:
-    allowed = (
-        "guildbotics.sync",
-        "guildbotics.workspace",
-        "guildbotics.observability",
-        "guildbotics.utils",
-        "guildbotics.entities",
-    )
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("sync", inside=True).items()
-        for module in sorted(modules)
-        if not _matches(module, allowed)
-    ]
-    assert offenders == []
-
-
-#: The only modules that may import ``guildbotics.sync``. The Desktop backend,
-#: ``guildbotics start``, member CLI, and the secret transfers are the process
-#: entry points that install a queue or run a one-shot repository operation.
-#: ``cli/secrets.py`` is one of them for both halves: it reads which hub this
-#: workspace belongs to, since secret values travel to the same machine the
-#: repository does, and it pushes the generations it publishes on a device that
-#: is running no service to push them for it.
-SYNC_COMPOSITION_ROOTS = frozenset(
-    {
-        Path("app_api/workspace_sync.py"),
-        Path("cli/service.py"),
-        Path("cli/member.py"),
-        Path("cli/secrets.py"),
-    }
+@pytest.mark.parametrize(
+    "contract", _PROTECTED, ids=[contract["id"] for contract in _PROTECTED]
 )
-
-
-def test_nothing_reaches_around_the_workspace_sync_port() -> None:
-    """Capabilities, drivers, integrations, and the API layer announce writes
-    through the port; importing the sync package would reintroduce the direct
-    dependency on Git the port exists to remove."""
-    offenders = [
-        f"{relative}: {module}"
-        for relative, modules in _imports_by_module("sync", inside=False).items()
-        if relative not in SYNC_COMPOSITION_ROOTS
-        for module in sorted(modules)
-        if _matches(module, ("guildbotics.sync",))
-    ]
-    assert offenders == []
-
-
-def test_every_declared_sync_composition_root_installs_the_queue() -> None:
+def test_every_allowed_importer_imports_what_its_contract_protects(
+    contract: dict,
+) -> None:
     """A stale entry would quietly widen the exception it declares."""
-    imports = _imports_by_module("sync", inside=False)
+    graph = grimp.build_graph("guildbotics", include_external_packages=True)
+    protected = contract["protected_modules"]
     unused = [
-        str(relative)
-        for relative in sorted(SYNC_COMPOSITION_ROOTS)
+        importer
+        for importer in contract["allowed_importers"]
         if not any(
-            _matches(module, ("guildbotics.sync",))
-            for module in imports.get(relative, set())
+            imported == module or imported.startswith(f"{module}.")
+            for imported in graph.find_modules_directly_imported_by(importer)
+            for module in protected
         )
     ]
     assert unused == []
-
-
-#: The one module that drives the sandbox runtime. The contract is enforced by
-#: exactly one layer, so an adapter that imported the SDK itself would be a
-#: second one, translating the contract its own way.
-AGENT_ENVIRONMENT_RUNTIME = Path("environment/runtime.py")
-
-
-def test_only_the_agent_environment_runtime_drives_the_sandbox_sdk() -> None:
-    offenders: list[str] = []
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        relative = path.relative_to(PACKAGE_ROOT)
-        if relative == AGENT_ENVIRONMENT_RUNTIME:
-            continue
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            names = (
-                [alias.name for alias in node.names]
-                if isinstance(node, ast.Import)
-                else [node.module or ""]
-                if isinstance(node, ast.ImportFrom)
-                else []
-            )
-            offenders.extend(
-                f"{relative}: {name}"
-                for name in names
-                if _matches(name, ("microsandbox",))
-            )
-    assert offenders == []
 
 
 def test_native_provider_wire_protocol_does_not_leak_into_app_or_frontend() -> None:

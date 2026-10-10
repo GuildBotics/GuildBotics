@@ -35,8 +35,8 @@ both, never a mix:
 ```
 guildbotics/
 │  host
-├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
 ├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
+├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
 ├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control, live state
 ├── setup/           # Workspace and member setup (setup_service, per-provider setup) used by the GUI
 ├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
@@ -77,27 +77,37 @@ side: a brain calls `inference()` (`intelligences/brains/inference.py`), which
 imports no implementation. The two places that build a `Context` install one —
 the host's `create_context()` the calls themselves
 (`environment/inference_host.py`), the guest's entry the command's window
-(`guest/window.py`).
+(`guest/window.py`). The member brokers (`environment/member_broker.py`) take
+the member CLI they run the same way: the environment does not import the CLI
+above it, and each host entry that runs commands (`cli/run.py`,
+`cli/service.py`, the Desktop's `app_api/runtime.py`) installs it with
+`install_member_cli()`.
 
-Hard dependency rules (enforced by `tests/guildbotics/test_layer_boundaries.py`):
+Dependency rules (the contracts in `[tool.importlinter]`, checked by `lint-imports`):
 
+- Each side imports only downward, in the order of the map above, and the
+  packages that share a step (`|`) import none of each other. The host:
+  `app_api` → `cli` → `drivers | setup` → `environment` → `capabilities` →
+  `integrations` → `sync | secrets` → `workspace | observability | hub`. The
+  shared packages: `commands` → `intelligences` → `runtime` → `loader` →
+  `entities` → `utils`. `app_api` sits above `cli` because the Desktop runs
+  the member CLI in its own process for the member brokers of its commands.
 - `app_api` is the top layer: no other guildbotics package may import it. Knowledge
   needed by both app_api and core (e.g. LLM provider / AI CLI tool catalogs) lives in
   core (`guildbotics/intelligences/*`); app_api only converts it to API models.
-- `observability` depends on nothing but `utils`. It records; it does not know about
-  app_api or capability concerns.
-- `workspace` depends on nothing but `utils` and `entities`. It is storage; it does not
-  know about capabilities, drivers, or app_api.
-- `hub` depends on nothing but `utils`. It knows about repositories and an SSH route,
-  never about what the shared records mean.
-- `sync` may be imported **only by a composition root**, listed in
-  `tests/guildbotics/test_layer_boundaries.py` (`SYNC_COMPOSITION_ROOTS`). Everything
-  else reaches synchronization through the Workspace Sync Port. The Desktop backend
-  and `guildbotics start` install a queue; member CLI uses the same boundary for one
-  locked commit/push. The process-local activation guard is supplemented by
-  `local/run/sync.lock`, so two processes cannot operate the same repository at once.
-- Lower layers (`entities`, `utils`) never depend on orchestration layers
-  (`commands`, `templates`, `drivers`).
+- `workspace`, `observability`, `hub`, `sync` and `secrets` take from the shared
+  packages only `utils`. Observability records without knowing app_api or capability
+  concerns; workspace is storage; the hub knows repositories and an SSH route, never
+  what the shared records mean.
+- `sync` builds on `workspace` and `observability`, `secrets` on `hub`; neither
+  reaches the other's.
+- `sync` may be imported **only by a composition root**, the `allowed_importers` of
+  the `sync-composition-roots` contract. Everything else reaches synchronization
+  through the Workspace Sync Port. The Desktop backend and `guildbotics start` install
+  a queue; member CLI uses the same boundary for one locked commit/push. The
+  process-local activation guard is supplemented by `local/run/sync.lock`, so two
+  processes cannot operate the same repository at once.
+- Only `environment/runtime.py` imports the microVM SDK.
 
 Responsibility boundaries between CLI / capabilities / observability / app_api /
 desktop frontend — who may know provider payloads, who normalizes display titles, etc. —

@@ -564,6 +564,19 @@ def _isolate_inference(monkeypatch):
     monkeypatch.setattr(inference, "_installed", None)
 
 
+@pytest.fixture(autouse=True)
+def _installed_member_cli(monkeypatch):
+    """Start every test with the member CLI the host entries install.
+
+    It stays for the process once installed; without this a test that
+    replaced it would decide what a later test's brokers run.
+    """
+    from guildbotics.cli.member import run_in_process
+    from guildbotics.environment import member_broker
+
+    monkeypatch.setattr(member_broker, "_member_cli", run_in_process)
+
+
 @pytest.fixture
 def direct_inference():
     """Brains call the inference APIs themselves, as on the host."""
