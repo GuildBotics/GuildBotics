@@ -7,6 +7,7 @@ import io
 import json
 import os
 import subprocess
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,7 @@ def _repository(root: Path, tracked: dict[str, str]) -> Path:
     """A repository whose index holds ``tracked``; nothing needs committing."""
     _tree(root, tracked)
     _git(root, "init", "-q")
-    _git(root, "add", "--", *tracked)
+    _git(root, "add", "-f", "--", *tracked)
     return root
 
 
@@ -68,16 +69,14 @@ def test_a_directory_without_git_is_copied_whole(tmp_path: Path) -> None:
     ]
 
 
-def test_a_repository_is_copied_as_far_as_git_names_it(tmp_path: Path) -> None:
-    """What git tracks and the untracked files it does not ignore; never
-    ``.git``, under any spelling, nor a tracked file gone from the worktree.
-    A gitfile names the read-only original's ``.git`` instead, so git reads
-    it and can change nothing."""
+def test_a_repository_is_copied_but_what_git_ignores(tmp_path: Path) -> None:
+    """What git tracks, ignored or not, and the untracked files it does not
+    ignore; never ``.git``, under any spelling. A gitfile names the read-only
+    original's ``.git`` instead, so git reads it and can change nothing."""
     source = _repository(
         tmp_path / "source",
-        {".gitignore": "target/\n*.pyc\n", "a.txt": "a", "gone.txt": "g"},
+        {".gitignore": "target/\n*.pyc\n", "a.txt": "a", "target/kept": "k"},
     )
-    (source / "gone.txt").unlink()
     _tree(
         source,
         {
@@ -92,26 +91,128 @@ def test_a_repository_is_copied_as_far_as_git_names_it(tmp_path: Path) -> None:
 
     copied = _copied(source, destination)
 
-    assert sorted(copied) == [".gitignore", "a.txt", "src/b.py"]
+    assert sorted(copied) == [".gitignore", "a.txt", "src/b.py", "target/kept"]
     assert (destination / "src" / "b.py").read_text(encoding="utf-8") == "b"
-    assert not (destination / "target").exists()
-    assert not (destination / "empty").exists()
-    assert not (destination / "sub").exists()
+    assert not (destination / "target" / "big").exists()
+    assert (destination / "empty").is_dir()
+    assert not (destination / "sub" / ".GIT").exists()
     assert (destination / ".git").read_text(encoding="utf-8") == (
         f"gitdir: {source / '.git'}\n"
     )
 
 
-def test_a_name_the_disk_spells_in_another_case_is_copied(tmp_path: Path) -> None:
-    """Where the host ignores case, git names a tracked file as its index
-    spells it, and a renamed directory with it."""
-    source = _repository(tmp_path / "source", {"README.md": "r", "Src/b.py": "b"})
-    _git(source, "config", "core.ignorecase", "true")
-    for old, new in (("README.md", "Readme.md"), ("Src", "src")):
-        (source / old).rename(source / f"{new}.tmp")
-        (source / f"{new}.tmp").rename(source / new)
+@pytest.mark.parametrize(
+    ("indexed", "on_disk"),
+    [
+        ("README.md", "Readme.md"),
+        ("Src/b.py", "src/b.py"),
+        (
+            unicodedata.normalize("NFC", "が.txt"),
+            unicodedata.normalize("NFD", "が.txt"),
+        ),
+        (
+            unicodedata.normalize("NFC", "ぶ/c.txt"),
+            unicodedata.normalize("NFD", "ぶ/c.txt"),
+        ),
+    ],
+    ids=["file-case", "directory-case", "file-unicode", "directory-unicode"],
+)
+def test_a_name_the_disk_spells_otherwise_is_copied_as_the_disk_spells_it(
+    tmp_path: Path, indexed: str, on_disk: str
+) -> None:
+    """Where the host tells files apart by neither case nor Unicode form, git
+    names a tracked file -- or its directory -- as its index spells it,
+    whatever the disk says: it is copied all the same, and is no change."""
+    source = _tree(tmp_path / "source", {on_disk: "x"})
+    _git(source, "init", "-q")
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--", on_disk],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(source, "update-index", "--add", "--cacheinfo", f"100644,{blob},{indexed}")
+    destination = tmp_path / "copy"
 
-    assert sorted(_copied(source, tmp_path / "copy")) == ["Readme.md", "src/b.py"]
+    copied = _copied(source, destination)
+
+    assert list(copied) == [on_disk]
+    assert _changes(source, destination, copied) == []
+
+
+def test_a_new_file_spelled_like_a_tracked_one_is_told_only_as_git_names_it(
+    tmp_path: Path,
+) -> None:
+    """Telling changes, names compare exactly: on a host that tells case
+    apart, an ignored file the command built is no change because another
+    one is tracked under a name that differs only by case."""
+    source = _repository(
+        tmp_path / "source", {".gitignore": "build/\n", "Build/config.txt": "c"}
+    )
+    _git(source, "config", "core.ignorecase", "false")
+    destination = tmp_path / "copy"
+    copied = _copied(source, destination)
+    if (destination / "build").exists():
+        pytest.skip("the file system takes 'build' and 'Build' for one directory")
+    _tree(destination, {"build/config.txt": "built"})
+
+    assert _changes(source, destination, copied) == []
+
+
+def test_a_directory_the_command_ignores_is_looked_into_for_what_was_copied(
+    tmp_path: Path,
+) -> None:
+    """A copied file there is still told, and nothing new there is."""
+    source = _repository(tmp_path / "source", {".gitignore": "*.o\n"})
+    _tree(source, {"foo/keep.txt": "k", "foo/gone.txt": "g"})
+    destination = tmp_path / "copy"
+    copied = _copied(source, destination)
+    (destination / ".gitignore").write_text("*.o\nfoo/\n", encoding="utf-8")
+    (destination / "foo" / "gone.txt").unlink()
+    _tree(destination, {"foo/built.o": "b", "foo/sub/deep.txt": "d"})
+
+    changes = _changes(source, destination, copied)
+
+    assert [(each["path"], "deleted" in each) for each in changes] == [
+        (".gitignore", False),
+        ("foo/gone.txt", True),
+    ]
+
+
+def test_a_case_only_rename_is_told_as_a_new_name_and_a_deletion(
+    tmp_path: Path,
+) -> None:
+    """On the microVM's disk, which tells case apart, the new name is a file
+    of its own: the host then decides what one file changed twice is."""
+    source = _repository(tmp_path / "source", {"README.md": "r"})
+    _git(source, "config", "core.ignorecase", "true")
+    destination = tmp_path / "copy"
+    copied = _copied(source, destination)
+    (destination / "README.md").rename(destination / "readme.md")
+    if (destination / "README.md").exists():
+        pytest.skip("the file system takes 'README.md' and 'readme.md' for one")
+
+    changes = _changes(source, destination, copied)
+
+    assert [(each["path"], "deleted" in each) for each in changes] == [
+        ("readme.md", False),
+        ("README.md", True),
+    ]
+
+
+def test_a_repository_the_command_made_is_no_repository_of_the_original(
+    tmp_path: Path,
+) -> None:
+    source = _repository(tmp_path / "source", {"a.txt": "a"})
+    destination = tmp_path / "copy"
+    copied = _copied(source, destination)
+    _tree(destination, {"vendor/lib/x.py": "x"})
+    _git(destination / "vendor", "init", "-q")
+
+    changes = _changes(source, destination, copied)
+
+    assert [each["path"] for each in changes] == ["vendor/lib/x.py"]
 
 
 def test_what_the_command_built_is_no_change(tmp_path: Path) -> None:
@@ -136,10 +237,10 @@ def test_what_the_command_built_is_no_change(tmp_path: Path) -> None:
 def test_a_submodule_and_a_nested_repository_are_copied_whole(
     tmp_path: Path,
 ) -> None:
-    """Git does not look into them, so neither does the listing; their
-    ``.git`` stays behind. In the copy they are no repository, so a new file
-    there counts as git names it from the outer repository."""
-    source = _repository(tmp_path / "source", {".gitignore": "*.log\n"})
+    """Git does not look into them, so they are copied whole but their
+    ``.git``, and a new file in them is no change; what was copied is told
+    whatever it is under."""
+    source = _repository(tmp_path / "source", {".gitignore": "*.log\ntarget/\n"})
     _repository(source / "nested", {"n.txt": "n", "old.log": "o"})
     _tree(source, {"sub/s.txt": "s", "sub/.git": "gitdir: ../.git/modules/sub\n"})
     blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
@@ -157,11 +258,24 @@ def test_a_submodule_and_a_nested_repository_are_copied_whole(
     assert not os.path.lexists(destination / "nested" / ".git")
     assert not os.path.lexists(destination / "sub" / ".git")
     (destination / "nested" / "old.log").write_text("edited", encoding="utf-8")
-    _tree(destination, {"nested/new.log": "x", "nested/new.txt": "x"})
+    (destination / "sub" / "s.txt").write_text("edited", encoding="utf-8")
+    _tree(
+        destination,
+        {
+            "nested/new.log": "x",
+            "nested/new.txt": "x",
+            "sub/new.log": "x",
+            "sub/new.txt": "x",
+            "sub/target/large.bin": "x",
+        },
+    )
 
     changes = _changes(source, destination, copied)
 
-    assert [each["path"] for each in changes] == ["nested/new.txt", "nested/old.log"]
+    assert sorted((each["path"], "deleted" in each) for each in changes) == [
+        ("nested/old.log", False),
+        ("sub/s.txt", False),
+    ]
 
 
 def test_a_gitfile_names_no_repository_here_so_all_is_copied(

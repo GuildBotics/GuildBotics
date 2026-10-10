@@ -9,15 +9,15 @@ writes them back itself, so nothing the command leaves there -- a hook, a
 link, a configuration git would follow -- reaches the host.
 
 Only directories and regular files are copied, and only regular files are
-reported; ``.git`` is neither copied nor reported. A directory whose ``.git``
-is a directory is copied as far as git names it: the files it tracks and the
-untracked ones it does not ignore, a directory it names (a submodule, a
-nested repository) whole. Any other directory is copied whole. The copy gets
-a gitfile naming the read-only original's ``.git``, so ``git status`` and
-``git diff`` work while nothing can be committed. What is reported are the
-changes to what was copied, and the new files git would name; the listing is
-taken from the original's ``.git`` in both, whatever the command did to the
-gitfile.
+reported; ``.git`` is neither copied nor reported. Of a directory whose
+``.git`` is a directory, what git ignores is not copied, and a new file is
+not reported when git ignores it or it is in a repository of its own (a
+submodule, a nested repository). Git is asked in both with the original's
+``.git``, whatever the command did to the copy's, and names what it ignores
+as it reads it from the disk, so nothing is matched by name. Any other
+directory is copied whole. The copy gets a gitfile naming the read-only
+original's ``.git``, so ``git status`` and ``git diff`` work while nothing
+can be committed.
 
 ``copy <source> <destination> [<excluded>...]`` writes one JSON line per file
 copied (:class:`CopiedFile`). ``changes <source> <destination> [<excluded>...]``
@@ -55,16 +55,16 @@ class WorktreeCopyError(ValueError):
 def copy_tree(
     source: Path, destination: Path, excluded: frozenset[str]
 ) -> Iterator[CopiedFile]:
-    """Copy the directories and regular files of ``source`` to ``destination``
-    -- those git names, when ``source`` is a repository.
+    """Copy the directories and regular files of ``source`` to
+    ``destination``, but what git ignores when ``source`` is a repository.
 
     Raises:
         WorktreeCopyError: When git cannot list the repository.
     """
     destination.mkdir(parents=True, exist_ok=True)
     repository = _repository(source)
-    admitted = None if repository is None else _listed(repository, source)
-    for path, info in _walk(source, excluded, admitted):
+    ignored = set() if repository is None else _ignored(repository, source)
+    for path, info in _walk(source, excluded | ignored):
         target = destination / path
         if stat.S_ISDIR(info.st_mode):
             target.mkdir(exist_ok=True)
@@ -85,25 +85,37 @@ def changed_files(
 ) -> Iterator[ChangedFile]:
     """The regular files of the copy that differ from what was ``copied``.
 
-    A new file counts only when git, listing the copy against ``source``'s
-    repository, names it: what the command built is no change. A link or
-    anything else the command made is no file to write back and is left out;
-    a copied file that became one cannot be told.
+    In a repository, a new file is no change when git, listing the copy
+    against ``source``'s repository, ignores it -- what the command built --
+    or when it is in a directory that is a repository of its own in
+    ``source`` (a submodule, a nested repository), where git does not look.
+    An ignored directory holding copied files is looked into for them alone.
+    A link or anything else the command made is no file to write back and is
+    left out; a copied file that became one cannot be told.
 
     Raises:
         WorktreeCopyError: For a copied file that is no regular file anymore,
             or when git cannot list the copy.
     """
     repository = _repository(source)
-    admitted = (
-        None if repository is None else copied.keys() | _listed(repository, destination)
-    )
+    kept = copied.keys() | {
+        parent.as_posix() for each in copied for parent in PurePosixPath(each).parents
+    }
+    ignored = set() if repository is None else _ignored(repository, destination)
+    # The directories whose new files are no change.
+    untold = ignored & kept
     present: set[str] = set()
-    for path, info in _walk(destination, excluded, admitted):
+    for path, info in _walk(destination, excluded | (ignored - kept)):
         if stat.S_ISDIR(info.st_mode):
+            if repository is not None and os.path.lexists(source / path / _GIT):
+                untold.add(path)
             continue
         present.add(path)
         before = copied.get(path)
+        if before is None and not untold.isdisjoint(
+            parent.as_posix() for parent in PurePosixPath(path).parents
+        ):
+            continue
         executable = _executable(info)
         digest = _sha256(destination / path)
         if (
@@ -132,10 +144,11 @@ def _repository(root: Path) -> Path | None:
     return git if git.is_dir() and not git.is_symlink() else None
 
 
-def _listed(repository: Path, tree: Path) -> set[str]:
-    """What git names in ``tree`` with ``repository``: the files it tracks
-    and the untracked ones it does not ignore, a directory it does not look
-    into (a submodule, a nested repository) as one.
+def _ignored(repository: Path, tree: Path) -> set[str]:
+    """What git ignores in ``tree`` with ``repository``: the untracked files
+    its rules match, a directory holding nothing else as one. The names are
+    the ones git read from ``tree``: in the microVM, where git changes no
+    Unicode form, spelled as the disk spells them.
 
     Raises:
         WorktreeCopyError: When git cannot list it.
@@ -147,9 +160,10 @@ def _listed(repository: Path, tree: Path) -> set[str]:
             f"--work-tree={tree}",
             "ls-files",
             "-z",
-            "--cached",
             "--others",
+            "--ignored",
             "--exclude-standard",
+            "--directory",
         ],
         cwd=tree,
         capture_output=True,
@@ -162,41 +176,23 @@ def _listed(repository: Path, tree: Path) -> set[str]:
     }
 
 
-def _walk(
-    root: Path, excluded: frozenset[str], admitted: Set[str] | None
-) -> Iterator[tuple[str, os.stat_result]]:
+def _walk(root: Path, left_out: Set[str]) -> Iterator[tuple[str, os.stat_result]]:
     """The directories and regular files under ``root`` by their relative
-    paths, parents first, never following a link and never into ``.git``.
-
-    With ``admitted``, only those paths, everything under the directories
-    among them, and the directories on the way to them. They compare without
-    case: where the host ignores it, git names a file as its index spells
-    it, whatever the disk says.
-    """
-    folded = {
-        each.casefold()
-        for each in admitted or ()
-        if _GIT not in PurePosixPath(each.casefold()).parts
-    }
-    on_the_way = {
-        parent.as_posix() for each in folded for parent in PurePosixPath(each).parents
-    }
-    pending = [("", admitted is None)]
+    paths, parents first, never following a link and never into ``.git`` or
+    what is ``left_out``."""
+    pending = [""]
     while pending:
-        directory, whole = pending.pop()
+        directory = pending.pop()
         with os.scandir(root / directory) as entries:
             for entry in sorted(entries, key=lambda each: each.name):
                 path = f"{directory}/{entry.name}" if directory else entry.name
-                if entry.name.casefold() == _GIT or path in excluded:
-                    continue
-                taken = whole or path.casefold() in folded
-                if not taken and path.casefold() not in on_the_way:
+                if entry.name.casefold() == _GIT or path in left_out:
                     continue
                 info = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
                     yield path, info
-                    pending.append((path, taken))
-                elif stat.S_ISREG(info.st_mode) and taken:
+                    pending.append(path)
+                elif stat.S_ISREG(info.st_mode):
                     yield path, info
 
 
