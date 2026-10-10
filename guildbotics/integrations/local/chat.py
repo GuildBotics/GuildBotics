@@ -24,7 +24,7 @@ import json
 import re
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from logging import Logger
 from pathlib import Path
 from typing import Any
@@ -261,7 +261,16 @@ class LocalChatService(ChatService):
         metadata: dict[str, Any] | None = None,
     ) -> ChatPostResult:
         message_id = uuid4().hex
+        # A channel names each message by a time of its own, after all before
+        # it, as a hosted chat does: a clock that ticks coarsely (Windows)
+        # would otherwise give two posts one time, ordered by random ids.
+        latest = max(
+            (_event(channel_id, m).occurred_at for m in _messages(channel_id)),
+            default=None,
+        )
         occurred_at = datetime.now(UTC)
+        if latest is not None and occurred_at <= latest:
+            occurred_at = latest + timedelta(microseconds=1)
         line: dict[str, Any] = {
             "message_id": message_id,
             "thread_id": thread_id or message_id,

@@ -109,3 +109,28 @@ async def test_a_cursor_no_page_gave_is_refused():
             await LocalChatService(
                 Person(person_id="aiko", name="Aiko")
             ).list_channel_events("C1", cursor=cursor)
+
+
+@pytest.mark.asyncio
+async def test_posts_of_one_clock_tick_still_follow_one_another(monkeypatch):
+    """However coarsely the clock ticks, each post is after all before it."""
+    tick = at(100)
+
+    class _Clock:
+        @staticmethod
+        def now(tz=None):
+            return tick
+
+        fromisoformat = staticmethod(chat.datetime.fromisoformat)
+
+    monkeypatch.setattr(chat, "datetime", _Clock)
+    service = LocalChatService(Person(person_id="aiko", name="Aiko"))
+    say("C1", "later by a clock ahead", message_id="m0", occurred_at=at(200))
+
+    posts = [await service.post_message("C1", f"post {n}") for n in range(3)]
+
+    times = [post.occurred_at for post in posts]
+    assert times == sorted(times) and len(set(times)) == 3  # noqa: PLR2004
+    assert times[0] > at(200)
+    page = await service.list_channel_events("C1", since=times[0], until=times[0])
+    assert [e.message_id for e in page.events] == [posts[0].message_id]
