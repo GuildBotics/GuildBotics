@@ -85,6 +85,40 @@ class SlackApiError(ChatServiceError):
         super().__init__(message)
 
 
+class SlackUnreachableError(ChatServiceError):
+    """Slack gave no answer to a Web API call: it could not be reached, or it
+    answered with an HTTP error or something that is no Slack answer.
+
+    The message names the call and what went wrong, never a token.
+    """
+
+    def __init__(self, method: str, reason: str, status: int | None = None) -> None:
+        self.status = status
+        super().__init__(f"Slack API '{method}' gave no answer: {reason}")
+
+
+async def _answer(
+    client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
+) -> dict[str, Any]:
+    """Slack's answer to ``method`` at ``url``.
+
+    Raises:
+        SlackUnreachableError: If there is none.
+    """
+    try:
+        response = await client.post(url, **kwargs)
+        if not response.is_success:
+            raise SlackUnreachableError(
+                method, f"HTTP {response.status_code}", response.status_code
+            )
+        payload = response.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        raise SlackUnreachableError(method, type(exc).__name__) from exc
+    if not isinstance(payload, dict):
+        raise SlackUnreachableError(method, "the answer is no JSON object")
+    return payload
+
+
 class SlackChatService(ChatService):
     """Slack Web API-backed chat service (MVP subset)."""
 
@@ -246,10 +280,7 @@ class SlackChatService(ChatService):
             if cursor:
                 form["cursor"] = cursor
             payload = await self._post_form("conversations.list", form)
-            channels = payload.get("channels", [])
-            for item in channels:
-                if not isinstance(item, dict):
-                    continue
+            for item in _items(payload, "channels"):
                 cid = _str_or_none(item.get("id"))
                 if not cid:
                     continue
@@ -281,11 +312,17 @@ class SlackChatService(ChatService):
             form["metadata"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         payload = await self._post_form("chat.postMessage", form)
         ts = str(payload.get("ts", ""))
+        try:
+            occurred_at = ts_time(ts)
+        except ValueError as exc:
+            raise SlackUnreachableError(
+                "chat.postMessage", "the answer names no message"
+            ) from exc
         return ChatPostResult(
             channel_id=channel_id,
             message_id=ts,
             thread_id=thread_id or ts,
-            occurred_at=ts_time(ts),
+            occurred_at=occurred_at,
         )
 
     async def add_reaction(
@@ -347,14 +384,14 @@ class SlackChatService(ChatService):
             await self._client.aclose()
 
     async def _post_form(self, method: str, form: dict[str, str]) -> dict[str, Any]:
-        client = self._get_client()
-        response = await client.post(f"{self._base_url}/{method}", data=form)
-        if response.status_code == HTTP_UNAUTHORIZED and self._record_credential_events:
-            _record_slack_auth_failure("unauthorized")
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Slack API '{method}' returned non-object JSON.")
+        try:
+            payload = await _answer(
+                self._get_client(), method, f"{self._base_url}/{method}", data=form
+            )
+        except SlackUnreachableError as exc:
+            if exc.status == HTTP_UNAUTHORIZED and self._record_credential_events:
+                _record_slack_auth_failure("unauthorized")
+            raise
         if not payload.get("ok", False):
             error = str(payload.get("error", "unknown_error") or "unknown_error")
             if is_slack_auth_error(error) and self._record_credential_events:
@@ -382,12 +419,21 @@ class SlackChatService(ChatService):
         return self._client
 
 
+def _items(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """The objects an answer lists under ``key``; what is no object is none."""
+    value = payload.get(key)
+    return (
+        [item for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
 def _page(channel_id: str, payload: dict[str, Any]) -> ChatEventPage:
     events = [
         event
-        for item in payload.get("messages", [])
-        if isinstance(item, dict)
-        and (event := chat_event(channel_id, item)) is not None
+        for item in _items(payload, "messages")
+        if (event := chat_event(channel_id, item)) is not None
     ]
     metadata = payload.get("response_metadata", {})
     cursor = (
@@ -405,11 +451,8 @@ async def _check(
         return CredentialCheck(name=name, status="unconfigured")
     try:
         await probe()
-    except Exception as exc:
-        # Whatever answered, the credential did not work: say so, not fail.
-        return CredentialCheck(
-            name=name, status="failed", error=str(exc) or type(exc).__name__
-        )
+    except ChatServiceError as exc:
+        return CredentialCheck(name=name, status="failed", error=str(exc))
     return CredentialCheck(name=name, status="ok")
 
 
@@ -422,20 +465,20 @@ async def probe_app_token(
     """Validate an app-level token via ``apps.connections.open``.
 
     Raises:
-        ChatServiceError: Carrying only the Slack error code (``invalid_auth``,
-            say), which is no secret.
+        SlackApiError: With the Slack error code (``invalid_auth``, say).
+        SlackUnreachableError: If Slack gave no answer.
     """
-    url = (base_url or DEFAULT_BASE_URL).rstrip("/") + "/apps.connections.open"
+    method = "apps.connections.open"
     async with httpx.AsyncClient(
         timeout=10.0,
         transport=transport,
         headers={"Authorization": f"Bearer {app_token}"},
     ) as client:
-        response = await client.post(url)
-        response.raise_for_status()
-        payload = response.json()
+        payload = await _answer(
+            client, method, f"{(base_url or DEFAULT_BASE_URL).rstrip('/')}/{method}"
+        )
     if error := slack_api_error(payload):
-        raise ChatServiceError(error)
+        raise SlackApiError(method, error)
 
 
 def _str_or_none(value: Any) -> str | None:

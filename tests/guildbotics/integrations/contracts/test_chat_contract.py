@@ -175,6 +175,30 @@ def test_the_listener_hears_what_is_written_while_it_runs(chat: ChatHarness):
 
 
 @pytest.mark.asyncio
+async def test_a_chat_that_fails_underneath_answers_with_the_ports_error(
+    chat: ChatHarness,
+):
+    """Whatever fails under a provider -- the network, the HTTP answer, its
+    decoding, a file -- reaches its user as the port's ``ChatServiceError``,
+    so no user needs to know a provider's libraries to handle it."""
+    root = chat.write("question")
+    for failure, fail in chat.failures.items():
+        fail()
+        with pytest.raises(ChatServiceError):
+            await chat.service.post_message(chat.channel_id, f"while {failure}")
+        for read in (
+            lambda: chat.service.resolve_channel_id("another-channel"),
+            lambda: chat.service.list_channel_events(chat.channel_id),
+            lambda: chat.service.list_thread_events(chat.channel_id, thread_id=root),
+            lambda: chat.service.add_reaction(chat.channel_id, root, "ack"),
+        ):
+            try:
+                await read()
+            except ChatServiceError:
+                pass
+
+
+@pytest.mark.asyncio
 async def test_the_members_credentials_are_checked(chat: ChatHarness):
     assert await chat.service.check_credentials() == chat.credentials
 

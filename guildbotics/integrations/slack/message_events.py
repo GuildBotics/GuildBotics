@@ -68,7 +68,11 @@ def chat_event(channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
     it by, is no event.
     """
     message_ts = str(raw.get("ts", "") or "")
-    if not message_ts or not is_conversational_message(raw):
+    try:
+        occurred_at = ts_time(message_ts)
+    except ValueError:
+        return None
+    if not is_conversational_message(raw):
         return None
     thread_ts = str(raw.get("thread_ts", "") or "") or message_ts
     text = str(raw.get("text", "") or "")
@@ -77,7 +81,7 @@ def chat_event(channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
         channel_id=channel_id,
         message_id=message_ts,
         thread_id=thread_ts,
-        occurred_at=ts_time(message_ts),
+        occurred_at=occurred_at,
         author_id=str(raw.get("user", "") or "") or None,
         text=text,
         mentions=mentioned_user_ids(text),

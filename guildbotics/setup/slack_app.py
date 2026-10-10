@@ -20,9 +20,9 @@ from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
     SlackChatService,
+    SlackUnreachableError,
     probe_app_token,
 )
-from guildbotics.runtime.chat_service import ChatServiceError
 from guildbotics.setup.setup_service import SetupServiceError
 
 BOT_TOKEN_PREFIX = "xoxb-"
@@ -172,7 +172,7 @@ async def _verify_channel(
         await service.list_channel_events(channel_id, limit=1)
     except SlackApiError as exc:
         return SlackChannelVerification(channel=channel, error=exc.error)
-    except (httpx.HTTPError, ValueError) as exc:
+    except SlackUnreachableError as exc:
         return SlackChannelVerification(channel=channel, error=_unreachable_error(exc))
     return SlackChannelVerification(channel=channel, ok=True)
 
@@ -210,7 +210,7 @@ async def _verify_bot_token(
     except SlackApiError as exc:
         result.bot_error = exc.error
         return
-    except (httpx.HTTPError, ValueError) as exc:
+    except SlackUnreachableError as exc:
         result.bot_error = _unreachable_error(exc)
         return
     finally:
@@ -241,7 +241,7 @@ async def _verify_bot_scopes(
         result.scope_error = exc.error
         result.scope_needed = exc.needed
         return
-    except (httpx.HTTPError, ValueError) as exc:
+    except SlackUnreachableError as exc:
         result.scope_error = _unreachable_error(exc)
         return
     finally:
@@ -261,10 +261,10 @@ async def _verify_app_token(
         return
     try:
         await probe_app_token(token, base_url, transport=transport)
-    except ChatServiceError as exc:
-        result.app_token_error = str(exc)
+    except SlackApiError as exc:
+        result.app_token_error = exc.error
         return
-    except (httpx.HTTPError, ValueError) as exc:
+    except SlackUnreachableError as exc:
         result.app_token_error = _unreachable_error(exc)
         return
     result.app_token_ok = True

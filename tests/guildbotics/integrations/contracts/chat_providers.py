@@ -49,6 +49,8 @@ class ChatHarness:
     reactions: Callable[[str], list[tuple[str, str]]]
     #: What checking the member's credentials should find.
     credentials: list[CredentialCheck]
+    #: Ways the provider fails underneath, by name: each makes it fail so.
+    failures: dict[str, Callable[[], None]]
 
     async def aclose(self) -> None:
         close = getattr(self.service, "aclose", None)
@@ -128,7 +130,15 @@ def _local(monkeypatch) -> ChatHarness:
         ),
         reactions,
         [],
+        {"channel unwritable": _unwritable},
     )
+
+
+def _unwritable() -> None:
+    """Have a directory where ``dev-chat``'s file is."""
+    path = local_chat.channel_path(CHANNEL_NAME)
+    path.unlink()
+    path.mkdir()
 
 
 # -- Slack ---------------------------------------------------------------
@@ -153,6 +163,10 @@ def _slack(monkeypatch) -> ChatHarness:
         url,
         lambda ts: [(r, u) for r, u in double.reactions.get(ts, [])],
         [CredentialCheck("bot_token", "ok"), CredentialCheck("app_token", "ok")],
+        {
+            failure: (lambda failure=failure: setattr(double, "failure", failure))
+            for failure in SlackDouble.FAILURES
+        },
     )
 
 
@@ -205,6 +219,8 @@ class SlackDouble:
     reactions it is sent, and delivers what a person writes on the socket."""
 
     BOT = "U_AIKO"
+    #: How Slack can fail to answer: what ``failure`` may be set to.
+    FAILURES = ("unreachable", "HTTP 429", "no JSON", "no JSON object")
 
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = [
@@ -212,6 +228,7 @@ class SlackDouble:
         ]
         self.reactions: dict[str, list[tuple[str, str]]] = {}
         self.socket: _Socket | None = None
+        self.failure: str | None = None
         self._ts = count(2)
 
     def connect(self) -> _Socket:
@@ -231,6 +248,14 @@ class SlackDouble:
         return message["ts"]
 
     def respond(self, request: httpx.Request) -> httpx.Response:
+        if self.failure == "unreachable":
+            raise httpx.ConnectError("no route to Slack", request=request)
+        if self.failure == "HTTP 429":
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        if self.failure == "no JSON":
+            return httpx.Response(200, text="<html>bad gateway</html>")
+        if self.failure == "no JSON object":
+            return httpx.Response(200, json=["ok"])
         method = request.url.path.rsplit("/", 1)[1]
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         return httpx.Response(200, json={"ok": True, **self._answer(method, form)})

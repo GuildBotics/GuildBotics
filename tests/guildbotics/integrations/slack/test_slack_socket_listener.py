@@ -299,3 +299,56 @@ def test_to_incoming_event_keeps_conversational_subtypes():
 
     assert listener._to_incoming_event(bot_message).is_bot_message is True
     assert listener._to_incoming_event(file_share).text == "please check this file"
+
+
+def _frame(envelope_id: str, ts: str, text: str) -> str:
+    return json.dumps(
+        {
+            "envelope_id": envelope_id,
+            "type": "events_api",
+            "payload": {
+                "event": {
+                    "type": "message",
+                    "channel": "C1",
+                    "user": "U1",
+                    "text": text,
+                    "ts": ts,
+                }
+            },
+        }
+    )
+
+
+def test_a_frame_that_is_no_message_is_acked_and_the_next_still_arrives():
+    """One malformed event must not hold the connection: it is acknowledged
+    (so Slack does not send it again) and passed over alone."""
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"ok": True, "url": "wss://x"})
+        )
+    )
+    socket = _FakeSocket(
+        [_frame("env-bad", "not-a-ts", "broken"), _frame("env-ok", "100.1", "fine")]
+    )
+    connects = []
+    listener = SlackSocketEventListener(
+        logger=_dummy_logger(),
+        app_token="xapp-test",
+        http_client=client,
+        ws_connect=lambda url: connects.append(url) or socket,
+    )
+
+    listener.start()
+    drained = []
+    deadline = time.time() + 2.0
+    while not drained and time.time() < deadline:
+        drained.extend(listener.drain_events())
+        time.sleep(0.01)
+    listener.stop()
+
+    assert [event.text for event in drained] == ["fine"]
+    assert [json.loads(ack)["envelope_id"] for ack in socket.sent] == [
+        "env-bad",
+        "env-ok",
+    ]
+    assert len(connects) == 1

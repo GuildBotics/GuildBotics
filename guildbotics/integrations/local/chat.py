@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
@@ -71,11 +71,18 @@ def channel_path(channel_id: str) -> Path:
 
 
 def append(channel_id: str, line: dict[str, Any]) -> None:
-    """Add one line to the channel, creating it."""
+    """Add one line to the channel, creating it.
+
+    Raises:
+        ChatServiceError: If the channel cannot be written.
+    """
     path = channel_path(channel_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(line, ensure_ascii=False) + "\n")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        raise ChatServiceError(f"Local chat channel cannot be written: {exc}") from exc
 
 
 def message_url(channel_id: str, message_id: str, thread_id: str = "") -> str:
@@ -106,13 +113,38 @@ def _event(channel_id: str, line: dict[str, Any]) -> ChatEvent:
     )
 
 
-def _lines(path: Path) -> Iterator[dict[str, Any]]:
-    if not path.is_file():
-        return
-    with path.open(encoding="utf-8") as file:
-        for raw in file:
-            if raw.strip():
-                yield json.loads(raw)
+def _record(raw: str | bytes) -> dict[str, Any] | None:
+    """The message or reaction one line records; ``None`` for a line that
+    records neither (damaged, or not a record at all), which is skipped."""
+    try:
+        line = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(line, dict) or not isinstance(line.get("message_id"), str):
+        return None
+    if "reaction" in line:
+        return line
+    try:
+        occurred_at = datetime.fromisoformat(str(line.get("occurred_at")))
+    except ValueError:
+        return None
+    # A time without its zone is no point in time to place the message at.
+    return line if occurred_at.tzinfo is not None else None
+
+
+def _lines(path: Path) -> list[dict[str, Any]]:
+    """The records of a channel's file, in the order written.
+
+    Raises:
+        ChatServiceError: If the file cannot be read.
+    """
+    try:
+        raw = path.read_bytes() if path.is_file() else b""
+    except OSError as exc:
+        raise ChatServiceError(f"Local chat channel cannot be read: {exc}") from exc
+    return [
+        record for line in raw.splitlines() if (record := _record(line)) is not None
+    ]
 
 
 def _messages(channel_id: str) -> list[dict[str, Any]]:
@@ -131,6 +163,11 @@ def _messages(channel_id: str) -> list[dict[str, Any]]:
 
 
 def _page(events: list[ChatEvent], cursor: str | None, limit: int) -> ChatEventPage:
+    """Raises:
+    ChatServiceError: If ``cursor`` is not one a page gave.
+    """
+    if not (cursor or "0").isdecimal():
+        raise ChatServiceError(f"Invalid local chat cursor: {cursor}")
     start = int(cursor or 0)
     end = start + limit
     return ChatEventPage(
@@ -326,28 +363,31 @@ class LocalChatListener(EventListener):
 
     def _watch(self) -> None:
         while not self._stop.wait(_POLL_SECONDS):
-            try:
-                arrived = [
-                    _event(path.stem, line)
-                    for path in self._files()
-                    for line in self._appended(path)
-                    if "reaction" not in line
-                ]
-            except (OSError, ValueError, KeyError) as exc:
-                # A line that is no message is skipped; the listener keeps on.
-                self._logger.warning("local chat line skipped: %s", exc)
-                continue
+            arrived = [event for path in self._files() for event in self._read(path)]
             if arrived:
                 with self._lock:
                     self._queue.extend(arrived)
                 self._on_activity()
 
-    def _appended(self, path: Path) -> list[dict[str, Any]]:
-        """The whole lines appended to ``path`` since it was last read."""
+    def _read(self, path: Path) -> list[ChatEvent]:
+        """The messages of the whole lines appended to ``path`` since it was
+        last read; a line that records none is passed over, alone."""
         offset = self._offsets.get(path, 0)
-        with path.open("rb") as file:
-            file.seek(offset)
-            data = file.read()
+        try:
+            with path.open("rb") as file:
+                file.seek(offset)
+                data = file.read()
+        except OSError as exc:
+            self._logger.warning("local chat channel unreadable: %s", exc)
+            return []
         complete = data[: data.rfind(b"\n") + 1]
         self._offsets[path] = offset + len(complete)
-        return [json.loads(raw) for raw in complete.splitlines() if raw.strip()]
+        events = []
+        for line in complete.splitlines():
+            record = _record(line)
+            if record is None:
+                if line.strip():
+                    self._logger.warning("local chat line skipped: %r", line[:80])
+            elif "reaction" not in record:
+                events.append(_event(path.stem, record))
+        return events

@@ -14,6 +14,7 @@ from guildbotics.integrations.slack.message_events import (
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
     SlackChatService,
+    SlackUnreachableError,
 )
 from guildbotics.runtime.chat_service import (
     ChatMessageRef,
@@ -290,7 +291,7 @@ async def test_add_reaction_raises_for_unknown_semantic_reaction():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    with pytest.raises(RuntimeError, match="Unsupported semantic reaction"):
+    with pytest.raises(ChatServiceError, match="Unsupported semantic reaction"):
         await svc.add_reaction("C1", "100.1", "eyes")
     await client.aclose()
 
@@ -427,8 +428,9 @@ async def test_auth_error_records_no_credential_event_when_opted_out(monkeypatch
         base_url="https://x.test",
         record_credential_events=False,
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(SlackUnreachableError, match="HTTP 401") as raised:
         await svc.get_bot_identity()
+    assert raised.value.status == 401  # noqa: PLR2004
     assert recorded == []
     await client.aclose()
 
@@ -511,7 +513,11 @@ async def test_credentials_are_each_tried_and_named_without_their_values():
 
     assert checks == [
         CredentialCheck("bot_token", "ok"),
-        CredentialCheck("app_token", "failed", "invalid_auth"),
+        CredentialCheck(
+            "app_token",
+            "failed",
+            "Slack API 'apps.connections.open' failed: invalid_auth",
+        ),
     ]
     assert tried == [
         ("/api/auth.test", "xoxb-bot"),
@@ -563,3 +569,47 @@ async def test_a_member_without_a_bot_token_is_told_where_it_goes():
 
     with pytest.raises(MemberCapabilityError, match="set AIKO_SLACK_BOT_TOKEN"):
         await chat.identity()
+
+
+@pytest.mark.asyncio
+async def test_a_message_without_a_timestamp_is_left_out_of_its_page():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [
+                    {"type": "message", "user": "U1", "text": "broken", "ts": "x"},
+                    {"type": "message", "user": "U1", "text": "fine", "ts": "1.5"},
+                    "no object",
+                ],
+            },
+        )
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        page = await service.list_channel_events("C1")
+
+    assert [event.text for event in page.events] == ["fine"]
+
+
+@pytest.mark.asyncio
+async def test_a_post_whose_answer_names_no_message_failed():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        with pytest.raises(SlackUnreachableError, match="names no message"):
+            await service.post_message("C1", "hello")
+
+
+@pytest.mark.asyncio
+async def test_a_slack_at_no_url_cannot_be_reached():
+    service = SlackChatService(
+        logging.getLogger("test"), token="xoxb-bot", base_url="http://[not a url"
+    )
+
+    with pytest.raises(SlackUnreachableError):
+        await service.get_bot_identity()
+    assert [c.status for c in await service.check_credentials()][0] == "failed"
