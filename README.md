@@ -953,6 +953,7 @@ discarding; the activity history record stays either way.
 - `services.ticket_manager`: GitHub Projects settings
 - `services.ticket_manager.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
 - `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
+- `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
 **Member settings** (`team/members/<person_id>/person.yml`):
 
@@ -962,7 +963,7 @@ discarding; the activity history record stays either way.
 - `profile.roles`: role assignment
 - `routine_commands`: override the default patrol commands
 - `task_schedules`: cron-based scheduled commands
-- `message_channels`: watched channel settings (`chat.enabled`, `chat.event_source=socket_mode`, `channel_id`/`name`)
+- `message_channels`: watched channel settings (`chat.enabled`, `channel_id`/`name`), on the project's chat service
 - `profile.character`: profile such as interests, preferences, and conversation participation policy
 
 **LLM / AI CLI tool settings**:

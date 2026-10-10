@@ -14,7 +14,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.runtime.chat_service import ChatEvent
+from tests.guildbotics.local_chat import at, chat_event
 
 EXPECTED_BACKFILL_ERROR_COUNT = 2
 EXPECTED_ATTEMPT_COUNT = 2
@@ -24,16 +24,14 @@ EXPECTED_MAX_ATTEMPTS = 5
 def test_channel_cursor_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     state = ChannelCursorState(
-        cursor="cur-1",
-        oldest_ts="123.45",
+        watermark=at(123.45),
         processed_event_ids=["e1", "e2"],
     )
 
     store.save_channel_cursor("slack", "alice", "C1", state)
     loaded = store.load_channel_cursor("slack", "alice", "C1")
 
-    assert loaded.cursor == "cur-1"
-    assert loaded.oldest_ts == "123.45"
+    assert loaded.watermark == at(123.45)
     assert loaded.processed_event_ids == ["e1", "e2"]
 
 
@@ -65,7 +63,7 @@ def test_thread_state_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     state = ThreadConversationState(
         channel_id="C1",
-        thread_ts="123.456",
+        thread_id="123.456",
         participants={"alice", "bob"},
         thread_topic="weekly AI news",
         latest_focus="business angle grounded in current-week items",
@@ -77,7 +75,7 @@ def test_thread_state_roundtrip(tmp_path):
             ThreadHandoffState(
                 person_id="bob",
                 roles=["design"],
-                message_ts="124.000",
+                message_id="124.000",
                 text="@bob UX wording check?",
                 thread_topic="weekly AI news",
                 latest_focus="business angle",
@@ -89,7 +87,7 @@ def test_thread_state_roundtrip(tmp_path):
     loaded = store.load_thread_state("slack", "alice", "C1", "123.456")
 
     assert loaded.channel_id == "C1"
-    assert loaded.thread_ts == "123.456"
+    assert loaded.thread_id == "123.456"
     assert loaded.participants == {"alice", "bob"}
     assert loaded.thread_topic == "weekly AI news"
     assert loaded.latest_focus == "business angle grounded in current-week items"
@@ -100,20 +98,19 @@ def test_thread_state_roundtrip(tmp_path):
     assert len(loaded.handoffs) == 1
     assert loaded.handoffs[0].person_id == "bob"
     assert loaded.handoffs[0].roles == ["design"]
-    assert loaded.handoffs[0].message_ts == "124.000"
+    assert loaded.handoffs[0].message_id == "124.000"
 
 
 def test_load_missing_state_returns_defaults(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
 
     channel = store.load_channel_cursor("slack", "alice", "C1")
-    assert channel.cursor is None
-    assert channel.oldest_ts is None
+    assert channel.watermark is None
     assert channel.processed_event_ids == []
 
     thread = store.load_thread_state("slack", "alice", "C1", "100.1")
     assert thread.channel_id == "C1"
-    assert thread.thread_ts == "100.1"
+    assert thread.thread_id == "100.1"
     assert thread.participants == set()
     assert thread.thread_topic == ""
     assert thread.latest_focus == ""
@@ -126,14 +123,14 @@ def test_thread_system_notices_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     state = ThreadConversationState(
         channel_id="C1",
-        thread_ts="123.456",
+        thread_id="123.456",
         system_notices=[
             ThreadSystemNoticeState(
                 kind="workflow_error",
                 reason="rate_limited",
                 person_id="alice",
                 source_event_id="C1:100.1",
-                message_ts="300.1",
+                message_id="300.1",
                 run_id="run-1",
                 retry_after_at="2026-07-04T11:44:00+09:00",
                 retry_after_text="11:44 AM",
@@ -173,8 +170,9 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "100.1",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.1",
+            thread_id="100.1",
+            message_id="100.1",
+            occurred_at=at(100.1),
             author_id="U1",
             text="root",
             mentions=[],
@@ -188,8 +186,9 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "100.1",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.2",
+            thread_id="100.1",
+            message_id="100.2",
+            occurred_at=at(100.2),
             author_id="U2",
             text="reply",
             mentions=["U1"],
@@ -203,8 +202,9 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "100.1",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.2",
+            thread_id="100.1",
+            message_id="100.2",
+            occurred_at=at(100.2),
             author_id="U2",
             text="reply updated",
             mentions=["U1"],
@@ -218,8 +218,9 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
         "100.1",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.3",
+            thread_id="100.1",
+            message_id="100.3",
+            occurred_at=at(100.3),
             author_id="U_BOT",
             text="bot",
             mentions=[],
@@ -228,7 +229,7 @@ def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
     )
 
     loaded = store.load_thread_messages("slack", "alice", "C1", "100.1")
-    assert [m.message_ts for m in loaded] == ["100.2", "100.3"]
+    assert [m.message_id for m in loaded] == ["100.2", "100.3"]
     assert loaded[0].text == "reply updated"
     assert loaded[1].is_bot_message is True
 
@@ -240,26 +241,26 @@ def test_list_thread_states_returns_known_threads_for_channel(tmp_path):
         "alice",
         "C1",
         "100.1",
-        ThreadConversationState(channel_id="C1", thread_ts="100.1"),
+        ThreadConversationState(channel_id="C1", thread_id="100.1"),
     )
     store.save_thread_state(
         "slack",
         "alice",
         "C1",
         "100.2",
-        ThreadConversationState(channel_id="C1", thread_ts="100.2"),
+        ThreadConversationState(channel_id="C1", thread_id="100.2"),
     )
     store.save_thread_state(
         "slack",
         "alice",
         "C2",
         "200.1",
-        ThreadConversationState(channel_id="C2", thread_ts="200.1"),
+        ThreadConversationState(channel_id="C2", thread_id="200.1"),
     )
 
     states = store.list_thread_states("slack", "alice", "C1")
 
-    assert [state.thread_ts for state in states] == ["100.1", "100.2"]
+    assert [state.thread_id for state in states] == ["100.1", "100.2"]
 
 
 def test_append_thread_message_splits_cache_from_shared_state(tmp_path):
@@ -274,8 +275,9 @@ def test_append_thread_message_splits_cache_from_shared_state(tmp_path):
         "100.1",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="100.1",
-            message_ts="100.1",
+            thread_id="100.1",
+            message_id="100.1",
+            occurred_at=at(100.1),
             author_id="U1",
             text="root",
             mentions=[],
@@ -291,35 +293,35 @@ def test_append_thread_message_splits_cache_from_shared_state(tmp_path):
     # The shared thread state makes the thread discoverable for backfill and
     # handoff even though the message cache is device-local.
     assert [
-        state.thread_ts for state in store.list_thread_states("slack", "alice", "C1")
+        state.thread_id for state in store.list_thread_states("slack", "alice", "C1")
     ] == ["100.1"]
 
 
 def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path, max_processed_events=3)
-    event1 = ChatEvent(
+    event1 = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
-        message_ts="100.1",
-        thread_ts="100.1",
+        message_id="100.1",
+        thread_id="100.1",
         author_id="U1",
         text="hello",
         mentions=[],
     )
-    event1_updated = ChatEvent(
+    event1_updated = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
-        message_ts="100.1",
-        thread_ts="100.1",
+        message_id="100.1",
+        thread_id="100.1",
         author_id="U1",
         text="hello updated",
         mentions=["U2"],
     )
-    event2 = ChatEvent(
+    event2 = chat_event(
         event_id="C1:100.2",
         channel_id="C1",
-        message_ts="100.2",
-        thread_ts="100.1",
+        message_id="100.2",
+        thread_id="100.1",
         author_id="U2",
         text="reply",
         mentions=[],
@@ -343,11 +345,11 @@ def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
 
 def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
-    event = ChatEvent(
+    event = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
-        message_ts="100.1",
-        thread_ts="100.1",
+        message_id="100.1",
+        thread_id="100.1",
         author_id="U1",
         text="hello",
         metadata={
@@ -373,15 +375,18 @@ def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
     assert loaded.run_id == "run-1"
 
 
-@pytest.mark.parametrize("missing", ["event_id", "message_ts", "thread_ts"])
+@pytest.mark.parametrize(
+    "missing", ["event_id", "message_id", "thread_id", "occurred_at"]
+)
 def test_pending_event_reader_does_not_drop_missing_identity_fields(
     tmp_path, missing: str
 ) -> None:
     store = FileConversationStateStore(base_dir=tmp_path)
     item = {
         "event_id": "C1:100.1",
-        "message_ts": "100.1",
-        "thread_ts": "100.1",
+        "message_id": "100.1",
+        "thread_id": "100.1",
+        "occurred_at": at(100.1).isoformat(),
         "text": "hello",
     }
     item.pop(missing)
@@ -395,11 +400,11 @@ def test_pending_event_reader_does_not_drop_missing_identity_fields(
 
 def test_list_pending_channels(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
-    event = ChatEvent(
+    event = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
-        message_ts="100.1",
-        thread_ts="100.1",
+        message_id="100.1",
+        thread_id="100.1",
         author_id="U1",
         text="hi",
     )
@@ -409,11 +414,11 @@ def test_list_pending_channels(tmp_path):
         "slack",
         "alice",
         "C2",
-        ChatEvent(
+        chat_event(
             event_id="C2:1",
             channel_id="C2",
-            message_ts="1",
-            thread_ts="1",
+            message_id="1",
+            thread_id="1",
             author_id="U1",
             text="hi",
         ),
@@ -428,17 +433,17 @@ def test_list_pending_channels(tmp_path):
 def test_list_known_channels_unions_cursor_pending_and_threads(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     store.save_channel_cursor(
-        "slack", "alice", "C1", ChannelCursorState(oldest_ts="100.0")
+        "slack", "alice", "C1", ChannelCursorState(watermark=at(100.0))
     )
     store.upsert_pending_event(
         "slack",
         "alice",
         "C2",
-        ChatEvent(
+        chat_event(
             event_id="C2:1",
             channel_id="C2",
-            message_ts="1",
-            thread_ts="1",
+            message_id="1",
+            thread_id="1",
             author_id="U1",
             text="hi",
         ),
@@ -450,8 +455,9 @@ def test_list_known_channels_unions_cursor_pending_and_threads(tmp_path):
         "50.0",
         ThreadMessageState(
             channel_id="C3",
-            thread_ts="50.0",
-            message_ts="50.0",
+            thread_id="50.0",
+            message_id="50.0",
+            occurred_at=at(50.0),
             author_id="U1",
             text="thread",
         ),
@@ -466,8 +472,8 @@ def test_receive_cutoff_roundtrip(tmp_path):
 
     assert store.load_receive_cutoff("slack", "alice") is None
 
-    store.save_receive_cutoff("slack", "alice", "999.5")
-    assert store.load_receive_cutoff("slack", "alice") == "999.5"
+    store.save_receive_cutoff("slack", "alice", at(999.5))
+    assert store.load_receive_cutoff("slack", "alice") == at(999.5)
     # Cutoff is scoped per person and does not leak across members.
     assert store.load_receive_cutoff("slack", "bob") is None
 
@@ -478,17 +484,17 @@ def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
         "slack",
         "alice",
         "C1",
-        ChannelCursorState(oldest_ts="100.0", processed_event_ids=["C1:1"]),
+        ChannelCursorState(watermark=at(100.0), processed_event_ids=["C1:1"]),
     )
     store.upsert_pending_event(
         "slack",
         "alice",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="C1:1",
             channel_id="C1",
-            message_ts="1",
-            thread_ts="1",
+            message_id="1",
+            thread_id="1",
             author_id="U1",
             text="old",
         ),
@@ -500,8 +506,9 @@ def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
         "50.0",
         ThreadMessageState(
             channel_id="C1",
-            thread_ts="50.0",
-            message_ts="50.0",
+            thread_id="50.0",
+            message_id="50.0",
+            occurred_at=at(50.0),
             author_id="U1",
             text="thread",
         ),
@@ -515,7 +522,7 @@ def test_clear_channel_receive_backlog_drops_pending_and_threads(tmp_path):
     assert store.list_thread_states("slack", "alice", "C1") == []
     # The per-channel cursor (watermark, processed ids) is left intact; the
     # receive cutoff is the mechanism that bounds future backfill.
-    assert store.load_channel_cursor("slack", "alice", "C1").oldest_ts == "100.0"
+    assert store.load_channel_cursor("slack", "alice", "C1").watermark == at(100.0)
 
 
 def test_clear_channel_receive_backlog_empties_pending_when_unlink_fails(
@@ -526,11 +533,11 @@ def test_clear_channel_receive_backlog_empties_pending_when_unlink_fails(
         "slack",
         "alice",
         "C1",
-        ChatEvent(
+        chat_event(
             event_id="C1:1",
             channel_id="C1",
-            message_ts="1",
-            thread_ts="1",
+            message_id="1",
+            thread_id="1",
             author_id="U1",
             text="old",
         ),

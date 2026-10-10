@@ -2,20 +2,37 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 from logging import Logger
 from typing import Any, cast
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
-from guildbotics.integrations.slack.message_events import MENTION_PATTERN, chat_event
+from guildbotics.entities.team import Person
+from guildbotics.integrations.slack.auth_errors import (
+    is_slack_auth_error,
+    slack_api_error,
+)
+from guildbotics.integrations.slack.message_events import (
+    MENTION_PATTERN,
+    chat_event,
+    mentioned_user_ids,
+    time_ts,
+    ts_time,
+)
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.chat_service import (
-    ChatEvent,
+    ChatCredentialsError,
     ChatEventPage,
     ChatIdentity,
+    ChatMessageRef,
     ChatPostResult,
     ChatService,
+    ChatServiceError,
+    ChatThreadNotFoundError,
+    CredentialCheck,
     SemanticReaction,
 )
 
@@ -28,6 +45,12 @@ _SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
     "support": "heart",
 }
 HTTP_UNAUTHORIZED = 401
+DEFAULT_BASE_URL = "https://slack.com/api"
+#: The digits after the ``p`` of a permalink's last path segment that are the
+#: microseconds of the message's timestamp.
+_PERMALINK_FRACTION_DIGITS = 6
+#: ``archives``, the channel, and the message, at the end of a permalink's path.
+_PERMALINK_PARTS = 3
 
 
 def _record_slack_auth_failure(code: str) -> None:
@@ -42,7 +65,7 @@ def _record_slack_auth_failure(code: str) -> None:
     )
 
 
-class SlackApiError(RuntimeError):
+class SlackApiError(ChatServiceError):
     """Raised when Slack returns ok=false for a Web API method."""
 
     def __init__(
@@ -62,6 +85,40 @@ class SlackApiError(RuntimeError):
         super().__init__(message)
 
 
+class SlackUnreachableError(ChatServiceError):
+    """Slack gave no answer to a Web API call: it could not be reached, or it
+    answered with an HTTP error or something that is no Slack answer.
+
+    The message names the call and what went wrong, never a token.
+    """
+
+    def __init__(self, method: str, reason: str, status: int | None = None) -> None:
+        self.status = status
+        super().__init__(f"Slack API '{method}' gave no answer: {reason}")
+
+
+async def _answer(
+    client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
+) -> dict[str, Any]:
+    """Slack's answer to ``method`` at ``url``.
+
+    Raises:
+        SlackUnreachableError: If there is none.
+    """
+    try:
+        response = await client.post(url, **kwargs)
+        if not response.is_success:
+            raise SlackUnreachableError(
+                method, f"HTTP {response.status_code}", response.status_code
+            )
+        payload = response.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        raise SlackUnreachableError(method, type(exc).__name__) from exc
+    if not isinstance(payload, dict):
+        raise SlackUnreachableError(method, "the answer is no JSON object")
+    return payload
+
+
 class SlackChatService(ChatService):
     """Slack Web API-backed chat service (MVP subset)."""
 
@@ -70,14 +127,19 @@ class SlackChatService(ChatService):
         logger: Logger,
         *,
         token: str | None = None,
+        token_name: str = "the Slack bot token",
+        app_token: str = "",
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         record_credential_events: bool = True,
     ) -> None:
         self._logger = logger
-        self._base_url = (base_url or "https://slack.com/api").rstrip("/")
+        self._base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self._token = token or ""
+        #: Where the bot token is configured, for when it is not.
+        self._token_name = token_name
+        self._app_token = app_token
         self._client = client
         self._transport = transport
         # Setup-time checks try credentials the user is still editing, so a
@@ -95,77 +157,93 @@ class SlackChatService(ChatService):
             workspace=str(payload.get("team", "")),
         )
 
+    async def check_credentials(self) -> list[CredentialCheck]:
+        """Try the bot token with ``auth.test`` and the app-level token with
+        ``apps.connections.open``, the call the event listener makes; a failure
+        names the Slack error code, never a value."""
+        return [
+            await _check("bot_token", self._token, self.get_bot_identity),
+            await _check(
+                "app_token",
+                self._app_token,
+                lambda: probe_app_token(
+                    self._app_token, self._base_url, transport=self._transport
+                ),
+            ),
+        ]
+
+    def self_user_id(self, person: Person) -> str:
+        return str(person.account_info.get("slack_user_id", "")).strip()
+
+    def parse_message_url(self, url: str) -> ChatMessageRef:
+        """The message of a Slack permalink: ``.../archives/<channel>/p<ts>``,
+        with ``?thread_ts=<ts>`` for a reply."""
+        parsed = urlparse(url)
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) < _PERMALINK_PARTS or parts[-3] != "archives":
+            raise ChatServiceError("Slack message URL must be an /archives/... URL.")
+        digits = parts[-1].removeprefix("p")
+        if not digits.isdigit() or len(digits) <= _PERMALINK_FRACTION_DIGITS:
+            raise ChatServiceError("Slack message URL contains an invalid message id.")
+        message_id = (
+            f"{digits[:-_PERMALINK_FRACTION_DIGITS]}."
+            f"{digits[-_PERMALINK_FRACTION_DIGITS:]}"
+        )
+        thread = parse_qs(parsed.query).get("thread_ts", [message_id])[0]
+        return ChatMessageRef(
+            channel_id=parts[-2], message_id=message_id, thread_id=thread
+        )
+
+    def mentioned_user_ids(self, text: str) -> list[str]:
+        return mentioned_user_ids(text)
+
     async def list_channel_events(
         self,
         channel_id: str,
         *,
         cursor: str | None = None,
-        oldest_ts: str | None = None,
-        latest_ts: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int = 100,
     ) -> ChatEventPage:
         form: dict[str, str] = {
             "channel": channel_id,
             "limit": str(limit),
             "include_all_metadata": "true",
+            # Both bounds are inclusive, as the port's are.
+            "inclusive": "true",
         }
         if cursor:
             form["cursor"] = cursor
-        if oldest_ts:
-            form["oldest"] = oldest_ts
-        if latest_ts:
-            form["latest"] = latest_ts
-        payload = await self._post_form("conversations.history", form)
-        messages = payload.get("messages", [])
-        events: list[ChatEvent] = []
-        for item in messages:
-            if not isinstance(item, dict):
-                continue
-            event = chat_event(channel_id, item)
-            if event is not None:
-                events.append(event)
-        metadata = payload.get("response_metadata", {})
-        next_cursor = None
-        if isinstance(metadata, dict):
-            next_cursor = _str_or_none(metadata.get("next_cursor"))
-        page_oldest = None
-        if events:
-            page_oldest = max((ev.message_ts for ev in events), default=None)
-        return ChatEventPage(events=events, cursor=next_cursor, oldest_ts=page_oldest)
+        if since:
+            form["oldest"] = time_ts(since)
+        if until:
+            form["latest"] = time_ts(until)
+        return _page(channel_id, await self._post_form("conversations.history", form))
 
     async def list_thread_events(
         self,
         channel_id: str,
         *,
-        thread_ts: str,
+        thread_id: str,
         cursor: str | None = None,
         limit: int = 100,
     ) -> ChatEventPage:
         form: dict[str, str] = {
             "channel": channel_id,
-            "ts": thread_ts,
+            "ts": thread_id,
             "limit": str(limit),
             "include_all_metadata": "true",
         }
         if cursor:
             form["cursor"] = cursor
-        payload = await self._post_form("conversations.replies", form)
-        messages = payload.get("messages", [])
-        events: list[ChatEvent] = []
-        for item in messages:
-            if not isinstance(item, dict):
-                continue
-            event = chat_event(channel_id, item)
-            if event is not None:
-                events.append(event)
-        metadata = payload.get("response_metadata", {})
-        next_cursor = None
-        if isinstance(metadata, dict):
-            next_cursor = _str_or_none(metadata.get("next_cursor"))
-        page_oldest = None
-        if events:
-            page_oldest = max((ev.message_ts for ev in events), default=None)
-        return ChatEventPage(events=events, cursor=next_cursor, oldest_ts=page_oldest)
+        try:
+            payload = await self._post_form("conversations.replies", form)
+        except SlackApiError as exc:
+            if exc.error == "thread_not_found":
+                raise ChatThreadNotFoundError(str(exc)) from exc
+            raise
+        return _page(channel_id, payload)
 
     async def probe_read_scopes(self) -> None:
         """Make the narrowest scoped read call, to prove scopes were granted.
@@ -202,10 +280,7 @@ class SlackChatService(ChatService):
             if cursor:
                 form["cursor"] = cursor
             payload = await self._post_form("conversations.list", form)
-            channels = payload.get("channels", [])
-            for item in channels:
-                if not isinstance(item, dict):
-                    continue
+            for item in _items(payload, "channels"):
                 cid = _str_or_none(item.get("id"))
                 if not cid:
                     continue
@@ -227,30 +302,41 @@ class SlackChatService(ChatService):
         channel_id: str,
         text: str,
         *,
-        thread_ts: str | None = None,
+        thread_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ChatPostResult:
         form: dict[str, str] = {"channel": channel_id, "text": text}
-        if thread_ts:
-            form["thread_ts"] = thread_ts
+        if thread_id:
+            form["thread_ts"] = thread_id
         if metadata:
             form["metadata"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         payload = await self._post_form("chat.postMessage", form)
         ts = str(payload.get("ts", ""))
+        try:
+            occurred_at = ts_time(ts)
+        except ValueError as exc:
+            raise SlackUnreachableError(
+                "chat.postMessage", "the answer names no message"
+            ) from exc
         return ChatPostResult(
-            channel_id=channel_id, message_ts=ts, thread_ts=thread_ts or ts
+            channel_id=channel_id,
+            message_id=ts,
+            thread_id=thread_id or ts,
+            occurred_at=occurred_at,
         )
 
     async def add_reaction(
-        self, channel_id: str, message_ts: str, reaction: str
+        self, channel_id: str, message_id: str, reaction: str
     ) -> None:
         if reaction not in _SLACK_REACTION_MAP:
-            raise RuntimeError(f"Unsupported semantic reaction for Slack: {reaction}")
+            raise ChatServiceError(
+                f"Unsupported semantic reaction for Slack: {reaction}"
+            )
         reaction_name = _SLACK_REACTION_MAP[cast(SemanticReaction, reaction)]
         try:
             await self._post_form(
                 "reactions.add",
-                {"channel": channel_id, "timestamp": message_ts, "name": reaction_name},
+                {"channel": channel_id, "timestamp": message_id, "name": reaction_name},
             )
         except SlackApiError as exc:
             # Repeating the same reaction after a crash between API success and
@@ -298,14 +384,14 @@ class SlackChatService(ChatService):
             await self._client.aclose()
 
     async def _post_form(self, method: str, form: dict[str, str]) -> dict[str, Any]:
-        client = self._get_client()
-        response = await client.post(f"{self._base_url}/{method}", data=form)
-        if response.status_code == HTTP_UNAUTHORIZED and self._record_credential_events:
-            _record_slack_auth_failure("unauthorized")
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Slack API '{method}' returned non-object JSON.")
+        try:
+            payload = await _answer(
+                self._get_client(), method, f"{self._base_url}/{method}", data=form
+            )
+        except SlackUnreachableError as exc:
+            if exc.status == HTTP_UNAUTHORIZED and self._record_credential_events:
+                _record_slack_auth_failure("unauthorized")
+            raise
         if not payload.get("ok", False):
             error = str(payload.get("error", "unknown_error") or "unknown_error")
             if is_slack_auth_error(error) and self._record_credential_events:
@@ -321,7 +407,9 @@ class SlackChatService(ChatService):
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             if not self._token:
-                raise RuntimeError("Slack bot token is not configured.")
+                raise ChatCredentialsError(
+                    f"Slack bot token is not configured: set {self._token_name}."
+                )
             headers = {}
             headers["Authorization"] = f"Bearer {self._token}"
             self._client = httpx.AsyncClient(
@@ -329,6 +417,68 @@ class SlackChatService(ChatService):
             )
             self._owns_client = True
         return self._client
+
+
+def _items(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """The objects an answer lists under ``key``; what is no object is none."""
+    value = payload.get(key)
+    return (
+        [item for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _page(channel_id: str, payload: dict[str, Any]) -> ChatEventPage:
+    events = [
+        event
+        for item in _items(payload, "messages")
+        if (event := chat_event(channel_id, item)) is not None
+    ]
+    metadata = payload.get("response_metadata", {})
+    cursor = (
+        _str_or_none(metadata.get("next_cursor"))
+        if isinstance(metadata, dict)
+        else None
+    )
+    return ChatEventPage(events=events, cursor=cursor)
+
+
+async def _check(
+    name: str, token: str, probe: Callable[[], Awaitable[object]]
+) -> CredentialCheck:
+    if not token:
+        return CredentialCheck(name=name, status="unconfigured")
+    try:
+        await probe()
+    except ChatServiceError as exc:
+        return CredentialCheck(name=name, status="failed", error=str(exc))
+    return CredentialCheck(name=name, status="ok")
+
+
+async def probe_app_token(
+    app_token: str,
+    base_url: str | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """Validate an app-level token via ``apps.connections.open``.
+
+    Raises:
+        SlackApiError: With the Slack error code (``invalid_auth``, say).
+        SlackUnreachableError: If Slack gave no answer.
+    """
+    method = "apps.connections.open"
+    async with httpx.AsyncClient(
+        timeout=10.0,
+        transport=transport,
+        headers={"Authorization": f"Bearer {app_token}"},
+    ) as client:
+        payload = await _answer(
+            client, method, f"{(base_url or DEFAULT_BASE_URL).rstrip('/')}/{method}"
+        )
+    if error := slack_api_error(payload):
+        raise SlackApiError(method, error)
 
 
 def _str_or_none(value: Any) -> str | None:

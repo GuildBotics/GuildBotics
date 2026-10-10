@@ -51,7 +51,7 @@ class ChatTurn(BaseModel):
 
     attempt: int
     subject: ChatSubject
-    message_ts: str
+    message_id: str
     context_cursor: str
     effort: str = ""
     prompt: dict[str, Any]

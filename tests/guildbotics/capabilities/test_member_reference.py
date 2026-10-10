@@ -137,12 +137,12 @@ def test_reference_states_cross_cutting_rules():
     assert "git add" in text
     assert "git config" in text
     assert "memory.pinned" in text
-    assert "ticket URL, PR URL, Slack thread URL" in text
+    assert "ticket URL, PR URL, chat thread URL" in text
     assert "canonical current state" in text
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
-    assert "GitHub and Slack access, reads and writes alike" in text
+    assert "GitHub and chat access, reads and writes alike" in text
     assert "Never use `gh`" in text
     assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
@@ -209,7 +209,7 @@ def test_reference_standardizes_free_form_input_with_utf8_files():
 def test_reference_documents_complete_content_command_usage():
     text = capability_reference_text()
     assert "[--add-to-project|--no-add-to-project]" in text
-    assert "(--channel-id <id> | --channel-name <name>) --thread-ts <ts>" in text
+    assert "(--channel-id <id> | --channel-name <name>) --thread-id <id>" in text
     assert "[--scope personal|team] --title <title> --content-file <file>" in text
     assert "[--keyword <word> ...] [--add-keyword <word> ...]" in text
     assert "[--ticket <url>] [--pr <url>]" in text

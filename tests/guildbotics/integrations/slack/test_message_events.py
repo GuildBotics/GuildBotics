@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from guildbotics.integrations.chat_workflow_status import (
@@ -29,8 +31,9 @@ def test_chat_event_reads_a_thread_reply() -> None:
     assert event is not None
     assert event.event_id == "C1:2.0"
     assert event.channel_id == "C1"
-    assert event.message_ts == "2.0"
-    assert event.thread_ts == "1.0"
+    assert event.message_id == "2.0"
+    assert event.thread_id == "1.0"
+    assert event.occurred_at == datetime(1970, 1, 1, 0, 0, 2, tzinfo=UTC)
     assert event.author_id == "U1"
     assert event.mentions == ["U2", "U3"]
     assert event.is_thread_reply is True
@@ -42,7 +45,7 @@ def test_chat_event_starts_its_own_thread_without_thread_ts() -> None:
     event = chat_event("C1", {"ts": "1.0", "bot_id": "B1", "text": ""})
 
     assert event is not None
-    assert event.thread_ts == "1.0"
+    assert event.thread_id == "1.0"
     assert event.is_thread_reply is False
     assert event.is_bot_message is True
     assert event.author_id is None

@@ -23,6 +23,7 @@ class Service(Enum):
 
     TICKET_MANAGER = "ticket_manager"
     CODE_HOSTING_SERVICE = "code_hosting_service"
+    CHAT_SERVICE = "chat_service"
 
 
 class Project(BaseModel):
@@ -148,8 +149,9 @@ class MessageChannel(BaseModel):
     """
     A class representing a message channel.
 
+    The project's chat service hosts it.
+
     Attributes:
-        service (str): The service where the message channel is hosted (e.g., Discord, Slack).
         name (str): The name of the message channel.
         used_as (list[str]): A list of roles that use the message channel.
         used_by (list[str]): A list of roles that are used by the message channel.
@@ -157,10 +159,6 @@ class MessageChannel(BaseModel):
     """
 
     name: str = Field(default="", description="The name of the message channel.")
-    service: str = Field(
-        default="",
-        description="The service where the message channel is hosted (e.g., Discord, Slack).",
-    )
     used_as: list[str] = Field(
         default_factory=list,
         description="A list of roles that use the message channel.",

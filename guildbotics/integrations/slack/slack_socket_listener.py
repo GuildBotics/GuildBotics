@@ -11,12 +11,13 @@ from typing import Any
 
 import httpx
 
-from guildbotics.integrations.event_listener import EventListener, IncomingChatEvent
+from guildbotics.integrations.event_listener import EventListener
 from guildbotics.integrations.slack.auth_errors import (
     is_slack_auth_error,
     slack_api_error,
 )
 from guildbotics.integrations.slack.message_events import chat_event
+from guildbotics.runtime.chat_service import ChatEvent
 
 
 # Slack error codes that will not recover by reconnecting with the same token.
@@ -55,7 +56,7 @@ class SlackSocketEventListener(EventListener):
         self._thread_lock = threading.Lock()
         self._ws: Any | None = None
         self._ws_lock = threading.Lock()
-        self._queue: queue.Queue[IncomingChatEvent] = queue.Queue()
+        self._queue: queue.Queue[ChatEvent] = queue.Queue()
         self._connect_attempts = 0
         self._reconnects = 0
         self._received_events = 0
@@ -111,14 +112,14 @@ class SlackSocketEventListener(EventListener):
             self._acks_sent,
         )
 
-    def drain_events(self) -> list[IncomingChatEvent]:
-        out: list[IncomingChatEvent] = []
+    def drain_events(self) -> list[ChatEvent]:
+        out: list[ChatEvent] = []
         while True:
             try:
                 out.append(self._queue.get_nowait())
             except queue.Empty:
                 break
-        out.sort(key=lambda item: item.event.message_ts)
+        out.sort(key=lambda item: item.position)
         return out
 
     def _reader_thread_main(self) -> None:
@@ -203,10 +204,7 @@ class SlackSocketEventListener(EventListener):
         try:
             from websockets.sync.client import connect  # type: ignore
         except Exception as e:
-            raise RuntimeError(
-                "Socket Mode requires the 'websockets' package. Install it before using "
-                "message_channels[].chat.event_source=socket_mode."
-            ) from e
+            raise RuntimeError("Socket Mode requires the 'websockets' package.") from e
         return connect(url)
 
     def _ack_if_needed(self, ws: Any, payload: dict[str, Any]) -> None:
@@ -219,7 +217,7 @@ class SlackSocketEventListener(EventListener):
         except BaseException:
             self._log_debug("socket listener ack failed")
 
-    def _to_incoming_event(self, envelope: dict[str, Any]) -> IncomingChatEvent | None:
+    def _to_incoming_event(self, envelope: dict[str, Any]) -> ChatEvent | None:
         if str(envelope.get("type", "")) != "events_api":
             return None
         body = envelope.get("payload")
@@ -234,12 +232,7 @@ class SlackSocketEventListener(EventListener):
         channel_id = str(event.get("channel", "") or "")
         if not channel_id:
             return None
-        message = chat_event(channel_id, event)
-        if message is None:
-            return None
-        return IncomingChatEvent(
-            service_name="slack", channel_id=channel_id, event=message
-        )
+        return chat_event(channel_id, event)
 
     def _parse_json(self, raw: Any) -> dict[str, Any] | None:
         text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)

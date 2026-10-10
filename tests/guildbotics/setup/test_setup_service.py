@@ -86,7 +86,7 @@ def test_write_project_without_github_creates_loadable_core_config(
 
     assert team.project.get_language_code() == "ja"
     assert team.project.description == "Local automation workspace"
-    assert team.project.services == {}
+    assert team.project.services == {"chat_service": {"name": "slack"}}
     assert KeyringSecretStore(config_dir).get("GOOGLE_API_KEY") == "test-google-key"
     assert "OSのUI言語と英語の間で相互翻訳" in (
         config_dir / "commands/translate.md"

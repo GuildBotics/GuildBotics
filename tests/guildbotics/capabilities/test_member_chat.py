@@ -1,129 +1,44 @@
 import pytest
 
-from guildbotics.capabilities import member_chat
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
+from guildbotics.entities.team import Person
+from guildbotics.integrations.local import chat
+from guildbotics.integrations.local.chat import LocalChatService
+from guildbotics.runtime.chat_service import ChatIdentity, CredentialCheck
 from guildbotics.runtime.integration_factory import MemberCapabilityError
-from guildbotics.entities.team import Person, Project, Team
-from guildbotics.runtime.chat_service import (
-    ChatEvent,
-    ChatEventPage,
-    ChatIdentity,
-    ChatPostResult,
-)
 from guildbotics.runtime.member_invocation import (
     MemberInvocation,
     member_invocation_scope,
 )
+from tests.guildbotics.local_chat import at, lines, say
+
+AIKO = Person(person_id="aiko", name="Aiko")
 
 
-class FakeChatService:
-    def __init__(self) -> None:
-        self.identity = ChatIdentity(user_id="U_BOT", display_name="Aiko")
-        self.channel_names = {"dev": "C_DEV"}
-        self.posts: list[tuple[str, str, str | None]] = []
-        self.reactions: list[tuple[str, str, str]] = []
-        self.channel_inspects: list[tuple[str, str | None, str | None, int]] = []
-        self.thread_inspects: list[tuple[str, str, int]] = []
-        self.closed = False
-
-    async def get_bot_identity(self):
-        return self.identity
-
-    async def resolve_channel_id(self, channel_name):
-        return self.channel_names.get(channel_name)
-
-    async def list_channel_events(
-        self, channel_id, *, cursor=None, oldest_ts=None, latest_ts=None, limit=100
-    ):
-        del cursor
-        self.channel_inspects.append((channel_id, oldest_ts, latest_ts, limit))
-        return ChatEventPage(
-            events=[
-                ChatEvent(
-                    event_id=f"{channel_id}:200.1",
-                    channel_id=channel_id,
-                    message_ts="200.1",
-                    thread_ts="200.1",
-                    author_id="U1",
-                    text="newer",
-                ),
-                ChatEvent(
-                    event_id=f"{channel_id}:100.1",
-                    channel_id=channel_id,
-                    message_ts="100.1",
-                    thread_ts="100.1",
-                    author_id="U2",
-                    text="older",
-                ),
-            ],
-            cursor="next",
-        )
-
-    async def list_thread_events(
-        self, channel_id, *, thread_ts, cursor=None, limit=100
-    ):
-        del cursor
-        self.thread_inspects.append((channel_id, thread_ts, limit))
-        return ChatEventPage(
-            events=[
-                ChatEvent(
-                    event_id=f"{channel_id}:100.2",
-                    channel_id=channel_id,
-                    message_ts="100.2",
-                    thread_ts=thread_ts,
-                    author_id="U2",
-                    text="reply",
-                    is_thread_reply=True,
-                ),
-                ChatEvent(
-                    event_id=f"{channel_id}:100.1",
-                    channel_id=channel_id,
-                    message_ts="100.1",
-                    thread_ts=thread_ts,
-                    author_id="U1",
-                    text="root",
-                ),
-            ]
-        )
-
-    async def post_message(self, channel_id, text, *, thread_ts=None):
-        self.posts.append((channel_id, text, thread_ts))
-        return ChatPostResult(
-            channel_id=channel_id,
-            message_ts="200.1",
-            thread_ts=thread_ts or "200.1",
-        )
-
-    async def add_reaction(self, channel_id, message_ts, reaction):
-        self.reactions.append((channel_id, message_ts, reaction))
-
-    def render_participant_text(self, text, participant_labels):
-        for user_id, label in participant_labels.items():
-            text = text.replace(f"@{label}", f"<@{user_id}>")
-        return text
-
-    async def aclose(self):
-        self.closed = True
-
-
-def _service(chat_service=None):
-    person = Person(person_id="aiko", name="Aiko")
-    team = Team(project=Project(name="demo"), members=[person])
-    logger = type("Logger", (), {"info": lambda *args, **kwargs: None})()
+def _service(chat_service=None) -> MemberChatCapabilityService:
+    """Aiko's chat, the local one, where ``dev`` is a channel."""
+    if not chat.channel_path("dev").exists():
+        say("dev", "welcome", message_id="0", occurred_at=at(0))
     return MemberChatCapabilityService(
-        person, team, logger, chat_service or FakeChatService()
+        AIKO, chat_service or LocalChatService(AIKO), "local"
     )
+
+
+def _posts(channel_id: str) -> list[tuple[str, str]]:
+    return [
+        (line["text"], line["thread_id"])
+        for line in lines(channel_id)
+        if line.get("author") == "aiko" and "reaction" not in line
+    ]
 
 
 @pytest.mark.asyncio
 async def test_identity_returns_stable_member_payload():
-    service = _service()
-
-    result = await service.identity()
+    result = await _service().identity()
 
     assert result == {
-        "service": "slack",
-        "user_id": "U_BOT",
+        "service": "local",
+        "user_id": "aiko",
         "display_name": "Aiko",
         "person_id": "aiko",
     }
@@ -131,220 +46,213 @@ async def test_identity_returns_stable_member_payload():
 
 @pytest.mark.asyncio
 async def test_post_resolves_channel_name_and_returns_evidence_payload():
-    fake = FakeChatService()
-    service = _service(fake)
+    result = await _service().post(
+        channel_id=None, channel_name="dev", body="hello team"
+    )
 
-    result = await service.post(channel_id=None, channel_name="dev", body="hello team")
-
-    assert fake.posts == [("C_DEV", "hello team", None)]
-    assert result["channel_id"] == "C_DEV"
-    assert result["message_ts"] == "200.1"
-    assert result["thread_ts"] == "200.1"
-    assert result["text"] == "hello team"
-    assert result["posted"] is True
+    [line] = [line for line in lines("dev") if line["author"] == "aiko"]
+    assert _posts("dev") == [("hello team", line["message_id"])]
+    assert result == {
+        "service": "local",
+        "channel_id": "dev",
+        "message_id": line["message_id"],
+        "thread_id": line["message_id"],
+        "occurred_at": line["occurred_at"],
+        "text": "hello team",
+        "posted": True,
+    }
 
 
 @pytest.mark.asyncio
 async def test_post_renders_participant_labels_from_workflow_context():
-    fake = FakeChatService()
-    service = _service(fake)
-
     with member_invocation_scope(
-        MemberInvocation(participant_labels='{"UBOB":"bob","UAIKO":"aiko"}')
+        MemberInvocation(participant_labels='{"u-bob":"bob","aiko":"aiko"}')
     ):
-        result = await service.post(
-            channel_id="C1", channel_name=None, body="@bob please"
+        result = await _service().post(
+            channel_id="dev", channel_name=None, body="@bob please"
         )
 
-    assert fake.posts == [("C1", "<@UBOB> please", None)]
-    assert result["text"] == "<@UBOB> please"
+    assert result["text"] == "@u-bob please"
+    assert [text for text, _ in _posts("dev")] == ["@u-bob please"]
 
 
 @pytest.mark.asyncio
 async def test_inspect_channel_resolves_name_and_returns_messages_in_time_order():
-    fake = FakeChatService()
-    service = _service(fake)
+    service = _service()
+    say("dev", "newer", message_id="m2", occurred_at=at(200))
+    say("dev", "older", message_id="m1", occurred_at=at(100))
+    say("dev", "too late", message_id="m3", occurred_at=at(400))
 
     result = await service.inspect_channel(
-        channel_id=None,
-        channel_name="dev",
-        oldest_ts="100.0",
-        latest_ts="300.0",
-        limit=25,
+        channel_id=None, channel_name="dev", since=at(100), until=at(300), limit=25
     )
 
-    assert fake.channel_inspects == [("C_DEV", "100.0", "300.0", 25)]
     assert result["mode"] == "channel"
-    assert result["next_cursor"] == "next"
+    assert result["since"] == at(100).isoformat()
+    assert result["until"] == at(300).isoformat()
     assert [message["text"] for message in result["messages"]] == ["older", "newer"]
+    assert result["messages"][0]["occurred_at"] == at(100).isoformat()
 
 
 @pytest.mark.asyncio
-async def test_inspect_thread_returns_thread_messages_in_time_order():
-    fake = FakeChatService()
-    service = _service(fake)
+async def test_inspect_thread_reads_by_id_or_by_message_url():
+    service = _service()
+    say("dev", "reply", message_id="r1", thread_id="t1", occurred_at=at(101))
+    say("dev", "root", message_id="t1", occurred_at=at(100))
 
-    result = await service.inspect_thread(
-        channel_id="C1", channel_name=None, thread_ts="100.1", limit=50
+    by_id = await service.inspect_thread(
+        channel_id="dev",
+        channel_name=None,
+        thread_id="t1",
+        message_url=None,
+        limit=50,
+    )
+    by_url = await service.inspect_thread(
+        channel_id=None,
+        channel_name=None,
+        thread_id=None,
+        message_url=chat.message_url("dev", "r1", "t1"),
+        limit=50,
     )
 
-    assert fake.thread_inspects == [("C1", "100.1", 50)]
-    assert result["mode"] == "thread"
-    assert result["thread_ts"] == "100.1"
-    assert [message["text"] for message in result["messages"]] == ["root", "reply"]
+    assert by_id["mode"] == "thread"
+    assert by_id["thread_id"] == "t1"
+    assert [m["text"] for m in by_id["messages"]] == ["root", "reply"]
+    assert by_url["messages"] == by_id["messages"]
 
 
 @pytest.mark.asyncio
-async def test_reply_posts_to_thread():
-    fake = FakeChatService()
-    service = _service(fake)
+async def test_inspect_thread_needs_a_thread():
+    with pytest.raises(MemberCapabilityError):
+        await _service().inspect_thread(
+            channel_id="dev",
+            channel_name=None,
+            thread_id=None,
+            message_url=None,
+            limit=50,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reply_posts_to_the_thread_a_message_url_names():
+    service = _service()
+    say("dev", "root", message_id="t1", occurred_at=at(100))
+    say("dev", "reply", message_id="r1", thread_id="t1", occurred_at=at(101))
 
     result = await service.reply(
-        channel_id="C1", channel_name=None, thread_ts="100.1", body="reply"
+        channel_id=None,
+        channel_name=None,
+        thread_id=None,
+        message_url=chat.message_url("dev", "r1", "t1"),
+        body="answer",
     )
 
-    assert fake.posts == [("C1", "reply", "100.1")]
-    assert result["thread_ts"] == "100.1"
-    assert result["text"] == "reply"
+    assert _posts("dev") == [("answer", "t1")]
+    assert result["thread_id"] == "t1"
+    assert result["text"] == "answer"
 
 
 @pytest.mark.asyncio
-async def test_reply_renders_participant_labels_from_workflow_context():
-    fake = FakeChatService()
-    service = _service(fake)
-
-    with member_invocation_scope(MemberInvocation(participant_labels='{"UBOB":"bob"}')):
-        result = await service.reply(
-            channel_id="C1",
-            channel_name=None,
-            thread_ts="100.1",
+async def test_reply_resolves_channel_name_and_renders_labels():
+    with member_invocation_scope(
+        MemberInvocation(participant_labels='{"u-bob":"bob"}')
+    ):
+        result = await _service().reply(
+            channel_id=None,
+            channel_name="dev",
+            thread_id="0",
+            message_url=None,
             body="@bob thoughts?",
         )
 
-    assert fake.posts == [("C1", "<@UBOB> thoughts?", "100.1")]
-    assert result["text"] == "<@UBOB> thoughts?"
-
-
-@pytest.mark.asyncio
-async def test_reply_resolves_channel_name():
-    fake = FakeChatService()
-    service = _service(fake)
-
-    result = await service.reply(
-        channel_id=None, channel_name="dev", thread_ts="100.1", body="reply"
-    )
-
-    assert fake.posts == [("C_DEV", "reply", "100.1")]
-    assert result["channel_id"] == "C_DEV"
+    assert _posts("dev") == [("@u-bob thoughts?", "0")]
+    assert result["channel_id"] == "dev"
 
 
 @pytest.mark.asyncio
 async def test_reaction_add_restricts_to_semantic_reactions():
-    fake = FakeChatService()
-    service = _service(fake)
+    service = _service()
 
     result = await service.add_reaction(
-        channel_id=None, channel_name="dev", message_ts="100.1", reaction="ack"
+        channel_id=None, channel_name="dev", message_id="0", reaction="ack"
+    )
+    await service.add_reaction(
+        channel_id="dev", channel_name=None, message_id="0", reaction="ack"
     )
 
-    assert fake.reactions == [("C_DEV", "100.1", "ack")]
-    assert result["channel_id"] == "C_DEV"
+    reactions = [line for line in lines("dev") if "reaction" in line]
+    assert reactions == [{"reaction": "ack", "author": "aiko", "message_id": "0"}]
+    assert result["message_id"] == "0"
     assert result["reacted"] is True
 
     with pytest.raises(MemberCapabilityError):
         await service.add_reaction(
-            channel_id="C1",
+            channel_id="dev",
             channel_name=None,
-            message_ts="100.1",
+            message_id="0",
             reaction="white_check_mark",
         )
 
 
-@pytest.mark.asyncio
-async def test_check_credentials_reports_ok_for_valid_tokens(monkeypatch):
-    monkeypatch.setenv("AIKO_SLACK_BOT_TOKEN", "xoxb-valid")
-    monkeypatch.setenv("AIKO_SLACK_APP_TOKEN", "xapp-valid")
+class _Credentials(LocalChatService):
+    def __init__(self, *checks: CredentialCheck) -> None:
+        super().__init__(AIKO)
+        self._checks = list(checks)
 
-    probed: list[tuple[str, str | None]] = []
-
-    async def fake_probe(app_token, base_url):
-        probed.append((app_token, base_url))
-
-    monkeypatch.setattr(member_chat, "probe_slack_app_token", fake_probe)
-    service = _service()
-
-    result = await service.check_credentials()
-
-    assert result["status"] == "ok"
-    assert result["bot_token"] == "ok"
-    assert result["app_token"] == "ok"
-    assert "bot_token_error" not in result
-    assert "app_token_error" not in result
-    assert probed == [("xapp-valid", None)]
+    async def check_credentials(self) -> list[CredentialCheck]:
+        return self._checks
 
 
 @pytest.mark.asyncio
-async def test_check_credentials_surfaces_invalid_app_token(monkeypatch):
-    monkeypatch.setenv("AIKO_SLACK_BOT_TOKEN", "xoxb-valid")
-    monkeypatch.setenv("AIKO_SLACK_APP_TOKEN", "xapp-broken")
+@pytest.mark.parametrize(
+    ("checks", "status"),
+    [
+        ((), "ok"),
+        (
+            (
+                CredentialCheck("bot_token", "ok"),
+                CredentialCheck("app_token", "unconfigured"),
+            ),
+            "ok",
+        ),
+        (
+            (
+                CredentialCheck("bot_token", "unconfigured"),
+                CredentialCheck("app_token", "unconfigured"),
+            ),
+            "unconfigured",
+        ),
+        (
+            (
+                CredentialCheck("bot_token", "ok"),
+                CredentialCheck("app_token", "failed", "invalid_auth"),
+            ),
+            "failed",
+        ),
+    ],
+)
+async def test_check_credentials_reports_each_credential_and_the_whole(checks, status):
+    result = await _service(_Credentials(*checks)).check_credentials()
 
-    async def fake_probe(app_token, base_url):
-        raise MemberCapabilityError("invalid_auth")
-
-    monkeypatch.setattr(member_chat, "probe_slack_app_token", fake_probe)
-    service = _service()
-
-    result = await service.check_credentials()
-
-    assert result["status"] == "failed"
-    assert result["bot_token"] == "ok"
-    assert result["app_token"] == "failed"
-    assert result["app_token_error"] == "invalid_auth"
-
-
-@pytest.mark.asyncio
-async def test_check_credentials_validates_app_token_without_chat_service(monkeypatch):
-    # A member with only an app token has no chat service (the factory requires a
-    # bot token); the app-token probe must still run.
-    monkeypatch.delenv("AIKO_SLACK_BOT_TOKEN", raising=False)
-    monkeypatch.setenv("AIKO_SLACK_APP_TOKEN", "xapp-valid")
-
-    async def fake_probe(app_token, base_url):
-        return None
-
-    monkeypatch.setattr(member_chat, "probe_slack_app_token", fake_probe)
-    person = Person(person_id="aiko", name="Aiko")
-    team = Team(project=Project(name="demo"), members=[person])
-    logger = type("Logger", (), {"info": lambda *args, **kwargs: None})()
-    service = MemberChatCapabilityService(person, team, logger, None)
-
-    result = await service.check_credentials()
-
-    assert result["bot_token"] == "unconfigured"
-    assert result["app_token"] == "ok"
-    assert result["status"] == "ok"
-
-
-@pytest.mark.asyncio
-async def test_check_credentials_reports_unconfigured_without_tokens(monkeypatch):
-    monkeypatch.delenv("AIKO_SLACK_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("AIKO_SLACK_APP_TOKEN", raising=False)
-    service = _service()
-
-    result = await service.check_credentials()
-
-    assert result["status"] == "unconfigured"
-    assert result["bot_token"] == "unconfigured"
-    assert result["app_token"] == "unconfigured"
+    assert result["service"] == "local"
+    assert result["status"] == status
+    assert result["credentials"] == [
+        {
+            "name": check.name,
+            "status": check.status,
+            **({"error": check.error} if check.error else {}),
+        }
+        for check in checks
+    ]
 
 
 @pytest.mark.asyncio
 async def test_safe_error_redacts_secret_markers():
-    class FailingChatService(FakeChatService):
-        async def get_bot_identity(self):
+    class FailingChatService(LocalChatService):
+        async def get_bot_identity(self) -> ChatIdentity:
             raise RuntimeError("SLACK_BOT_TOKEN=xoxb-secret")
 
-    service = _service(FailingChatService())
+    service = _service(FailingChatService(AIKO))
 
     with pytest.raises(MemberCapabilityError, match="safely") as exc_info:
         await service.identity()

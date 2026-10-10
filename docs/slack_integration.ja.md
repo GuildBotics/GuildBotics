@@ -154,7 +154,7 @@ uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.js
 **設定 → メンバー → 巡回** タブで **定期実行を追加** を押し、コマンド欄を **直接入力** に切り替えて、以下のようなコマンドラインを指定します。実行時刻は 毎時 / 毎日 / 毎週 のプリセットか **詳細 cron** で指定します。
 
 ```text
-workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 本文を生成するコマンドの例（AIニュースダイジェスト）:
@@ -168,12 +168,22 @@ guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Ge
 投稿までを一度に実行する例（手動）:
 
 ```bash
-guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
+guildbotics run workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
 チャネルが指定されていない・`channel_name` が解決できない（チャネル名、Bot のチャネル参加、`channels:read` / `groups:read` スコープを確認してください）・`command` が空または引用符が閉じていない場合は、実行が失敗として記録されます。コマンドの出力が空のときは何も投稿せず、成功として扱います。
 
 ## `person.yml` リファレンス
+
+プロジェクトのチャットが Slack であることは `team/project.yml` に書きます。デスクトップアプリのプロジェクト設定がこれを書き出します。
+
+```yaml
+# team/project.yml
+services:
+  chat_service:
+    name: slack
+    # base_url: https://slack.com/api   # プロキシ経由で Slack に届く場合だけ
+```
 
 デスクトップアプリで保存した Slack 設定は、`team/members/<person_id>/person.yml` に次の形で書き出されます。GUI を使わないサーバーでは、このファイルを直接編集します。
 
@@ -184,8 +194,7 @@ name: Alice
 is_active: true
 
 message_channels:
-  - service: slack
-    name: dev-chat
+  - name: dev-chat
     chat:
       enabled: true
       participation: strict
@@ -193,14 +202,14 @@ message_channels:
       backfill_interval_seconds: 300
 
 task_schedules:
-  - command: 'workflows/chat_post_command service=slack channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
+  - command: 'workflows/chat_post_command channel_id=C0123456789 command="examples/reports/ai_news_digest query=\"OpenAI OR Anthropic OR Gemini\" language=ja country=JP limit=10 max_age_hours=24"'
     schedules:
       - "0 9 * * 1-5"
 ```
 
 ポイント:
 
-- 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものが対象になります
+- 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものがプロジェクトのチャット（`services.chat_service`）で監視対象になります
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します
@@ -212,10 +221,10 @@ Bot Token と App-Level Token は `person.yml` には保存されません。OS 
 メンバーとしての返信・リアクションは CLI から直接実行することもできます。
 
 ```bash
-guildbotics member chat reply --person alice --service slack --channel-id C0123456789 --thread-ts 1777554000.000000 --content-stdin <<'EOF'
+guildbotics member chat reply --person alice --channel-id C0123456789 --thread-id 1777554000.000000 --content-stdin <<'EOF'
 `$HOME`、backtick (`command`)、`$(command)` をそのまま含む返信本文
 EOF
-guildbotics member chat reaction add --person alice --service slack --channel-id C0123456789 --message-ts 1777554000.000000 --reaction ack
+guildbotics member chat reaction add --person alice --channel-id C0123456789 --message-id 1777554000.000000 --reaction ack
 ```
 
 ## チャット処理の内部動作

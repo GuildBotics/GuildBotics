@@ -12,6 +12,7 @@ way, where the keys are.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from logging import Logger
 from typing import Any
 
@@ -23,9 +24,11 @@ from guildbotics.intelligences.brains.inference import AgnoAnswer, AgnoCall, Jev
 from guildbotics.runtime.chat_service import (
     ChatEventPage,
     ChatIdentity,
+    ChatMessageRef,
     ChatPostResult,
     ChatService,
     ChatServiceError,
+    CredentialCheck,
 )
 from guildbotics.runtime.code_hosting_resources import (
     RepositoryReadError,
@@ -129,6 +132,18 @@ class WindowChatService(ChatService):
         identity = await self._member("identity")
         return ChatIdentity(identity["user_id"], identity["display_name"])
 
+    async def check_credentials(self) -> list[CredentialCheck]:
+        raise _unavailable("Checking chat credentials")
+
+    def self_user_id(self, person: Person) -> str:
+        raise _unavailable("Reading a member's chat user")
+
+    def parse_message_url(self, url: str) -> ChatMessageRef:
+        raise _unavailable("Reading a chat message URL")
+
+    def mentioned_user_ids(self, text: str) -> list[str]:
+        raise _unavailable("Reading chat mentions")
+
     async def list_channel_events(self, channel_id: str, **_: Any) -> ChatEventPage:
         raise _unavailable("Reading a channel's events")
 
@@ -144,29 +159,32 @@ class WindowChatService(ChatService):
         channel_id: str,
         text: str,
         *,
-        thread_ts: str | None = None,
+        thread_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ChatPostResult:
         if metadata:
             raise _unavailable("Posting with message metadata")
-        where = ("reply", "--thread-ts", thread_ts) if thread_ts else ("post",)
+        where = ("reply", "--thread-id", thread_id) if thread_id else ("post",)
         posted = await self._member(
             *where, "--channel-id", channel_id, "--content-stdin", stdin=text
         )
         return ChatPostResult(
-            posted["channel_id"], posted["message_ts"], posted["thread_ts"]
+            posted["channel_id"],
+            posted["message_id"],
+            posted["thread_id"],
+            datetime.fromisoformat(posted["occurred_at"]),
         )
 
     async def add_reaction(
-        self, channel_id: str, message_ts: str, reaction: str
+        self, channel_id: str, message_id: str, reaction: str
     ) -> None:
         await self._member(
             "reaction",
             "add",
             "--channel-id",
             channel_id,
-            "--message-ts",
-            message_ts,
+            "--message-id",
+            message_id,
             "--reaction",
             reaction,
         )
@@ -180,8 +198,6 @@ class WindowChatService(ChatService):
                 *arguments,
                 "--person",
                 self._person_id,
-                "--service",
-                "slack",
                 "--format",
                 "json",
             ],

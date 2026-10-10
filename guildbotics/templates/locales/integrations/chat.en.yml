@@ -1,0 +1,2 @@
+en:
+  unsupported: "Configure a supported chat_service in project.services (currently slack) to use chat; '%{name}' is not one."

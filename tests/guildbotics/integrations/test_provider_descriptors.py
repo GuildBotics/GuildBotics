@@ -70,8 +70,13 @@ def test_a_provider_declares_exactly_what_its_package_reads_of_a_member(name):
 def test_a_provider_serves_a_kind_and_is_chosen_by_its_name(name):
     provider = PROVIDERS[name]
     assert provider.name == name
-    assert provider.code_hosting is not None or provider.ticket_manager is not None
-    for kind in ("code_hosting_service", "ticket_manager"):
+    kinds = {
+        "code_hosting_service": provider.code_hosting,
+        "ticket_manager": provider.ticket_manager,
+        "chat_service": provider.chat,
+    }
+    assert any(kinds.values())
+    for kind in (kind for kind, serves in kinds.items() if serves):
         team = Team(
             project=Project(services={kind: {"name": name.upper()}}), members=[]
         )

@@ -16,7 +16,6 @@ from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations import chat_receive_status
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
@@ -24,12 +23,13 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
+from tests.guildbotics.local_chat import at, chat_event, lines, say
 from tests.guildbotics.local_code_host import issue, item, local_member
 
 _SOURCE = ChatSubject(
     service="slack",
     channel_id="C1",
-    thread_ts="100.1",
+    thread_id="100.1",
     event_id="E1",
     self_user_id="U_BOT",
 )
@@ -46,11 +46,11 @@ def chat_run():
 
 
 def event(number, **kwargs):
-    return ChatEvent(
+    return chat_event(
         event_id=f"E{number}",
         channel_id="C1",
-        thread_ts="100.1",
-        message_ts=f"{100 + number}.1",
+        thread_id="100.1",
+        message_id=f"{100 + number}.1",
         author_id="U_OTHER",
         text=f"request {number}",
         **kwargs,
@@ -83,7 +83,7 @@ def test_only_source_thread_external_unprocessed_input_is_new(chat_run):
     for message in (
         event(1),
         replace(event(2), author_id="U_BOT"),
-        replace(event(3), thread_ts="other"),
+        replace(event(3), thread_id="other"),
         event(4, is_edit_or_delete=True),
         event(5),
     ):
@@ -117,14 +117,14 @@ def test_the_source_thread_is_the_runs_work_not_what_its_record_says(chat_run):
     RunStore().append_evidence(
         "chat-run",
         "chat_batch",
-        {"event_ids": ["E1"], "channel_id": "C2", "thread_ts": "other"},
+        {"event_ids": ["E1"], "channel_id": "C2", "thread_id": "other"},
     )
     queue(chat_run, event(3))
-    queue(chat_run, replace(event(4), thread_ts="other"))
+    queue(chat_run, replace(event(4), thread_id="other"))
 
     result = check_chat_updates("aiko")
 
-    assert (result["channel_id"], result["thread_ts"]) == ("C1", "100.1")
+    assert (result["channel_id"], result["thread_id"]) == ("C1", "100.1")
     assert [item["event_id"] for item in result["messages"]] == ["E3"]
 
 
@@ -136,9 +136,8 @@ def test_the_source_thread_is_the_runs_work_not_what_its_record_says(chat_run):
     ],
 )
 def test_only_a_chat_run_has_updates_to_check(invocation):
-    with member_invocation_scope(invocation):
-        with pytest.raises(ChatUpdatesRequired):
-            check_chat_updates("aiko")
+    with member_invocation_scope(invocation), pytest.raises(ChatUpdatesRequired):
+        check_chat_updates("aiko")
 
 
 def test_new_batch_resets_checked_membership(chat_run):
@@ -153,27 +152,29 @@ def test_new_batch_resets_checked_membership(chat_run):
 @pytest.mark.parametrize("action", ["reply", "post", "reaction"])
 async def test_chat_write_checks_source_even_for_another_destination(chat_run, action):
     service = chat_service()
+    say("C_OTHER", "elsewhere", message_id="200.1", occurred_at=at(200.1))
+    [seeded] = lines("C_OTHER")
 
     async def publish():
         kwargs = {"channel_id": "C_OTHER", "channel_name": None}
         if action == "reaction":
             return await service.add_reaction(
-                **kwargs, message_ts="200.1", reaction="ack"
+                **kwargs, message_id="200.1", reaction="ack"
             )
         if action == "reply":
-            kwargs["thread_ts"] = "200.1"
+            kwargs["thread_id"] = "200.1"
         return await getattr(service, action)(**kwargs, body="response")
 
     with pytest.raises(ChatUpdatesRequired):
         await publish()
-    assert not service.chat_service.posts and not service.chat_service.reactions
+    assert lines("C_OTHER") == [seeded]
     check_chat_updates("aiko")
     queue(chat_run, event(3))
     with pytest.raises(ChatUpdatesRequired):
         await publish()
     check_chat_updates("aiko")
     await publish()
-    assert len(service.chat_service.posts) + len(service.chat_service.reactions) == 1
+    assert len(lines("C_OTHER")) == 2
 
 
 @pytest.mark.asyncio

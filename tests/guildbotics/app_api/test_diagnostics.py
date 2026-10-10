@@ -23,6 +23,7 @@ from guildbotics.entities.team import (
     Role,
     Team,
 )
+from guildbotics.integrations.slack import provider as slack_provider
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -30,7 +31,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
-from guildbotics.runtime.chat_service import ChatIdentity
+from guildbotics.runtime.chat_service import ChatIdentity, ChatServiceError
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 
@@ -228,7 +229,7 @@ def _patch_app_token_probe(
         if error is not None:
             raise error
 
-    monkeypatch.setattr(diagnostics_module, "probe_slack_app_token", _probe)
+    monkeypatch.setattr(slack_provider, "probe_app_token", _probe)
 
 
 def _by_code(response: Any) -> dict:
@@ -343,7 +344,8 @@ async def test_person_id_human_member_uses_static_checks_only() -> None:
                     "name": "GitHub",
                     "owner": "acme",
                     "project_id": "1",
-                }
+                },
+                "chat_service": {"name": "slack"},
             },
         ),
         ticket_manager=ticket_manager,
@@ -403,7 +405,8 @@ async def test_person_id_human_member_without_a_board_has_no_board_check() -> No
                         "github_username": "aiko",
                     },
                 )
-            ]
+            ],
+            {"chat_service": {"name": "slack"}},
         )
     )
 
@@ -1069,10 +1072,12 @@ async def test_github_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not response.ok
 
 
+_SLACK = {"chat_service": {"name": "slack"}}
+
+
 def _slack_member(person_id: str, *, enabled: bool = True) -> Person:
     channel = MessageChannel(
         name="general",
-        service="slack",
         chat={"enabled": enabled, "channel_id": "C001", "channel_name": "general"},
     )
     return _person(person_id, is_active=True, message_channels=[channel])
@@ -1102,7 +1107,7 @@ async def test_slack_credential_present_and_channel_ok(
     _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
     context = _StubContext(
-        team=_team([_slack_member("alice")]),
+        team=_team([_slack_member("alice")], _SLACK),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -1131,7 +1136,7 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
 
     monkeypatch.setattr(_StubChatService, "list_channel_events", not_in_channel)
     context = _StubContext(
-        team=_team([_slack_member("alice")]),
+        team=_team([_slack_member("alice")], _SLACK),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -1147,13 +1152,11 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
 
 @pytest.mark.asyncio
 async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    from guildbotics.runtime.integration_factory import MemberCapabilityError
-
     _patch_talk(monkeypatch)
-    _patch_app_token_probe(monkeypatch, error=MemberCapabilityError("invalid_auth"))
+    _patch_app_token_probe(monkeypatch, error=ChatServiceError("invalid_auth"))
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-broken")
     context = _StubContext(
-        team=_team([_slack_member("alice")]),
+        team=_team([_slack_member("alice")], _SLACK),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -1171,7 +1174,7 @@ async def test_slack_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None
     _patch_talk(monkeypatch)
     monkeypatch.delenv("ALICE_SLACK_APP_TOKEN", raising=False)
     context = _StubContext(
-        team=_team([_slack_member("alice")]),
+        team=_team([_slack_member("alice")], _SLACK),
         brain=_StubBrain(_CliResult()),
     )
 
@@ -1194,7 +1197,7 @@ async def test_slack_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
             raise RuntimeError("invalid_auth")
 
     context = _StubContext(
-        team=_team([_slack_member("alice")]),
+        team=_team([_slack_member("alice")], _SLACK),
         brain=_StubBrain(_CliResult()),
         chat_service=_FailingChat(),
     )

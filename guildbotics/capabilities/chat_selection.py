@@ -11,7 +11,6 @@ runs the turn with the input selected here.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -73,7 +72,6 @@ from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import await_shared_change
 
 _MAX_THREAD_CONTEXT_MESSAGES = 100
-_SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
 _MAX_HANDOFF_TEXT_LENGTH = 240
 
 
@@ -112,7 +110,7 @@ class ChatBatch:
         return ChatSubject(
             service=self.service_name,
             channel_id=self.channel_id,
-            thread_ts=self.event.thread_ts,
+            thread_id=self.event.thread_id,
             event_id=self.event.event_id,
             self_user_id=self.self_user_id,
         )
@@ -154,7 +152,7 @@ class ChatSelector:
         person_id = self._person_id
         identity = await self._chat_service.get_bot_identity()
         thread_state = self._state_store.load_thread_state(
-            service_name, person_id, channel_id, event.thread_ts
+            service_name, person_id, channel_id, event.thread_id
         )
         processed = set(
             self._state_store.load_channel_cursor(
@@ -177,7 +175,7 @@ class ChatSelector:
 
         recovered = _recorded_chat_completion(run_id)
         cached_thread_messages = self._state_store.load_thread_messages(
-            service_name, person_id, channel_id, event.thread_ts
+            service_name, person_id, channel_id, event.thread_id
         )
         participation = _chat_participation(chat_participation)
         # One provider snapshot serves both the participation decision and the
@@ -284,7 +282,7 @@ class ChatSelector:
             completion.status,
             completion.evidence_types,
             batch.channel_id,
-            batch.event.thread_ts,
+            batch.event.thread_id,
             batch.event.event_id,
         )
         self._settle_completion(
@@ -295,24 +293,24 @@ class ChatSelector:
         # Persist the snapshot into the device-local cache so retries and later
         # events keep this context even when the provider becomes unavailable.
         event = batch.event
-        cached_ts = {message.message_ts for message in batch.cached_thread_messages}
+        cached = {message.message_id for message in batch.cached_thread_messages}
         for thread_event in [*batch.snapshot_events, *batch.batch_events]:
-            if not thread_event.message_ts or thread_event.message_ts in cached_ts:
+            if thread_event.message_id in cached:
                 continue
             self._state_store.append_thread_message(
                 batch.service_name,
                 self._person_id,
                 batch.channel_id,
-                event.thread_ts,
-                _event_to_thread_message(event.thread_ts, thread_event),
+                event.thread_id,
+                _event_to_thread_message(event.thread_id, thread_event),
             )
-            cached_ts.add(thread_event.message_ts)
+            cached.add(thread_event.message_id)
         return await _build_agent_prompt_payload(
             context=self._context,
             chat_service=self._chat_service,
             event=event,
             thread_messages=self._state_store.load_thread_messages(
-                batch.service_name, self._person_id, batch.channel_id, event.thread_ts
+                batch.service_name, self._person_id, batch.channel_id, event.thread_id
             ),
             self_user_id=batch.self_user_id,
             thread_state=batch.thread_state,
@@ -329,7 +327,7 @@ class ChatSelector:
         event = batch.event
         run_id = attempt.run_id
         reaction_target = next(
-            item.message_ts
+            item.message_id
             for item in reversed(batch.batch_events)
             if not item.is_from_user(batch.self_user_id)
         )
@@ -345,7 +343,7 @@ class ChatSelector:
                 },
                 "service": batch.service_name,
                 "channel_id": batch.channel_id,
-                "thread_ts": event.thread_ts,
+                "thread_id": event.thread_id,
                 "event_ids": [item.event_id for item in batch.batch_events],
                 "reaction_target": reaction_target,
                 "run_id": run_id,
@@ -383,14 +381,14 @@ class ChatSelector:
                 batch.service_name,
                 person_id,
                 batch.channel_id,
-                event.thread_ts,
+                event.thread_id,
                 thread_state,
             )
         return ChatTurn(
             attempt=attempt.attempt_count,
             subject=batch.subject,
-            message_ts=reaction_target,
-            context_cursor=batch.batch_events[-1].message_ts,
+            message_id=reaction_target,
+            context_cursor=batch.batch_events[-1].position,
             effort=effort or "",
             prompt=prompt,
         )
@@ -428,7 +426,7 @@ class ChatSelector:
             "chat_batch",
             {
                 "event_ids": [item.event_id for item in batch.batch_events],
-                "context_cursor": batch.batch_events[-1].message_ts,
+                "context_cursor": batch.batch_events[-1].position,
             },
         )
 
@@ -470,22 +468,17 @@ class ChatSelector:
         if decision.route == "reaction-only":
             existing = any(
                 item["evidence_type"] == "chat_reaction"
-                and item["payload"].get("message_ts") == reaction_target
+                and item["payload"].get("message_id") == reaction_target
                 and item["payload"].get("reaction") == decision.reaction
                 for item in store.evidence(run_id)
             )
             if not existing:
-                service = MemberChatCapabilityService(
-                    self._context.person,
-                    self._context.team,
-                    self._context.logger,
-                    self._chat_service,
-                    service_name=batch.service_name,
-                )
-                await service.add_reaction(
+                await MemberChatCapabilityService(
+                    self._context.person, self._chat_service, batch.service_name
+                ).add_reaction(
                     channel_id=batch.channel_id,
                     channel_name=None,
-                    message_ts=reaction_target,
+                    message_id=reaction_target,
                     reaction=decision.reaction,
                 )
         else:
@@ -572,7 +565,7 @@ class ChatSelector:
             result = await self._chat_service.post_message(
                 batch.channel_id,
                 message,
-                thread_ts=batch.event.thread_ts,
+                thread_id=batch.event.thread_id,
                 metadata=workflow_status_metadata(
                     workflow_status_fields(
                         reason=reason,
@@ -592,7 +585,7 @@ class ChatSelector:
                 reason=reason,
                 person_id=self._person_id,
                 source_event_id=source_event_id,
-                message_ts=result.message_ts,
+                message_id=result.message_id,
                 run_id=run_id,
                 retry_after_at=retry_after_at,
                 retry_after_text=retry_after_text,
@@ -603,7 +596,7 @@ class ChatSelector:
             batch.service_name,
             self._person_id,
             batch.channel_id,
-            batch.event.thread_ts,
+            batch.event.thread_id,
             thread_state,
         )
 
@@ -627,19 +620,20 @@ class ChatSelector:
         if posted is not None:
             payload = posted.get("payload", {})
             text = str(payload.get("text", "")).strip()
-            message_ts = str(payload.get("message_ts", "")).strip()
-            thread_ts = str(payload.get("thread_ts", event.thread_ts)).strip()
-            mentioned_user_ids = _mentioned_user_ids_from_text(text)
-            if text and message_ts:
+            message_id = str(payload.get("message_id", "")).strip()
+            thread_id = str(payload.get("thread_id", event.thread_id)).strip()
+            mentioned_user_ids = self._chat_service.mentioned_user_ids(text)
+            if text and message_id:
                 self._state_store.append_thread_message(
                     batch.service_name,
                     person_id,
                     batch.channel_id,
-                    thread_ts,
+                    thread_id,
                     ThreadMessageState(
                         channel_id=batch.channel_id,
-                        thread_ts=thread_ts,
-                        message_ts=message_ts,
+                        thread_id=thread_id,
+                        message_id=message_id,
+                        occurred_at=datetime.fromisoformat(payload["occurred_at"]),
                         author_id=batch.self_user_id,
                         text=text,
                         mentions=mentioned_user_ids,
@@ -652,11 +646,11 @@ class ChatSelector:
                     participant_labels=participant_labels,
                     mentioned_user_ids=mentioned_user_ids,
                     source_person_id=person_id,
-                    message_ts=message_ts,
+                    message_id=message_id,
                     text=text,
                 )
         # Only record the member as a thread participant when it took a visible
-        # action (reply/post/reaction). noop / blocked completions leave no Slack
+        # action (reply/post/reaction). noop / blocked completions leave no chat
         # trace, so marking the member as a participant would wrongly bias future
         # follow-up decisions toward treating the thread as one it joined.
         reacted = any(
@@ -668,7 +662,7 @@ class ChatSelector:
                 batch.service_name,
                 person_id,
                 batch.channel_id,
-                event.thread_ts,
+                event.thread_id,
                 thread_state,
             )
 
@@ -716,13 +710,13 @@ def _collect_batch_events(
         item.event_id: item
         for item in [event, *(pending.event for pending in queued), *snapshot_events]
         if item.channel_id == event.channel_id
-        and item.thread_ts == event.thread_ts
-        and _split_timestamp(item.message_ts) >= _split_timestamp(event.message_ts)
+        and item.thread_id == event.thread_id
+        and item.position >= event.position
         and item.event_id not in processed_event_ids
         and not item.is_edit_or_delete
         and not is_suppressed_chat_event(item)
     }
-    return sorted(events.values(), key=lambda item: _split_timestamp(item.message_ts))
+    return sorted(events.values(), key=lambda item: item.position)
 
 
 async def _build_agent_prompt_payload(
@@ -737,7 +731,7 @@ async def _build_agent_prompt_payload(
     live_thread: tuple[list[ChatEvent], bool],
     batch_events: list[ChatEvent],
 ) -> dict[str, Any]:
-    person_labels = await _chat_user_to_person_labels(context)
+    person_labels = await _chat_user_to_person_labels(context, chat_service)
     author_labels = _build_author_labels(
         context, self_user_id, event, thread_messages[-20:], person_labels
     )
@@ -801,25 +795,15 @@ async def _fetch_thread_events(
         while True:
             page = await chat_service.list_thread_events(
                 event.channel_id,
-                thread_ts=event.thread_ts or event.message_ts,
+                thread_id=event.thread_id,
                 cursor=cursor,
                 limit=_MAX_THREAD_CONTEXT_MESSAGES,
             )
             for thread_event in page.events:
-                if thread_event.message_ts:
-                    events[thread_event.message_ts] = thread_event
-            events = dict(
-                sorted(
-                    events.items(),
-                    key=lambda item: _split_timestamp(item[0]),
-                )
-            )
+                events[thread_event.position] = thread_event
+            events = dict(sorted(events.items()))
             # Bound history without truncating unread requests.
-            previous = [
-                ts
-                for ts in events
-                if _split_timestamp(ts) < _split_timestamp(event.message_ts)
-            ]
+            previous = [ts for ts in events if ts < event.position]
             for ts in previous[:-_MAX_THREAD_CONTEXT_MESSAGES]:
                 del events[ts]
             next_cursor = str(page.cursor or "")
@@ -836,23 +820,17 @@ async def _fetch_thread_events(
 
 
 def _events_mention_user(events: list[ChatEvent], user_id: str) -> bool:
-    if not user_id:
-        return False
-    for thread_event in events:
-        if user_id in set(thread_event.mentions):
-            return True
-        if user_id in _mentioned_user_ids_from_text(thread_event.text or ""):
-            return True
-    return False
+    return bool(user_id) and any(user_id in event.mentions for event in events)
 
 
 def _event_to_thread_message(
-    thread_ts: str, thread_event: ChatEvent
+    thread_id: str, thread_event: ChatEvent
 ) -> ThreadMessageState:
     return ThreadMessageState(
         channel_id=thread_event.channel_id,
-        thread_ts=thread_ts,
-        message_ts=thread_event.message_ts,
+        thread_id=thread_id,
+        message_id=thread_event.message_id,
+        occurred_at=thread_event.occurred_at,
         author_id=thread_event.author_id,
         text=thread_event.text,
         mentions=list(thread_event.mentions),
@@ -879,14 +857,13 @@ def _merge_thread_context(
             thread_event, self_user_id, author_labels, chat_service
         )
         messages[prompt_message.timestamp] = _message_to_prompt_dict(prompt_message)
-    batch_timestamps = {item.message_ts for item in batch_events}
-    cutoff = _split_timestamp(batch_events[-1].message_ts)
+    batch_positions = {item.position for item in batch_events}
+    cutoff = batch_events[-1].position
     return _bounded_thread_context(
         {
-            timestamp: message
-            for timestamp, message in messages.items()
-            if timestamp not in batch_timestamps
-            and _split_timestamp(timestamp) < cutoff
+            position: message
+            for position, message in messages.items()
+            if position not in batch_positions and position < cutoff
         }
     )
 
@@ -894,19 +871,8 @@ def _merge_thread_context(
 def _bounded_thread_context(
     messages: dict[str, dict[str, str]],
 ) -> list[dict[str, str]]:
-    ordered = sorted(messages.values(), key=lambda message: _timestamp_key(message))
+    ordered = sorted(messages.values(), key=lambda message: message["timestamp"])
     return ordered[-_MAX_THREAD_CONTEXT_MESSAGES:]
-
-
-def _timestamp_key(message: dict[str, str]) -> tuple[int, ...]:
-    return _split_timestamp(message.get("timestamp", ""))
-
-
-def _split_timestamp(timestamp: str) -> tuple[int, ...]:
-    try:
-        return tuple(int(part) for part in timestamp.split("."))
-    except ValueError:
-        return (0,)
 
 
 def _recorded_chat_completion(
@@ -939,12 +905,6 @@ def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]
     return None
 
 
-def _mentioned_user_ids_from_text(text: str) -> list[str]:
-    return list(
-        dict.fromkeys(match.group(1) for match in _SLACK_MENTION_RE.finditer(text))
-    )
-
-
 def _record_handoffs(
     *,
     context: Any,
@@ -952,14 +912,14 @@ def _record_handoffs(
     participant_labels: dict[str, str],
     mentioned_user_ids: list[str],
     source_person_id: str,
-    message_ts: str,
+    message_id: str,
     text: str,
 ) -> None:
     if not mentioned_user_ids:
         return
     roles_by_person = _roles_by_person(context)
     existing = {
-        (handoff.person_id, handoff.message_ts) for handoff in thread_state.handoffs
+        (handoff.person_id, handoff.message_id) for handoff in thread_state.handoffs
     }
     for user_id in mentioned_user_ids:
         person_id = participant_labels.get(user_id, "")
@@ -969,14 +929,14 @@ def _record_handoffs(
             or person_id not in roles_by_person
         ):
             continue
-        key = (person_id, message_ts)
+        key = (person_id, message_id)
         if key in existing:
             continue
         thread_state.handoffs.append(
             ThreadHandoffState(
                 person_id=person_id,
                 roles=roles_by_person.get(person_id, []),
-                message_ts=message_ts,
+                message_id=message_id,
                 text=_truncate_handoff_text(text),
                 thread_topic=thread_state.thread_topic,
                 latest_focus=thread_state.latest_focus,
@@ -1009,7 +969,7 @@ def _handoff_to_prompt_dict(handoff: ThreadHandoffState) -> dict[str, Any]:
     return {
         "person_id": handoff.person_id,
         "roles": handoff.roles,
-        "message_ts": handoff.message_ts,
+        "message_id": handoff.message_id,
         "text": handoff.text,
         "thread_topic": handoff.thread_topic,
         "latest_focus": handoff.latest_focus,
@@ -1159,59 +1119,27 @@ def _handoff_roles(member: Any) -> dict[str, dict[str, str]]:
     return roles
 
 
-async def _chat_user_to_person_labels(context: Any) -> dict[str, str]:
-    team = getattr(context, "team", None)
-    members = getattr(team, "members", []) if team is not None else []
-    return await _runtime_chat_user_to_person_labels(context, members)
-
-
-async def _runtime_chat_user_to_person_labels(
-    context: Any,
-    members: list[Any],
+async def _chat_user_to_person_labels(
+    context: Any, chat_service: ChatService
 ) -> dict[str, str]:
-    clone_for = getattr(context, "clone_for", None)
-    if not callable(clone_for):
-        return {}
-
-    runtime_labels: dict[str, str] = {}
-    for member in members:
-        person_id = str(getattr(member, "person_id", "")).strip()
-        if not person_id or person_id in runtime_labels.values():
-            continue
-        slack_user_id = str(
-            (getattr(member, "account_info", {}) or {}).get("slack_user_id", "")
-        ).strip()
-        if slack_user_id:
-            runtime_labels[slack_user_id] = person_id
-            continue
-        try:
-            member_context = clone_for(member)
-        except Exception:
-            continue
-        try:
-            get_chat_service = getattr(member_context, "get_chat_service", None)
-            if not callable(get_chat_service):
-                continue
-            service = get_chat_service()
-            get_bot_identity = getattr(service, "get_bot_identity", None)
-            if not callable(get_bot_identity):
-                continue
-            identity = await get_bot_identity()
-            user_id = str(getattr(identity, "user_id", "")).strip()
-            if user_id:
-                runtime_labels[user_id] = person_id
-        except Exception:
-            continue
-        finally:
-            close = getattr(member_context, "aclose", None)
-            if callable(close):
-                try:
-                    result = close()
-                    if hasattr(result, "__await__"):
-                        await result
-                except Exception:
-                    pass
-    return runtime_labels
+    """Each member's chat user: as configured, else (for an agent) the user
+    of its own credential."""
+    labels: dict[str, str] = {}
+    for member in context.team.members:
+        user_id = chat_service.self_user_id(member)
+        if not user_id and member.person_type != "human":
+            member_context = context.clone_for(member)
+            try:
+                user_id = (
+                    await member_context.get_chat_service().get_bot_identity()
+                ).user_id
+            except Exception:
+                user_id = ""
+            finally:
+                await member_context.aclose()
+        if user_id:
+            labels.setdefault(user_id, member.person_id)
+    return labels
 
 
 def _to_prompt_message_from_state(
@@ -1228,7 +1156,7 @@ def _to_prompt_message_from_state(
         author_type=_to_author_type(
             message.is_bot_message, message.author_id, self_user_id
         ),
-        timestamp=message.message_ts,
+        timestamp=message.position,
     )
 
 
@@ -1246,7 +1174,7 @@ def _to_prompt_message_from_event(
         author_type=_to_author_type(
             event.is_bot_message, event.author_id, self_user_id
         ),
-        timestamp=event.message_ts,
+        timestamp=event.position,
     )
 
 
