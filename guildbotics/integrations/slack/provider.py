@@ -10,7 +10,12 @@ from typing import Any
 
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
-from guildbotics.integrations.provider import Chat, Provider, ProviderCheck
+from guildbotics.integrations.provider import (
+    Chat,
+    Provider,
+    ProviderCheck,
+    configured_check,
+)
 from guildbotics.integrations.slack.slack_chat_service import (
     DEFAULT_BASE_URL,
     SlackApiError,
@@ -82,23 +87,17 @@ def _event_listener(
 def _verify(person: Person) -> list[ProviderCheck]:
     if person.person_type == "human" or not get_chat_subscriptions(person):
         return []
-    checks = []
-    for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
-        target = person.to_person_env_key(key)
-        configured = person.has_secret(key)
-        checks.append(
-            ProviderCheck(
-                section=_SECTION,
-                code="slack_credential",
-                status="ok" if configured else "error",
-                message=f"{target} is configured."
-                if configured
-                else f"{target} is not configured.",
-                target=target,
-                context={"person_id": person.person_id, "key": key},
-            )
+    return [
+        configured_check(
+            _SECTION,
+            "slack_credential",
+            person,
+            key,
+            person.to_person_env_key(key),
+            person.has_secret(key),
         )
-    return checks
+        for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")
+    ]
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:

@@ -34,6 +34,22 @@ class ProviderCheck(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+def configured_check(
+    section: str, code: str, person: Person, key: str, target: str, configured: bool
+) -> ProviderCheck:
+    """Whether ``person`` has ``key`` configured, at ``target``, as verify says it."""
+    return ProviderCheck(
+        section=section,
+        code=code,
+        status="ok" if configured else "error",
+        message=f"{target} is configured."
+        if configured
+        else f"{target} is not configured.",
+        target=target,
+        context={"person_id": person.person_id, "key": key},
+    )
+
+
 async def _no_diagnosis(context: Context, members: list[Person]) -> list[ProviderCheck]:
     return []
 
