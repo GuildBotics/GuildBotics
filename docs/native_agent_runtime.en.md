@@ -212,8 +212,18 @@ admission; turns cannot create such links because protected files are not mounte
   working directory -- a repository named with `guildbotics run --cwd`, for
   example -- is bound read-only, its `.git` included, copied onto the
   microVM's own disk at the same path, and the command works on the copy.
+  When the working directory's `.git` is a directory, only what git names is
+  copied: the files it tracks and the untracked files the repository's own
+  ignore rules (`.gitignore`, `.git/info/exclude`; not your global git
+  configuration) do not ignore -- a submodule or a nested repository whole,
+  without its `.git`. Ignored files -- build output, a `.venv`,
+  `node_modules` -- are not in the copy, and a command that needs them makes
+  them again there. When the environment's git cannot read the repository
+  (an extension of a newer git, for example), the copy cannot be made and the
+  command fails. Any other working directory is copied whole.
   When the command ends well, the host writes back the regular files that
-  changed in the copy, reaching each from the working directory without
+  changed in the copy -- those copied, and the new files git would not
+  ignore -- reaching each from the working directory without
   following a link; links, anything inside `.git`, and anything outside the
   working directory are never written back. If a file changed on the host
   while the command ran, nothing is written back and the command fails naming

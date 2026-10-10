@@ -9,13 +9,19 @@ writes them back itself, so nothing the command leaves there -- a hook, a
 link, a configuration git would follow -- reaches the host.
 
 Only directories and regular files are copied, and only regular files are
-reported; ``.git`` is neither copied nor reported. The copy gets a gitfile
-naming the read-only original's ``.git``, so ``git status`` and ``git diff``
-work while nothing can be committed.
+reported; ``.git`` is neither copied nor reported. A directory whose ``.git``
+is a directory is copied as far as git names it: the files it tracks and the
+untracked ones it does not ignore, a directory it names (a submodule, a
+nested repository) whole. Any other directory is copied whole. The copy gets
+a gitfile naming the read-only original's ``.git``, so ``git status`` and
+``git diff`` work while nothing can be committed. What is reported are the
+changes to what was copied, and the new files git would name; the listing is
+taken from the original's ``.git`` in both, whatever the command did to the
+gitfile.
 
 ``copy <source> <destination> [<excluded>...]`` writes one JSON line per file
-copied (:class:`CopiedFile`). ``changes <destination> [<excluded>...]`` reads
-those lines on standard input and writes one JSON line per file changed
+copied (:class:`CopiedFile`). ``changes <source> <destination> [<excluded>...]``
+reads those lines on standard input and writes one JSON line per file changed
 (:class:`ChangedFile`). ``excluded`` are directories under the copy, relative
 to it, that are mounts of their own.
 """
@@ -28,9 +34,10 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
-from collections.abc import Iterator
-from pathlib import Path
+from collections.abc import Iterator, Set
+from pathlib import Path, PurePosixPath
 
 from guildbotics.intelligences.agent_runtime.wire import (
     ChangedFile,
@@ -48,9 +55,16 @@ class WorktreeCopyError(ValueError):
 def copy_tree(
     source: Path, destination: Path, excluded: frozenset[str]
 ) -> Iterator[CopiedFile]:
-    """Copy the directories and regular files of ``source`` to ``destination``."""
+    """Copy the directories and regular files of ``source`` to ``destination``
+    -- those git names, when ``source`` is a repository.
+
+    Raises:
+        WorktreeCopyError: When git cannot list the repository.
+    """
     destination.mkdir(parents=True, exist_ok=True)
-    for path, info in _walk(source, excluded):
+    repository = _repository(source)
+    admitted = None if repository is None else _listed(repository, source)
+    for path, info in _walk(source, excluded, admitted):
         target = destination / path
         if stat.S_ISDIR(info.st_mode):
             target.mkdir(exist_ok=True)
@@ -59,23 +73,33 @@ def copy_tree(
         executable = _executable(info)
         os.chmod(target, 0o755 if executable else 0o644)
         yield CopiedFile(path=path, sha256=_sha256(target), executable=executable)
-    if (source / _GIT).is_dir() and not (source / _GIT).is_symlink():
-        (destination / _GIT).write_text(f"gitdir: {source / _GIT}\n", encoding="utf-8")
+    if repository is not None:
+        (destination / _GIT).write_text(f"gitdir: {repository}\n", encoding="utf-8")
 
 
 def changed_files(
-    destination: Path, copied: dict[str, CopiedFile], excluded: frozenset[str]
+    source: Path,
+    destination: Path,
+    copied: dict[str, CopiedFile],
+    excluded: frozenset[str],
 ) -> Iterator[ChangedFile]:
     """The regular files of the copy that differ from what was ``copied``.
 
-    A link or anything else the command made is no file to write back and is
-    left out; a copied file that became one cannot be told.
+    A new file counts only when git, listing the copy against ``source``'s
+    repository, names it: what the command built is no change. A link or
+    anything else the command made is no file to write back and is left out;
+    a copied file that became one cannot be told.
 
     Raises:
-        WorktreeCopyError: For a copied file that is no regular file anymore.
+        WorktreeCopyError: For a copied file that is no regular file anymore,
+            or when git cannot list the copy.
     """
+    repository = _repository(source)
+    admitted = (
+        None if repository is None else copied.keys() | _listed(repository, destination)
+    )
     present: set[str] = set()
-    for path, info in _walk(destination, excluded):
+    for path, info in _walk(destination, excluded, admitted):
         if stat.S_ISDIR(info.st_mode):
             continue
         present.add(path)
@@ -101,22 +125,78 @@ def changed_files(
         yield ChangedFile(path=path, deleted=True)
 
 
-def _walk(root: Path, excluded: frozenset[str]) -> Iterator[tuple[str, os.stat_result]]:
+def _repository(root: Path) -> Path | None:
+    """``root``'s ``.git``, when it is a directory git can read in the
+    microVM; a gitfile names one elsewhere on the host."""
+    git = root / _GIT
+    return git if git.is_dir() and not git.is_symlink() else None
+
+
+def _listed(repository: Path, tree: Path) -> set[str]:
+    """What git names in ``tree`` with ``repository``: the files it tracks
+    and the untracked ones it does not ignore, a directory it does not look
+    into (a submodule, a nested repository) as one.
+
+    Raises:
+        WorktreeCopyError: When git cannot list it.
+    """
+    listed = subprocess.run(
+        [
+            "git",
+            f"--git-dir={repository}",
+            f"--work-tree={tree}",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        cwd=tree,
+        capture_output=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        raise WorktreeCopyError(listed.stderr.decode(errors="replace").strip())
+    return {
+        os.fsdecode(each).rstrip("/") for each in listed.stdout.split(b"\0") if each
+    }
+
+
+def _walk(
+    root: Path, excluded: frozenset[str], admitted: Set[str] | None
+) -> Iterator[tuple[str, os.stat_result]]:
     """The directories and regular files under ``root`` by their relative
-    paths, parents first, never following a link and never into ``.git``."""
-    pending = [""]
+    paths, parents first, never following a link and never into ``.git``.
+
+    With ``admitted``, only those paths, everything under the directories
+    among them, and the directories on the way to them. They compare without
+    case: where the host ignores it, git names a file as its index spells
+    it, whatever the disk says.
+    """
+    folded = {
+        each.casefold()
+        for each in admitted or ()
+        if _GIT not in PurePosixPath(each.casefold()).parts
+    }
+    on_the_way = {
+        parent.as_posix() for each in folded for parent in PurePosixPath(each).parents
+    }
+    pending = [("", admitted is None)]
     while pending:
-        directory = pending.pop()
+        directory, whole = pending.pop()
         with os.scandir(root / directory) as entries:
             for entry in sorted(entries, key=lambda each: each.name):
                 path = f"{directory}/{entry.name}" if directory else entry.name
                 if entry.name.casefold() == _GIT or path in excluded:
                     continue
+                taken = whole or path.casefold() in folded
+                if not taken and path.casefold() not in on_the_way:
+                    continue
                 info = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
                     yield path, info
-                    pending.append(path)
-                elif stat.S_ISREG(info.st_mode):
+                    pending.append((path, taken))
+                elif stat.S_ISREG(info.st_mode) and taken:
                     yield path, info
 
 
@@ -142,13 +222,13 @@ def main(argv: list[str]) -> int:
                     Path(source), Path(destination), frozenset(excluded)
                 ):
                     out.write(json.dumps(copied) + "\n")
-            case ["changes", destination, *excluded]:
+            case ["changes", source, destination, *excluded]:
                 listed: dict[str, CopiedFile] = {}
                 for line in sys.stdin:
                     each: CopiedFile = json.loads(line)
                     listed[each["path"]] = each
                 for changed in changed_files(
-                    Path(destination), listed, frozenset(excluded)
+                    Path(source), Path(destination), listed, frozenset(excluded)
                 ):
                     out.write(json.dumps(changed) + "\n")
             case _:
