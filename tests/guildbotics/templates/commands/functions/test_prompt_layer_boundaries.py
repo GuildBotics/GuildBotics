@@ -4,27 +4,30 @@ Prompt layer model (see AGENTS.md「member プロンプト層モデル」):
 - mode-independent knowledge → member capability reference (member context/help)
 - shared workflow envelope → i18n ``workflow_contract`` injected as
   ``{workflow_contract}``
-- trigger-specific contract → ``handle_github_ticket`` / ``handle_chat_event``
+- trigger-specific contract → ``handle_ticket`` / ``handle_chat_event``
 - interactive envelope → ``skills/guildbotics/SKILL.md``
 - delegated one-off envelope → ``commands/ask.{en,ja}.md``
 
 These tests keep the boundaries mechanical: shared wording must not creep back
-into individual prompts, and the en/ja prompt variants must not drift apart.
+into individual prompts, the en/ja prompt variants must not drift apart, and
+no layer names the provider a workspace configures for a kind of service.
 """
 
 import re
 from itertools import combinations
 from pathlib import Path
 
+import click
 import pytest
 import yaml
 
 from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 SKILL_PATH = Path("skills/guildbotics/SKILL.md")
-WORKFLOW_PROMPTS = ("handle_github_ticket", "handle_chat_event")
+WORKFLOW_PROMPTS = ("handle_ticket", "handle_chat_event")
 ASK_PATH = Path("guildbotics/templates/commands/ask")
 REVIEW_SKILL_PATHS = tuple(
     Path(root) / "skills/handle-review-feedback/SKILL.md"
@@ -33,6 +36,38 @@ REVIEW_SKILL_PATHS = tuple(
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 _MEMBER_COMMAND_RE = re.compile(r"guildbotics member ([a-z]+(?: [a-z]+)*)")
+
+
+#: What an agent reads as its contract, in every layer of the prompt model.
+AGENT_FACING_ROOTS = (
+    *(
+        Path("guildbotics/templates/commands") / name
+        for name in (
+            "functions",
+            "workflows",
+            "assistants",
+            "diagnostics",
+            "repository",
+        )
+    ),
+    Path("guildbotics/templates/locales/commands/workflows"),
+    # Role descriptions reach the agent through ``member context``.
+    Path("guildbotics/templates/roles"),
+    Path("guildbotics/capabilities/member_reference.py"),
+    SKILL_PATH,
+    *REVIEW_SKILL_PATHS,
+    ASK_PATH.with_suffix(".en.md"),
+    ASK_PATH.with_suffix(".ja.md"),
+)
+
+
+def _agent_facing_files() -> list[Path]:
+    return [
+        path
+        for root in AGENT_FACING_ROOTS
+        for path in ([root] if root.is_file() else sorted(root.rglob("*")))
+        if path.is_file() and "__pycache__" not in path.parts
+    ]
 
 
 def _prompt_body(name: str, language: str) -> str:
@@ -259,7 +294,7 @@ def test_review_feedback_entrypoints_reference_the_shared_procedure():
         ("en", "Handling review feedback"),
         ("ja", "レビュー指摘への対応"),
     ):
-        body = _prompt_body("handle_github_ticket", language)
+        body = _prompt_body("handle_ticket", language)
         feedback = next(
             line
             for line in body.splitlines()
@@ -326,21 +361,21 @@ def test_chat_prompt_supports_code_work_without_an_issue():
 
 
 def test_ticket_prompt_requires_issue_comment_on_pr_work():
-    """handle_github_ticket must tell the agent to comment on the Issue when
+    """handle_ticket must tell the agent to comment on the Issue when
     a PR is created/reused/updated, with PR URL and verification result."""
     for language in ("en", "ja"):
-        body = _prompt_body("handle_github_ticket", language)
-        assert "member github issue comment" in body, language
+        body = _prompt_body("handle_ticket", language)
+        assert "member ticket comment" in body, language
         assert "PR URL" in body or "PR url" in body, language
         # Verification result should be mentioned
         assert "verification" in body.lower() or "確認結果" in body, language
 
 
-def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
+def test_ticket_prompt_clarifies_summary_is_not_a_comment_substitute():
     """task complete --content-file and AgentResponse.message must be called
-    out as NOT substitutes for GitHub comments, in both en and ja."""
+    out as NOT substitutes for ticket comments, in both en and ja."""
     for language in ("en", "ja"):
-        body = _prompt_body("handle_github_ticket", language)
+        body = _prompt_body("handle_ticket", language)
         assert "task complete --content-file" in body, language
         assert "AgentResponse.message" in body, language
         # Both must appear in a context that says they are NOT substitutes
@@ -349,7 +384,7 @@ def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
 
 def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
     for language in ("en", "ja"):
-        body = _prompt_body("handle_github_ticket", language)
+        body = _prompt_body("handle_ticket", language)
         assert "repository/pr_checks" in body, language
         assert "`readiness`" in body, language
         assert "head SHA" in body, language
@@ -357,7 +392,7 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
 
 
 def test_issue_comment_contract_not_in_chat_prompt():
-    """The Issue comment contract is specific to handle_github_ticket and
+    """The Issue comment contract is specific to handle_ticket and
     must NOT leak into handle_chat_event."""
     for language in ("en", "ja"):
         body = _prompt_body("handle_chat_event", language)
@@ -414,7 +449,7 @@ def _frontmatter(name: str, language: str) -> dict:
 def test_ticket_work_runs_at_high_effort_by_default():
     """Ticket work is heavy by default; that decision lives in the frontmatter."""
     for language in ("en", "ja"):
-        assert _frontmatter("handle_github_ticket", language)["effort"] == "high"
+        assert _frontmatter("handle_ticket", language)["effort"] == "high"
 
 
 def test_chat_work_states_no_frontmatter_effort():
@@ -440,3 +475,72 @@ def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
     assert "standard work procedure" in english
     assert "repository ガイドライン確認" in japanese
     assert "標準作業手順" in japanese
+
+
+def test_agent_facing_layers_do_not_name_a_provider():
+    """The prompts, the capability reference, and the skills say ticket,
+    repository, and chat: which provider serves each kind is the workspace's
+    choice, and provider knowledge lives in ``integrations/<provider>/``."""
+    files = _agent_facing_files()
+    assert FUNCTIONS_DIR / "handle_ticket.en.md" in files
+    assert (
+        Path("guildbotics/templates/commands/workflows/ticket_driven_workflow.py")
+        in files
+    )
+    assert Path("guildbotics/templates/roles/default.en.yml") in files
+    named = [
+        (path.as_posix(), word)
+        for path in files
+        for word in re.findall(r"[a-z]+", path.read_text(encoding="utf-8").lower())
+        if word in PROVIDERS
+    ]
+    assert named == []
+
+
+def _options(command: click.Command) -> set[str]:
+    names = {
+        name
+        for parameter in command.params
+        for name in (*parameter.opts, *parameter.secondary_opts)
+        if name.startswith("--")
+    }
+    if isinstance(command, click.Group):
+        for child in command.commands.values():
+            names |= _options(child)
+    return names
+
+
+def test_agent_facing_layers_name_only_member_commands_that_exist():
+    """A command a layer tells the agent to run is one the member CLI has."""
+    from guildbotics.cli.member import member
+
+    named = {
+        (path.as_posix(), match.group(1))
+        for path in _agent_facing_files()
+        for match in re.finditer(
+            r"(?:guildbotics |`)member ([a-z][a-z-]*)", path.read_text(encoding="utf-8")
+        )
+    }
+    assert named
+    assert {
+        (path, name) for path, name in named if name not in member.commands
+    } == set()
+
+
+def test_agent_facing_layers_name_only_options_that_exist():
+    """An option a layer tells the agent to pass is one of the member CLI's or
+    of ``guildbotics run``'s, so a removed option cannot linger in a prompt."""
+    from guildbotics.cli import main
+    from guildbotics.cli.member import member
+
+    run = main.get_command(click.Context(main), "run")
+    assert run is not None
+    known = _options(member) | _options(run) | {"--help"}
+    named = {
+        (path.as_posix(), option)
+        for path in _agent_facing_files()
+        for option in re.findall(
+            r"(?<![\w-])--[a-z][a-z0-9-]*", path.read_text(encoding="utf-8")
+        )
+    }
+    assert {(path, option) for path, option in named if option not in known} == set()

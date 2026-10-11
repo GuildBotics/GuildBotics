@@ -1,5 +1,5 @@
 ja:
-  unsupported: "リポジトリの参照には、対応する code_hosting_service（現在は github）を設定してください。"
+  unsupported: "リポジトリの参照には、対応する code_hosting_service を設定してください。"
   too_large: "取得結果がページの上限サイズを超えています。一覧では page_size を下げてください。上限を超える個別の項目は返せません。"
   resource: "未対応の参照リソースです。対応する名前は member help で確認してください。"
   repository: "リポジトリは URL やパスではなく owner/name 形式で指定してください。"

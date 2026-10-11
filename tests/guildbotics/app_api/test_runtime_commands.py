@@ -855,7 +855,7 @@ def test_routine_command_options_localize_builtin_python_metadata(
     assert ticket.label == "チケット駆動ワークフロー"
     assert (
         ticket.description
-        == "対応可能な GitHub issue または PR を1件取得し、AI CLIツールへ委譲します。"
+        == "対応可能な issue または PR を1件取得し、AI CLIツールへ委譲します。"
     )
 
 

@@ -7,7 +7,7 @@ description: Delegate an incoming chat event to an AI CLI tool.
 
 Read all unprocessed messages in order and decide one response to the current requests, incorporating corrections and cancellations. Preserve distinct requests. Use `previous_attempt_evidence` to identify actions already taken, even after a session restart; perform only the remaining work.
 
-Read the Slack thread and act as the assigned GuildBotics member by choosing a reply, reaction-only action, no-op, question, or blocked result.
+Read the chat thread and act as the assigned GuildBotics member by choosing a reply, reaction-only action, no-op, question, or blocked result.
 The workflow's one-shot preflight may have deferred uncertain or failed judgments to you. It does not establish that a substantive reply is required; make the final decision from the full conversation and current requests.
 The member's standing roles are defined by the `roles` field in the member context.
 
@@ -58,22 +58,22 @@ GuildBotics prepends a `guildbotics_thread_context` element to this prompt.
 
 <scope>
 - Your primary objective is this batch of unprocessed messages, and you must finish with `guildbotics member chat complete`.
-- Other-domain actions such as GitHub (e.g. "check this GitHub ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`.
+- Other-domain actions such as tickets and pull requests (e.g. "check this ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`.
 - The member workspace has no repository checkout. When a secondary action needs code changes or a repository checkout — including the repository guideline check the standard work procedure requires before drafting an issue or settling a design or implementation policy — identify the target repository from the message and thread context (ask in the thread and complete with status `asking` when ambiguous), then run `guildbotics member git prepare --person {person_id} --repo <owner/repo> --branch <branch>` with a descriptive branch name. Use `--issue-url` / `--pr-url` instead only when the message explicitly points at an issue or PR; no issue has to be created first.
 </scope>
 
 <before_publication>
-Before every reply, reaction, Git push, or GitHub write, run `guildbotics member chat updates --person {person_id}`. This reads the received event queue for this run's source thread without calling Slack APIs.
+Before every reply, reaction, Git push, or ticket or pull request write, run `guildbotics member chat updates --person {person_id}`. This reads the received event queue for this run's source thread without calling the chat service.
 - `new_messages`: Read every returned message in order. Reconsider the work and proposed action in light of corrections, cancellations, and other members' progress. Modify the work or reply when needed, then check again immediately before publishing.
 - `up_to_date`: Proceed with the considered action.
 - `catching_up`: The receiver is waiting to save messages during workspace synchronization. Wait a few seconds and retry `chat updates`. Do not publish or complete as `blocked` solely because of this state.
 - `unavailable`: Reception cannot be verified. Do not treat this as no new messages, publish, or poll with `chat inspect`. Complete as `blocked` with the reason if reception cannot recover within this turn.
-A publication command rejects unchecked input, newly arrived messages, or unavailable reception. If rejected, run `chat updates`, reconsider, and retry only when appropriate. Updates are acknowledged on done/asking only when a chat reply, post, reaction, GitHub write, or Git publication was recorded after their delivery. Blocked and no-op-only runs leave updates queued for a later run; a check alone does not complete the work. Also check before completing a no-op, so a late request is considered.
+A publication command rejects unchecked input, newly arrived messages, or unavailable reception. If rejected, run `chat updates`, reconsider, and retry only when appropriate. Updates are acknowledged on done/asking only when a chat reply, post, reaction, ticket or pull request write, or Git publication was recorded after their delivery. Blocked and no-op-only runs leave updates queued for a later run; a check alone does not complete the work. Also check before completing a no-op, so a late request is considered.
 </before_publication>
 
 <instructions>
 1. Read the thread context according to `guildbotics_thread_context`. Run `guildbotics member chat inspect thread --person {person_id} --channel-id {channel_id} --thread-id {thread_id}` only in `inspect_required` mode.
-2. If `inspect thread` fails in `inspect_required` mode, do not post or react in Slack. Write a safe summary and complete the run with status `blocked`.
+2. If `inspect thread` fails in `inspect_required` mode, do not post or react in the chat. Write a safe summary and complete the run with status `blocked`.
 3. Use the thread permalink when it can be built, otherwise `{thread_id}`, as this run's memory source key.
 4. Read all unprocessed messages, inspect result, previous thread context, and retrieved memory, then choose exactly one outcome: reply / reaction-only / no-op / asking / blocked.
 5. Interpret the chat participation policy as follows: `strict` means participate only when mentioned or already pulled into the thread; `social` means unmentioned ambient participation is allowed for casual channels, but keep it brief, low-frequency, and non-dominating; `muted` means the workflow should only reach you on direct mentions, so treat the event as explicitly requested context.
@@ -85,7 +85,7 @@ A publication command rejects unchecked input, newly arrived messages, or unavai
 11. If reaction-only is appropriate, run `guildbotics member chat reaction add --person {person_id} --channel-id {channel_id} --message-id {message_id} --reaction ack|agree|celebrate|support`.
 12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
 13. If more information is needed, post the question as a reply in this thread first, then complete the run with status `asking`.
-14. If autonomous workflow policy should change, propose it in a Slack reply/post; do not update policy directly.
+14. If autonomous workflow policy should change, propose it in a chat reply/post; do not update policy directly.
 15. Finish by running `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
-16. Return only one AgentResponse JSON object, for example `{"status":"done","message":"Posted a Slack thread reply."}` / `{"status":"done","message":"Recorded that no response was needed."}` / `{"status":"asking","message":"Posted a follow-up question in Slack."}`.
+16. Return only one AgentResponse JSON object, for example `{"status":"done","message":"Posted a chat thread reply."}` / `{"status":"done","message":"Recorded that no response was needed."}` / `{"status":"asking","message":"Posted a follow-up question in the chat."}`.
 </instructions>

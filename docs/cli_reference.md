@@ -69,23 +69,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch (--issue-url), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
-| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
-| [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
-| [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
-| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
-| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
-| [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
-| [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
-| [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
-| [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
-| [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
-| [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
-| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number). |
-| [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
-| [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
-| [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
@@ -95,11 +78,30 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
 | [`guildbotics member memory touch`](#guildbotics-member-memory-touch) | Mark a useful memory as actually used by moving it to the digest front. |
 | [`guildbotics member memory update`](#guildbotics-member-memory-update) | Replace selected body or metadata fields and move the document to the digest front. |
-| [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
-| [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
+| [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
+| [`guildbotics member pr artifact`](#guildbotics-member-pr-artifact) | CI artifact operations. |
+| [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download) | Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection. |
+| [`guildbotics member pr comment`](#guildbotics-member-pr-comment) | Comment on a PR conversation. |
+| [`guildbotics member pr create`](#guildbotics-member-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
+| [`guildbotics member pr reaction`](#guildbotics-member-pr-reaction) | Reactions to pull request comments and reviews. |
+| [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add) | React to a conversation comment, a review thread comment, or a review's body of the PR. |
+| [`guildbotics member pr read`](#guildbotics-member-pr-read) | Read one bounded page of a PR's resource through the configured code_hosting_service: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files,... |
+| [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
+| [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict on the PR head as a review; a conversation comment does not consume a review request or make the member a reviewer. |
+| [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a PR diff line. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
+| [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
+| [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts through the configured code_hosting_service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on issues, and react to their comments. |
+| [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on an issue in the member voice. |
+| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up issue a human asked for. |
+| [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to issue comments. |
+| [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the issue. |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of an issue's resource through the configured code_hosting_service: issues, issue_comments, issue_timeline, or issue_projects. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -647,11 +649,12 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
-| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
-| [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
+| [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
+| [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on issues, and react to their comments. |
 
 ## `guildbotics member chat`
 
@@ -993,326 +996,6 @@ guildbotics member git push [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
-## `guildbotics member github`
-
-GitHub issue, pull request, Actions, and reaction capabilities.
-
-```text
-guildbotics member github [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
-| [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
-| [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
-| [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
-
-## `guildbotics member github issue`
-
-GitHub issue operations.
-
-```text
-guildbotics member github issue [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
-| [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
-| [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
-
-## `guildbotics member github issue comment`
-
-Comment on an issue in the member voice.
-
-```text
-guildbotics member github issue comment [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Issue URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github issue create`
-
-Open a follow-up issue a human asked for.
-
-```text
-guildbotics member github issue create [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
-| `--title TEXT` | Issue title. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--label TEXT` | Label already defined in the repository. Repeat for several labels. |
-| `--add-to-project / --no-add-to-project` | Add the created issue to the configured project board. [default: add-to-project] |
-| `--human-approved` | Confirm that a human instructed or approved this change. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github issue update`
-
-Change an issue's body, title, labels, or state; empty content removes the body.
-
-```text
-guildbotics member github issue update [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Issue URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--title TEXT` | Replace the issue title. |
-| `--add-label TEXT` | Add a label already defined in the repository. Repeat for several labels. |
-| `--remove-label TEXT` | Remove a label from the issue. Repeat for several labels. |
-| `--state [open\|closed]` | Close or reopen the issue; requires --human-approved. |
-| `--state-reason [completed\|not_planned]` | Why the issue is closed; requires --state closed. |
-| `--human-approved` | Confirm that a human instructed or approved this change. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr`
-
-GitHub pull request operations.
-
-```text
-guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
-| [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
-| [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
-| [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
-
-## `guildbotics member github pr comment`
-
-Comment on a PR conversation.
-
-```text
-guildbotics member github pr comment [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr create`
-
-Open a PR, or return the existing open PR for the same head and base branches. --issue-url appends Refs #<n> unless --closes-issue is set.
-
-```text
-guildbotics member github pr create [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
-| `--head TEXT` | Head branch containing the changes. [required] |
-| `--base TEXT` | Base branch for the pull request. Defaults to the repository default branch. [default: ""] |
-| `--title TEXT` | Pull request title. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
-| `--closes-issue / --refs-issue` | When --issue-url is set, append Closes #\<n\> or Refs #\<n\> to the PR body. Defaults to Refs. [default: refs-issue] |
-| `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr reply`
-
-Reply to an inline review thread.
-
-```text
-guildbotics member github pr reply [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--reply-target-id INTEGER` | reply_target_id from repository/pr_inspect include_comments=true. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr review`
-
-Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer.
-
-```text
-guildbotics member github pr review [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--event [approve\|request-changes\|comment]` | Review verdict submitted on the current PR head. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr review-comment`
-
-Create a new inline review comment on a PR diff line.
-
-```text
-guildbotics member github pr review-comment [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--path TEXT` | File path in the PR diff. [required] |
-| `--line INTEGER RANGE` | Line number on the chosen diff side. [x\>=1; required] |
-| `--side [LEFT\|RIGHT]` | Diff side of the line. [default: RIGHT] |
-| `--start-line INTEGER RANGE` | Start line for a multi-line comment. [x\>=1] |
-| `--start-side [LEFT\|RIGHT]` | Diff side of --start-line. |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github pr update`
-
-Change a PR's body or title. Body replacement preserves existing standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or list items; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
-
-```text
-guildbotics member github pr update [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--title TEXT` | Replace the pull request title. |
-| `--drop-issue-links` | Do not carry existing standalone Closes/Fixes/Resolves/Refs #\<n\> lines in paragraphs or list items into the replacement body. Requires --content-stdin/--content-file. By default, these lines are preserved, even with empty content; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github reaction`
-
-GitHub reaction operations.
-
-```text
-guildbotics member github reaction [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number). |
-
-## `guildbotics member github reaction add`
-
-React to an issue comment, a review thread comment, or a review's body (pr-review: the review id with --pr-number).
-
-```text
-guildbotics member github reaction add [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
-| `--target [issue-comment\|pr-review-comment\|pr-review]` | Kind of comment to react to; pr-review is a review's body. [required] |
-| `--comment-id INTEGER` | Numeric id of the comment, or of the review for pr-review. [required] |
-| `--pr-number INTEGER` | Number of the pull request the review belongs to (pr-review only). |
-| `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics member github run`
-
-GitHub Actions run operations.
-
-```text
-guildbotics member github run [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
-
-## `guildbotics member github run artifact`
-
-GitHub Actions artifact operations.
-
-```text
-guildbotics member github run artifact [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
-
-## `guildbotics member github run artifact download`
-
-Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection.
-
-```text
-guildbotics member github run artifact download [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL or GitHub Actions run URL. [required] |
-| `--name TEXT` | Exact artifact name. [required] |
-| `--dest DIRECTORY` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
 ## `guildbotics member help`
 
 Print the member capability reference (commands and cross-cutting rules).
@@ -1491,12 +1174,13 @@ guildbotics member memory update [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
-## `guildbotics member repository`
+## `guildbotics member pr`
 
-Read resources from the configured code-hosting service.
+Read, open, update, comment on, and review pull requests, react to their
+comments and reviews, and download their CI artifacts.
 
 ```text
-guildbotics member repository [OPTIONS] COMMAND [ARGS]...
+guildbotics member pr [OPTIONS] COMMAND [ARGS]...
 ```
 
 | Option | Description |
@@ -1505,20 +1189,247 @@ guildbotics member repository [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
+| [`guildbotics member pr artifact`](#guildbotics-member-pr-artifact) | CI artifact operations. |
+| [`guildbotics member pr comment`](#guildbotics-member-pr-comment) | Comment on a PR conversation. |
+| [`guildbotics member pr create`](#guildbotics-member-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
+| [`guildbotics member pr reaction`](#guildbotics-member-pr-reaction) | Reactions to pull request comments and reviews. |
+| [`guildbotics member pr read`](#guildbotics-member-pr-read) | Read one bounded page of a PR's resource through the configured code_hosting_service: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files,... |
+| [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
+| [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict on the PR head as a review; a conversation comment does not consume a review request or make the member a reviewer. |
+| [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a PR diff line. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
 
-## `guildbotics member repository read`
+## `guildbotics member pr artifact`
 
-Read one bounded page through the configured code_hosting_service. dependency_alerts accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an identifier, it returns one alert and accepts no conditions or continuation. Results contain normalized items and continuation; reuse identical conditions for the next page. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Other resources require a numeric identifier: issues, pull_requests, issue_comments, issue_timeline, issue_projects, pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). URLs, HTTP methods, headers, and GraphQL are not accepted.
+CI artifact operations.
 
 ```text
-guildbotics member repository read [OPTIONS]
+guildbotics member pr artifact [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member pr artifact download`](#guildbotics-member-pr-artifact-download) | Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection. |
+
+## `guildbotics member pr artifact download`
+
+Download and extract a size-limited CI artifact of the PR's head; remove repository files after inspection.
+
+```text
+guildbotics member pr artifact download [OPTIONS]
 ```
 
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource TEXT` | Host-defined resource name; see member help. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--name TEXT` | Exact artifact name. [required] |
+| `--dest DIRECTORY` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr comment`
+
+Comment on a PR conversation.
+
+```text
+guildbotics member pr comment [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr create`
+
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url appends Refs #<n> unless --closes-issue is set.
+
+```text
+guildbotics member pr create [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
+| `--head TEXT` | Head branch containing the changes. [required] |
+| `--base TEXT` | Base branch for the pull request. Defaults to the repository default branch. [default: ""] |
+| `--title TEXT` | Pull request title. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
+| `--closes-issue / --refs-issue` | When --issue-url is set, append Closes #\<n\> or Refs #\<n\> to the PR body. Defaults to Refs. [default: refs-issue] |
+| `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr reaction`
+
+Reactions to pull request comments and reviews.
+
+```text
+guildbotics member pr reaction [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member pr reaction add`](#guildbotics-member-pr-reaction-add) | React to a conversation comment, a review thread comment, or a review's body of the PR. |
+
+## `guildbotics member pr reaction add`
+
+React to a conversation comment, a review thread comment, or a review's body of the PR.
+
+```text
+guildbotics member pr reaction add [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--target [comment\|review-comment\|review]` | What to react to: a conversation comment, an inline review comment, or a review's body. [required] |
+| `--comment-id INTEGER` | Numeric id of the comment, or of the review with --target review. [required] |
+| `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr read`
+
+Read one bounded page of a PR's resource through the configured code_hosting_service: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. URLs, HTTP methods, headers, and GraphQL are not accepted.
+
+```text
+guildbotics member pr read [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--resource [pull_requests\|pull_request_comments\|pull_request_reviews\|pull_request_files\|pull_request_threads\|review_thread_comments\|pull_request_readiness]` | Resource to read; see member help for its conditions. [required] |
+| `--repo TEXT` | Repository identifier for the configured service. [required] |
+| `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
+| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
+| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr reply`
+
+Reply to an inline review thread.
+
+```text
+guildbotics member pr reply [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--reply-target-id INTEGER` | reply_target_id from repository/pr_inspect include_comments=true. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr review`
+
+Submit a review verdict on the PR head as a review; a conversation comment does not consume a review request or make the member a reviewer.
+
+```text
+guildbotics member pr review [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--event [approve\|request-changes\|comment]` | Review verdict submitted on the current PR head. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr review-comment`
+
+Create a new inline review comment on a PR diff line.
+
+```text
+guildbotics member pr review-comment [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--path TEXT` | File path in the PR diff. [required] |
+| `--line INTEGER RANGE` | Line number on the chosen diff side. [x\>=1; required] |
+| `--side [LEFT\|RIGHT]` | Diff side of the line. [default: RIGHT] |
+| `--start-line INTEGER RANGE` | Start line for a multi-line comment. [x\>=1] |
+| `--start-side [LEFT\|RIGHT]` | Diff side of --start-line. |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member pr update`
+
+Change a PR's body or title. Body replacement preserves existing standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or list items; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
+
+```text
+guildbotics member pr update [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--title TEXT` | Replace the pull request title. |
+| `--drop-issue-links` | Do not carry existing standalone Closes/Fixes/Resolves/Refs #\<n\> lines in paragraphs or list items into the replacement body. Requires --content-stdin/--content-file. By default, these lines are preserved, even with empty content; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member repo-info`
+
+Read information about the repository as a whole.
+
+```text
+guildbotics member repo-info [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts through the configured code_hosting_service. |
+
+## `guildbotics member repo-info read`
+
+Read one bounded page of the repository's dependency_alerts through the configured code_hosting_service. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an identifier, it returns one alert and accepts no conditions or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. URLs, HTTP methods, headers, and GraphQL are not accepted.
+
+```text
+guildbotics member repo-info read [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--resource [dependency_alerts]` | Resource to read; see member help for its conditions. [required] |
 | `--repo TEXT` | Repository identifier for the configured service. [required] |
 | `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
@@ -1571,6 +1482,139 @@ guildbotics member task status [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Accepted for consistency with other member commands; not required. [default: ""] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member ticket`
+
+Read, create, update, and comment on issues, and react to their comments.
+
+```text
+guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on an issue in the member voice. |
+| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up issue a human asked for. |
+| [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to issue comments. |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of an issue's resource through the configured code_hosting_service: issues, issue_comments, issue_timeline, or issue_projects. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
+
+## `guildbotics member ticket comment`
+
+Comment on an issue in the member voice.
+
+```text
+guildbotics member ticket comment [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Issue URL. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member ticket create`
+
+Open a follow-up issue a human asked for.
+
+```text
+guildbotics member ticket create [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
+| `--title TEXT` | Issue title. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--label TEXT` | Label already defined in the repository. Repeat for several labels. |
+| `--add-to-project / --no-add-to-project` | Add the created issue to the configured project board. [default: add-to-project] |
+| `--human-approved` | Confirm that a human instructed or approved this change. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member ticket reaction`
+
+Reactions to issue comments.
+
+```text
+guildbotics member ticket reaction [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the issue. |
+
+## `guildbotics member ticket reaction add`
+
+React to a comment of the issue.
+
+```text
+guildbotics member ticket reaction add [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Issue URL. [required] |
+| `--comment-id INTEGER` | Numeric id of the comment. [required] |
+| `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member ticket read`
+
+Read one bounded page of an issue's resource through the configured code_hosting_service: issues, issue_comments, issue_timeline, or issue_projects. Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. URLs, HTTP methods, headers, and GraphQL are not accepted.
+
+```text
+guildbotics member ticket read [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--resource [issues\|issue_comments\|issue_timeline\|issue_projects]` | Resource to read; see member help for its conditions. [required] |
+| `--repo TEXT` | Repository identifier for the configured service. [required] |
+| `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
+| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
+| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member ticket update`
+
+Change an issue's body, title, labels, or state; empty content removes the body.
+
+```text
+guildbotics member ticket update [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Issue URL. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--title TEXT` | Replace the issue title. |
+| `--add-label TEXT` | Add a label already defined in the repository. Repeat for several labels. |
+| `--remove-label TEXT` | Remove a label from the issue. Repeat for several labels. |
+| `--state [open\|closed]` | Close or reopen the issue; requires --human-approved. |
+| `--state-reason [completed\|not_planned]` | Why the issue is closed; requires --state closed. |
+| `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

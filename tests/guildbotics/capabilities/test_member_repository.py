@@ -153,9 +153,9 @@ async def test_pull_request_work_reports_its_target(member):
 @pytest.mark.parametrize(
     ("target", "key"),
     [
-        ("issue-comment", "comments"),
-        ("pr-review-comment", "review_comments"),
-        ("pr-review", "reviews"),
+        ("comment", "comments"),
+        ("review-comment", "review_comments"),
+        ("review", "reviews"),
     ],
 )
 async def test_reaction_add_reacts_to_each_kind_of_target(member, target, key):
@@ -164,13 +164,75 @@ async def test_reaction_add_reacts_to_each_kind_of_target(member, target, key):
         entry["submitted_at"] = entry.pop("created_at")
     url = pull_request(3, "feature", **{key: [{**entry, "in_reply_to": None}]})
 
-    result = await member_repository.reaction_add(
-        member, "owner/repo", target, 7, "eyes", 3
-    )
+    result = await member_repository.reaction_add(member, url, target, 7, "eyes")
 
     assert result == {"content": "eyes", "comment_id": 7}
     [reacted] = item(url)[key]
     assert reacted["reactions"] == [{"author": "aiko", "content": "eyes"}]
+
+
+@pytest.mark.asyncio
+async def test_reaction_add_looks_only_in_the_item_the_url_names(member):
+    """The comment is found in the issue or pull request ``url`` names; the
+    same id on another item is not it."""
+    pull_request(3, "feature", comments=[comment("reviewer", id=7)])
+    other = pull_request(4, "other")
+
+    with pytest.raises(MemberCapabilityError, match="no comments entry 7"):
+        await member_repository.reaction_add(member, other, "comment", 7, "eyes")
+
+
+@pytest.mark.asyncio
+async def test_an_issue_and_a_pull_request_of_one_number_are_two_items(member):
+    """Issues and pull requests are numbered each on their own: issue #1 and
+    pull request #1 are both there, and a URL reaches the one it names."""
+    issue_url = issue(1)
+    pr_url = pull_request(1, "feature")
+
+    await member_repository.issue_comment(member, issue_url, "To the issue")
+    await member_repository.pr_comment(member, pr_url, "To the pull request")
+
+    assert [c["body"] for c in item(issue_url)["comments"]] == ["To the issue"]
+    assert [c["body"] for c in item(pr_url)["comments"]] == ["To the pull request"]
+    for resource, body in (
+        ("issue_comments", "To the issue"),
+        ("pull_request_comments", "To the pull request"),
+    ):
+        page = await member_repository.read_repository(
+            member,
+            resource,
+            "owner/repo",
+            identifier="1",
+            parameters={},
+            continuation="",
+        )
+        assert [c["body"] for c in page["items"]] == [body]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["../9/report", "nested/report"])
+async def test_artifact_download_reads_only_the_pull_requests_artifacts(
+    member, tmp_path, name
+):
+    """An artifact is named among the pull request's own: a name that leads
+    into another pull request's artifacts, or anywhere else, is refused."""
+    url = pull_request(3, "feature")
+    other = store.artifact("owner", "repo", 9, "report")
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"")
+
+    with pytest.raises(MemberCapabilityError, match="is not a name of #3"):
+        await member_repository.artifact_download(member, url, name, tmp_path / "out")
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_refuses_a_path_as_the_name(member, tmp_path):
+    url = pull_request(3, "feature")
+
+    with pytest.raises(MemberCapabilityError, match="is not a name of #3"):
+        await member_repository.artifact_download(
+            member, url, str(tmp_path / "anywhere"), tmp_path / "out"
+        )
 
 
 @pytest.mark.asyncio
@@ -260,8 +322,8 @@ async def test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled(me
     the whole patrol, and still reads as itself."""
     _remote_with()
     url = pull_request(5, "feature", author="them", head_repo="contributor/repo")
-    store.item_path("owner", "repo", 5).write_text(
-        store.item_path("owner", "repo", 5)
+    store.item_path("owner", "repo", "pull_request", 5).write_text(
+        store.item_path("owner", "repo", "pull_request", 5)
         .read_text(encoding="utf-8")
         .replace('"reviewers": []', '"reviewers": ["aiko"]'),
         encoding="utf-8",

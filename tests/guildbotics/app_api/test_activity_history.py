@@ -439,7 +439,7 @@ def test_inspected_target_kept_by_the_session_record_is_not_a_link() -> None:
     inspected = _lifecycle(
         "t-int",
         source="interactive",
-        command="member repository read",
+        command="member pr read",
         attributes={
             "github.action": "inspected",
             "github.kind": "pull_request",
@@ -551,7 +551,7 @@ def test_interactive_session_titles_from_its_recorded_target_or_command() -> Non
     targeted = _lifecycle(
         "t-int",
         source="interactive",
-        command="member repository read",
+        command="member pr read",
         attributes={"github.title": "利用枠の表示", "github.kind": "pull_request"},
     )
     assert _title(targeted) == "利用枠の表示"
@@ -644,7 +644,7 @@ def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
             _lifecycle(
                 "t-issue",
                 source="interactive",
-                command="member github issue create",
+                command="member ticket create",
                 started_at="2026-07-01T12:00:00+00:00",
                 attributes={},
             )
@@ -668,7 +668,7 @@ def test_issue_comments_add_session_link_without_event_row() -> None:
             _lifecycle(
                 "t-comment",
                 source="interactive",
-                command="member github issue comment",
+                command="member ticket comment",
                 started_at="2026-07-01T13:00:00+00:00",
                 attributes={},
             )

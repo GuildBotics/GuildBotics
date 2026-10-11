@@ -81,8 +81,8 @@ mutation(
 }
 """
 
-#: A reaction on anything GitHub reacts to through GraphQL only: REST has no
-#: endpoint for a review's body.
+#: A reaction on a comment, a review comment, or a review's body, named by its
+#: node (REST has no endpoint for a review's body).
 ADD_REACTION = """
 mutation($subject: ID!, $content: ReactionContent!) {
   addReaction(input: {subjectId: $subject, content: $content}) {

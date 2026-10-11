@@ -79,7 +79,7 @@ provider の置き方:
 - provider の実装は `integrations/<provider>/`、provider ごとの setup は `setup/` に、層ごとに置く。`integrations/<provider>/` を import できるのは `integrations/factory.py` と `setup/` だけ（import-linter の `providers-behind-the-factory` 契約）で、それ以外は種類ごとの port（`runtime`）と provider に依らない host の module（`integrations/` 直下）越しに provider へ届く
 - provider を選ぶのは `integrations/factory.py` の 1 か所だけ。factory の表 `PROVIDERS` は provider ごとの descriptor（`integrations/provider.py` の `Provider`。担当する種類（チャットはサービス・listener・接続をまとめる単位 `listener_key` の `Chat`）、member に要る secret 名と `account_info` の鍵、設定の確認 `verify`、provider 自身への読み取り確認 `diagnose`、資格情報を持つ member の判定 `credentialed`）を持つ。Desktop の verify と診断、Activity の取り込みは、設定された provider の descriptor を列挙するだけで provider の名前で分岐しない
 - 種類（チャット / コード / ボード）の port は `runtime` に置く。コードのホスト（`CodeHostingService`）は issue と PR の読み書き・コメント・reaction・CI（readiness・artifact）・git remote・PR 巡回を、ボード（`TicketManager`）は巡回の候補・レーン・ボードへの追加・閉じた項目を持つ（GitHub では issue もコメントもリポジトリの資源なので、issue の読み書きもコードのホストにある）。読み取りの語彙と結果の形は `runtime/code_hosting_resources.py`、書き込みの結果の形は `runtime/code_hosting_service.py` の model が正本。チャット（`ChatService`）のメッセージは不透明な `message_id` / `thread_id` と時刻 `occurred_at` を持ち、時間窓は `occurred_at` で計算する。順序は `position`（固定幅の UTC 時刻と id の文字列）の比較で、保留キュー・wake cursor・AI CLI のセッションの context cursor はこれを比べる
-- 参照 provider `local`（`integrations/local/`）は issue・PR・レーンをワークスペースの `.guildbotics/local/services/code/` のファイルに、remote を bare repository に、チャットのチャンネルを `.guildbotics/local/services/chat/<channel_id>.jsonl` に持ち、資格情報を要らない。Setup 画面には出さない。port の契約テスト（`tests/guildbotics/integrations/contracts/`）は factory の全 provider で同じ手順を流し、capability・ticket selector・ticket workflow・チャットの受信から返信までのテストは `local` で動かす
+- 参照 provider `local`（`integrations/local/`）は issue・PR・レーンをワークスペースの `.guildbotics/local/services/code/` のファイルに、remote を bare repository に、チャットのチャンネルを `.guildbotics/local/services/chat/<channel_id>.jsonl` に持ち、資格情報を要らない。特定のサービスの形をまねず、issue と PR は種類ごとに番号を振り、コメント・review の id は item ごとに振る（URL と id の組で 1 つを指す）。番号やコメント id の振り方のようなサービス固有の事情は、そのサービスの provider の中で扱う。Setup 画面には出さない。port の契約テスト（`tests/guildbotics/integrations/contracts/`）は factory の全 provider で同じ手順を流し、capability・ticket selector・ticket workflow・チャットの受信から返信までのテストは `local` で動かす
 
 ### パッケージ全体マップ
 
@@ -300,7 +300,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace の Desktop Local API が利用可能なら実行を委譲し、それ以外は手元で実行する。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
-- `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`github`（issue/pr/reaction）、`context`、`help`
+- `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
 - `start` と Desktop Service は共通の OS advisory lock
   `~/.guildbotics/data/run/service.lock` を使い、background service
   （scheduler worker / event listener）の machine-wide な二重起動を防ぐ。
@@ -438,10 +438,11 @@ member 向けエージェント指示（SKILL / workflow プロンプト）は�
 
 - 全体共通（コマンドカタログ、標準作業手順、memory / communication style などの横断契約）は `guildbotics/capabilities/member_reference.py` に置き、`member context` / `member help` で runtime 配信する
 - workflow 共通の封筒（実行モードマーカー、isolated workspace、complete 必須、AgentResponse 規定）は `guildbotics/templates/locales/commands/workflows/common.{en,ja}.yml` の `workflow_contract` に置き、各 workflow が `{workflow_contract}` としてテンプレートへ注入する
-- trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_github_ticket` / `functions/handle_chat_event` に書く
+- trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_ticket` / `functions/handle_chat_event` に書く
 - 対話封筒（共有ワークスペース、`--workspace-mode current`、対話 DOD）だけを `skills/guildbotics/SKILL.md` に書く
 - 単発委任の封筒（現在の cwd、依頼範囲内だけの作業、stdout での結果返却）は `guildbotics/templates/commands/ask.{en,ja}.md` に置く。host から委任を起動する案内は対話スキルに置き、workflow や member 共通カタログには置かない
-- 同じ文が 2 ファイル以上に現れたら、より深い層へ移す。層境界と en/ja 整合は `tests/guildbotics/templates/commands/functions/test_prompt_layer_boundaries.py` が担保する
+- エージェントに見える契約（member CLI のグループ名、上の各層の文面）は provider 名（`integrations/factory.py` の `PROVIDERS` の名前）ではなく種類と対象の語（ticket / pr / repo-info / chat）で書く。provider 固有の知識は `integrations/<provider>/` に置く
+- 同じ文が 2 ファイル以上に現れたら、より深い層へ移す。層境界と en/ja 整合と provider 名が現れないことは `tests/guildbotics/templates/commands/functions/test_prompt_layer_boundaries.py` が担保する
 
 ## 開発時の基本コマンド（CI 準拠）
 

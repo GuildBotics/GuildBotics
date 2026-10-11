@@ -45,14 +45,13 @@ from guildbotics.integrations.github.pull_request_patrol import (
     pull_request_work,
 )
 from guildbotics.integrations.github.pull_requests import (
-    GITHUB_ACTIONS_RUN_MIN_PART_COUNT,
     GitHubPullRequests,
     GitHubResource,
     _raise_for_status,
     _work_target,
+    refuse_pull_request,
 )
 from guildbotics.integrations.github.read_resources import (
-    DETAIL_RESOURCES,
     GRAPH_RESOURCES,
     REST_RESOURCES,
     graph_connection,
@@ -67,7 +66,9 @@ from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
 )
 from guildbotics.runtime.code_hosting_resources import (
+    DETAIL_RESOURCES,
     MAX_PAGE_BYTES,
+    RESOURCE_SUBJECTS,
     DependencyAlert,
     RepositoryReadError,
     RepositoryReadPage,
@@ -239,6 +240,16 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     ):
                         raise ValueError
             else:
+                if resource in _SHARED_ROUTES:
+                    owner, name = repo.split("/")
+                    await self._named_item(
+                        GitHubResource(
+                            owner,
+                            name,
+                            int(identifier),
+                            _ROUTE_KINDS[RESOURCE_SUBJECTS[resource]],
+                        )
+                    )
                 path = f"repos/{repo}/" + REST_RESOURCES[resource].format(
                     identifier=identifier
                 )
@@ -287,6 +298,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     int(identifier),
                     "pull" if resource == "pull_requests" else "issue",
                 )
+                if resource == "issues":
+                    refuse_pull_request(ref, item)
                 target = _work_target(ref, item)
                 result = {
                     **target,
@@ -372,11 +385,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         resource = self.parse_url(url, expected_kind=_KINDS[kind] if kind else None)
         # The target is read before the write, never after it: a read that
         # fails after the comment landed would make a retry post it twice.
-        item = await (
-            self._pull_request(resource)
-            if resource.kind == "pull"
-            else self._issue(resource)
-        )
+        item = await self._named_item(resource)
         if status is not None:
             body = _addressed(
                 render_workflow_status_comment(body=body, payload=status),
@@ -450,9 +459,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         additions = await self._defined_labels(
             resource.owner, resource.repo, add_labels
         )
-        state_changed = False
-        if state is not None:
-            state_changed = (await self._issue(resource)).get("state") != state
+        issue = await self._issue(resource)
+        state_changed = state is not None and issue.get("state") != state
         client = await self._get_client()
         issue_endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
@@ -460,11 +468,12 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         if payload:
             resp = await client.patch(issue_endpoint, json=payload)
             _raise_for_status(resp)
+            issue = resp.json()
         await self._apply_label_changes(resource, additions, remove_labels)
-        if additions or remove_labels or not payload:
+        if additions or remove_labels:
             resp = await client.get(issue_endpoint)
             _raise_for_status(resp)
-        issue = resp.json()
+            issue = resp.json()
         response_body = issue.get("body")
         return IssueUpdated(
             issue_number=issue.get("number", resource.number),
@@ -533,6 +542,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
 
     async def linked_pull_requests(self, issue_url: str) -> list[str]:
         resource = self.parse_url(issue_url, expected_kind="issue")
+        await self._issue(resource)
         endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline"
         )
@@ -574,6 +584,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             pr = existing[0]
             created = False
         else:
+            if issue_url:
+                await self._linked_issue(f"{owner}/{repo_name}", issue_url)
             resp = await client.post(
                 endpoint,
                 json={
@@ -703,24 +715,12 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def reply(self, url: str, reply_target_id: int, body: str) -> ReplyWritten:
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
-        client = await self._get_client()
-        response = await client.get(
-            f"/repos/{resource.full_repo}/pulls/comments/{reply_target_id}"
-        )
-        _raise_for_status(response)
-        root = response.json()
-        expected_url = (
-            f"{self.base_url}/repos/{resource.full_repo}/pulls/{resource.number}"
-        )
-        if (
-            not isinstance(root, dict)
-            or root.get("id") != reply_target_id
-            or root.get("in_reply_to_id") is not None
-            or root.get("pull_request_url") != expected_url
-        ):
+        root = await self._child(resource, "pulls/comments", reply_target_id)
+        if root is None or root.get("in_reply_to_id") is not None:
             raise MemberCapabilityError(
                 f"Review comment '{reply_target_id}' is not replyable for this PR."
             )
+        client = await self._get_client()
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments/{reply_target_id}/replies",
             json={"body": body.rstrip()},
@@ -735,44 +735,69 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         )
 
     async def add_reaction(
-        self,
-        repo: str,
-        target: ReactionTarget,
-        comment_id: int,
-        reaction: str,
-        pr_number: int | None = None,
+        self, url: str, target: ReactionTarget, comment_id: int, reaction: str
     ) -> ReactionAdded:
-        owner, repo_name = self.parse_repo(repo)
+        resource = self.parse_url(
+            url, expected_kind=None if target == "comment" else "pull"
+        )
+        # A pull request's conversation comments are issue comments on GitHub.
+        collection = {
+            "comment": "issues/comments",
+            "review-comment": "pulls/comments",
+            "review": f"pulls/{resource.number}/reviews",
+        }[target]
+        if target == "comment":
+            await self._named_item(resource)
+        child = await self._child(resource, collection, comment_id)
+        if child is None:
+            raise MemberCapabilityError(f"{target} {comment_id} is not one of {url}.")
+        await self._graphql(
+            ADD_REACTION,
+            {
+                "subject": str(child["node_id"]),
+                "content": _GRAPHQL_REACTIONS[reaction],
+            },
+        )
+        return ReactionAdded(content=reaction, comment_id=comment_id)
+
+    async def _linked_issue(self, repo: str, issue_url: str) -> None:
+        """Raises:
+        MemberCapabilityError: If ``issue_url`` names no issue of ``repo``,
+            which the link a pull request's body carries (``#<n>``) would.
+        """
+        linked = self.parse_url(issue_url, expected_kind="issue")
+        if linked.full_repo.casefold() != repo.casefold():
+            raise MemberCapabilityError(f"{issue_url} is not an issue of {repo}.")
+        await self._issue(linked)
+
+    async def _child(
+        self, resource: GitHubResource, collection: str, child_id: int
+    ) -> dict[str, Any] | None:
+        """The comment or review ``child_id`` of the repository's ``collection``,
+        when it is one of the item ``resource`` names.
+
+        GitHub finds comments by their repository-wide id, so where one is
+        must be read before it is acted on as the item's.
+        """
         client = await self._get_client()
-        if target == "pr-review":
-            if pr_number is None:
-                raise MemberCapabilityError("A review reaction needs the PR number.")
-            # A review's body is reached only through GraphQL.
-            resp = await client.get(
-                f"/repos/{owner}/{repo_name}/pulls/{pr_number}/reviews/{comment_id}"
-            )
-            _raise_for_status(resp)
-            await self._graphql(
-                ADD_REACTION,
-                {
-                    "subject": str(resp.json()["node_id"]),
-                    "content": _GRAPHQL_REACTIONS[reaction],
-                },
-            )
-            return ReactionAdded(content=reaction, comment_id=comment_id)
-        collection = "issues" if target == "issue-comment" else "pulls"
-        resp = await client.post(
-            f"/repos/{owner}/{repo_name}/{collection}/comments/{comment_id}/reactions",
-            json={"content": reaction},
-            headers={"Accept": "application/vnd.github+json"},
+        response = await client.get(
+            f"/repos/{resource.full_repo}/{collection}/{child_id}"
         )
-        _raise_for_status(resp)
-        payload = resp.json()
-        return ReactionAdded(
-            reaction_id=payload.get("id"),
-            content=str(payload.get("content") or reaction),
-            comment_id=comment_id,
+        _raise_for_status(response)
+        child = response.json()
+        field, items = (
+            ("issue_url", "issues")
+            if collection == "issues/comments"
+            else ("pull_request_url", "pulls")
         )
+        expected = (
+            f"{self.base_url}/repos/{resource.full_repo}/{items}/{resource.number}"
+        )
+        if not isinstance(child, dict) or child.get("id") != child_id:
+            return None
+        # GitHub answers with the repository's own spelling of its name.
+        owner = child.get(field)
+        return child if str(owner).casefold() == expected.casefold() else None
 
     async def open_pull_requests(self, remote_url: str, branch: str) -> list[str]:
         repository = self.repository_from_remote(remote_url)
@@ -800,21 +825,21 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def artifact(
         self, url: str, name: str, limit: int
     ) -> AsyncIterator[tuple[ArtifactRef, IO[bytes]]]:
-        resource, run_id, head_sha = await self._artifact_target(url)
+        resource = self.parse_url(url, expected_kind="pull")
+        head_sha = self._pull_request_head_sha(
+            resource, await self._pull_request(resource)
+        )
         actions = GitHubActionsClient(await self._get_client())
         try:
             artifacts = await actions.artifacts(
-                resource.owner, resource.repo, name=name, run_id=run_id
+                resource.owner, resource.repo, name=name
             )
             candidates = [
                 artifact
                 for artifact in artifacts
                 if artifact.get("name") == name
                 and not artifact.get("expired", False)
-                and (
-                    head_sha is None
-                    or (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
-                )
+                and (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
             ]
             if not candidates:
                 raise MemberCapabilityError(
@@ -826,12 +851,11 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             if archive_size > limit:
                 raise MemberCapabilityError(
                     f"Artifact '{name}' is {archive_size} bytes, above the "
-                    f"{limit} byte limit. Inspect the artifact from "
-                    "the Actions run URL or ask a human to retrieve it."
+                    f"{limit} byte limit. Ask a human to retrieve it."
                 )
             ref = ArtifactRef(
                 repo=resource.full_repo,
-                run_id=run_id or (artifact.get("workflow_run") or {}).get("id"),
+                run_id=(artifact.get("workflow_run") or {}).get("id"),
                 artifact_id=artifact_id,
                 artifact_name=name,
             )
@@ -841,28 +865,6 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                 yield ref, archive
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
-
-    async def _artifact_target(
-        self, url: str
-    ) -> tuple[GitHubResource, int | None, str | None]:
-        parsed = urlparse(url)
-        parts = [part for part in parsed.path.strip("/").split("/") if part]
-        if len(parts) >= GITHUB_ACTIONS_RUN_MIN_PART_COUNT and parts[2:4] == [
-            "actions",
-            "runs",
-        ]:
-            try:
-                run_id = int(parts[4])
-            except ValueError as exc:
-                raise MemberCapabilityError(
-                    f"Unsupported GitHub Actions URL: {url}"
-                ) from exc
-            if run_id < 1:
-                raise MemberCapabilityError(f"Unsupported GitHub Actions URL: {url}")
-            return GitHubResource(parts[0], parts[1], run_id, "run"), run_id, None
-        resource = self.parse_url(url, expected_kind="pull")
-        pr = await self._pull_request(resource)
-        return resource, None, self._pull_request_head_sha(resource, pr)
 
     # ------------------------------------------------------------------ #
     #   The git remote                                                   #
@@ -1145,10 +1147,19 @@ def _continuation(response: httpx.Response, request: dict[str, Any]) -> str | No
     ).decode()
 
 
+#: The resources whose GitHub route answers for an issue and a pull request
+#: alike: the item's kind is read before each of their pages.
+_SHARED_ROUTES = frozenset(
+    {"issue_comments", "issue_timeline", "pull_request_comments"}
+)
+#: The kind of GitHub address of each resource subject that is an item.
+_ROUTE_KINDS = {"issue": "issue", "pull_request": "pull"}
+
 _PERMISSIONS = {
     "dependency_alerts": "Dependabot alerts",
     "issues": "Issues",
-    "issue_comments": "Issues / Pull requests",
+    "issue_comments": "Issues",
+    "pull_request_comments": "Pull requests",
     "issue_timeline": "Issues / Pull requests",
     "issue_projects": "Projects",
     "pull_requests": "Pull requests",

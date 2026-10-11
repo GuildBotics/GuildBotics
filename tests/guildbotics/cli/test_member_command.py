@@ -319,8 +319,7 @@ def test_member_context_outputs_no_secret(monkeypatch):
         ),
         pytest.param(
             [
-                "github",
-                "issue",
+                "ticket",
                 "comment",
                 "--content-stdin",
                 "--person",
@@ -328,7 +327,7 @@ def test_member_context_outputs_no_secret(monkeypatch):
                 "--url",
                 "https://github.com/owner/repo/issues/1",
             ],
-            id="github",
+            id="ticket",
         ),
         pytest.param(["chat", "identity", "--person", "hana"], id="chat"),
         pytest.param(
@@ -409,28 +408,68 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         assert member_module._member_command_needs_lease() is False
 
 
+_READ_GROUPS = {"issue": "ticket", "pull_request": "pr", "repository": "repo-info"}
+
+
 def test_ci_inspection_commands_are_read_only() -> None:
-    github = member_module.member.commands["github"]
-    run = github.commands["run"]
-    artifact = run.commands["artifact"]
+    commands = member_module.member.commands
 
     for command in (
-        member_module.member.commands["repository"].commands["read"],
-        artifact.commands["download"],
+        *(commands[group].commands["read"] for group in _READ_GROUPS.values()),
+        commands["pr"].commands["artifact"].commands["download"],
     ):
         with click.Context(command):
             assert member_module._member_command_needs_lease() is False
 
 
 def test_inspection_cli_leaves_are_removed():
-    github = member_module.member.commands["github"]
-    assert "inspect" not in github.commands["issue"].commands
-    assert not {"inspect", "checks"} & github.commands["pr"].commands.keys()
+    member = member_module.member
+    assert "inspect" not in member.commands["ticket"].commands
+    assert not {"inspect", "checks"} & member.commands["pr"].commands.keys()
 
 
-def test_repository_read_records_host_target_in_workflow_trace(
-    monkeypatch, bind_invocation
-):
+@pytest.mark.parametrize(("subject", "group"), _READ_GROUPS.items())
+def test_each_read_reads_only_its_subjects_resources(subject, group):
+    """``ticket read`` reads an issue, ``pr read`` a pull request, and
+    ``repo-info read`` the repository: every resource is read in one place."""
+    from guildbotics.runtime.code_hosting_resources import RESOURCES_BY_SUBJECT
+
+    read = member_module.member.commands[group].commands["read"]
+    [resource] = [option for option in read.params if option.name == "resource"]
+    assert set(resource.type.choices) == set(RESOURCES_BY_SUBJECT[subject])
+    elsewhere = next(
+        name
+        for other, resources in RESOURCES_BY_SUBJECT.items()
+        if other != subject
+        for name in resources
+    )
+    result = CliRunner().invoke(
+        member_module.member,
+        [group, "read", "--person", "aiko", "--resource", elsewhere, "--repo", "o/r"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value for '--resource'" in result.output
+
+
+def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
+    for name, command in group.commands.items():
+        yield (*prefix, name)
+        if isinstance(command, click.Group):
+            yield from _command_paths(command, (*prefix, name))
+
+
+def test_member_commands_are_named_by_kind_not_provider():
+    """Agents call the member CLI by what they act on (ticket, pr, repo-info,
+    chat), whichever provider the workspace configures for it."""
+    from guildbotics.integrations.factory import PROVIDERS
+
+    names = {name for path in _command_paths(member_module.member) for name in path}
+    assert not names & PROVIDERS.keys()
+    assert {"ticket", "pr", "repo-info", "chat"} <= member_module.member.commands.keys()
+    assert "repository" not in member_module.member.commands
+
+
+def test_pr_read_records_host_target_in_workflow_trace(monkeypatch, bind_invocation):
 
     from guildbotics.runtime.code_hosting_resources import (
         RepositoryReadPage,
@@ -463,7 +502,7 @@ def test_repository_read_records_host_target_in_workflow_trace(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
+            "pr",
             "read",
             "--person",
             "aiko",
@@ -667,7 +706,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     async def failing():
         raise RuntimeError("boom")
 
-    member_module._run_interactive(inspect_pr(), session, "member repository read")
+    member_module._run_interactive(inspect_pr(), session, "member pr read")
     with pytest.raises(RuntimeError):
         member_module._run_interactive(failing(), session, "member git push")
 
@@ -676,7 +715,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
             encoding="utf-8"
         )
     )
-    assert record["command"] == "member repository read"
+    assert record["command"] == "member pr read"
     assert record["status"] == "failed"
     # Only the targets are shared: the session's host attributes describe
     # this machine.
@@ -825,7 +864,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
         async def context(self, check_credentials=False):
             return {
                 "person_id": "aiko",
-                "capabilities": "### GitHub\n- `guildbotics member github pr create ...`",
+                "capabilities": "### Repository\n- `guildbotics member pr create ...`",
             }
 
         async def aclose(self):
@@ -841,7 +880,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
 
     assert result.exit_code == 0
     assert "## Member Capabilities" in result.output
-    assert "guildbotics member github pr create" in result.output
+    assert "guildbotics member pr create" in result.output
 
 
 def test_member_context_markdown_highlights_communication_style(monkeypatch):
@@ -862,7 +901,7 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
                 "communication_style": {
                     "active_member_instruction": "Treat Aiko as active.",
                     "interactive_replies": "Reply as Aiko.",
-                    "github_comments": "Comment as Aiko.",
+                    "comments": "Comment as Aiko.",
                     "neutral_documents": "Use neutral documents.",
                     "machine_outputs": "Keep JSON factual.",
                 },
@@ -1115,8 +1154,7 @@ def test_member_write_command_requires_content_source():
     result = runner.invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "comment",
             "--person",
             "aiko",
@@ -1137,13 +1175,13 @@ CONTENT_COMMANDS = (
     "chat complete --person aiko --status done",
     "git commit --person aiko --repo-path .",
     "git publish --person aiko --repo-path .",
-    "github issue comment --person aiko --url https://github.com/owner/repo/issues/1",
-    "github issue create --person aiko --repo owner/repo --title Title",
-    "github pr create --person aiko --repo owner/repo --head feature --title Title",
-    "github pr comment --person aiko --url https://github.com/owner/repo/pull/1",
-    "github pr review-comment --person aiko "
+    "ticket comment --person aiko --url https://github.com/owner/repo/issues/1",
+    "ticket create --person aiko --repo owner/repo --title Title",
+    "pr create --person aiko --repo owner/repo --head feature --title Title",
+    "pr comment --person aiko --url https://github.com/owner/repo/pull/1",
+    "pr review-comment --person aiko "
     "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
-    "github pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
+    "pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
     "--reply-target-id 1",
     "task complete --person aiko --status done",
 )
@@ -1176,14 +1214,14 @@ def test_required_content_commands_reject_empty_stdin(command, bind_invocation):
         "chat complete",
         "git commit",
         "git publish",
-        "github issue comment",
-        "github issue create",
-        "github issue update",
-        "github pr create",
-        "github pr update",
-        "github pr comment",
-        "github pr review-comment",
-        "github pr reply",
+        "ticket comment",
+        "ticket create",
+        "ticket update",
+        "pr create",
+        "pr update",
+        "pr comment",
+        "pr review-comment",
+        "pr reply",
         "task complete",
     ],
 )
@@ -1305,8 +1343,8 @@ def test_content_file_read_failure_is_reported(monkeypatch, tmp_path):
     "command",
     [
         "memory record --person aiko",
-        "github issue create --person aiko --repo owner/repo",
-        "github pr create --person aiko --repo owner/repo --head feature",
+        "ticket create --person aiko --repo owner/repo",
+        "pr create --person aiko --repo owner/repo --head feature",
     ],
 )
 @pytest.mark.parametrize(
@@ -1324,7 +1362,7 @@ def test_write_command_titles_reject_empty_or_multiline_values(command, title, e
     assert error in result.output
 
 
-def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
+def test_member_issue_commands_pass_content_stdin(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = []
     activity_calls = []
@@ -1382,8 +1420,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
     comment = runner.invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "comment",
             "--person",
             "aiko",
@@ -1396,8 +1433,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
     create = runner.invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "create",
             "--person",
             "aiko",
@@ -1438,7 +1474,7 @@ def test_member_github_issue_commands_pass_content_stdin(monkeypatch):
     assert activity_calls[1][2]["issue_title"] == "Issue title"
 
 
-def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
+def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     activity_calls = []
 
@@ -1479,8 +1515,7 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
     comment = runner.invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "comment",
             "--person",
             "aiko",
@@ -1493,8 +1528,7 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
     create = runner.invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "create",
             "--person",
             "aiko",
@@ -1515,7 +1549,7 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
     assert activity_calls == []
 
 
-def test_member_github_write_outside_the_configured_owner_is_never_sent(monkeypatch):
+def test_member_write_outside_the_configured_owner_is_never_sent(monkeypatch):
     """#679: a public repository of another owner took an issue in the
     member's name, because the token alone does not stop that."""
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -1547,8 +1581,7 @@ def test_member_github_write_outside_the_configured_owner_is_never_sent(monkeypa
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "create",
             "--person",
             "aiko",
@@ -2004,7 +2037,7 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
     assert "only for interactive use" in result.output
 
 
-def test_member_github_pr_create_passes_base(monkeypatch):
+def test_member_pr_create_passes_base(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2052,7 +2085,6 @@ def test_member_github_pr_create_passes_base(monkeypatch):
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2111,7 +2143,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
     ]
 
 
-def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
+def test_member_pr_create_reads_content_from_stdin(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2159,7 +2191,6 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2192,7 +2223,7 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
     assert '"base": "ticket-driven-workflow"' in result.output
 
 
-def test_member_github_pr_create_passes_closes_issue(monkeypatch):
+def test_member_pr_create_passes_closes_issue(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2229,7 +2260,6 @@ def test_member_github_pr_create_passes_closes_issue(monkeypatch):
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2255,11 +2285,10 @@ def test_member_github_pr_create_passes_closes_issue(monkeypatch):
     }
 
 
-def test_member_github_pr_create_rejects_closes_issue_without_issue_url():
+def test_member_pr_create_rejects_closes_issue_without_issue_url():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2280,13 +2309,12 @@ def test_member_github_pr_create_rejects_closes_issue_without_issue_url():
     assert "--closes-issue requires --issue-url." in result.output
 
 
-def test_member_github_pr_create_rejects_unknown_draft_value():
+def test_member_pr_create_rejects_unknown_draft_value():
     runner = CliRunner()
 
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2308,13 +2336,12 @@ def test_member_github_pr_create_rejects_unknown_draft_value():
     assert "'auto' is not one of 'true', 'false'" in result.output
 
 
-def test_member_github_pr_create_rejects_multiline_title():
+def test_member_pr_create_rejects_multiline_title():
     runner = CliRunner()
 
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2334,13 +2361,12 @@ def test_member_github_pr_create_rejects_multiline_title():
     assert "title must not contain newlines" in result.output
 
 
-def test_member_github_pr_create_rejects_missing_content_source():
+def test_member_pr_create_rejects_missing_content_source():
     runner = CliRunner()
 
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "create",
             "--person",
@@ -2358,11 +2384,10 @@ def test_member_github_pr_create_rejects_missing_content_source():
     assert "--content-stdin or --content-file" in result.output
 
 
-def test_member_github_pr_update_rejects_update_without_any_change():
+def test_member_pr_update_rejects_update_without_any_change():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "update",
             "--person",
@@ -2377,11 +2402,10 @@ def test_member_github_pr_update_rejects_update_without_any_change():
     assert "pr update needs --content-stdin/--content-file or --title." in result.output
 
 
-def test_member_github_pr_update_drop_issue_links_requires_content():
+def test_member_pr_update_drop_issue_links_requires_content():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "update",
             "--person",
@@ -2401,7 +2425,7 @@ def test_member_github_pr_update_drop_issue_links_requires_content():
 
 
 @pytest.mark.parametrize("drop_issue_links", [False, True])
-def test_member_github_pr_update_reads_entire_stdin_and_closes_service(
+def test_member_pr_update_reads_entire_stdin_and_closes_service(
     monkeypatch, drop_issue_links
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -2437,7 +2461,6 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "update",
             "--person",
@@ -2461,7 +2484,7 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(
 
 
 @pytest.mark.parametrize("content", ["", "\n", " \t\n"])
-def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
+def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch, bind_invocation, content
 ):
     lease = _bind_workflow(bind_invocation, run_id="run-1")
@@ -2502,7 +2525,6 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "update",
             "--person",
@@ -2527,12 +2549,11 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_update"
 
 
-def test_member_github_issue_update_rejects_update_without_any_change():
+def test_member_issue_update_rejects_update_without_any_change():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2549,11 +2570,11 @@ def test_member_github_issue_update_rejects_update_without_any_change():
 @pytest.mark.parametrize(
     ("command", "url_option"),
     [
-        (["github", "issue", "update"], "https://github.com/owner/repo/issues/42"),
-        (["github", "pr", "update"], "https://github.com/owner/repo/pull/7"),
+        (["ticket", "update"], "https://github.com/owner/repo/issues/42"),
+        (["pr", "update"], "https://github.com/owner/repo/pull/7"),
     ],
 )
-def test_member_github_update_rejects_an_empty_title(command, url_option):
+def test_member_update_rejects_an_empty_title(command, url_option):
     result = CliRunner().invoke(
         member_module.member,
         [*command, "--person", "aiko", "--url", url_option, "--title", "   "],
@@ -2563,12 +2584,11 @@ def test_member_github_update_rejects_an_empty_title(command, url_option):
     assert "title must not be empty." in result.output
 
 
-def test_member_github_issue_update_rejects_state_reason_without_close():
+def test_member_issue_update_rejects_state_reason_without_close():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2586,7 +2606,7 @@ def test_member_github_issue_update_rejects_state_reason_without_close():
     assert "--state-reason requires --state closed." in result.output
 
 
-def test_member_github_issue_edit_on_a_closed_issue_records_no_close_activity(
+def test_member_issue_edit_on_a_closed_issue_records_no_close_activity(
     monkeypatch,
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -2628,8 +2648,7 @@ def test_member_github_issue_edit_on_a_closed_issue_records_no_close_activity(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2644,7 +2663,7 @@ def test_member_github_issue_edit_on_a_closed_issue_records_no_close_activity(
     assert recorded == []
 
 
-def test_member_github_issue_close_passes_approval_and_records_activity(monkeypatch):
+def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
     activity_calls = []
@@ -2684,8 +2703,7 @@ def test_member_github_issue_close_passes_approval_and_records_activity(monkeypa
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2718,7 +2736,7 @@ def test_member_github_issue_close_passes_approval_and_records_activity(monkeypa
     assert activity_calls[0][1]["state_changed"] is True
 
 
-def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
+def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2750,8 +2768,7 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2777,7 +2794,7 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
 
 
 @pytest.mark.parametrize("content", ["", "\n", " \t\n"])
-def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
+def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
     monkeypatch, bind_invocation, content
 ):
     lease = _bind_workflow(bind_invocation, run_id="run-1")
@@ -2812,8 +2829,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "github",
-            "issue",
+            "ticket",
             "update",
             "--person",
             "aiko",
@@ -2841,7 +2857,7 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "issue_update"
 
 
-def test_member_github_pr_review_reads_stdin_and_records_evidence(
+def test_member_pr_review_reads_stdin_and_records_evidence(
     monkeypatch, bind_invocation
 ):
     lease = _bind_workflow(bind_invocation, run_id="run-1")
@@ -2878,7 +2894,6 @@ def test_member_github_pr_review_reads_stdin_and_records_evidence(
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "review",
             "--person",
@@ -2905,13 +2920,12 @@ def test_member_github_pr_review_reads_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_review"
 
 
-def test_member_github_pr_review_rejects_unknown_event():
+def test_member_pr_review_rejects_unknown_event():
     runner = CliRunner()
 
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "review",
             "--person",
@@ -2929,7 +2943,7 @@ def test_member_github_pr_review_rejects_unknown_event():
     assert "Invalid value for '--event'" in result.output
 
 
-def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(
+def test_member_pr_review_comment_reads_stdin_and_records_evidence(
     monkeypatch, bind_invocation
 ):
     lease = _bind_workflow(bind_invocation, run_id="run-1")
@@ -2976,7 +2990,6 @@ def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "review-comment",
             "--person",
@@ -3015,13 +3028,12 @@ def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == ("pr_review_comment")
 
 
-def test_member_github_pr_review_comment_rejects_partial_range():
+def test_member_pr_review_comment_rejects_partial_range():
     runner = CliRunner()
 
     result = runner.invoke(
         member_module.member,
         [
-            "github",
             "pr",
             "review-comment",
             "--person",
@@ -3041,6 +3053,92 @@ def test_member_github_pr_review_comment_rejects_partial_range():
 
     assert result.exit_code != 0
     assert "--start-line and --start-side must be provided together" in result.output
+
+
+_ISSUE = "https://github.com/owner/repo/issues/42"
+_PULL = "https://github.com/owner/repo/pull/7"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "url", "target"),
+    [
+        (["ticket", "reaction", "add", "--url", _ISSUE], _ISSUE, "comment"),
+        *(
+            (
+                ["pr", "reaction", "add", "--url", _PULL, "--target", target],
+                _PULL,
+                target,
+            )
+            for target in ("comment", "review-comment", "review")
+        ),
+    ],
+)
+def test_member_reaction_add_names_its_target_and_records_evidence(
+    monkeypatch, bind_invocation, arguments, url, target
+):
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls = []
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def reaction_add(self, *args):
+            calls.append(args)
+            return {"content": "eyes", "comment_id": 55}
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _identifier: (FakeContext(person), person),
+    )
+    _fake_capabilities(monkeypatch, FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            *arguments,
+            "--person",
+            "aiko",
+            "--comment-id",
+            "55",
+            "--reaction",
+            "eyes",
+        ],
+    )
+    lease.release()
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(url, target, 55, "eyes")]
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "reaction_add"
+
+
+def test_member_ticket_reaction_add_takes_no_target():
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "ticket",
+            "reaction",
+            "add",
+            "--person",
+            "aiko",
+            "--url",
+            _ISSUE,
+            "--target",
+            "review",
+            "--comment-id",
+            "55",
+            "--reaction",
+            "eyes",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option '--target'" in result.output
 
 
 def test_member_task_status_cli(monkeypatch, bind_invocation, tmp_path):
@@ -3731,7 +3829,7 @@ def _work_target_records():
         ),
     ],
 )
-def test_member_github_commands_declare_their_work_target(
+def test_member_code_hosting_commands_declare_their_work_target(
     monkeypatch, arguments, read_only
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -3750,7 +3848,7 @@ def test_member_github_commands_declare_their_work_target(
 
     result = CliRunner().invoke(
         member_module.member,
-        ["github", *arguments, "--person", "aiko", "--format", "json"],
+        [*arguments, "--person", "aiko", "--format", "json"],
         input="Looks good.\n",
     )
 

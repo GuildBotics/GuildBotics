@@ -75,7 +75,11 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.chat_service import ChatServiceError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import (
+    RESOURCES_BY_SUBJECT,
+    ReadSubject,
+    RepositoryReadError,
+)
 from guildbotics.runtime.code_hosting_service import ReactionTarget, ReviewEvent
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.integration_factory import MemberCapabilityError
@@ -1284,12 +1288,7 @@ def _workspace_mode(value: str) -> WorkspaceMode:
     return cast(WorkspaceMode, value)
 
 
-@member.group()
-def github() -> None:
-    """GitHub issue, pull request, Actions, and reaction capabilities."""
-
-
-async def _github(
+async def _code_hosting(
     person: str,
     action: Callable[[Context], Awaitable[dict[str, Any]]],
     *,
@@ -1325,68 +1324,90 @@ def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
     )
 
 
-@github.group()
-def issue() -> None:
-    """GitHub issue operations."""
+@member.group()
+def ticket() -> None:
+    """Read, create, update, and comment on issues, and react to their comments."""
 
 
 @member.group()
-def repository() -> None:
-    """Read resources from the configured code-hosting service."""
+def pr() -> None:
+    """Read, open, update, comment on, and review pull requests, react to their
+    comments and reviews, and download their CI artifacts."""
 
 
-@repository.command(name="read")
-@_read_only_member_command
-@_person_option
-@click.option(
-    "--resource", required=True, help="Host-defined resource name; see member help."
-)
-@click.option(
-    "--repo", required=True, help="Repository identifier for the configured service."
-)
-@click.option(
-    "--identifier", default="", help="Resource identifier for an individual item."
-)
-@click.option(
-    "--params", "parameters", default="{}", help="Resource conditions as a JSON object."
-)
-@click.option(
-    "--continuation",
-    default="",
-    help="Continuation returned for the same resource and conditions.",
-)
-@_json_format_option
-def repository_read(
-    person: str,
-    resource: str,
-    repo: str,
-    identifier: str,
-    parameters: str,
-    continuation: str,
-    output_format: str,
-) -> _CommandWork:
-    try:
-        conditions = json.loads(parameters)
-        if not isinstance(conditions, dict):
-            raise ValueError
-    except ValueError:
-        raise click.BadParameter(
-            "Expected a JSON object.", param_hint="--params"
-        ) from None
-    return _github(
-        person,
-        lambda context: member_repository.read_repository(
-            context,
-            resource,
-            repo,
-            identifier=identifier,
-            parameters=conditions,
-            continuation=continuation,
-        ),
+@member.group(name="repo-info")
+def repo_info() -> None:
+    """Read information about the repository as a whole."""
+
+
+def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
+    """Give ``group`` the read of the code host's resources of ``subject``."""
+
+    @group.command(name="read")
+    @_read_only_member_command
+    @_person_option
+    @click.option(
+        "--resource",
+        required=True,
+        type=click.Choice(list(RESOURCES_BY_SUBJECT[subject])),
+        help="Resource to read; see member help for its conditions.",
     )
+    @click.option(
+        "--repo",
+        required=True,
+        help="Repository identifier for the configured service.",
+    )
+    @click.option(
+        "--identifier", default="", help="Resource identifier for an individual item."
+    )
+    @click.option(
+        "--params",
+        "parameters",
+        default="{}",
+        help="Resource conditions as a JSON object.",
+    )
+    @click.option(
+        "--continuation",
+        default="",
+        help="Continuation returned for the same resource and conditions.",
+    )
+    @_json_format_option
+    def read(
+        person: str,
+        resource: str,
+        repo: str,
+        identifier: str,
+        parameters: str,
+        continuation: str,
+        output_format: str,
+    ) -> _CommandWork:
+        try:
+            conditions = json.loads(parameters)
+            if not isinstance(conditions, dict):
+                raise ValueError
+        except ValueError:
+            raise click.BadParameter(
+                "Expected a JSON object.", param_hint="--params"
+            ) from None
+        return _code_hosting(
+            person,
+            lambda context: member_repository.read_repository(
+                context,
+                resource,
+                repo,
+                identifier=identifier,
+                parameters=conditions,
+                continuation=continuation,
+            ),
+        )
 
 
-@issue.command(name="comment")
+_add_read_command(ticket, "issue")
+_add_read_command(pr, "pull_request")
+_add_read_command(repo_info, "repository")
+
+
+@ticket.command(name="comment")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_required_content_stdin_option
@@ -1397,7 +1418,7 @@ def issue_comment(
     output_format: str,
 ) -> _CommandWork:
     body = _read_stdin("issue comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_comment(context, issue_url, body),
         evidence="issue_comment",
@@ -1405,7 +1426,7 @@ def issue_comment(
     )
 
 
-@issue.command(name="create")
+@ticket.command(name="create")
 @_person_option
 @click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
 @click.option("--title", required=True, help="Issue title.")
@@ -1434,7 +1455,7 @@ def issue_create(
 ) -> _CommandWork:
     title = _validate_title(title)
     body = _read_stdin("issue body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_create(
             context, repo, title, body, add_to_project, labels, human_approved
@@ -1444,7 +1465,7 @@ def issue_create(
     )
 
 
-@issue.command(name="update")
+@ticket.command(name="update")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_optional_content_stdin_option
@@ -1494,7 +1515,7 @@ def issue_update(
         )
     body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.issue_update(
             context,
@@ -1510,11 +1531,6 @@ def issue_update(
         evidence="issue_update",
         then=record_member_issue_close_event,
     )
-
-
-@github.group()
-def pr() -> None:
-    """GitHub pull request operations."""
 
 
 @pr.command(name="create")
@@ -1564,7 +1580,7 @@ def pr_create(
     if closes_issue and not issue_url.strip():
         raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_create(
             context, repo, head, base, title, body, issue_url, draft, closes_issue
@@ -1613,7 +1629,7 @@ def pr_update(
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_update(
             context,
@@ -1633,7 +1649,7 @@ def pr_update(
 @_json_format_option
 def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_comment(context, pr_url, body),
         evidence="pr_comment",
@@ -1653,7 +1669,7 @@ def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
 @_json_format_option
 def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _CommandWork:
     body = _read_stdin("pull request review body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_review(
             context, pr_url, body, cast(ReviewEvent, event)
@@ -1707,7 +1723,7 @@ def pr_review_comment(
             "--start-line and --start-side must be provided together."
         )
     body = _read_stdin("pull request review comment body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_review_comment(
             context, pr_url, body, file_path, line, side, start_line, start_side
@@ -1734,7 +1750,7 @@ def pr_reply(
     output_format: str,
 ) -> _CommandWork:
     body = _read_stdin("pull request reply body")
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.pr_reply(
             context, pr_url, reply_target_id, body
@@ -1743,25 +1759,15 @@ def pr_reply(
     )
 
 
-@github.group()
-def run() -> None:
-    """GitHub Actions run operations."""
-
-
-@run.group()
+@pr.group()
 def artifact() -> None:
-    """GitHub Actions artifact operations."""
+    """CI artifact operations."""
 
 
 @artifact.command(name="download")
 @_read_only_member_command
 @_person_option
-@click.option(
-    "--url",
-    "target_url",
-    required=True,
-    help="Pull request URL or GitHub Actions run URL.",
-)
+@click.option("--url", "target_url", required=True, help="Pull request URL.")
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
     "--dest",
@@ -1780,7 +1786,7 @@ def artifact_download(
     dest: Path,
     output_format: str,
 ) -> _CommandWork:
-    return _github(
+    return _code_hosting(
         person,
         lambda context: member_repository.artifact_download(
             context, target_url, name, dest
@@ -1788,33 +1794,7 @@ def artifact_download(
     )
 
 
-@github.group()
-def reaction() -> None:
-    """GitHub reaction operations."""
-
-
-@reaction.command(name="add")
-@_person_option
-@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
-@click.option(
-    "--target",
-    required=True,
-    type=click.Choice(["issue-comment", "pr-review-comment", "pr-review"]),
-    help="Kind of comment to react to; pr-review is a review's body.",
-)
-@click.option(
-    "--comment-id",
-    required=True,
-    type=int,
-    help="Numeric id of the comment, or of the review for pr-review.",
-)
-@click.option(
-    "--pr-number",
-    type=int,
-    default=None,
-    help="Number of the pull request the review belongs to (pr-review only).",
-)
-@click.option(
+_reaction_option = click.option(
     "--reaction",
     "reaction_content",
     required=True,
@@ -1823,27 +1803,78 @@ def reaction() -> None:
     ),
     help="Reaction to add.",
 )
+
+
+def _add_reaction(
+    person: str, url: str, target: ReactionTarget, comment_id: int, reaction: str
+) -> _CommandWork:
+    return _code_hosting(
+        person,
+        lambda context: member_repository.reaction_add(
+            context, url, target, comment_id, reaction
+        ),
+        evidence="reaction_add",
+    )
+
+
+@ticket.group(name="reaction")
+def ticket_reaction() -> None:
+    """Reactions to issue comments."""
+
+
+@ticket_reaction.command(name="add")
+@_person_option
+@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@click.option(
+    "--comment-id", required=True, type=int, help="Numeric id of the comment."
+)
+@_reaction_option
 @_json_format_option
-def reaction_add(
+def ticket_reaction_add(
     person: str,
-    repo: str,
-    target: str,
+    issue_url: str,
     comment_id: int,
-    pr_number: int | None,
     reaction_content: str,
     output_format: str,
 ) -> _CommandWork:
-    return _github(
-        person,
-        lambda context: member_repository.reaction_add(
-            context,
-            repo,
-            cast(ReactionTarget, target),
-            comment_id,
-            reaction_content,
-            pr_number,
-        ),
-        evidence="reaction_add",
+    return _add_reaction(person, issue_url, "comment", comment_id, reaction_content)
+
+
+@pr.group(name="reaction")
+def pr_reaction() -> None:
+    """Reactions to pull request comments and reviews."""
+
+
+@pr_reaction.command(name="add")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--target",
+    required=True,
+    type=click.Choice(["comment", "review-comment", "review"]),
+    help=(
+        "What to react to: a conversation comment, an inline review comment, "
+        "or a review's body."
+    ),
+)
+@click.option(
+    "--comment-id",
+    required=True,
+    type=int,
+    help="Numeric id of the comment, or of the review with --target review.",
+)
+@_reaction_option
+@_json_format_option
+def pr_reaction_add(
+    person: str,
+    pr_url: str,
+    target: str,
+    comment_id: int,
+    reaction_content: str,
+    output_format: str,
+) -> _CommandWork:
+    return _add_reaction(
+        person, pr_url, cast(ReactionTarget, target), comment_id, reaction_content
     )
 
 
@@ -2335,7 +2366,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
                 "active_member_instruction",
                 "voice_basis",
                 "interactive_replies",
-                "github_comments",
+                "comments",
                 "neutral_documents",
                 "machine_outputs",
             ):
@@ -2349,7 +2380,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         if key == "failed_logs" and isinstance(value, list):
             lines.append("## Failed job logs")
             if not value:
-                lines.append("_No failed GitHub Actions job logs found._")
+                lines.append("_No failed CI job logs found._")
                 continue
             for item in value:
                 if not isinstance(item, dict):

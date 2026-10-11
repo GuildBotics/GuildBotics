@@ -79,13 +79,13 @@ def comment(author: str, body: str = "a comment", **fields: Any) -> dict[str, An
 
 def item(url: str) -> dict[str, Any]:
     ref = store.locate(url)
-    return store.load(ref.owner, ref.repo, ref.number)
+    return store.load(ref.owner, ref.repo, ref.kind, ref.number)
 
 
 def write(owner: str, repo: str, item: dict[str, Any]) -> None:
     """Put ``item`` among the files of ``owner/repo``, as someone editing them
     would: no member writes it, so no member's scope applies."""
-    path = store.item_path(owner, repo, item["number"])
+    path = store.item_path(owner, repo, item["kind"], item["number"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(item), encoding="utf-8")
 

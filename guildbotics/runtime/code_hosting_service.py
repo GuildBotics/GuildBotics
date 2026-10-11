@@ -13,8 +13,6 @@ from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import IO, Any, Literal
 
-from pydantic import Field
-
 from guildbotics.entities import Task
 from guildbotics.runtime.code_hosting_resources import (
     Readiness,
@@ -26,7 +24,9 @@ from guildbotics.runtime.code_hosting_resources import (
 
 ItemKind = Literal["issue", "pull_request"]
 ReviewEvent = Literal["approve", "request-changes", "comment"]
-ReactionTarget = Literal["issue-comment", "pr-review-comment", "pr-review"]
+#: A conversation comment on an issue or pull request, an inline review
+#: comment, or a review's body.
+ReactionTarget = Literal["comment", "review-comment", "review"]
 
 
 class ItemRef(ReadModel):
@@ -128,10 +128,6 @@ class ReplyWritten(ReadModel):
 
 
 class ReactionAdded(ReadModel):
-    #: The reaction's own id, where the code host gives it one.
-    reaction_id: int | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
     content: str
     comment_id: int
 
@@ -289,14 +285,10 @@ class CodeHostingService(ABC):
         raise NotImplementedError
 
     async def add_reaction(
-        self,
-        repo: str,
-        target: ReactionTarget,
-        comment_id: int,
-        reaction: str,
-        pr_number: int | None = None,
+        self, url: str, target: ReactionTarget, comment_id: int, reaction: str
     ) -> ReactionAdded:
-        """React to a comment, a review comment, or a review (of ``pr_number``)."""
+        """React to a comment of the issue or pull request at ``url``, or to a
+        review comment or a review of the pull request."""
         raise NotImplementedError
 
     async def readiness(
@@ -320,8 +312,8 @@ class CodeHostingService(ABC):
     def artifact(
         self, url: str, name: str, limit: int
     ) -> AbstractAsyncContextManager[tuple[ArtifactRef, IO[bytes]]]:
-        """The newest CI artifact ``name`` of a run, or of a pull request's
-        head, as an archive of at most ``limit`` bytes."""
+        """The newest CI artifact ``name`` of a pull request's head, as an
+        archive of at most ``limit`` bytes."""
         raise NotImplementedError
 
     async def clone_url(self, owner: str, repo: str) -> str:

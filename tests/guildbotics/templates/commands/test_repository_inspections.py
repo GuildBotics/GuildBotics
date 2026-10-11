@@ -98,7 +98,10 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
         {
             "pull_requests": [page({"changed_files": 2, "head_repo": "fork/repo"})],
             "pull_request_readiness": [page(readiness)],
-            "issue_comments": [page({"id": 1}, continuation="more"), page({"id": 2})],
+            "pull_request_comments": [
+                page({"id": 1}, continuation="more"),
+                page({"id": 2}),
+            ],
             "pull_request_reviews": [
                 page({"state": "COMMENTED"}, continuation="more"),
                 page({"state": "APPROVED"}),

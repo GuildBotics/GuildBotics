@@ -45,13 +45,13 @@ class LocalTicketManager(TicketManager):
         assert task.url
         ref = store.locate(task.url, "issue")
         return self._work(
-            ref.owner, ref.repo, store.load(ref.owner, ref.repo, ref.number)
+            ref.owner, ref.repo, store.load(ref.owner, ref.repo, ref.kind, ref.number)
         )
 
     async def move_ticket(self, task: Task, new_status: str) -> bool:
         assert task.url
         ref = store.locate(task.url, "issue")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         item["lane"] = new_status
         store.save(self.team.project, ref.owner, ref.repo, item)
         return True
@@ -62,7 +62,7 @@ class LocalTicketManager(TicketManager):
 
     async def add_ticket(self, issue_url: str) -> str | None:
         ref = store.locate(issue_url, "issue")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         item["lane"] = item.get("lane") or Task.NEW
         store.save(self.team.project, ref.owner, ref.repo, item)
         return ref.url

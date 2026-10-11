@@ -102,6 +102,13 @@ class FakeClient:
         payload = deepcopy(self.get_payloads.get(endpoint, []))
         if "/branches/" in endpoint and endpoint not in self.get_payloads:
             payload = {"commit": {"sha": "base123"}}
+        if (
+            re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", endpoint)
+            and endpoint not in self.get_payloads
+        ):
+            # An issue: GitHub answers a pull request here too, with the
+            # ``pull_request`` key that tells them apart.
+            payload = {"number": int(endpoint.rsplit("/", 1)[1]), "state": "open"}
         if endpoint.startswith("/repos/owner/repo/pulls/") and isinstance(
             payload, dict
         ):
@@ -456,7 +463,7 @@ async def test_context_returns_llm_ready_communication_style():
     assert "親しみやすいアイデアメーカー" in style["voice_basis"]
     assert "具体案をやわらかく提案する" in style["voice_basis"]
     assert "interactive replies" in style["interactive_replies"]
-    assert "GitHub issue comments" in style["github_comments"]
+    assert "issue comments" in style["comments"]
     assert "PR titles/bodies" in style["neutral_documents"]
     assert "workflow AgentResponse.message" in style["machine_outputs"]
     assert "token" not in str(style).lower()
@@ -489,8 +496,8 @@ async def test_context_includes_capability_reference():
     # The context carries the full capability reference (single source of truth)
     # instead of a flat command-name list, and not the old fields.
     assert "guildbotics member chat reply" in result["capabilities"]
-    assert "guildbotics member github pr create" in result["capabilities"]
-    assert "guildbotics member github pr review-comment" in result["capabilities"]
+    assert "guildbotics member pr create" in result["capabilities"]
+    assert "guildbotics member pr review-comment" in result["capabilities"]
     assert "#### Handling review feedback" in result["capabilities"]
     assert "#### レビュー指摘への対応" in result["capabilities"]
     assert "available_member_commands" not in result
@@ -1104,7 +1111,9 @@ async def test_linked_pull_requests_refuse_an_incomplete_issue_timeline(after_pa
     service._client = fake
     with pytest.raises(MemberCapabilityError):
         await service.linked_pull_requests("https://github.com/owner/repo/issues/1")
-    assert len(fake.gets) == (2 if after_page else 1)
+    # The issue itself is read first, as an issue, then its timeline.
+    assert [endpoint for endpoint, _, _ in fake.gets][0] == "/repos/owner/repo/issues/1"
+    assert len(fake.gets) == (3 if after_page else 2)
 
 
 @pytest.mark.asyncio
@@ -1132,6 +1141,22 @@ def _artifact_zip(files: dict[str, bytes]) -> bytes:
         for path, content in files.items():
             bundle.writestr(path, content)
     return output.getvalue()
+
+
+_ARTIFACT_PR = "https://github.com/owner/repo/pull/9"
+
+
+def _pull_request_artifacts(fake: FakeClient, *artifacts: dict) -> None:
+    """Pull request 9, whose head ``abc`` was built by run 9 into ``artifacts``."""
+    fake.get_payloads["/repos/owner/repo/pulls/9"] = {
+        "head": {"sha": "abc", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    fake.get_payloads["/repos/owner/repo/actions/artifacts"] = {
+        "artifacts": [
+            {**artifact, "workflow_run": {"id": 9, "head_sha": "abc"}}
+            for artifact in artifacts
+        ]
+    }
 
 
 @pytest.mark.asyncio
@@ -1181,25 +1206,24 @@ async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
 async def test_artifact_download_rejects_oversized_artifact(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {
-                "id": 12,
-                "name": "large",
-                "expired": False,
-                "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
-            }
-        ]
-    }
+    _pull_request_artifacts(
+        fake,
+        {
+            "id": 12,
+            "name": "large",
+            "expired": False,
+            "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
+        },
+    )
     service._client = fake
     # The destination is a directory of its own: ``tmp_path`` also holds the
     # isolated HOME, which anything in the process may write to.
     destination = tmp_path / "artifact"
 
-    with pytest.raises(MemberCapabilityError, match="ask a human to retrieve it"):
+    with pytest.raises(MemberCapabilityError, match="Ask a human to retrieve it"):
         await member_repository.artifact_download(
             _member(service),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "large",
             destination,
         )
@@ -1211,16 +1235,9 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
 async def test_artifact_download_rejects_path_traversal(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {
-                "id": 12,
-                "name": "unsafe",
-                "expired": False,
-                "size_in_bytes": 100,
-            }
-        ]
-    }
+    _pull_request_artifacts(
+        fake, {"id": 12, "name": "unsafe", "expired": False, "size_in_bytes": 100}
+    )
     fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
         {"../outside.txt": b"must not escape"}
     )
@@ -1229,7 +1246,7 @@ async def test_artifact_download_rejects_path_traversal(tmp_path):
     with pytest.raises(MemberCapabilityError, match="unsafe path"):
         await member_repository.artifact_download(
             _member(service),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "unsafe",
             tmp_path,
         )
@@ -1631,10 +1648,11 @@ async def test_issue_update_removing_a_label_skips_the_repository_label_lookup()
     )
 
     # Nothing is validated against the repository vocabulary when only
-    # removing, so the paginated label listing is never fetched; the one GET
-    # reads the issue back for the result.
+    # removing, so the paginated label listing is never fetched; the first GET
+    # makes sure the number is an issue's, the last reads it back.
     assert [endpoint for endpoint, _params, _headers in fake.gets] == [
-        "/repos/owner/repo/issues/42"
+        "/repos/owner/repo/issues/42",
+        "/repos/owner/repo/issues/42",
     ]
     assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
     assert fake.patches == []
@@ -1711,6 +1729,7 @@ async def test_issue_update_patches_fields_before_labels_and_refetches_the_resul
     # re-fetched afterwards so it reflects the applied label changes.
     assert fake.history == [
         ("get", "/repos/owner/repo/labels"),
+        ("get", "/repos/owner/repo/issues/42"),
         ("patch", "/repos/owner/repo/issues/42"),
         ("post", "/repos/owner/repo/issues/42/labels"),
         ("get", "/repos/owner/repo/issues/42"),
@@ -2469,59 +2488,149 @@ async def test_pr_update_drop_issue_links_requires_replacement_body():
     assert fake.gets == fake.patches == []
 
 
+_API = "https://api.github.com/repos/owner/repo"
+
+
 @pytest.mark.asyncio
-async def test_reaction_add_uses_target_specific_endpoint():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "pr-review-comment", 101, "+1"
-    )
-
-    assert result == {"reaction_id": 10, "content": "+1", "comment_id": 101}
-    assert fake.posts == [
+@pytest.mark.parametrize(
+    ("url", "target", "path", "owner"),
+    [
         (
-            "/repos/owner/repo/pulls/comments/101/reactions",
-            {"content": "+1"},
-            {"Accept": "application/vnd.github+json"},
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_reaction_on_a_review_body_goes_through_graphql():
-    """REST has no reactions for a review; GraphQL reacts to its node."""
+            "https://github.com/owner/repo/issues/7",
+            "comment",
+            "/issues/comments/101",
+            ("issue_url", f"{_API}/issues/7"),
+        ),
+        # A pull request's conversation comments are issue comments on GitHub.
+        (
+            "https://github.com/owner/repo/pull/7",
+            "comment",
+            "/issues/comments/101",
+            ("issue_url", f"{_API}/issues/7"),
+        ),
+        (
+            "https://github.com/owner/repo/pull/7",
+            "review-comment",
+            "/pulls/comments/101",
+            ("pull_request_url", f"{_API}/pulls/7"),
+        ),
+        (
+            "https://github.com/owner/repo/pull/7",
+            "review",
+            "/pulls/7/reviews/101",
+            ("pull_request_url", f"{_API}/pulls/7"),
+        ),
+    ],
+)
+async def test_a_reaction_reads_where_its_comment_is_then_reacts_to_its_node(
+    url, target, path, owner
+):
     service = _service(person_type="agent")
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {"node_id": "PRR_55"}
+    fake.get_payloads[f"/repos/owner/repo{path}"] = {
+        "id": 101,
+        "node_id": "NODE_101",
+        owner[0]: owner[1],
+    }
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"number": 7}
     fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "pr-review", 55, "+1", 7
+        _member(service), url, target, 101, "+1"
     )
 
-    assert result == {"content": "+1", "comment_id": 55}
+    assert result == {"content": "+1", "comment_id": 101}
+    # A conversation comment's id says nothing of its item's kind, so the
+    # item the URL names is read as that kind first.
+    named = "/issues/7" if "/issues/" in url else "/pulls/7"
     assert fake.history == [
-        ("get", "/repos/owner/repo/pulls/7/reviews/55"),
+        *([("get", f"/repos/owner/repo{named}")] if target == "comment" else []),
+        ("get", f"/repos/owner/repo{path}"),
         ("post", "/graphql"),
     ]
     assert fake.posts[0][1] == {
         "query": ADD_REACTION,
-        "variables": {"subject": "PRR_55", "content": "THUMBS_UP"},
+        "variables": {"subject": "NODE_101", "content": "THUMBS_UP"},
     }
 
 
 @pytest.mark.asyncio
-async def test_reaction_on_a_review_body_needs_the_pr_number():
+@pytest.mark.parametrize(
+    "comment",
+    [
+        {"id": 101, "node_id": "N", "issue_url": f"{_API}/issues/8"},
+        {"id": 102, "node_id": "N", "issue_url": f"{_API}/issues/7"},
+        [],
+    ],
+)
+async def test_a_reaction_to_a_comment_of_another_item_is_not_sent(comment):
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/comments/101"] = comment
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="is not one of"):
+        await member_repository.reaction_add(
+            _member(service),
+            "https://github.com/owner/repo/issues/7",
+            "comment",
+            101,
+            "+1",
+        )
+
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_to_a_review_of_another_pull_request_is_not_sent():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {
+        "id": 55,
+        "node_id": "N",
+        "pull_request_url": f"{_API}/pulls/8",
+    }
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="is not one of"):
+        await member_repository.reaction_add(
+            _member(service), "https://github.com/owner/repo/pull/7", "review", 55, "+1"
+        )
+
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_names_the_repository_in_any_case():
+    """GitHub answers with the repository's own spelling of its name."""
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/Owner/Repo/issues/comments/101"] = {
+        "id": 101,
+        "node_id": "N",
+        "issue_url": f"{_API}/issues/7",
+    }
+    fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
+    service._client = fake
+
+    await member_repository.reaction_add(
+        _member(service), "https://github.com/Owner/Repo/issues/7", "comment", 101, "+1"
+    )
+
+    assert fake.history[-1] == ("post", "/graphql")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["review", "review-comment"])
+async def test_a_reaction_on_a_review_needs_a_pull_request_url(target):
     service = _service(person_type="agent")
     fake = FakeClient()
     service._client = fake
 
-    with pytest.raises(MemberCapabilityError, match="PR number"):
+    with pytest.raises(MemberCapabilityError):
         await member_repository.reaction_add(
-            _member(service), "owner/repo", "pr-review", 55, "+1"
+            _member(service), "https://github.com/owner/repo/issues/7", target, 55, "+1"
         )
 
     assert fake.history == []
@@ -2563,11 +2672,9 @@ class _Guest:
 def _artifact_service(content: bytes) -> GitHubCodeHostingService:
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
-        ]
-    }
+    _pull_request_artifacts(
+        fake, {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
+    )
     fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = content
     service._client = fake
     return service
@@ -2592,7 +2699,7 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
             _member(_artifact_service(archive)),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             destination,
         )
@@ -2627,7 +2734,7 @@ async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
     ):
         await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"../x": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )
@@ -2656,7 +2763,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
     ):
         await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"a": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )
@@ -2671,7 +2778,7 @@ async def test_what_the_environment_answers_decides_nothing_else(tmp_path):
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"a": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )

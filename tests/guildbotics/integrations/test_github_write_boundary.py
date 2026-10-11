@@ -89,7 +89,6 @@ WRITES = {
         "post",
     ): REPOSITORY,
     ("integrations/github/code_hosting_service.py", "reply", "post"): REPOSITORY,
-    ("integrations/github/code_hosting_service.py", "add_reaction", "post"): REPOSITORY,
     ("integrations/github/code_hosting_service.py", "_graphql", "post"): GRAPHQL,
     (
         "integrations/github/code_hosting_service.py",
@@ -331,13 +330,20 @@ def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
 async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``reaction add --target pr-review`` names the review by repository, but
+    """``reaction add --target review`` names the review by repository, but
     the mutation names only its node: the gate reads where the node lives."""
     sent: list[dict[str, object]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/reviews/55"):
-            return httpx.Response(200, json={"node_id": "PRR_55"})
+            return httpx.Response(
+                200,
+                json={
+                    "id": 55,
+                    "node_id": "PRR_55",
+                    "pull_request_url": "https://api.github.com/repos/other-owner/demo/pulls/7",
+                },
+            )
         body = json.loads(request.content)
         sent.append(body)
         repository = {"name": "demo", "owner": {"login": "other-owner"}}
@@ -360,7 +366,9 @@ async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_
     )
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await service.add_reaction("other-owner/demo", "pr-review", 55, "eyes", 7)
+            await service.add_reaction(
+                "https://github.com/other-owner/demo/pull/7", "review", 55, "eyes"
+            )
     finally:
         await service.aclose()
 

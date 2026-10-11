@@ -81,7 +81,7 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
 
     assert response is context.response
     [(command_name, kwargs)] = context.invocations
-    assert command_name == "functions/handle_github_ticket"
+    assert command_name == "functions/handle_ticket"
     # The run and the work are the host's: the turn takes them from its grant.
     assert kwargs["agent_execution_context"] == {
         "resume_policy": "fresh",
@@ -185,7 +185,7 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
             )
             for arguments, stdin in [
                 (
-                    ["github", "issue", "comment", "--url", kwargs["ticket_url"]],
+                    ["ticket", "comment", "--url", kwargs["ticket_url"]],
                     "Done.",
                 ),
                 (["task", "complete", "--status", "done"], "Fixed the login."),

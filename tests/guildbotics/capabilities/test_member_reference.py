@@ -27,14 +27,17 @@ def test_reference_covers_every_member_domain():
     # regardless of which workflow invoked it.
     assert "guildbotics member git commit" in text
     assert "include_diff=true" in text
-    assert "guildbotics member github pr create" in text
+    assert "guildbotics member pr create" in text
     assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
     assert "--issue-url appends Refs #<n> unless --closes-issue is set." in text
-    assert "guildbotics member github pr update" in text
-    assert "guildbotics member github pr review-comment" in text
+    assert "guildbotics member pr update" in text
+    assert "guildbotics member pr review-comment" in text
     assert "guildbotics run repository/pr_checks" in text
     assert "failed_logs=true" in text
-    assert "guildbotics member github run artifact download" in text
+    assert "guildbotics member pr artifact download" in text
+    assert "guildbotics member pr reaction add" in text
+    assert "guildbotics member ticket create" in text
+    assert "guildbotics member ticket reaction add" in text
     assert "remove repository files after inspection" in text
     assert "--content-file" in text
     assert "guildbotics member chat reply" in text
@@ -69,8 +72,8 @@ def test_reference_includes_standard_work_procedure():
     assert "feature branch to the default branch uses `Closes` for the parent" in text
     assert "issues that the merge does not complete" in text
     assert (
-        "GitHub only closes an issue automatically when the PR merges into the "
-        "default branch"
+        "A merge into a branch other than the default branch closes no issue "
+        "automatically"
     ) in text
     assert "follow the manual-close rule below" in text
     assert "does not by itself authorize closing the issue" in text
@@ -122,7 +125,7 @@ def test_reference_maps_communication_style_output_kinds():
     text = capability_reference_text()
     for output_kind in (
         "interactive_replies",
-        "github_comments",
+        "comments",
         "neutral_documents",
         "machine_outputs",
     ):
@@ -142,8 +145,8 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
-    assert "GitHub and chat access, reads and writes alike" in text
-    assert "Never use `gh`" in text
+    assert "code-host and chat access, reads and writes alike" in text
+    assert "Never use a service's own CLI such as `gh`" in text
     assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
     assert "read-only copies GuildBotics keeps" in text
@@ -151,7 +154,7 @@ def test_reference_states_cross_cutting_rules():
     assert "under `~/Documents/GuildBotics/`" in text
 
 
-def test_reference_states_which_github_writes_stay_human_decisions():
+def test_reference_states_which_code_host_writes_stay_human_decisions():
     text = capability_reference_text()
     # Opening/closing issues, priority, and assignees are decisions the member
     # must not take on its own; the reference is where a member learns that.
@@ -163,15 +166,15 @@ def test_reference_states_which_github_writes_stay_human_decisions():
         "and never because another member asked for it."
     )
     manual_close_exception = (
-        "The one exception is a human's merge outside the default branch: if GitHub "
-        "does not close an issue after a human merges its PR there"
+        "The one exception is a human's merge outside the default branch: if the "
+        "code host does not close an issue after a human merges its PR there"
     )
     assert f"{approval_rule} {manual_close_exception}" in text
     assert "inspect the current PR and issue" in text
     assert "verify that the merge completed the issue's whole scope" in text
     assert "post a completion comment and close the issue" in text
     assert (
-        "issue update --state closed --state-reason completed --human-approved" in text
+        "ticket update --state closed --state-reason completed --human-approved" in text
     )
     assert "leave the issue open and comment on what remains" in text
     assert "Priority is a human triage decision" in text
@@ -236,6 +239,6 @@ def test_reference_excludes_ticket_specific_issue_comment_rule():
     procedure_and_rules = text.split("### Standard work procedure")[1]
     procedure_and_rules_lower = procedure_and_rules.lower()
     # Ticket-specific sentinel phrases must not appear in the procedure/rules.
-    assert "member github issue comment" not in procedure_and_rules_lower
+    assert "member ticket comment" not in procedure_and_rules_lower
     assert "result comment" not in procedure_and_rules_lower
     assert "not a substitute" not in procedure_and_rules_lower

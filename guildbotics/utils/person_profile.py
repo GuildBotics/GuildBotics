@@ -54,10 +54,10 @@ def build_member_communication_style(person: Any) -> dict[str, str]:
             "language, reflect the voice_basis lightly, and keep technical details "
             "accurate and actionable. Do not turn this into exaggerated roleplay."
         ),
-        "github_comments": (
-            f"Write GitHub issue comments, PR conversation comments, and PR review "
-            f"thread replies in {name}'s natural conversational voice, while staying "
-            "clear about technical facts and next actions."
+        "comments": (
+            f"Write issue comments, PR conversation comments, inline review comments, "
+            f"and review thread replies in {name}'s natural conversational voice, "
+            "while staying clear about technical facts and next actions."
         ),
         "neutral_documents": (
             "Use the project's neutral document style for issue titles/bodies, PR "

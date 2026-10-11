@@ -132,7 +132,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
 
     def assign(url: str) -> None:
         ref = store.locate(url, "issue")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         item.update(lane=Task.READY, assignees=[MEMBER])
         write(ref.owner, ref.repo, item)
 
@@ -242,8 +242,9 @@ def serve(double: GitHubDouble, monkeypatch) -> None:
     monkeypatch.setenv(f"{MEMBER.upper()}_GITHUB_ACCESS_TOKEN", "token")
 
 
-#: The node of issue #1 of ``THEIRS``.
+#: The node of issue #1 of ``THEIRS``, and of its comment.
 _THEIR_NODE = "THEIRS"
+_THEIR_COMMENT = "THEIRS_COMMENT"
 
 
 class GitHubDouble:
@@ -255,6 +256,7 @@ class GitHubDouble:
         self.items: dict[int, dict[str, Any]] = {}
         self.comments: dict[int, dict[str, Any]] = {}
         self.review_comments: dict[int, dict[str, Any]] = {}
+        self.reviews: dict[int, dict[str, Any]] = {}
         self.branches: dict[str, str] = {"main": "base-sha"}
         #: The Project's items: issue number -> Status option name.
         self.board: dict[int, str] = {}
@@ -293,7 +295,17 @@ class GitHubDouble:
                 "title": "Theirs",
                 "user": {"login": "them"},
             }
-            answers = {"": {"default_branch": "main"}, "/pulls": [], "/issues/1": issue}
+            comment = {
+                "id": 1,
+                "node_id": _THEIR_COMMENT,
+                "issue_url": f"{API}/repos/{THEIRS}/issues/1",
+            }
+            answers = {
+                "": {"default_branch": "main"},
+                "/pulls": [],
+                "/issues/1": issue,
+                "/issues/comments/1": comment,
+            }
             if route not in answers:
                 return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(200, json=answers[route])
@@ -332,16 +344,38 @@ class GitHubDouble:
         if match := re.fullmatch(r"/issues/(\d+)/comments", route):
             number = int(match.group(1))
             if method == "POST":
-                comment = self._entry(body, issue=number)
+                comment = self._entry(
+                    body, issue=number, issue_url=f"{API}/repos/{REPO}/issues/{number}"
+                )
                 self.comments[comment["id"]] = comment
                 return comment
             return [c for c in self.comments.values() if c["issue"] == number]
         if re.fullmatch(r"/issues/\d+/timeline", route):
             return []
-        if match := re.fullmatch(r"/(issues|pulls)/comments/(\d+)/reactions", route):
-            return {"id": next(self._ids), "content": body["content"]}
+        if match := re.fullmatch(r"/issues/comments/(\d+)", route):
+            return self.comments.get(int(match.group(1)))
         if match := re.fullmatch(r"/pulls/(\d+)/reviews", route):
-            return {**self._entry(body), "state": "APPROVED", "submitted_at": "t"}
+            number = int(match.group(1))
+            if "head" not in self.items.get(number, {}):
+                return None
+            if method == "GET":
+                return [
+                    review
+                    for review in self.reviews.values()
+                    if review["pull_request_url"].endswith(f"/pulls/{number}")
+                ]
+            review = {
+                **self._entry(
+                    body, pull_request_url=f"{API}/repos/{REPO}/pulls/{number}"
+                ),
+                "state": "APPROVED",
+                "submitted_at": "t",
+            }
+            self.reviews[review["id"]] = review
+            return review
+        if match := re.fullmatch(r"/pulls/\d+/reviews/(\d+)", route):
+            # Whichever pull request the path names: the provider checks it.
+            return self.reviews.get(int(match.group(1)))
         if match := re.fullmatch(r"/pulls/(\d+)/comments", route):
             comment = self._entry(
                 body, pull_request_url=f"{API}/repos/{REPO}/pulls/{match.group(1)}"
@@ -402,6 +436,7 @@ class GitHubDouble:
         entry_id = next(self._ids)
         return {
             "id": entry_id,
+            "node_id": f"NODE_C{entry_id}",
             "body": body.get("body", ""),
             "user": {"login": LOGIN},
             "created_at": "2026-07-02T00:00:00Z",
@@ -412,10 +447,11 @@ class GitHubDouble:
     def _graphql(self, body: dict) -> dict[str, Any]:
         query, variables = body["query"], body.get("variables") or {}
         if query == NODE_REPOSITORY:
-            owner, name = (THEIRS if variables["id"] == _THEIR_NODE else REPO).split(
-                "/"
-            )
+            theirs = variables["id"] in {_THEIR_NODE, _THEIR_COMMENT}
+            owner, name = (THEIRS if theirs else REPO).split("/")
             return {"node": {"repository": {"name": name, "owner": {"login": owner}}}}
+        if "addReaction" in query:
+            return {"addReaction": {"reaction": {"content": variables["content"]}}}
         if "projectV2(number" in query:
             return {"organization": {"projectV2": {"id": "PROJECT"}}}
         if "addProjectV2ItemById" in query:

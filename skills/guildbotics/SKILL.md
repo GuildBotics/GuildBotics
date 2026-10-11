@@ -5,7 +5,7 @@ description: Work as a configured GuildBotics member through the guildbotics mem
 
 # GuildBotics Member Capability
 
-Use this skill when the user asks you to act as a GuildBotics member, handle a GitHub issue or pull request through GuildBotics, publish GitHub/git work as a configured member, or post/reply/react in Slack as a configured member.
+Use this skill when the user asks you to act as a GuildBotics member, handle an issue or pull request through GuildBotics, publish repository/git work as a configured member, or post/reply/react in the chat as a configured member.
 
 This skill only defines the interactive envelope: how to work side by side with the user in their current repository. What a member can do and how member work is performed (commands, standard work procedure, memory handling, communication-style mapping, write safety, secrets) is defined by the member capability reference and is not restated here.
 
@@ -25,7 +25,7 @@ guildbotics member context --person <person_id>
 
 Treat the returned non-secret member context as the source of truth for the member's persona, role, profile, judgment criteria, and `communication_style`.
 Its `capabilities` section is the authoritative reference for every `guildbotics member ...` command, the standard work procedure, and the cross-cutting rules. The same reference can be reprinted with `"$HOME/.guildbotics/bin/guildbotics" member help` on macOS/Linux or `guildbotics member help` on Windows.
-Do not perform GitHub, git, or Slack writes before reading `member context`.
+Do not perform ticket, repository, git, or chat writes before reading `member context`.
 Use the desktop-managed absolute path on macOS/Linux and bare `guildbotics` on Windows. If it reports that no active workspace is configured, ask the user to select a workspace in GuildBotics desktop or run `guildbotics workspace use <path>`.
 
 If the user asks to verify credentials, use the same OS-specific executable form:
@@ -38,7 +38,7 @@ If the user asks to verify credentials, use the same OS-specific executable form
 guildbotics member context --person <person_id> --check-credentials --format json
 ```
 
-This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform GitHub or git writes.
+This credential check is allowed: it performs a read-only GuildBotics member credential probe and does not perform repository or git writes.
 
 ## Active Member Session Rules
 
@@ -75,7 +75,7 @@ guildbotics member git commit --person <person_id> --repo-path <current_repo_pat
 guildbotics member git push --person <person_id> --repo-path <current_repo_path> --workspace-mode current
 ```
 
-Run `member git commit` without `member git push` when the user asks for a local commit only.
+Run `member git commit` without `member git push` when the user asks for a commit without a push.
 
 ## Definition of Done
 

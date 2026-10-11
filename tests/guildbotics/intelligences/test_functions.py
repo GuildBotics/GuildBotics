@@ -33,9 +33,9 @@ def test_messages_to_json_basic():
     assert data[0]["content"] == "hi" and data[1]["author_type"] == "Assistant"
 
 
-def test_handle_github_ticket_prompt_keeps_only_trigger_specific_contract():
+def test_handle_ticket_prompt_keeps_only_trigger_specific_contract():
     prompt = load_markdown_with_frontmatter(
-        Path("guildbotics/templates/commands/functions/handle_github_ticket.en.md")
+        Path("guildbotics/templates/commands/functions/handle_ticket.en.md")
     )
 
     body = prompt["body"]

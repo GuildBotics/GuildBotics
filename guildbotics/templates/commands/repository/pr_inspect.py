@@ -27,7 +27,7 @@ async def main(
     result = await reader.one("pull_requests")
     result["checks"] = await reader.one("pull_request_readiness")
     if comments:
-        result["conversation_comments"] = await reader.read("issue_comments")
+        result["conversation_comments"] = await reader.read("pull_request_comments")
         result["review_summaries"] = await reader.read("pull_request_reviews")
         threads = await reader.read("pull_request_threads")
         for thread in threads:
