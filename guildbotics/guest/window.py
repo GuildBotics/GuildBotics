@@ -31,16 +31,27 @@ from guildbotics.runtime.chat_service import (
     CredentialCheck,
 )
 from guildbotics.runtime.code_hosting_resources import (
+    RESOURCE_SUBJECTS,
+    ReadSubject,
     RepositoryReadError,
     RepositoryReadPage,
 )
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.utils.i18n_tool import t
 
 
 class MemberCommandError(RuntimeError):
     """A member command the window ran failed; the message is its error."""
+
+
+#: The member command group that reads each subject's resources.
+_READ_GROUPS: dict[ReadSubject, str] = {
+    "issue": "ticket",
+    "pull_request": "pr",
+    "repository": "repo-info",
+}
 
 
 class WindowCodeHostingService(CodeHostingService):
@@ -59,10 +70,12 @@ class WindowCodeHostingService(CodeHostingService):
         parameters: dict[str, Any] | None = None,
         continuation: str = "",
     ) -> RepositoryReadPage:
+        if resource not in RESOURCE_SUBJECTS:
+            raise RepositoryReadError(t("integrations.repository.resource"))
         result = await _member_result(
             self._client,
             [
-                "repository",
+                _READ_GROUPS[RESOURCE_SUBJECTS[resource]],
                 "read",
                 "--person",
                 self._person_id,

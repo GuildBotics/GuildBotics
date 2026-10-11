@@ -75,7 +75,11 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.chat_service import ChatServiceError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.code_hosting_resources import (
+    RESOURCES_BY_SUBJECT,
+    ReadSubject,
+    RepositoryReadError,
+)
 from guildbotics.runtime.code_hosting_service import ReactionTarget, ReviewEvent
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.integration_factory import MemberCapabilityError
@@ -1322,63 +1326,85 @@ def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
 
 @member.group()
 def ticket() -> None:
-    """Create, update, and comment on issues, and react to their comments."""
+    """Read, create, update, and comment on issues, and react to their comments."""
 
 
 @member.group()
-def repository() -> None:
-    """Repository reads, pull requests, CI artifacts, and reactions."""
+def pr() -> None:
+    """Read, open, update, comment on, and review pull requests, react to their
+    comments and reviews, and download their CI artifacts."""
 
 
-@repository.command(name="read")
-@_read_only_member_command
-@_person_option
-@click.option(
-    "--resource", required=True, help="Host-defined resource name; see member help."
-)
-@click.option(
-    "--repo", required=True, help="Repository identifier for the configured service."
-)
-@click.option(
-    "--identifier", default="", help="Resource identifier for an individual item."
-)
-@click.option(
-    "--params", "parameters", default="{}", help="Resource conditions as a JSON object."
-)
-@click.option(
-    "--continuation",
-    default="",
-    help="Continuation returned for the same resource and conditions.",
-)
-@_json_format_option
-def repository_read(
-    person: str,
-    resource: str,
-    repo: str,
-    identifier: str,
-    parameters: str,
-    continuation: str,
-    output_format: str,
-) -> _CommandWork:
-    try:
-        conditions = json.loads(parameters)
-        if not isinstance(conditions, dict):
-            raise ValueError
-    except ValueError:
-        raise click.BadParameter(
-            "Expected a JSON object.", param_hint="--params"
-        ) from None
-    return _code_hosting(
-        person,
-        lambda context: member_repository.read_repository(
-            context,
-            resource,
-            repo,
-            identifier=identifier,
-            parameters=conditions,
-            continuation=continuation,
-        ),
+@member.group(name="repo-info")
+def repo_info() -> None:
+    """Read information about the repository as a whole."""
+
+
+def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
+    """Give ``group`` the read of the code host's resources of ``subject``."""
+
+    @group.command(name="read")
+    @_read_only_member_command
+    @_person_option
+    @click.option(
+        "--resource",
+        required=True,
+        type=click.Choice(list(RESOURCES_BY_SUBJECT[subject])),
+        help="Resource to read; see member help for its conditions.",
     )
+    @click.option(
+        "--repo",
+        required=True,
+        help="Repository identifier for the configured service.",
+    )
+    @click.option(
+        "--identifier", default="", help="Resource identifier for an individual item."
+    )
+    @click.option(
+        "--params",
+        "parameters",
+        default="{}",
+        help="Resource conditions as a JSON object.",
+    )
+    @click.option(
+        "--continuation",
+        default="",
+        help="Continuation returned for the same resource and conditions.",
+    )
+    @_json_format_option
+    def read(
+        person: str,
+        resource: str,
+        repo: str,
+        identifier: str,
+        parameters: str,
+        continuation: str,
+        output_format: str,
+    ) -> _CommandWork:
+        try:
+            conditions = json.loads(parameters)
+            if not isinstance(conditions, dict):
+                raise ValueError
+        except ValueError:
+            raise click.BadParameter(
+                "Expected a JSON object.", param_hint="--params"
+            ) from None
+        return _code_hosting(
+            person,
+            lambda context: member_repository.read_repository(
+                context,
+                resource,
+                repo,
+                identifier=identifier,
+                parameters=conditions,
+                continuation=continuation,
+            ),
+        )
+
+
+_add_read_command(ticket, "issue")
+_add_read_command(pr, "pull_request")
+_add_read_command(repo_info, "repository")
 
 
 @ticket.command(name="comment")
@@ -1505,11 +1531,6 @@ def issue_update(
         evidence="issue_update",
         then=record_member_issue_close_event,
     )
-
-
-@repository.group()
-def pr() -> None:
-    """Pull request operations."""
 
 
 @pr.command(name="create")
@@ -1738,7 +1759,7 @@ def pr_reply(
     )
 
 
-@repository.group()
+@pr.group()
 def artifact() -> None:
     """CI artifact operations."""
 
@@ -1746,12 +1767,7 @@ def artifact() -> None:
 @artifact.command(name="download")
 @_read_only_member_command
 @_person_option
-@click.option(
-    "--url",
-    "target_url",
-    required=True,
-    help="Pull request URL or CI run URL.",
-)
+@click.option("--url", "target_url", required=True, help="Pull request URL.")
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
     "--dest",
@@ -1778,9 +1794,6 @@ def artifact_download(
     )
 
 
-_reaction_repo_option = click.option(
-    "--repo", required=True, help="Target repository as <owner>/<repo>."
-)
 _reaction_option = click.option(
     "--reaction",
     "reaction_content",
@@ -1793,17 +1806,12 @@ _reaction_option = click.option(
 
 
 def _add_reaction(
-    person: str,
-    repo: str,
-    target: ReactionTarget,
-    comment_id: int,
-    reaction_content: str,
-    pr_number: int | None = None,
+    person: str, url: str, target: ReactionTarget, comment_id: int, reaction: str
 ) -> _CommandWork:
     return _code_hosting(
         person,
         lambda context: member_repository.reaction_add(
-            context, repo, target, comment_id, reaction_content, pr_number
+            context, url, target, comment_id, reaction
         ),
         evidence="reaction_add",
     )
@@ -1816,7 +1824,7 @@ def ticket_reaction() -> None:
 
 @ticket_reaction.command(name="add")
 @_person_option
-@_reaction_repo_option
+@click.option("--url", "issue_url", required=True, help="Issue URL.")
 @click.option(
     "--comment-id", required=True, type=int, help="Numeric id of the comment."
 )
@@ -1824,22 +1832,22 @@ def ticket_reaction() -> None:
 @_json_format_option
 def ticket_reaction_add(
     person: str,
-    repo: str,
+    issue_url: str,
     comment_id: int,
     reaction_content: str,
     output_format: str,
 ) -> _CommandWork:
-    return _add_reaction(person, repo, "comment", comment_id, reaction_content)
+    return _add_reaction(person, issue_url, "comment", comment_id, reaction_content)
 
 
-@repository.group(name="reaction")
-def repository_reaction() -> None:
+@pr.group(name="reaction")
+def pr_reaction() -> None:
     """Reactions to pull request comments and reviews."""
 
 
-@repository_reaction.command(name="add")
+@pr_reaction.command(name="add")
 @_person_option
-@_reaction_repo_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
 @click.option(
     "--target",
     required=True,
@@ -1855,30 +1863,18 @@ def repository_reaction() -> None:
     type=int,
     help="Numeric id of the comment, or of the review with --target review.",
 )
-@click.option(
-    "--pr-number",
-    type=int,
-    default=None,
-    help="Number of the pull request the review belongs to (review only).",
-)
 @_reaction_option
 @_json_format_option
-def repository_reaction_add(
+def pr_reaction_add(
     person: str,
-    repo: str,
+    pr_url: str,
     target: str,
     comment_id: int,
-    pr_number: int | None,
     reaction_content: str,
     output_format: str,
 ) -> _CommandWork:
     return _add_reaction(
-        person,
-        repo,
-        cast(ReactionTarget, target),
-        comment_id,
-        reaction_content,
-        pr_number,
+        person, pr_url, cast(ReactionTarget, target), comment_id, reaction_content
     )
 
 

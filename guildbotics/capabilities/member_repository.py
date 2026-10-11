@@ -230,16 +230,9 @@ async def pr_reply(
 
 
 async def reaction_add(
-    context: Context,
-    repo: str,
-    target: ReactionTarget,
-    comment_id: int,
-    reaction: str,
-    pr_number: int | None = None,
+    context: Context, url: str, target: ReactionTarget, comment_id: int, reaction: str
 ) -> dict[str, Any]:
-    added = await _writing(context).add_reaction(
-        repo, target, comment_id, reaction, pr_number
-    )
+    added = await _writing(context).add_reaction(url, target, comment_id, reaction)
     return added.model_dump()
 
 

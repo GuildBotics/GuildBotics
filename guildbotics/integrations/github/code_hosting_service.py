@@ -45,14 +45,12 @@ from guildbotics.integrations.github.pull_request_patrol import (
     pull_request_work,
 )
 from guildbotics.integrations.github.pull_requests import (
-    GITHUB_ACTIONS_RUN_MIN_PART_COUNT,
     GitHubPullRequests,
     GitHubResource,
     _raise_for_status,
     _work_target,
 )
 from guildbotics.integrations.github.read_resources import (
-    DETAIL_RESOURCES,
     GRAPH_RESOURCES,
     REST_RESOURCES,
     graph_connection,
@@ -67,6 +65,7 @@ from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
 )
 from guildbotics.runtime.code_hosting_resources import (
+    DETAIL_RESOURCES,
     MAX_PAGE_BYTES,
     DependencyAlert,
     RepositoryReadError,
@@ -735,21 +734,16 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         )
 
     async def add_reaction(
-        self,
-        repo: str,
-        target: ReactionTarget,
-        comment_id: int,
-        reaction: str,
-        pr_number: int | None = None,
+        self, url: str, target: ReactionTarget, comment_id: int, reaction: str
     ) -> ReactionAdded:
-        owner, repo_name = self.parse_repo(repo)
+        resource = self.parse_url(
+            url, expected_kind=None if target == "comment" else "pull"
+        )
         client = await self._get_client()
         if target == "review":
-            if pr_number is None:
-                raise MemberCapabilityError("A review reaction needs the PR number.")
             # A review's body is reached only through GraphQL.
             resp = await client.get(
-                f"/repos/{owner}/{repo_name}/pulls/{pr_number}/reviews/{comment_id}"
+                f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews/{comment_id}"
             )
             _raise_for_status(resp)
             await self._graphql(
@@ -763,7 +757,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         # A pull request's conversation comments are issue comments on GitHub.
         collection = "issues" if target == "comment" else "pulls"
         resp = await client.post(
-            f"/repos/{owner}/{repo_name}/{collection}/comments/{comment_id}/reactions",
+            f"/repos/{resource.owner}/{resource.repo}/{collection}/comments/{comment_id}/reactions",
             json={"content": reaction},
             headers={"Accept": "application/vnd.github+json"},
         )
@@ -801,21 +795,21 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def artifact(
         self, url: str, name: str, limit: int
     ) -> AsyncIterator[tuple[ArtifactRef, IO[bytes]]]:
-        resource, run_id, head_sha = await self._artifact_target(url)
+        resource = self.parse_url(url, expected_kind="pull")
+        head_sha = self._pull_request_head_sha(
+            resource, await self._pull_request(resource)
+        )
         actions = GitHubActionsClient(await self._get_client())
         try:
             artifacts = await actions.artifacts(
-                resource.owner, resource.repo, name=name, run_id=run_id
+                resource.owner, resource.repo, name=name
             )
             candidates = [
                 artifact
                 for artifact in artifacts
                 if artifact.get("name") == name
                 and not artifact.get("expired", False)
-                and (
-                    head_sha is None
-                    or (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
-                )
+                and (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
             ]
             if not candidates:
                 raise MemberCapabilityError(
@@ -827,12 +821,11 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             if archive_size > limit:
                 raise MemberCapabilityError(
                     f"Artifact '{name}' is {archive_size} bytes, above the "
-                    f"{limit} byte limit. Inspect the artifact from "
-                    "the Actions run URL or ask a human to retrieve it."
+                    f"{limit} byte limit. Ask a human to retrieve it."
                 )
             ref = ArtifactRef(
                 repo=resource.full_repo,
-                run_id=run_id or (artifact.get("workflow_run") or {}).get("id"),
+                run_id=(artifact.get("workflow_run") or {}).get("id"),
                 artifact_id=artifact_id,
                 artifact_name=name,
             )
@@ -842,28 +835,6 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                 yield ref, archive
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
-
-    async def _artifact_target(
-        self, url: str
-    ) -> tuple[GitHubResource, int | None, str | None]:
-        parsed = urlparse(url)
-        parts = [part for part in parsed.path.strip("/").split("/") if part]
-        if len(parts) >= GITHUB_ACTIONS_RUN_MIN_PART_COUNT and parts[2:4] == [
-            "actions",
-            "runs",
-        ]:
-            try:
-                run_id = int(parts[4])
-            except ValueError as exc:
-                raise MemberCapabilityError(
-                    f"Unsupported GitHub Actions URL: {url}"
-                ) from exc
-            if run_id < 1:
-                raise MemberCapabilityError(f"Unsupported GitHub Actions URL: {url}")
-            return GitHubResource(parts[0], parts[1], run_id, "run"), run_id, None
-        resource = self.parse_url(url, expected_kind="pull")
-        pr = await self._pull_request(resource)
-        return resource, None, self._pull_request_head_sha(resource, pr)
 
     # ------------------------------------------------------------------ #
     #   The git remote                                                   #
@@ -1149,7 +1120,8 @@ def _continuation(response: httpx.Response, request: dict[str, Any]) -> str | No
 _PERMISSIONS = {
     "dependency_alerts": "Dependabot alerts",
     "issues": "Issues",
-    "issue_comments": "Issues / Pull requests",
+    "issue_comments": "Issues",
+    "pull_request_comments": "Pull requests",
     "issue_timeline": "Issues / Pull requests",
     "issue_projects": "Projects",
     "pull_requests": "Pull requests",

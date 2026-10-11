@@ -17,6 +17,7 @@ import re
 from itertools import combinations
 from pathlib import Path
 
+import click
 import pytest
 import yaml
 
@@ -494,3 +495,52 @@ def test_agent_facing_layers_do_not_name_a_provider():
         if word in PROVIDERS
     ]
     assert named == []
+
+
+def _options(command: click.Command) -> set[str]:
+    names = {
+        name
+        for parameter in command.params
+        for name in (*parameter.opts, *parameter.secondary_opts)
+        if name.startswith("--")
+    }
+    if isinstance(command, click.Group):
+        for child in command.commands.values():
+            names |= _options(child)
+    return names
+
+
+def test_agent_facing_layers_name_only_member_commands_that_exist():
+    """A command a layer tells the agent to run is one the member CLI has."""
+    from guildbotics.cli.member import member
+
+    named = {
+        (path.as_posix(), match.group(1))
+        for path in _agent_facing_files()
+        for match in re.finditer(
+            r"(?:guildbotics |`)member ([a-z][a-z-]*)", path.read_text(encoding="utf-8")
+        )
+    }
+    assert named
+    assert {
+        (path, name) for path, name in named if name not in member.commands
+    } == set()
+
+
+def test_agent_facing_layers_name_only_options_that_exist():
+    """An option a layer tells the agent to pass is one of the member CLI's or
+    of ``guildbotics run``'s, so a removed option cannot linger in a prompt."""
+    from guildbotics.cli import main
+    from guildbotics.cli.member import member
+
+    run = main.get_command(click.Context(main), "run")
+    assert run is not None
+    known = _options(member) | _options(run) | {"--help"}
+    named = {
+        (path.as_posix(), option)
+        for path in _agent_facing_files()
+        for option in re.findall(
+            r"(?<![\w-])--[a-z][a-z0-9-]*", path.read_text(encoding="utf-8")
+        )
+    }
+    assert {(path, option) for path, option in named if option not in known} == set()

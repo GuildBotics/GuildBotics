@@ -56,7 +56,7 @@ def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
     from guildbotics.cli import main
 
     monkeypatch.setattr(main, "callback", None)
-    arguments = ["repository", "read", "--help"]
+    arguments = ["pr", "read", "--help"]
     through_cli = CliRunner().invoke(
         main, ["member", *arguments], prog_name="guildbotics"
     )
@@ -97,7 +97,7 @@ def test_path_checks_read_from_the_commands_directory(
 
     monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
     monkeypatch.setattr(member_module, "_code_hosting", code_hosting)
-    command = ["repository", "artifact", "download", "--person", "aiko"]
+    command = ["pr", "artifact", "download", "--person", "aiko"]
     command += ["--url", "https://example.test/pr/1", "--name", "logs", *arguments]
 
     exit_code, _stdout, stderr = _run(
@@ -460,7 +460,7 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
         monkeypatch.setattr(os, name, look)
 
     exit_code, _stdout, stderr = _run(
-        ["repository", "artifact", "download", "--person", "aiko"]
+        ["pr", "artifact", "download", "--person", "aiko"]
         + ["--url", "https://example.test/pr/1", "--name", "logs"]
         + ["--dest", "a-file"],
         MemberInvocation(task_run_id="run-1", guest=SimpleNamespace()),

@@ -360,7 +360,9 @@ async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_
     )
     try:
         with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await service.add_reaction("other-owner/demo", "review", 55, "eyes", 7)
+            await service.add_reaction(
+                "https://github.com/other-owner/demo/pull/7", "review", 55, "eyes"
+            )
     finally:
         await service.aclose()
 

@@ -231,19 +231,38 @@ class DependencyAlert(ReadModel):
     updated_at: str | None = None
 
 
-#: Every resource a code host reads, with the schema of one of its items.
+#: What a resource is part of: one issue, one pull request, or the repository.
+ReadSubject = Literal["issue", "pull_request", "repository"]
+
+#: Every resource a code host reads, by what it is part of, with the schema of
+#: one of its items.
+RESOURCES_BY_SUBJECT: dict[ReadSubject, dict[str, type[ReadModel]]] = {
+    "issue": {
+        "issues": Issue,
+        "issue_comments": Comment,
+        "issue_timeline": TimelineEvent,
+        "issue_projects": ProjectItem,
+    },
+    "pull_request": {
+        "pull_requests": PullRequest,
+        "pull_request_comments": Comment,
+        "pull_request_reviews": Review,
+        "pull_request_files": FileChange,
+        "pull_request_threads": ReviewThread,
+        "review_thread_comments": ThreadComment,
+        "pull_request_readiness": Readiness,
+    },
+    "repository": {"dependency_alerts": DependencyAlert},
+}
 RESOURCES: dict[str, type[ReadModel]] = {
-    "issues": Issue,
-    "pull_requests": PullRequest,
-    "issue_comments": Comment,
-    "issue_timeline": TimelineEvent,
-    "issue_projects": ProjectItem,
-    "pull_request_reviews": Review,
-    "pull_request_files": FileChange,
-    "pull_request_threads": ReviewThread,
-    "review_thread_comments": ThreadComment,
-    "pull_request_readiness": Readiness,
-    "dependency_alerts": DependencyAlert,
+    name: schema
+    for resources in RESOURCES_BY_SUBJECT.values()
+    for name, schema in resources.items()
+}
+RESOURCE_SUBJECTS: dict[str, ReadSubject] = {
+    name: subject
+    for subject, resources in RESOURCES_BY_SUBJECT.items()
+    for name in resources
 }
 #: The resources that are one item, read without pagination.
 DETAIL_RESOURCES = frozenset({"issues", "pull_requests", "pull_request_readiness"})

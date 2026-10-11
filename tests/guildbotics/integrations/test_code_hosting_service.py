@@ -14,6 +14,7 @@ from guildbotics.integrations.factory import (
     ServiceIntegrationFactory,
 )
 from guildbotics.runtime.code_hosting_resources import (
+    RESOURCES_BY_SUBJECT,
     DependencyAlert,
     RepositoryReadError,
     RepositoryReadPage,
@@ -231,7 +232,7 @@ async def test_capability_and_window_use_configured_service_and_close_it(fail):
 
     class Window:
         async def acall(self, name, *, arguments, stdin):
-            assert name == "member" and arguments[:2] == ["repository", "read"]
+            assert name == "member" and arguments[:2] == ["repo-info", "read"]
             assert arguments[arguments.index("--person") + 1] == "aiko"
             result = await read_repository(
                 context,
@@ -267,7 +268,7 @@ def test_cli_reads_another_provider_without_github_or_numeric_ids(monkeypatch):
     monkeypatch.setattr(cli, "resolve_member_context", lambda _: (context, person))
     code, stdout, stderr = cli.run_in_process(
         [
-            "repository",
+            "repo-info",
             "read",
             "--person",
             "aiko",
@@ -305,3 +306,48 @@ async def test_normalized_output_limit_applies_to_every_provider(monkeypatch):
             parameters={},
             continuation="",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource", "group"),
+    [
+        (resource, group)
+        for subject, group in (
+            ("issue", "ticket"),
+            ("pull_request", "pr"),
+            ("repository", "repo-info"),
+        )
+        for resource in RESOURCES_BY_SUBJECT[subject]
+    ],
+)
+async def test_a_command_reads_each_resource_through_its_subjects_member_command(
+    resource, group
+):
+    """A command's environment reads an issue's resources with ``ticket read``,
+    a pull request's with ``pr read``, and the repository's with
+    ``repo-info read``."""
+    sent: list[list[str]] = []
+
+    class Window:
+        async def acall(self, name, *, arguments, stdin):
+            sent.append(arguments)
+            return {"exit_code": 0, "stdout": json.dumps({"items": []}), "stderr": ""}
+
+    await WindowCodeHostingService(Window(), "aiko").read(
+        resource, "owner/repo", identifier="1"
+    )
+
+    assert [arguments[:4] for arguments in sent] == [
+        [group, "read", "--person", "aiko"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_command_cannot_read_a_resource_no_code_host_has():
+    class Window:
+        async def acall(self, name, *, arguments, stdin):
+            raise AssertionError("nothing is asked of the host")
+
+    with pytest.raises(RepositoryReadError):
+        await WindowCodeHostingService(Window(), "aiko").read("secrets", "owner/repo")

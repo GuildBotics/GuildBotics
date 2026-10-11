@@ -92,7 +92,7 @@ async def test_structured_alert_fields_and_next_page(command):
     assert name == "member"
     assert call["stdin"] == ""
     assert call["arguments"] == [
-        "repository",
+        "repo-info",
         "read",
         "--person",
         "aiko",

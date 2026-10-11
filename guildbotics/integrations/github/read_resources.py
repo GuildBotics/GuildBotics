@@ -15,11 +15,12 @@ REST_RESOURCES = {
     "issues": "issues/{identifier}",
     "pull_requests": "pulls/{identifier}",
     "issue_comments": "issues/{identifier}/comments",
+    # A pull request's conversation comments are issue comments on GitHub.
+    "pull_request_comments": "issues/{identifier}/comments",
     "issue_timeline": "issues/{identifier}/timeline",
     "pull_request_reviews": "pulls/{identifier}/reviews",
     "pull_request_files": "pulls/{identifier}/files",
 }
-DETAIL_RESOURCES = {"issues", "pull_requests", "pull_request_readiness"}
 GRAPH_RESOURCES = {"issue_projects", "pull_request_threads", "review_thread_comments"}
 _ITEM_URL_PARTS = 4
 
@@ -78,7 +79,7 @@ def graph_connection(resource: str, data: dict[str, Any]) -> dict[str, Any]:
 
 def translate(resource: str, item: dict[str, Any], person: Any) -> dict[str, Any]:
     """Translate one resource, without fetching or combining other resources."""
-    if resource == "issue_comments":
+    if resource in {"issue_comments", "pull_request_comments"}:
         return _comment_summary(person, item)
     if resource == "pull_request_reviews":
         return _review_summary(person, item)

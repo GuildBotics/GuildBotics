@@ -35,7 +35,7 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "guildbotics/integrations/github/code_hosting_service.py",
         "add_reaction",
         "client.get",
-        "f'/repos/{owner}/{repo_name}/pulls/{pr_number}/reviews/{comment_id}'",
+        "f'/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews/{comment_id}'",
     ): "single_resource: repository, pull request, and review id identify one review",
     (
         "guildbotics/app_api/avatar.py",

@@ -489,8 +489,8 @@ async def test_context_includes_capability_reference():
     # The context carries the full capability reference (single source of truth)
     # instead of a flat command-name list, and not the old fields.
     assert "guildbotics member chat reply" in result["capabilities"]
-    assert "guildbotics member repository pr create" in result["capabilities"]
-    assert "guildbotics member repository pr review-comment" in result["capabilities"]
+    assert "guildbotics member pr create" in result["capabilities"]
+    assert "guildbotics member pr review-comment" in result["capabilities"]
     assert "#### Handling review feedback" in result["capabilities"]
     assert "#### レビュー指摘への対応" in result["capabilities"]
     assert "available_member_commands" not in result
@@ -1134,6 +1134,22 @@ def _artifact_zip(files: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
+_ARTIFACT_PR = "https://github.com/owner/repo/pull/9"
+
+
+def _pull_request_artifacts(fake: FakeClient, *artifacts: dict) -> None:
+    """Pull request 9, whose head ``abc`` was built by run 9 into ``artifacts``."""
+    fake.get_payloads["/repos/owner/repo/pulls/9"] = {
+        "head": {"sha": "abc", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    fake.get_payloads["/repos/owner/repo/actions/artifacts"] = {
+        "artifacts": [
+            {**artifact, "workflow_run": {"id": 9, "head_sha": "abc"}}
+            for artifact in artifacts
+        ]
+    }
+
+
 @pytest.mark.asyncio
 async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
     service = _service()
@@ -1181,25 +1197,24 @@ async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
 async def test_artifact_download_rejects_oversized_artifact(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {
-                "id": 12,
-                "name": "large",
-                "expired": False,
-                "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
-            }
-        ]
-    }
+    _pull_request_artifacts(
+        fake,
+        {
+            "id": 12,
+            "name": "large",
+            "expired": False,
+            "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
+        },
+    )
     service._client = fake
     # The destination is a directory of its own: ``tmp_path`` also holds the
     # isolated HOME, which anything in the process may write to.
     destination = tmp_path / "artifact"
 
-    with pytest.raises(MemberCapabilityError, match="ask a human to retrieve it"):
+    with pytest.raises(MemberCapabilityError, match="Ask a human to retrieve it"):
         await member_repository.artifact_download(
             _member(service),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "large",
             destination,
         )
@@ -1211,16 +1226,9 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
 async def test_artifact_download_rejects_path_traversal(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {
-                "id": 12,
-                "name": "unsafe",
-                "expired": False,
-                "size_in_bytes": 100,
-            }
-        ]
-    }
+    _pull_request_artifacts(
+        fake, {"id": 12, "name": "unsafe", "expired": False, "size_in_bytes": 100}
+    )
     fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
         {"../outside.txt": b"must not escape"}
     )
@@ -1229,7 +1237,7 @@ async def test_artifact_download_rejects_path_traversal(tmp_path):
     with pytest.raises(MemberCapabilityError, match="unsafe path"):
         await member_repository.artifact_download(
             _member(service),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "unsafe",
             tmp_path,
         )
@@ -2476,7 +2484,11 @@ async def test_reaction_add_uses_target_specific_endpoint():
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "review-comment", 101, "+1"
+        _member(service),
+        "https://github.com/owner/repo/pull/7",
+        "review-comment",
+        101,
+        "+1",
     )
 
     assert result == {"reaction_id": 10, "content": "+1", "comment_id": 101}
@@ -2499,7 +2511,7 @@ async def test_reaction_on_a_review_body_goes_through_graphql():
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "owner/repo", "review", 55, "+1", 7
+        _member(service), "https://github.com/owner/repo/pull/7", "review", 55, "+1"
     )
 
     assert result == {"content": "+1", "comment_id": 55}
@@ -2514,17 +2526,38 @@ async def test_reaction_on_a_review_body_goes_through_graphql():
 
 
 @pytest.mark.asyncio
-async def test_reaction_on_a_review_body_needs_the_pr_number():
+@pytest.mark.parametrize("target", ["review", "review-comment"])
+async def test_a_reaction_on_a_review_needs_a_pull_request_url(target):
     service = _service(person_type="agent")
     fake = FakeClient()
     service._client = fake
 
-    with pytest.raises(MemberCapabilityError, match="PR number"):
+    with pytest.raises(MemberCapabilityError):
         await member_repository.reaction_add(
-            _member(service), "owner/repo", "review", 55, "+1"
+            _member(service), "https://github.com/owner/repo/issues/7", target, 55, "+1"
         )
 
     assert fake.history == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_on_a_conversation_comment_takes_an_issue_or_pull_request():
+    """A pull request's conversation comments are issue comments on GitHub."""
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    for url in (
+        "https://github.com/owner/repo/issues/7",
+        "https://github.com/owner/repo/pull/7",
+    ):
+        await member_repository.reaction_add(
+            _member(service), url, "comment", 101, "+1"
+        )
+
+    assert [post[0] for post in fake.posts] == [
+        "/repos/owner/repo/issues/comments/101/reactions"
+    ] * 2
 
 
 class _Guest:
@@ -2563,11 +2596,9 @@ class _Guest:
 def _artifact_service(content: bytes) -> GitHubCodeHostingService:
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
-        "artifacts": [
-            {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
-        ]
-    }
+    _pull_request_artifacts(
+        fake, {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
+    )
     fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = content
     service._client = fake
     return service
@@ -2592,7 +2623,7 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
             _member(_artifact_service(archive)),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             destination,
         )
@@ -2627,7 +2658,7 @@ async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
     ):
         await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"../x": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )
@@ -2656,7 +2687,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
     ):
         await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"a": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )
@@ -2671,7 +2702,7 @@ async def test_what_the_environment_answers_decides_nothing_else(tmp_path):
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
             _member(_artifact_service(_artifact_zip({"a": b""}))),
-            "https://github.com/owner/repo/actions/runs/9",
+            _ARTIFACT_PR,
             "report",
             tmp_path,
         )

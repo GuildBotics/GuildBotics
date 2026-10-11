@@ -141,7 +141,7 @@ class LocalCodeHostingService(CodeHostingService):
         item: dict[str, Any],
         conditions: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        if resource == "issue_comments":
+        if resource in {"issue_comments", "pull_request_comments"}:
             return [self._comment(comment) for comment in item.get("comments", [])]
         if resource == "issue_timeline":
             return [
@@ -465,28 +465,22 @@ class LocalCodeHostingService(CodeHostingService):
         )
 
     async def add_reaction(
-        self,
-        repo: str,
-        target: ReactionTarget,
-        comment_id: int,
-        reaction: str,
-        pr_number: int | None = None,
+        self, url: str, target: ReactionTarget, comment_id: int, reaction: str
     ) -> ReactionAdded:
-        owner, name = store.split(repo)
+        ref = store.locate(url, None if target == "comment" else "pull_request")
+        item = store.load(ref.owner, ref.repo, ref.number)
         key = {
             "comment": "comments",
             "review-comment": "review_comments",
             "review": "reviews",
         }[target]
-        item, entry = store.find_entry(owner, name, key, comment_id)
-        if target == "review" and item["number"] != pr_number:
-            raise MemberCapabilityError(
-                f"Review {comment_id} is not a review of #{pr_number}."
-            )
+        entry = next((e for e in item.get(key, []) if e["id"] == comment_id), None)
+        if entry is None:
+            raise MemberCapabilityError(f"{ref.url} has no {key} entry {comment_id}.")
         entry.setdefault("reactions", []).append(
             {"author": self.person.person_id, "content": reaction}
         )
-        store.save(self.team.project, owner, name, item)
+        store.save(self.team.project, ref.owner, ref.repo, item)
         return ReactionAdded(content=reaction, comment_id=comment_id)
 
     async def readiness(

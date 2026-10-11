@@ -92,7 +92,9 @@ async def test_an_issue_reads_back_as_it_was_written(host: Harness):
     assert [(c["id"], c["body"], c["author_type"]) for c in comments.items] == [
         (written.comment_id, "Looking into it.", Message.ASSISTANT)
     ]
-    reaction = await code.add_reaction(REPO, "comment", written.comment_id or 0, "eyes")
+    reaction = await code.add_reaction(
+        created.issue_url, "comment", written.comment_id or 0, "eyes"
+    )
     assert (reaction.content, reaction.comment_id) == ("eyes", written.comment_id)
 
 
@@ -134,7 +136,7 @@ async def test_writes_outside_the_configured_owner_are_refused(host: Harness):
             closes_issue=False,
         )
     with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.add_reaction(elsewhere, "comment", 1, "eyes")
+        await host.code.add_reaction(host.theirs.url or "", "comment", 1, "eyes")
     with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
         await host.code.comment(host.theirs.url or "", "Hi")
 
@@ -240,12 +242,16 @@ async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harne
     assert [review.target, inline.target, reply.target, written.target] == [
         created.target
     ] * 4
+    conversation = await code.read(
+        "pull_request_comments", REPO, identifier=str(created.pr_number)
+    )
+    assert [c["id"] for c in conversation.items] == [written.comment_id]
     reactions = [
-        await code.add_reaction(REPO, target, comment_id or 0, "eyes", number)
-        for target, comment_id, number in (
-            ("comment", written.comment_id, None),
-            ("review-comment", inline.review_comment_id, None),
-            ("review", review.review_id, created.pr_number),
+        await code.add_reaction(created.pr_url, target, comment_id or 0, "eyes")
+        for target, comment_id in (
+            ("comment", written.comment_id),
+            ("review-comment", inline.review_comment_id),
+            ("review", review.review_id),
         )
     ]
     assert [reaction.content for reaction in reactions] == ["eyes"] * 3

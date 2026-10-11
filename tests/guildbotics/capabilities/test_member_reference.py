@@ -27,15 +27,15 @@ def test_reference_covers_every_member_domain():
     # regardless of which workflow invoked it.
     assert "guildbotics member git commit" in text
     assert "include_diff=true" in text
-    assert "guildbotics member repository pr create" in text
+    assert "guildbotics member pr create" in text
     assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
     assert "--issue-url appends Refs #<n> unless --closes-issue is set." in text
-    assert "guildbotics member repository pr update" in text
-    assert "guildbotics member repository pr review-comment" in text
+    assert "guildbotics member pr update" in text
+    assert "guildbotics member pr review-comment" in text
     assert "guildbotics run repository/pr_checks" in text
     assert "failed_logs=true" in text
-    assert "guildbotics member repository artifact download" in text
-    assert "guildbotics member repository reaction add" in text
+    assert "guildbotics member pr artifact download" in text
+    assert "guildbotics member pr reaction add" in text
     assert "guildbotics member ticket create" in text
     assert "guildbotics member ticket reaction add" in text
     assert "remove repository files after inspection" in text

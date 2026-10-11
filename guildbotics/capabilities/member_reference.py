@@ -84,6 +84,17 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Read an issue and its comments.",
             ),
             (
+                "guildbotics member ticket read --person <person> --resource <name> "
+                "--repo <repository> --identifier <number> [--params <json>] "
+                "[--continuation <value>]",
+                "Read one bounded page of an issue's resource through the configured "
+                "code_hosting_service: issues, issue_comments, issue_timeline, or "
+                "issue_projects. Collections accept page_size (1-100). "
+                "Results contain normalized items and continuation; reuse identical "
+                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
+                "are not accepted.",
+            ),
+            (
                 "guildbotics member ticket comment --person <person> --url <issue_url> --content-file <file>",
                 "Comment on an issue in the member voice.",
             ),
@@ -102,34 +113,15 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "removes the body.",
             ),
             (
-                "guildbotics member ticket reaction add --person <person> --repo <owner/repo> "
+                "guildbotics member ticket reaction add --person <person> --url <issue_url> "
                 "--comment-id <id> --reaction <reaction>",
-                "React to an issue comment.",
+                "React to a comment of the issue.",
             ),
         ],
     ),
     (
-        "Repository",
+        "Pull request",
         [
-            (
-                "guildbotics member repository read --person <person> --resource <name> "
-                "--repo <repository> [--identifier <id>] [--params <json>] "
-                "[--continuation <value>]",
-                "Read one bounded page through the configured code_hosting_service. "
-                "dependency_alerts accepts state (open by default, resolved, dismissed) "
-                "and page_size (1-100, default 30). With an identifier, it returns one "
-                "alert and accepts no conditions or continuation. Results contain "
-                "normalized items and continuation; reuse identical conditions for "
-                "the next page. For formatted or JSON alerts, run "
-                "repository/security_alerts in a ready command environment. "
-                "Other resources require a numeric identifier: issues, pull_requests, "
-                "issue_comments, issue_timeline, issue_projects, pull_request_reviews, "
-                "pull_request_files, pull_request_threads, review_thread_comments, "
-                "pull_request_readiness. Collections accept page_size (1-100); "
-                "review_thread_comments also requires node from pull_request_threads. "
-                "Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). "
-                "URLs, HTTP methods, headers, and GraphQL are not accepted.",
-            ),
             (
                 "guildbotics run repository/pr_inspect --person <person> repo=<owner/repo> number=<n> "
                 "[include_comments=true] [include_diff=true]",
@@ -144,14 +136,30 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "reduced when jobs share the serialized page budget).",
             ),
             (
-                "guildbotics member repository pr create --person <person> --repo <owner/repo> --head <branch> "
+                "guildbotics member pr read --person <person> --resource <name> "
+                "--repo <repository> --identifier <number> [--params <json>] "
+                "[--continuation <value>]",
+                "Read one bounded page of a PR's resource through the configured "
+                "code_hosting_service: pull_requests, pull_request_comments "
+                "(conversation comments), pull_request_reviews, pull_request_files, "
+                "pull_request_threads, review_thread_comments, or "
+                "pull_request_readiness. Collections accept page_size (1-100); "
+                "review_thread_comments also requires node from pull_request_threads. "
+                "Readiness accepts failed_logs (boolean) and log_tail_bytes "
+                "(1-65536, default 65536). "
+                "Results contain normalized items and continuation; reuse identical "
+                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
+                "are not accepted.",
+            ),
+            (
+                "guildbotics member pr create --person <person> --repo <owner/repo> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
                 "[--issue-url <url> [--closes-issue|--refs-issue]] [--draft true|false]",
                 "Open a PR, or return the existing open PR for the same head and base branches. "
                 "--issue-url appends Refs #<n> unless --closes-issue is set.",
             ),
             (
-                "guildbotics member repository pr update --person <person> --url <pr_url> "
+                "guildbotics member pr update --person <person> --url <pr_url> "
                 "[--content-file <file>] [--title <title>] [--drop-issue-links]",
                 "Change a PR's body or title. Body replacement preserves existing "
                 "standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or "
@@ -162,39 +170,58 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "--drop-issue-links requires content and disables preservation.",
             ),
             (
-                "guildbotics member repository pr comment --person <person> --url <pr_url> --content-file <file>",
+                "guildbotics member pr comment --person <person> --url <pr_url> --content-file <file>",
                 "Comment on a PR conversation.",
             ),
             (
-                "guildbotics member repository pr review --person <person> --url <pr_url> "
+                "guildbotics member pr review --person <person> --url <pr_url> "
                 "--event approve|request-changes|comment --content-file <file>",
                 "Submit a review verdict on the PR head as a review; a "
                 "conversation comment does not consume a review request or make "
                 "the member a reviewer.",
             ),
             (
-                "guildbotics member repository pr review-comment --person <person> --url <pr_url> "
+                "guildbotics member pr review-comment --person <person> --url <pr_url> "
                 "--path <file> --line <n> [--side LEFT|RIGHT] [--start-line <n> --start-side LEFT|RIGHT] "
                 "--content-file <file>",
                 "Create a new inline review comment on a PR diff line.",
             ),
             (
-                "guildbotics member repository pr reply --person <person> --url <pr_url> "
+                "guildbotics member pr reply --person <person> --url <pr_url> "
                 "--reply-target-id <id> --content-file <file>",
                 "Reply to an inline review thread.",
             ),
             (
-                "guildbotics member repository artifact download --person <person> "
-                "--url <pr_url|run_url> --name <artifact> [--dest <dir>]",
-                "Download and extract a size-limited CI artifact; remove "
-                "repository files after inspection.",
+                "guildbotics member pr reaction add --person <person> --url <pr_url> "
+                "--target comment|review-comment|review --comment-id <id> "
+                "--reaction <reaction>",
+                "React to a conversation comment, a review thread comment, or a "
+                "review's body of the PR.",
             ),
             (
-                "guildbotics member repository reaction add --person <person> --repo <owner/repo> "
-                "--target comment|review-comment|review --comment-id <id> "
-                "[--pr-number <n>] --reaction <reaction>",
-                "React to a PR conversation comment, a review thread comment, or a "
-                "review's body (review: the review id with --pr-number).",
+                "guildbotics member pr artifact download --person <person> "
+                "--url <pr_url> --name <artifact> [--dest <dir>]",
+                "Download and extract a size-limited CI artifact of the PR's head; "
+                "remove repository files after inspection.",
+            ),
+        ],
+    ),
+    (
+        "Repository information",
+        [
+            (
+                "guildbotics member repo-info read --person <person> --resource "
+                "dependency_alerts --repo <repository> [--identifier <id>] "
+                "[--params <json>] [--continuation <value>]",
+                "Read one bounded page of the repository's dependency_alerts through "
+                "the configured code_hosting_service. It accepts state (open by "
+                "default, resolved, dismissed) and page_size (1-100, default 30). "
+                "With an identifier, it returns one alert and accepts no conditions "
+                "or continuation. For formatted or JSON alerts, run "
+                "repository/security_alerts in a ready command environment. "
+                "Results contain normalized items and continuation; reuse identical "
+                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
+                "are not accepted.",
             ),
         ],
     ),
@@ -347,7 +374,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "the requester for a decision instead of registering it or fixing it yourself.",
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
-    "When issue work changed code, open or reuse a PR with `member repository pr "
+    "When issue work changed code, open or reuse a PR with `member pr "
     "create`. Pass `--issue-url`, and add `--closes-issue` only when the issue is "
     "complete once this PR merges into the branch that receives its work. "
     "A child issue can therefore use `Closes` in a PR to its parent's feature "
@@ -360,10 +387,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "PR into a feature branch, follow the manual-close rule below. `Closes` only "
     "states intent and does not by itself authorize closing the issue.",
     "When creating new PR inline feedback, first inspect the PR with "
-    "`repository/pr_inspect include_diff=true`, then use `member repository pr "
+    "`repository/pr_inspect include_diff=true`, then use `member pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
     "(`line`, `side`, and optional `--start-line` / `--start-side`); take `path` from the containing file.",
-    "When addressing existing PR review threads, reply with `member repository pr reply` "
+    "When addressing existing PR review threads, reply with `member pr reply` "
     "using the `reply_target_id` from `repository/pr_inspect include_comments=true`.",
     "After opening or updating a PR, inspect its CI and completion readiness with "
     "`repository/pr_checks`. "

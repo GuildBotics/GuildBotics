@@ -168,19 +168,6 @@ def next_id(owner: str, repo: str) -> int:
     )
 
 
-def find_entry(owner: str, repo: str, key: str, entry_id: int) -> tuple[dict, dict]:
-    """The item and its ``key`` entry with ``entry_id``.
-
-    Raises:
-        MemberCapabilityError: If the repository has none.
-    """
-    for item in items(owner, repo):
-        for entry in item.get(key, []):
-            if entry["id"] == entry_id:
-                return item, entry
-    raise MemberCapabilityError(f"{owner}/{repo} has no {key} entry {entry_id}.")
-
-
 def repository(owner: str, repo: str) -> dict[str, Any]:
     path = root() / owner / repo / "repository.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}

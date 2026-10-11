@@ -1,5 +1,5 @@
 en:
-  incomplete: "Could not retrieve the complete %{resource} result within the supported limit. Read individual pages with member repository read."
+  incomplete: "Could not retrieve the complete %{resource} result within the supported limit. Read individual pages with member ticket read or member pr read."
   flag: "Use true or false for boolean arguments."
   log_size: "log_tail_bytes must be a positive integer (at most %{maximum})."
   number: "number must be a positive issue or pull request number."

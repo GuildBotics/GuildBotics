@@ -164,13 +164,22 @@ async def test_reaction_add_reacts_to_each_kind_of_target(member, target, key):
         entry["submitted_at"] = entry.pop("created_at")
     url = pull_request(3, "feature", **{key: [{**entry, "in_reply_to": None}]})
 
-    result = await member_repository.reaction_add(
-        member, "owner/repo", target, 7, "eyes", 3
-    )
+    result = await member_repository.reaction_add(member, url, target, 7, "eyes")
 
     assert result == {"content": "eyes", "comment_id": 7}
     [reacted] = item(url)[key]
     assert reacted["reactions"] == [{"author": "aiko", "content": "eyes"}]
+
+
+@pytest.mark.asyncio
+async def test_reaction_add_looks_only_in_the_item_the_url_names(member):
+    """The comment is found in the issue or pull request ``url`` names; the
+    same id on another item is not it."""
+    pull_request(3, "feature", comments=[comment("reviewer", id=7)])
+    other = pull_request(4, "other")
+
+    with pytest.raises(MemberCapabilityError, match="no comments entry 7"):
+        await member_repository.reaction_add(member, other, "comment", 7, "eyes")
 
 
 @pytest.mark.asyncio

@@ -408,12 +408,15 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         assert member_module._member_command_needs_lease() is False
 
 
+_READ_GROUPS = {"issue": "ticket", "pull_request": "pr", "repository": "repo-info"}
+
+
 def test_ci_inspection_commands_are_read_only() -> None:
-    repository = member_module.member.commands["repository"]
+    commands = member_module.member.commands
 
     for command in (
-        repository.commands["read"],
-        repository.commands["artifact"].commands["download"],
+        *(commands[group].commands["read"] for group in _READ_GROUPS.values()),
+        commands["pr"].commands["artifact"].commands["download"],
     ):
         with click.Context(command):
             assert member_module._member_command_needs_lease() is False
@@ -422,10 +425,30 @@ def test_ci_inspection_commands_are_read_only() -> None:
 def test_inspection_cli_leaves_are_removed():
     member = member_module.member
     assert "inspect" not in member.commands["ticket"].commands
-    assert (
-        not {"inspect", "checks"}
-        & member.commands["repository"].commands["pr"].commands.keys()
+    assert not {"inspect", "checks"} & member.commands["pr"].commands.keys()
+
+
+@pytest.mark.parametrize(("subject", "group"), _READ_GROUPS.items())
+def test_each_read_reads_only_its_subjects_resources(subject, group):
+    """``ticket read`` reads an issue, ``pr read`` a pull request, and
+    ``repo-info read`` the repository: every resource is read in one place."""
+    from guildbotics.runtime.code_hosting_resources import RESOURCES_BY_SUBJECT
+
+    read = member_module.member.commands[group].commands["read"]
+    [resource] = [option for option in read.params if option.name == "resource"]
+    assert set(resource.type.choices) == set(RESOURCES_BY_SUBJECT[subject])
+    elsewhere = next(
+        name
+        for other, resources in RESOURCES_BY_SUBJECT.items()
+        if other != subject
+        for name in resources
     )
+    result = CliRunner().invoke(
+        member_module.member,
+        [group, "read", "--person", "aiko", "--resource", elsewhere, "--repo", "o/r"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value for '--resource'" in result.output
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
@@ -436,18 +459,17 @@ def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
 
 
 def test_member_commands_are_named_by_kind_not_provider():
-    """Agents call the member CLI by the kind of service (ticket, repository,
+    """Agents call the member CLI by what they act on (ticket, pr, repo-info,
     chat), whichever provider the workspace configures for it."""
     from guildbotics.integrations.factory import PROVIDERS
 
     names = {name for path in _command_paths(member_module.member) for name in path}
     assert not names & PROVIDERS.keys()
-    assert {"ticket", "repository", "chat"} <= member_module.member.commands.keys()
+    assert {"ticket", "pr", "repo-info", "chat"} <= member_module.member.commands.keys()
+    assert "repository" not in member_module.member.commands
 
 
-def test_repository_read_records_host_target_in_workflow_trace(
-    monkeypatch, bind_invocation
-):
+def test_pr_read_records_host_target_in_workflow_trace(monkeypatch, bind_invocation):
 
     from guildbotics.runtime.code_hosting_resources import (
         RepositoryReadPage,
@@ -480,7 +502,7 @@ def test_repository_read_records_host_target_in_workflow_trace(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
+            "pr",
             "read",
             "--person",
             "aiko",
@@ -684,7 +706,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     async def failing():
         raise RuntimeError("boom")
 
-    member_module._run_interactive(inspect_pr(), session, "member repository read")
+    member_module._run_interactive(inspect_pr(), session, "member pr read")
     with pytest.raises(RuntimeError):
         member_module._run_interactive(failing(), session, "member git push")
 
@@ -693,7 +715,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
             encoding="utf-8"
         )
     )
-    assert record["command"] == "member repository read"
+    assert record["command"] == "member pr read"
     assert record["status"] == "failed"
     # Only the targets are shared: the session's host attributes describe
     # this machine.
@@ -842,7 +864,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
         async def context(self, check_credentials=False):
             return {
                 "person_id": "aiko",
-                "capabilities": "### Repository\n- `guildbotics member repository pr create ...`",
+                "capabilities": "### Repository\n- `guildbotics member pr create ...`",
             }
 
         async def aclose(self):
@@ -858,7 +880,7 @@ def test_member_context_markdown_renders_capabilities_section(monkeypatch):
 
     assert result.exit_code == 0
     assert "## Member Capabilities" in result.output
-    assert "guildbotics member repository pr create" in result.output
+    assert "guildbotics member pr create" in result.output
 
 
 def test_member_context_markdown_highlights_communication_style(monkeypatch):
@@ -1155,11 +1177,11 @@ CONTENT_COMMANDS = (
     "git publish --person aiko --repo-path .",
     "ticket comment --person aiko --url https://github.com/owner/repo/issues/1",
     "ticket create --person aiko --repo owner/repo --title Title",
-    "repository pr create --person aiko --repo owner/repo --head feature --title Title",
-    "repository pr comment --person aiko --url https://github.com/owner/repo/pull/1",
-    "repository pr review-comment --person aiko "
+    "pr create --person aiko --repo owner/repo --head feature --title Title",
+    "pr comment --person aiko --url https://github.com/owner/repo/pull/1",
+    "pr review-comment --person aiko "
     "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
-    "repository pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
+    "pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
     "--reply-target-id 1",
     "task complete --person aiko --status done",
 )
@@ -1195,11 +1217,11 @@ def test_required_content_commands_reject_empty_stdin(command, bind_invocation):
         "ticket comment",
         "ticket create",
         "ticket update",
-        "repository pr create",
-        "repository pr update",
-        "repository pr comment",
-        "repository pr review-comment",
-        "repository pr reply",
+        "pr create",
+        "pr update",
+        "pr comment",
+        "pr review-comment",
+        "pr reply",
         "task complete",
     ],
 )
@@ -1322,7 +1344,7 @@ def test_content_file_read_failure_is_reported(monkeypatch, tmp_path):
     [
         "memory record --person aiko",
         "ticket create --person aiko --repo owner/repo",
-        "repository pr create --person aiko --repo owner/repo --head feature",
+        "pr create --person aiko --repo owner/repo --head feature",
     ],
 )
 @pytest.mark.parametrize(
@@ -2063,7 +2085,6 @@ def test_member_pr_create_passes_base(monkeypatch):
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2170,7 +2191,6 @@ def test_member_pr_create_reads_content_from_stdin(monkeypatch):
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2240,7 +2260,6 @@ def test_member_pr_create_passes_closes_issue(monkeypatch):
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2270,7 +2289,6 @@ def test_member_pr_create_rejects_closes_issue_without_issue_url():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2297,7 +2315,6 @@ def test_member_pr_create_rejects_unknown_draft_value():
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2325,7 +2342,6 @@ def test_member_pr_create_rejects_multiline_title():
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2351,7 +2367,6 @@ def test_member_pr_create_rejects_missing_content_source():
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "create",
             "--person",
@@ -2373,7 +2388,6 @@ def test_member_pr_update_rejects_update_without_any_change():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "update",
             "--person",
@@ -2392,7 +2406,6 @@ def test_member_pr_update_drop_issue_links_requires_content():
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "update",
             "--person",
@@ -2448,7 +2461,6 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "update",
             "--person",
@@ -2513,7 +2525,6 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
     result = CliRunner().invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "update",
             "--person",
@@ -2560,7 +2571,7 @@ def test_member_issue_update_rejects_update_without_any_change():
     ("command", "url_option"),
     [
         (["ticket", "update"], "https://github.com/owner/repo/issues/42"),
-        (["repository", "pr", "update"], "https://github.com/owner/repo/pull/7"),
+        (["pr", "update"], "https://github.com/owner/repo/pull/7"),
     ],
 )
 def test_member_update_rejects_an_empty_title(command, url_option):
@@ -2883,7 +2894,6 @@ def test_member_pr_review_reads_stdin_and_records_evidence(
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "review",
             "--person",
@@ -2916,7 +2926,6 @@ def test_member_pr_review_rejects_unknown_event():
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "review",
             "--person",
@@ -2981,7 +2990,6 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "review-comment",
             "--person",
@@ -3026,7 +3034,6 @@ def test_member_pr_review_comment_rejects_partial_range():
     result = runner.invoke(
         member_module.member,
         [
-            "repository",
             "pr",
             "review-comment",
             "--person",
@@ -3048,37 +3055,26 @@ def test_member_pr_review_comment_rejects_partial_range():
     assert "--start-line and --start-side must be provided together" in result.output
 
 
+_ISSUE = "https://github.com/owner/repo/issues/42"
+_PULL = "https://github.com/owner/repo/pull/7"
+
+
 @pytest.mark.parametrize(
-    ("arguments", "target", "pr_number"),
+    ("arguments", "url", "target"),
     [
-        (["ticket", "reaction", "add"], "comment", None),
-        (
-            ["repository", "reaction", "add", "--target", "comment"],
-            "comment",
-            None,
-        ),
-        (
-            ["repository", "reaction", "add", "--target", "review-comment"],
-            "review-comment",
-            None,
-        ),
-        (
-            [
-                "repository",
-                "reaction",
-                "add",
-                "--target",
-                "review",
-                "--pr-number",
-                "7",
-            ],
-            "review",
-            7,
+        (["ticket", "reaction", "add", "--url", _ISSUE], _ISSUE, "comment"),
+        *(
+            (
+                ["pr", "reaction", "add", "--url", _PULL, "--target", target],
+                _PULL,
+                target,
+            )
+            for target in ("comment", "review-comment", "review")
         ),
     ],
 )
 def test_member_reaction_add_names_its_target_and_records_evidence(
-    monkeypatch, bind_invocation, arguments, target, pr_number
+    monkeypatch, bind_invocation, arguments, url, target
 ):
     lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
@@ -3108,8 +3104,6 @@ def test_member_reaction_add_names_its_target_and_records_evidence(
             *arguments,
             "--person",
             "aiko",
-            "--repo",
-            "owner/repo",
             "--comment-id",
             "55",
             "--reaction",
@@ -3119,7 +3113,7 @@ def test_member_reaction_add_names_its_target_and_records_evidence(
     lease.release()
 
     assert result.exit_code == 0, result.output
-    assert calls == [("owner/repo", target, 55, "eyes", pr_number)]
+    assert calls == [(url, target, 55, "eyes")]
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "reaction_add"
 
 
@@ -3132,8 +3126,8 @@ def test_member_ticket_reaction_add_takes_no_target():
             "add",
             "--person",
             "aiko",
-            "--repo",
-            "owner/repo",
+            "--url",
+            _ISSUE,
             "--target",
             "review",
             "--comment-id",
@@ -3825,7 +3819,6 @@ def _work_target_records():
     [
         (
             [
-                "repository",
                 "pr",
                 "comment",
                 "--url",
