@@ -16,6 +16,11 @@ from guildbotics.utils.i18n_tool import get_language, set_language, t
 REPO = "GuildBotics/GuildBotics"
 BASE = "https://github.example.test/api/v3/"
 PATH = f"/api/v3/repos/{REPO}/dependabot/alerts"
+#: Issue #7 and pull request #7, as GitHub answers each at its own address.
+NAMED_ITEMS = {
+    f"/api/v3/repos/{REPO}/issues/7": {"number": 7, "state": "open"},
+    f"/api/v3/repos/{REPO}/pulls/7": {"number": 7, "state": "open"},
+}
 
 
 @pytest.fixture(params=["en", "ja"])
@@ -267,6 +272,7 @@ async def test_inspection_rest_pages_rebuild_original_routes(
     reader, resource, suffix, item
 ):
     service, state, requests = reader
+    state["items"] = NAMED_ITEMS
     state["respond"] = lambda _: httpx.Response(
         200,
         json=[item],
@@ -300,6 +306,29 @@ async def test_inspection_rest_pages_rebuild_original_routes(
         ]
     if resource == "issue_timeline":
         assert first.items[0]["pull_request"] == {"repo": "fork/repo", "number": 9}
+
+
+@pytest.mark.asyncio
+async def test_every_page_of_a_shared_route_reads_its_items_kind(reader):
+    """A continuation names no more than the request it continues: the page
+    it asks for is of an issue only while the number is still an issue's."""
+    service, state, _ = reader
+    state["items"] = dict(NAMED_ITEMS)
+    state["respond"] = lambda _: httpx.Response(
+        200,
+        json=[{"id": 1, "body": "comment", "user": {"login": "aiko"}}],
+        headers={"Link": f'<{BASE}repos/{REPO}/issues/7/comments?page=2>; rel="next"'},
+    )
+    first = await service.read("issue_comments", REPO, identifier="7")
+    state["items"][f"/api/v3/repos/{REPO}/issues/7"] = {
+        "number": 7,
+        "pull_request": {},
+    }
+
+    with pytest.raises(RepositoryReadError, match="is a pull request"):
+        await service.read(
+            "issue_comments", REPO, identifier="7", continuation=first.continuation
+        )
 
 
 @pytest.mark.asyncio
@@ -543,9 +572,12 @@ async def test_graphql_partial_data_and_project_field_overflow_fail_explicitly(r
 @pytest_asyncio.fixture
 async def reader(monkeypatch):
     requests = []
-    state = {"respond": lambda _: httpx.Response(200, json=[])}
+    state = {"respond": lambda _: httpx.Response(200, json=[]), "items": {}}
 
     def respond(request):
+        # The item a shared route's first page is of, read for its kind.
+        if request.url.path in state["items"]:
+            return httpx.Response(200, json=state["items"][request.url.path])
         requests.append(request)
         return state["respond"](request)
 
@@ -792,6 +824,8 @@ async def test_raw_limit_is_enforced_by_authenticated_client(
     reader, monkeypatch, resource, identifier
 ):
     service, state, _ = reader
+    if resource in {"issue_comments", "issue_timeline", "pull_request_comments"}:
+        state["items"] = NAMED_ITEMS
     monkeypatch.setattr(hosting, "MAX_PAGE_BYTES", 250)
     state["respond"] = lambda _: httpx.Response(200, content=b"x" * 251)
     with pytest.raises(

@@ -49,6 +49,7 @@ from guildbotics.integrations.github.pull_requests import (
     GitHubResource,
     _raise_for_status,
     _work_target,
+    refuse_pull_request,
 )
 from guildbotics.integrations.github.read_resources import (
     GRAPH_RESOURCES,
@@ -67,6 +68,7 @@ from guildbotics.integrations.github.workflow_status_comment import (
 from guildbotics.runtime.code_hosting_resources import (
     DETAIL_RESOURCES,
     MAX_PAGE_BYTES,
+    RESOURCE_SUBJECTS,
     DependencyAlert,
     RepositoryReadError,
     RepositoryReadPage,
@@ -238,6 +240,16 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     ):
                         raise ValueError
             else:
+                if resource in _SHARED_ROUTES:
+                    owner, name = repo.split("/")
+                    await self._named_item(
+                        GitHubResource(
+                            owner,
+                            name,
+                            int(identifier),
+                            _ROUTE_KINDS[RESOURCE_SUBJECTS[resource]],
+                        )
+                    )
                 path = f"repos/{repo}/" + REST_RESOURCES[resource].format(
                     identifier=identifier
                 )
@@ -286,6 +298,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     int(identifier),
                     "pull" if resource == "pull_requests" else "issue",
                 )
+                if resource == "issues":
+                    refuse_pull_request(ref, item)
                 target = _work_target(ref, item)
                 result = {
                     **target,
@@ -371,11 +385,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         resource = self.parse_url(url, expected_kind=_KINDS[kind] if kind else None)
         # The target is read before the write, never after it: a read that
         # fails after the comment landed would make a retry post it twice.
-        item = await (
-            self._pull_request(resource)
-            if resource.kind == "pull"
-            else self._issue(resource)
-        )
+        item = await self._named_item(resource)
         if status is not None:
             body = _addressed(
                 render_workflow_status_comment(body=body, payload=status),
@@ -449,9 +459,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         additions = await self._defined_labels(
             resource.owner, resource.repo, add_labels
         )
-        state_changed = False
-        if state is not None:
-            state_changed = (await self._issue(resource)).get("state") != state
+        issue = await self._issue(resource)
+        state_changed = state is not None and issue.get("state") != state
         client = await self._get_client()
         issue_endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
@@ -459,11 +468,12 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         if payload:
             resp = await client.patch(issue_endpoint, json=payload)
             _raise_for_status(resp)
+            issue = resp.json()
         await self._apply_label_changes(resource, additions, remove_labels)
-        if additions or remove_labels or not payload:
+        if additions or remove_labels:
             resp = await client.get(issue_endpoint)
             _raise_for_status(resp)
-        issue = resp.json()
+            issue = resp.json()
         response_body = issue.get("body")
         return IssueUpdated(
             issue_number=issue.get("number", resource.number),
@@ -532,6 +542,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
 
     async def linked_pull_requests(self, issue_url: str) -> list[str]:
         resource = self.parse_url(issue_url, expected_kind="issue")
+        await self._issue(resource)
         endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline"
         )
@@ -573,6 +584,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             pr = existing[0]
             created = False
         else:
+            if issue_url:
+                await self._linked_issue(f"{owner}/{repo_name}", issue_url)
             resp = await client.post(
                 endpoint,
                 json={
@@ -733,6 +746,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             "review-comment": "pulls/comments",
             "review": f"pulls/{resource.number}/reviews",
         }[target]
+        if target == "comment":
+            await self._named_item(resource)
         child = await self._child(resource, collection, comment_id)
         if child is None:
             raise MemberCapabilityError(f"{target} {comment_id} is not one of {url}.")
@@ -744,6 +759,16 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             },
         )
         return ReactionAdded(content=reaction, comment_id=comment_id)
+
+    async def _linked_issue(self, repo: str, issue_url: str) -> None:
+        """Raises:
+        MemberCapabilityError: If ``issue_url`` names no issue of ``repo``,
+            which the link a pull request's body carries (``#<n>``) would.
+        """
+        linked = self.parse_url(issue_url, expected_kind="issue")
+        if linked.full_repo.casefold() != repo.casefold():
+            raise MemberCapabilityError(f"{issue_url} is not an issue of {repo}.")
+        await self._issue(linked)
 
     async def _child(
         self, resource: GitHubResource, collection: str, child_id: int
@@ -1121,6 +1146,14 @@ def _continuation(response: httpx.Response, request: dict[str, Any]) -> str | No
         json.dumps({"request": request, "after": cursors[0]}).encode()
     ).decode()
 
+
+#: The resources whose GitHub route answers for an issue and a pull request
+#: alike: the item's kind is read before each of their pages.
+_SHARED_ROUTES = frozenset(
+    {"issue_comments", "issue_timeline", "pull_request_comments"}
+)
+#: The kind of GitHub address of each resource subject that is an item.
+_ROUTE_KINDS = {"issue": "issue", "pull_request": "pull"}
 
 _PERMISSIONS = {
     "dependency_alerts": "Dependabot alerts",

@@ -16,6 +16,10 @@ import pytest_asyncio
 from guildbotics.entities.message import Message
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.repository_scope import RepositoryScopeError
+from guildbotics.runtime.code_hosting_resources import (
+    RESOURCES_BY_SUBJECT,
+    RepositoryReadError,
+)
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import MemberCapabilityError
 from tests.guildbotics.integrations.contracts.providers import (
@@ -314,6 +318,101 @@ async def test_a_reaction_reaches_only_a_comment_of_the_item_it_names(
     assert len(host.writes) == before
     reaction = await code.add_reaction(first, target, comment_id or 0, "eyes")
     assert reaction.comment_id == comment_id
+
+
+def _as(host: Harness, kind: str, number: int) -> str:
+    """The URL of ``kind`` ``number`` of the repository."""
+    owner, name = REPO.split("/")
+    return host.url(owner, name, kind, number)
+
+
+@pytest.mark.asyncio
+async def test_an_issue_operation_reaches_no_pull_request(host: Harness):
+    """An issue's URL names an issue only: one with a pull request's number is
+    refused before anything is written, whether the code host numbers both
+    together or each on its own."""
+    code = host.code
+    [created, _] = await _two_pull_requests(code, host)
+    written = await code.comment(created.pr_url, "Hi", kind="pull_request")
+    issue_url = _as(host, "issue", created.pr_number)
+    before = len(host.writes)
+
+    for kind in ("issue", None):
+        with pytest.raises(MemberCapabilityError):
+            await code.comment(issue_url, "Hi", kind=kind)
+    with pytest.raises(MemberCapabilityError):
+        await code.linked_pull_requests(issue_url)
+    with pytest.raises(MemberCapabilityError):
+        await code.update_issue(
+            issue_url,
+            body=None,
+            title="Renamed",
+            add_labels=[],
+            remove_labels=[],
+            state="closed",
+            state_reason=None,
+        )
+    with pytest.raises(MemberCapabilityError):
+        await code.add_reaction(issue_url, "comment", written.comment_id or 0, "eyes")
+
+    assert len(host.writes) == before
+
+
+@pytest.mark.asyncio
+async def test_a_pull_request_links_only_an_issue_of_its_repository(host: Harness):
+    code = host.code
+    [created, other] = await _two_pull_requests(code, host)
+    host.branch("third")
+    before = len(host.writes)
+
+    for issue_url in (
+        _as(host, "issue", created.pr_number),
+        other.pr_url,
+        host.theirs.url or "",
+    ):
+        with pytest.raises(MemberCapabilityError):
+            await code.create_pull_request(
+                REPO,
+                "third",
+                "main",
+                "Third",
+                "",
+                draft=False,
+                issue_url=issue_url,
+                closes_issue=True,
+            )
+
+    assert len(host.writes) == before
+
+
+#: Every resource a code host reads of one issue or one pull request, but
+#: those GitHub answers through GraphQL (its schema types issue and pull
+#: request apart), which the double does not serve.
+_ITEM_RESOURCES = [
+    (subject, resource)
+    for subject in ("issue", "pull_request")
+    for resource in RESOURCES_BY_SUBJECT[subject]
+    if resource
+    not in {"issue_projects", "pull_request_threads", "review_thread_comments"}
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("subject", "resource"), _ITEM_RESOURCES)
+async def test_a_resource_is_read_only_of_an_item_of_its_subject(
+    host: Harness, subject: str, resource: str
+):
+    """An issue's resource is read of an issue and a pull request's of a pull
+    request: the other kind's number reads nothing."""
+    code = host.code
+    if subject == "issue":
+        [created, _] = await _two_pull_requests(code, host)
+        number = created.pr_number
+    else:
+        number = (await code.create_issue(REPO, "Only", "", [])).issue_number
+
+    with pytest.raises(RepositoryReadError):
+        await code.read(resource, REPO, identifier=str(number))
 
 
 @pytest.mark.asyncio

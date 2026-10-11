@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -21,6 +21,7 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.local import store
 from guildbotics.runtime.code_hosting_resources import (
     DETAIL_RESOURCES,
+    RESOURCE_SUBJECTS,
     CompletionBlocker,
     Readiness,
     ReadinessQuery,
@@ -87,7 +88,12 @@ class LocalCodeHostingService(CodeHostingService):
         ):
             raise RepositoryReadError(t("integrations.repository.continuation"))
         try:
-            item = store.load(owner, name, int(identifier))
+            item = store.load(
+                owner,
+                name,
+                cast(ItemKind, RESOURCE_SUBJECTS[resource]),
+                int(identifier),
+            )
         except MemberCapabilityError as exc:
             raise RepositoryReadError(str(exc)) from None
         target = _target(owner, name, item)
@@ -232,7 +238,7 @@ class LocalCodeHostingService(CodeHostingService):
         status: dict[str, object] | None = None,
     ) -> CommentWritten:
         ref, item = self._item(url, kind)
-        comment = self._entry(ref, {"body": body.rstrip(), "status": status})
+        comment = self._entry(item, {"body": body.rstrip(), "status": status})
         item.setdefault("comments", []).append(comment)
         store.save(self.team.project, ref.owner, ref.repo, item)
         return CommentWritten(
@@ -295,7 +301,7 @@ class LocalCodeHostingService(CodeHostingService):
         )
 
     async def linked_pull_requests(self, issue_url: str) -> list[str]:
-        ref = store.locate(issue_url, "issue")
+        ref, _ = self._item(issue_url, "issue")
         return [
             store.url(ref.owner, ref.repo, "pull_request", item["number"])
             for item in store.items(ref.owner, ref.repo)
@@ -339,7 +345,7 @@ class LocalCodeHostingService(CodeHostingService):
                 reviewers=[],
                 reviews=[],
                 review_comments=[],
-                issue=store.locate(issue_url, "issue").number if issue_url else None,
+                issue=self._linked_issue(owner, name, issue_url),
             )
             store.save(self.team.project, owner, name, item)
         return PullRequestCreated(
@@ -378,7 +384,7 @@ class LocalCodeHostingService(CodeHostingService):
     async def review(self, url: str, body: str, event: ReviewEvent) -> ReviewSubmitted:
         ref, item = self._item(url, "pull_request")
         review = self._entry(
-            ref,
+            item,
             {
                 "body": body.rstrip(),
                 "state": _REVIEW_STATES[event],
@@ -409,7 +415,7 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> ReviewCommentWritten:
         ref, item = self._item(url, "pull_request")
         comment = self._entry(
-            ref,
+            item,
             {
                 "body": body.rstrip(),
                 "path": path,
@@ -448,7 +454,7 @@ class LocalCodeHostingService(CodeHostingService):
                 f"Review comment '{reply_target_id}' is not replyable for this PR."
             )
         reply = self._entry(
-            ref,
+            item,
             {
                 **{key: root[key] for key in ("path", "line", "side", "commit_id")},
                 "body": body.rstrip(),
@@ -468,7 +474,7 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, target: ReactionTarget, comment_id: int, reaction: str
     ) -> ReactionAdded:
         ref = store.locate(url, None if target == "comment" else "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         key = {
             "comment": "comments",
             "review-comment": "review_comments",
@@ -492,7 +498,7 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> Readiness:
         ReadinessQuery(failed_logs=failed_logs, log_tail_bytes=log_tail_bytes)
         ref = store.locate(url, "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         head_sha = self._head_sha(ref, item)
         succeeds = self._checks() == "success"
         result: dict[str, Any] = {
@@ -610,7 +616,7 @@ class LocalCodeHostingService(CodeHostingService):
 
     async def pull_request_head(self, url: str) -> PullRequestHead:
         ref = store.locate(url, "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         owner, repo = store.split(item.get("head_repo") or ref.full_repo)
         return PullRequestHead(owner=owner, repo=repo, branch=item["head"])
 
@@ -651,7 +657,7 @@ class LocalCodeHostingService(CodeHostingService):
         assert task.pull_request_url
         ref = store.locate(task.pull_request_url, "pull_request")
         return self._pull_request_work(
-            ref.owner, ref.repo, store.load(ref.owner, ref.repo, ref.number)
+            ref.owner, ref.repo, store.load(ref.owner, ref.repo, ref.kind, ref.number)
         )
 
     def _pull_request_work(
@@ -692,14 +698,30 @@ class LocalCodeHostingService(CodeHostingService):
 
     def _item(self, url: str, kind: ItemKind | None) -> tuple[ItemRef, dict[str, Any]]:
         ref = store.locate(url, kind)
-        return ref, store.load(ref.owner, ref.repo, ref.number)
+        return ref, store.load(ref.owner, ref.repo, ref.kind, ref.number)
+
+    def _linked_issue(self, owner: str, repo: str, issue_url: str) -> int | None:
+        """The number of the issue of ``owner/repo`` a new pull request links.
+
+        Raises:
+            MemberCapabilityError: If ``issue_url`` names no issue of the
+                repository.
+        """
+        if not issue_url:
+            return None
+        ref = store.locate(issue_url, "issue")
+        if (ref.owner, ref.repo) != (owner, repo):
+            raise MemberCapabilityError(
+                f"{issue_url} is not an issue of {owner}/{repo}."
+            )
+        return store.load(owner, repo, "issue", ref.number)["number"]
 
     def _new_item(
         self, owner: str, repo: str, kind: ItemKind, title: str, body: str
     ) -> dict[str, Any]:
         return {
             "kind": kind,
-            "number": store.next_number(owner, repo),
+            "number": store.next_number(owner, repo, kind),
             "title": title,
             "body": body,
             "state": "open",
@@ -712,9 +734,9 @@ class LocalCodeHostingService(CodeHostingService):
             "comments": [],
         }
 
-    def _entry(self, ref: ItemRef, fields: dict[str, Any]) -> dict[str, Any]:
+    def _entry(self, item: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
         return {
-            "id": store.next_id(ref.owner, ref.repo),
+            "id": store.next_id(item),
             "author": self.person.person_id,
             "created_at": store.now(),
             **fields,

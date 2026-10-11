@@ -132,7 +132,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
 
     def assign(url: str) -> None:
         ref = store.locate(url, "issue")
-        item = store.load(ref.owner, ref.repo, ref.number)
+        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
         item.update(lane=Task.READY, assignees=[MEMBER])
         write(ref.owner, ref.repo, item)
 
@@ -355,9 +355,18 @@ class GitHubDouble:
         if match := re.fullmatch(r"/issues/comments/(\d+)", route):
             return self.comments.get(int(match.group(1)))
         if match := re.fullmatch(r"/pulls/(\d+)/reviews", route):
+            number = int(match.group(1))
+            if "head" not in self.items.get(number, {}):
+                return None
+            if method == "GET":
+                return [
+                    review
+                    for review in self.reviews.values()
+                    if review["pull_request_url"].endswith(f"/pulls/{number}")
+                ]
             review = {
                 **self._entry(
-                    body, pull_request_url=f"{API}/repos/{REPO}/pulls/{match.group(1)}"
+                    body, pull_request_url=f"{API}/repos/{REPO}/pulls/{number}"
                 ),
                 "state": "APPROVED",
                 "submitted_at": "t",

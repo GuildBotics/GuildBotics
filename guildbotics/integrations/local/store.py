@@ -3,11 +3,11 @@ device-local ``.guildbotics/local/services/code``.
 
 Each repository is a bare git repository ``<owner>/<repo>.git`` (the remote
 members fetch from and push to) beside a directory ``<owner>/<repo>/`` that
-holds its issues and pull requests, one JSON file per number
-(``items/<n>.json``), and optionally ``repository.json`` (the labels the
-repository defines) and ``artifacts/<n>/<name>.zip`` (a pull request's CI
-artifacts). Issues and pull requests share one numbering, and comments, reviews
-and review comments one id sequence per repository, as on a hosted code host.
+holds its issues (``issues/<n>.json``) and pull requests (``pull/<n>.json``),
+each kind numbered on its own, and optionally ``repository.json`` (the labels
+the repository defines) and ``artifacts/<n>/<name>.zip`` (a pull request's CI
+artifacts). The comments, reviews and review comments of an item have ids of
+its own sequence, so a URL and an id name one thing only together.
 
 An item is addressed by ``local://<owner>/<repo>/issues/<n>`` or
 ``local://<owner>/<repo>/pull/<n>``.
@@ -40,7 +40,7 @@ from guildbotics.utils.fileio import get_workspace_local_path
 SCHEME = "local"
 _COLLECTIONS: dict[ItemKind, str] = {"issue": "issues", "pull_request": "pull"}
 _URL_PARTS = 4
-#: The keys of an item that hold things with an id of the repository's sequence.
+#: The keys of an item that hold things with an id of the item's sequence.
 _ENTRIES = ("comments", "reviews", "review_comments")
 
 
@@ -108,33 +108,43 @@ def bare(owner: str, repo: str) -> Path:
 
 def repositories() -> Iterator[tuple[str, str]]:
     """Every repository that has items."""
-    for items in sorted(root().glob("*/*/items")):
-        yield items.parent.parent.name, items.parent.name
+    for repository in sorted(
+        {
+            directory.parent
+            for name in _COLLECTIONS.values()
+            for directory in root().glob(f"*/*/{name}")
+        }
+    ):
+        yield repository.parent.name, repository.name
 
 
-def item_path(owner: str, repo: str, number: int) -> Path:
-    return root() / owner / repo / "items" / f"{number}.json"
+def item_path(owner: str, repo: str, kind: ItemKind, number: int) -> Path:
+    return root() / owner / repo / _COLLECTIONS[kind] / f"{number}.json"
 
 
-def load(owner: str, repo: str, number: int) -> dict[str, Any]:
+def load(owner: str, repo: str, kind: ItemKind, number: int) -> dict[str, Any]:
     """Raises:
-    MemberCapabilityError: If the repository has no such item.
+    MemberCapabilityError: If the repository has no such item of ``kind``.
     """
-    path = item_path(owner, repo, number)
+    path = item_path(owner, repo, kind, number)
     if not path.is_file():
-        raise MemberCapabilityError(f"{owner}/{repo}#{number} was not found.")
+        raise MemberCapabilityError(f"{url(owner, repo, kind, number)} was not found.")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def items(owner: str, repo: str) -> list[dict[str, Any]]:
-    directory = root() / owner / repo / "items"
-    return sorted(
-        (
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in directory.glob("*.json")
-        ),
-        key=lambda item: item["number"],
-    )
+    """Every issue and pull request of the repository, issues first."""
+    return [
+        item
+        for name in _COLLECTIONS.values()
+        for item in sorted(
+            (
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (root() / owner / repo / name).glob("*.json")
+            ),
+            key=lambda item: item["number"],
+        )
+    ]
 
 
 def save(project: Project, owner: str, repo: str, item: dict[str, Any]) -> None:
@@ -144,24 +154,25 @@ def save(project: Project, owner: str, repo: str, item: dict[str, Any]) -> None:
         RepositoryScopeError: If the repository is not the configured owner's.
     """
     check_repository(configured_owner(project), owner, repo)
-    path = item_path(owner, repo, item["number"])
+    path = item_path(owner, repo, item["kind"], item["number"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def next_number(owner: str, repo: str) -> int:
-    return max((item["number"] for item in items(owner, repo)), default=0) + 1
-
-
-def next_id(owner: str, repo: str) -> int:
+def next_number(owner: str, repo: str, kind: ItemKind) -> int:
     return (
         max(
-            (
-                entry["id"]
-                for item in items(owner, repo)
-                for key in _ENTRIES
-                for entry in item.get(key, [])
-            ),
+            (item["number"] for item in items(owner, repo) if item["kind"] == kind),
+            default=0,
+        )
+        + 1
+    )
+
+
+def next_id(item: dict[str, Any]) -> int:
+    return (
+        max(
+            (entry["id"] for key in _ENTRIES for entry in item.get(key, [])),
             default=0,
         )
         + 1

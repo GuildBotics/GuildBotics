@@ -102,6 +102,13 @@ class FakeClient:
         payload = deepcopy(self.get_payloads.get(endpoint, []))
         if "/branches/" in endpoint and endpoint not in self.get_payloads:
             payload = {"commit": {"sha": "base123"}}
+        if (
+            re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", endpoint)
+            and endpoint not in self.get_payloads
+        ):
+            # An issue: GitHub answers a pull request here too, with the
+            # ``pull_request`` key that tells them apart.
+            payload = {"number": int(endpoint.rsplit("/", 1)[1]), "state": "open"}
         if endpoint.startswith("/repos/owner/repo/pulls/") and isinstance(
             payload, dict
         ):
@@ -1104,7 +1111,9 @@ async def test_linked_pull_requests_refuse_an_incomplete_issue_timeline(after_pa
     service._client = fake
     with pytest.raises(MemberCapabilityError):
         await service.linked_pull_requests("https://github.com/owner/repo/issues/1")
-    assert len(fake.gets) == (2 if after_page else 1)
+    # The issue itself is read first, as an issue, then its timeline.
+    assert [endpoint for endpoint, _, _ in fake.gets][0] == "/repos/owner/repo/issues/1"
+    assert len(fake.gets) == (3 if after_page else 2)
 
 
 @pytest.mark.asyncio
@@ -1639,10 +1648,11 @@ async def test_issue_update_removing_a_label_skips_the_repository_label_lookup()
     )
 
     # Nothing is validated against the repository vocabulary when only
-    # removing, so the paginated label listing is never fetched; the one GET
-    # reads the issue back for the result.
+    # removing, so the paginated label listing is never fetched; the first GET
+    # makes sure the number is an issue's, the last reads it back.
     assert [endpoint for endpoint, _params, _headers in fake.gets] == [
-        "/repos/owner/repo/issues/42"
+        "/repos/owner/repo/issues/42",
+        "/repos/owner/repo/issues/42",
     ]
     assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
     assert fake.patches == []
@@ -1719,6 +1729,7 @@ async def test_issue_update_patches_fields_before_labels_and_refetches_the_resul
     # re-fetched afterwards so it reflects the applied label changes.
     assert fake.history == [
         ("get", "/repos/owner/repo/labels"),
+        ("get", "/repos/owner/repo/issues/42"),
         ("patch", "/repos/owner/repo/issues/42"),
         ("post", "/repos/owner/repo/issues/42/labels"),
         ("get", "/repos/owner/repo/issues/42"),
@@ -2521,6 +2532,7 @@ async def test_a_reaction_reads_where_its_comment_is_then_reacts_to_its_node(
         "node_id": "NODE_101",
         owner[0]: owner[1],
     }
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"number": 7}
     fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
     service._client = fake
 
@@ -2529,7 +2541,14 @@ async def test_a_reaction_reads_where_its_comment_is_then_reacts_to_its_node(
     )
 
     assert result == {"content": "+1", "comment_id": 101}
-    assert fake.history == [("get", f"/repos/owner/repo{path}"), ("post", "/graphql")]
+    # A conversation comment's id says nothing of its item's kind, so the
+    # item the URL names is read as that kind first.
+    named = "/issues/7" if "/issues/" in url else "/pulls/7"
+    assert fake.history == [
+        *([("get", f"/repos/owner/repo{named}")] if target == "comment" else []),
+        ("get", f"/repos/owner/repo{path}"),
+        ("post", "/graphql"),
+    ]
     assert fake.posts[0][1] == {
         "query": ADD_REACTION,
         "variables": {"subject": "NODE_101", "content": "THUMBS_UP"},

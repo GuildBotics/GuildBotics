@@ -183,6 +183,33 @@ async def test_reaction_add_looks_only_in_the_item_the_url_names(member):
 
 
 @pytest.mark.asyncio
+async def test_an_issue_and_a_pull_request_of_one_number_are_two_items(member):
+    """Issues and pull requests are numbered each on their own: issue #1 and
+    pull request #1 are both there, and a URL reaches the one it names."""
+    issue_url = issue(1)
+    pr_url = pull_request(1, "feature")
+
+    await member_repository.issue_comment(member, issue_url, "To the issue")
+    await member_repository.pr_comment(member, pr_url, "To the pull request")
+
+    assert [c["body"] for c in item(issue_url)["comments"]] == ["To the issue"]
+    assert [c["body"] for c in item(pr_url)["comments"]] == ["To the pull request"]
+    for resource, body in (
+        ("issue_comments", "To the issue"),
+        ("pull_request_comments", "To the pull request"),
+    ):
+        page = await member_repository.read_repository(
+            member,
+            resource,
+            "owner/repo",
+            identifier="1",
+            parameters={},
+            continuation="",
+        )
+        assert [c["body"] for c in page["items"]] == [body]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["../9/report", "nested/report"])
 async def test_artifact_download_reads_only_the_pull_requests_artifacts(
     member, tmp_path, name
@@ -295,8 +322,8 @@ async def test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled(me
     the whole patrol, and still reads as itself."""
     _remote_with()
     url = pull_request(5, "feature", author="them", head_repo="contributor/repo")
-    store.item_path("owner", "repo", 5).write_text(
-        store.item_path("owner", "repo", 5)
+    store.item_path("owner", "repo", "pull_request", 5).write_text(
+        store.item_path("owner", "repo", "pull_request", 5)
         .read_text(encoding="utf-8")
         .replace('"reviewers": []', '"reviewers": ["aiko"]'),
         encoding="utf-8",

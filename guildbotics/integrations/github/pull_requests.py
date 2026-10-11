@@ -65,6 +65,17 @@ class GitHubResource:
         return f"{self.owner}/{self.repo}"
 
 
+def refuse_pull_request(resource: GitHubResource, item: dict[str, Any]) -> None:
+    """Raises:
+    MemberCapabilityError: If ``item``, read at an issue's address, is a pull
+        request.
+    """
+    if "pull_request" in item:
+        raise MemberCapabilityError(
+            f"{resource.full_repo}#{resource.number} is a pull request, not an issue."
+        )
+
+
 def _raise_for_status(resp: Any) -> None:
     try:
         resp.raise_for_status()
@@ -509,7 +520,22 @@ class GitHubPullRequests:
         return await self._item(resource, "pulls", "pull request")
 
     async def _issue(self, resource: GitHubResource) -> dict[str, Any]:
-        return await self._item(resource, "issues", "issue")
+        """The issue ``resource`` names.
+
+        Raises:
+            MemberCapabilityError: If the number is a pull request's: GitHub
+                numbers both together and answers a pull request at an
+                issue's address too.
+        """
+        issue = await self._item(resource, "issues", "issue")
+        refuse_pull_request(resource, issue)
+        return issue
+
+    async def _named_item(self, resource: GitHubResource) -> dict[str, Any]:
+        """The issue or pull request ``resource`` names, of the kind it names."""
+        if resource.kind == "pull":
+            return await self._pull_request(resource)
+        return await self._issue(resource)
 
     async def _item(
         self, resource: GitHubResource, collection: str, noun: str
