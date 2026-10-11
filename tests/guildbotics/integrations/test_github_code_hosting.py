@@ -2477,52 +2477,129 @@ async def test_pr_update_drop_issue_links_requires_replacement_body():
     assert fake.gets == fake.patches == []
 
 
+_API = "https://api.github.com/repos/owner/repo"
+
+
 @pytest.mark.asyncio
-async def test_reaction_add_uses_target_specific_endpoint():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    result = await member_repository.reaction_add(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        "review-comment",
-        101,
-        "+1",
-    )
-
-    assert result == {"reaction_id": 10, "content": "+1", "comment_id": 101}
-    assert fake.posts == [
+@pytest.mark.parametrize(
+    ("url", "target", "path", "owner"),
+    [
         (
-            "/repos/owner/repo/pulls/comments/101/reactions",
-            {"content": "+1"},
-            {"Accept": "application/vnd.github+json"},
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_reaction_on_a_review_body_goes_through_graphql():
-    """REST has no reactions for a review; GraphQL reacts to its node."""
+            "https://github.com/owner/repo/issues/7",
+            "comment",
+            "/issues/comments/101",
+            ("issue_url", f"{_API}/issues/7"),
+        ),
+        # A pull request's conversation comments are issue comments on GitHub.
+        (
+            "https://github.com/owner/repo/pull/7",
+            "comment",
+            "/issues/comments/101",
+            ("issue_url", f"{_API}/issues/7"),
+        ),
+        (
+            "https://github.com/owner/repo/pull/7",
+            "review-comment",
+            "/pulls/comments/101",
+            ("pull_request_url", f"{_API}/pulls/7"),
+        ),
+        (
+            "https://github.com/owner/repo/pull/7",
+            "review",
+            "/pulls/7/reviews/101",
+            ("pull_request_url", f"{_API}/pulls/7"),
+        ),
+    ],
+)
+async def test_a_reaction_reads_where_its_comment_is_then_reacts_to_its_node(
+    url, target, path, owner
+):
     service = _service(person_type="agent")
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {"node_id": "PRR_55"}
+    fake.get_payloads[f"/repos/owner/repo{path}"] = {
+        "id": 101,
+        "node_id": "NODE_101",
+        owner[0]: owner[1],
+    }
     fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
     service._client = fake
 
     result = await member_repository.reaction_add(
-        _member(service), "https://github.com/owner/repo/pull/7", "review", 55, "+1"
+        _member(service), url, target, 101, "+1"
     )
 
-    assert result == {"content": "+1", "comment_id": 55}
-    assert fake.history == [
-        ("get", "/repos/owner/repo/pulls/7/reviews/55"),
-        ("post", "/graphql"),
-    ]
+    assert result == {"content": "+1", "comment_id": 101}
+    assert fake.history == [("get", f"/repos/owner/repo{path}"), ("post", "/graphql")]
     assert fake.posts[0][1] == {
         "query": ADD_REACTION,
-        "variables": {"subject": "PRR_55", "content": "THUMBS_UP"},
+        "variables": {"subject": "NODE_101", "content": "THUMBS_UP"},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "comment",
+    [
+        {"id": 101, "node_id": "N", "issue_url": f"{_API}/issues/8"},
+        {"id": 102, "node_id": "N", "issue_url": f"{_API}/issues/7"},
+        [],
+    ],
+)
+async def test_a_reaction_to_a_comment_of_another_item_is_not_sent(comment):
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/comments/101"] = comment
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="is not one of"):
+        await member_repository.reaction_add(
+            _member(service),
+            "https://github.com/owner/repo/issues/7",
+            "comment",
+            101,
+            "+1",
+        )
+
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_to_a_review_of_another_pull_request_is_not_sent():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {
+        "id": 55,
+        "node_id": "N",
+        "pull_request_url": f"{_API}/pulls/8",
+    }
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="is not one of"):
+        await member_repository.reaction_add(
+            _member(service), "https://github.com/owner/repo/pull/7", "review", 55, "+1"
+        )
+
+    assert fake.posts == []
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_names_the_repository_in_any_case():
+    """GitHub answers with the repository's own spelling of its name."""
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/Owner/Repo/issues/comments/101"] = {
+        "id": 101,
+        "node_id": "N",
+        "issue_url": f"{_API}/issues/7",
+    }
+    fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
+    service._client = fake
+
+    await member_repository.reaction_add(
+        _member(service), "https://github.com/Owner/Repo/issues/7", "comment", 101, "+1"
+    )
+
+    assert fake.history[-1] == ("post", "/graphql")
 
 
 @pytest.mark.asyncio
@@ -2538,26 +2615,6 @@ async def test_a_reaction_on_a_review_needs_a_pull_request_url(target):
         )
 
     assert fake.history == []
-
-
-@pytest.mark.asyncio
-async def test_a_reaction_on_a_conversation_comment_takes_an_issue_or_pull_request():
-    """A pull request's conversation comments are issue comments on GitHub."""
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    for url in (
-        "https://github.com/owner/repo/issues/7",
-        "https://github.com/owner/repo/pull/7",
-    ):
-        await member_repository.reaction_add(
-            _member(service), url, "comment", 101, "+1"
-        )
-
-    assert [post[0] for post in fake.posts] == [
-        "/repos/owner/repo/issues/comments/101/reactions"
-    ] * 2
 
 
 class _Guest:

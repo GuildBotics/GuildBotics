@@ -174,7 +174,17 @@ def repository(owner: str, repo: str) -> dict[str, Any]:
 
 
 def artifact(owner: str, repo: str, number: int, name: str) -> Path:
-    return root() / owner / repo / "artifacts" / str(number) / f"{name}.zip"
+    """Where the pull request's artifact ``name`` is kept.
+
+    Raises:
+        MemberCapabilityError: If ``name`` names a file outside the pull
+            request's artifacts.
+    """
+    artifacts = root() / owner / repo / "artifacts" / str(number)
+    path = artifacts / f"{name}.zip"
+    if path.parent != artifacts:
+        raise MemberCapabilityError(f"Artifact '{name}' is not a name of #{number}.")
+    return path
 
 
 def task(

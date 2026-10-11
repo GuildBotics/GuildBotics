@@ -13,8 +13,6 @@ from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import IO, Any, Literal
 
-from pydantic import Field
-
 from guildbotics.entities import Task
 from guildbotics.runtime.code_hosting_resources import (
     Readiness,
@@ -130,10 +128,6 @@ class ReplyWritten(ReadModel):
 
 
 class ReactionAdded(ReadModel):
-    #: The reaction's own id, where the code host gives it one.
-    reaction_id: int | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
     content: str
     comment_id: int
 

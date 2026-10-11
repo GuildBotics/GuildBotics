@@ -183,6 +183,32 @@ async def test_reaction_add_looks_only_in_the_item_the_url_names(member):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["../9/report", "nested/report"])
+async def test_artifact_download_reads_only_the_pull_requests_artifacts(
+    member, tmp_path, name
+):
+    """An artifact is named among the pull request's own: a name that leads
+    into another pull request's artifacts, or anywhere else, is refused."""
+    url = pull_request(3, "feature")
+    other = store.artifact("owner", "repo", 9, "report")
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"")
+
+    with pytest.raises(MemberCapabilityError, match="is not a name of #3"):
+        await member_repository.artifact_download(member, url, name, tmp_path / "out")
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_refuses_a_path_as_the_name(member, tmp_path):
+    url = pull_request(3, "feature")
+
+    with pytest.raises(MemberCapabilityError, match="is not a name of #3"):
+        await member_repository.artifact_download(
+            member, url, str(tmp_path / "anywhere"), tmp_path / "out"
+        )
+
+
+@pytest.mark.asyncio
 async def test_artifact_download_extracts_the_pull_requests_artifact(member, tmp_path):
     url = pull_request(3, "feature")
     archive = store.artifact("owner", "repo", 3, "report")

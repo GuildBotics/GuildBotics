@@ -702,24 +702,12 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def reply(self, url: str, reply_target_id: int, body: str) -> ReplyWritten:
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
-        client = await self._get_client()
-        response = await client.get(
-            f"/repos/{resource.full_repo}/pulls/comments/{reply_target_id}"
-        )
-        _raise_for_status(response)
-        root = response.json()
-        expected_url = (
-            f"{self.base_url}/repos/{resource.full_repo}/pulls/{resource.number}"
-        )
-        if (
-            not isinstance(root, dict)
-            or root.get("id") != reply_target_id
-            or root.get("in_reply_to_id") is not None
-            or root.get("pull_request_url") != expected_url
-        ):
+        root = await self._child(resource, "pulls/comments", reply_target_id)
+        if root is None or root.get("in_reply_to_id") is not None:
             raise MemberCapabilityError(
                 f"Review comment '{reply_target_id}' is not replyable for this PR."
             )
+        client = await self._get_client()
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments/{reply_target_id}/replies",
             json={"body": body.rstrip()},
@@ -739,35 +727,52 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         resource = self.parse_url(
             url, expected_kind=None if target == "comment" else "pull"
         )
-        client = await self._get_client()
-        if target == "review":
-            # A review's body is reached only through GraphQL.
-            resp = await client.get(
-                f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews/{comment_id}"
-            )
-            _raise_for_status(resp)
-            await self._graphql(
-                ADD_REACTION,
-                {
-                    "subject": str(resp.json()["node_id"]),
-                    "content": _GRAPHQL_REACTIONS[reaction],
-                },
-            )
-            return ReactionAdded(content=reaction, comment_id=comment_id)
         # A pull request's conversation comments are issue comments on GitHub.
-        collection = "issues" if target == "comment" else "pulls"
-        resp = await client.post(
-            f"/repos/{resource.owner}/{resource.repo}/{collection}/comments/{comment_id}/reactions",
-            json={"content": reaction},
-            headers={"Accept": "application/vnd.github+json"},
+        collection = {
+            "comment": "issues/comments",
+            "review-comment": "pulls/comments",
+            "review": f"pulls/{resource.number}/reviews",
+        }[target]
+        child = await self._child(resource, collection, comment_id)
+        if child is None:
+            raise MemberCapabilityError(f"{target} {comment_id} is not one of {url}.")
+        await self._graphql(
+            ADD_REACTION,
+            {
+                "subject": str(child["node_id"]),
+                "content": _GRAPHQL_REACTIONS[reaction],
+            },
         )
-        _raise_for_status(resp)
-        payload = resp.json()
-        return ReactionAdded(
-            reaction_id=payload.get("id"),
-            content=str(payload.get("content") or reaction),
-            comment_id=comment_id,
+        return ReactionAdded(content=reaction, comment_id=comment_id)
+
+    async def _child(
+        self, resource: GitHubResource, collection: str, child_id: int
+    ) -> dict[str, Any] | None:
+        """The comment or review ``child_id`` of the repository's ``collection``,
+        when it is one of the item ``resource`` names.
+
+        GitHub finds comments by their repository-wide id, so where one is
+        must be read before it is acted on as the item's.
+        """
+        client = await self._get_client()
+        response = await client.get(
+            f"/repos/{resource.full_repo}/{collection}/{child_id}"
         )
+        _raise_for_status(response)
+        child = response.json()
+        field, items = (
+            ("issue_url", "issues")
+            if collection == "issues/comments"
+            else ("pull_request_url", "pulls")
+        )
+        expected = (
+            f"{self.base_url}/repos/{resource.full_repo}/{items}/{resource.number}"
+        )
+        if not isinstance(child, dict) or child.get("id") != child_id:
+            return None
+        # GitHub answers with the repository's own spelling of its name.
+        owner = child.get(field)
+        return child if str(owner).casefold() == expected.casefold() else None
 
     async def open_pull_requests(self, remote_url: str, branch: str) -> list[str]:
         repository = self.repository_from_remote(remote_url)

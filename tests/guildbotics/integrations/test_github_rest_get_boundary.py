@@ -21,22 +21,16 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
     ): "bounded: one host-defined detail or page, with a condition-bound continuation",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
-        "reply",
+        "_child",
         "client.get",
-        "f'/repos/{resource.full_repo}/pulls/comments/{reply_target_id}'",
-    ): "single_resource: validate the root review comment and its pull request before replying",
+        "f'/repos/{resource.full_repo}/{collection}/{child_id}'",
+    ): "single_resource: one comment or review, checked to be the named item's before it is acted on",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
         "read",
         "client.get",
         "path",
     ): "bounded: one alert or one size-limited page with an explicit continuation token",
-    (
-        "guildbotics/integrations/github/code_hosting_service.py",
-        "add_reaction",
-        "client.get",
-        "f'/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews/{comment_id}'",
-    ): "single_resource: repository, pull request, and review id identify one review",
     (
         "guildbotics/app_api/avatar.py",
         "get_github_avatar_url",

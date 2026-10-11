@@ -257,6 +257,65 @@ async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harne
     assert [reaction.content for reaction in reactions] == ["eyes"] * 3
 
 
+async def _two_pull_requests(code: CodeHostingService, host: Harness):
+    created = []
+    for branch in ("feature", "other"):
+        host.branch(branch)
+        created.append(
+            await code.create_pull_request(
+                REPO,
+                branch,
+                "main",
+                branch,
+                "",
+                draft=False,
+                issue_url="",
+                closes_issue=False,
+            )
+        )
+    return created
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["issue", "pull_request", "review-comment", "review"])
+async def test_a_reaction_reaches_only_a_comment_of_the_item_it_names(
+    host: Harness, kind: str
+):
+    """Comments are named inside the issue or pull request ``url`` names: an id
+    of another item of the same repository is refused before anything is
+    written."""
+    code = host.code
+    if kind == "issue":
+        first, second = [
+            (await code.create_issue(REPO, title, "", [])).issue_url
+            for title in ("A", "B")
+        ]
+        written = await code.comment(first, "Hi", kind="issue")
+        target, comment_id = "comment", written.comment_id
+    else:
+        first_pr, second_pr = await _two_pull_requests(code, host)
+        first, second = first_pr.pr_url, second_pr.pr_url
+        if kind == "pull_request":
+            written = await code.comment(first, "Hi", kind="pull_request")
+            target, comment_id = "comment", written.comment_id
+        elif kind == "review":
+            review = await code.review(first, "Looks good.", "approve")
+            target, comment_id = "review", review.review_id
+        else:
+            inline = await code.review_comment(
+                first, "Rename this.", "a.py", 3, "RIGHT", None, None
+            )
+            target, comment_id = "review-comment", inline.review_comment_id
+    before = len(host.writes)
+
+    with pytest.raises(MemberCapabilityError):
+        await code.add_reaction(second, target, comment_id or 0, "eyes")
+
+    assert len(host.writes) == before
+    reaction = await code.add_reaction(first, target, comment_id or 0, "eyes")
+    assert reaction.comment_id == comment_id
+
+
 @pytest.mark.asyncio
 async def test_the_git_remote_names_its_repository_and_its_open_pull_requests(
     host: Harness,
