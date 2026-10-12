@@ -9,7 +9,7 @@ from guildbotics.observability.activity_event_store import (
 
 
 def test_is_domain_activity_event() -> None:
-    assert is_domain_activity_event("github.push") is True
+    assert is_domain_activity_event("repository.push") is True
     assert is_domain_activity_event("workflow.completed") is True
     # A run's lifecycle is one shared record per run, not its boundary events:
     # those would be read once per command on every device, for nothing the
@@ -35,11 +35,11 @@ def test_activity_event_store_writes_one_file_per_event(tmp_path) -> None:
     store = ActivityEventStore(tmp_path / "events")
     path = store.record(
         {
-            "type": "github.push",
+            "type": "repository.push",
             "timestamp": "2026-08-10T09:00:00+00:00",
             "person_id": "aiko",
             "payload": {"action": "push"},
-            "attributes": {"github.url": "https://example.test"},
+            "attributes": {"target.url": "https://example.test"},
             "trace_id": "trace-1",
         }
     )
@@ -49,7 +49,7 @@ def test_activity_event_store_writes_one_file_per_event(tmp_path) -> None:
         datetime(2026, 8, 31, tzinfo=UTC),
     )
     assert len(events) == 1
-    assert events[0]["kind"] == "github.push"
+    assert events[0]["kind"] == "repository.push"
     assert events[0]["member_id"] == "aiko"
     assert events[0]["local_trace_id"] == "trace-1"
     assert "prompt" not in events[0]
@@ -57,7 +57,7 @@ def test_activity_event_store_writes_one_file_per_event(tmp_path) -> None:
         datetime(2026, 8, 1, tzinfo=UTC),
         datetime(2026, 8, 31, tzinfo=UTC),
     )
-    assert records[0]["type"] == "github.push"
+    assert records[0]["type"] == "repository.push"
     assert records[0]["payload"]["action"] == "push"
 
 
@@ -129,7 +129,7 @@ def test_list_between_reads_only_the_months_the_window_can_reach(
         "2026-09-01T00:00:00Z",
     ):
         store.record(
-            {"type": "github.push", "timestamp": occurred, "person_id": "aiko"}
+            {"type": "repository.push", "timestamp": occurred, "person_id": "aiko"}
         )
     read = _months_read(store, monkeypatch)
 
@@ -156,13 +156,13 @@ def test_boundary_events_an_earlier_build_shared_are_not_read_as_facts(
                 "person_id": "aiko",
             }
         )
-    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+    store.record({"type": "repository.push", "timestamp": "2026-08-10T08:00:00+00:00"})
 
     events = store.list_between(
         datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC)
     )
 
-    assert [item["kind"] for item in events] == ["github.push"]
+    assert [item["kind"] for item in events] == ["repository.push"]
 
 
 def test_list_between_finds_events_another_offset_filed_in_a_neighbouring_month(
@@ -173,7 +173,7 @@ def test_list_between_finds_events_another_offset_filed_in_a_neighbouring_month(
     lives in ``2026/08``."""
     store = ActivityEventStore(tmp_path / "events")
     path = store.record(
-        {"type": "github.push", "timestamp": "2026-08-31T13:00:00-12:00"}
+        {"type": "repository.push", "timestamp": "2026-08-31T13:00:00-12:00"}
     )
     assert path.parent.parent.name == "2026" and path.parent.name == "08"
 
@@ -188,13 +188,13 @@ def test_list_between_accepts_an_unbounded_window(tmp_path) -> None:
     # A caller asking for everything hands in the ends of the calendar; the
     # neighbouring-month reach must not step past them.
     store = ActivityEventStore(tmp_path / "events")
-    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+    store.record({"type": "repository.push", "timestamp": "2026-08-10T08:00:00+00:00"})
 
     events = store.list_between(
         datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
     )
 
-    assert [item["kind"] for item in events] == ["github.push"]
+    assert [item["kind"] for item in events] == ["repository.push"]
 
 
 def test_an_unbounded_window_reads_only_the_months_the_store_holds(
@@ -203,8 +203,8 @@ def test_an_unbounded_window_reads_only_the_months_the_store_holds(
     """Ten thousand years of calendar months are not ten thousand years of
     lookups: on Windows that alone took seconds per sync status read (#570)."""
     store = ActivityEventStore(tmp_path / "events")
-    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
-    store.record({"type": "github.push", "timestamp": "2027-01-10T08:00:00+00:00"})
+    store.record({"type": "repository.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+    store.record({"type": "repository.push", "timestamp": "2027-01-10T08:00:00+00:00"})
     read = _months_read(store, monkeypatch)
 
     events = store.list_between(

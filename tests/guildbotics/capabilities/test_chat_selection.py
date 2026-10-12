@@ -665,7 +665,7 @@ async def test_taking_a_batch_records_the_runs_start_under_its_trace(tmp_path):
         "event_listener",
         trace_id="run-chat",
         person_id="alice",
-        attributes={"event.provider": "local", "slack.channel": "C1"},
+        attributes={"chat.provider": "local", "chat.channel": "C1"},
     ):
         await _dispatch(ctx, chat_service=service, state_store=state_store)
 
@@ -682,7 +682,7 @@ async def test_taking_a_batch_records_the_runs_start_under_its_trace(tmp_path):
         "service": "local",
         "channel_id": "C1",
     }
-    assert record.attributes == {"event.provider": "local", "slack.channel": "C1"}
+    assert record.attributes == {"chat.provider": "local", "chat.channel": "C1"}
     assert record.result is not None
 
 

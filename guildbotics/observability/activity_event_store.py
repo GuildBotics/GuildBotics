@@ -32,10 +32,10 @@ _MAX_SAFE_SUMMARY_CHARS = MAX_SHARED_TEXT_CHARS
 # too; a new event type must opt in here.
 _DOMAIN_EVENT_TYPES = frozenset(
     {
-        "github.push",
-        "github.pull_request",
-        "github.issue",
-        "github.issue_comment",
+        "repository.push",
+        "pull_request.item",
+        "ticket.item",
+        "ticket.comment",
         "workflow.completed",
         "workflow.completion_missing",
         "workflow.rate_limited",

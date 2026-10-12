@@ -174,8 +174,8 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
     assert invocation.payload["max_completion_attempts"] == 3
     assert invocation.payload["ticket_url"] == ISSUE_URL
     # A route whose trace opened before selection still names the ticket.
-    assert attributes["github.title"] == "Fix login"
-    assert attributes["github.url"] == ISSUE_URL
+    assert attributes["target.title"] == "Fix login"
+    assert attributes["target.url"] == ISSUE_URL
     assert context.closed == 1
 
 
@@ -450,15 +450,19 @@ async def test_candidates_are_the_pull_requests_and_then_the_board_and_refresh_b
 def test_ticket_trace_attributes_for_ticket_and_pull_request():
     ticket_task = Task(id="1", title="T", description="D", url=ISSUE_URL)
     assert ticket_task.trace_attributes() == {
-        "github.kind": "ticket",
-        "github.title": "T",
-        "github.url": ISSUE_URL,
+        "target.provider": "",
+        "target.label": "",
+        "target.kind": "ticket",
+        "target.title": "T",
+        "target.url": ISSUE_URL,
     }
 
     pr_url = "local://code/acme/team/demo/pulls/7"
     pr = Task(id="2", title="T", description="D", url=pr_url, pull_request_url=pr_url)
     assert pr.trace_attributes() == {
-        "github.kind": "pull_request",
-        "github.title": "T",
-        "github.url": pr_url,
+        "target.provider": "",
+        "target.label": "",
+        "target.kind": "pull_request",
+        "target.title": "T",
+        "target.url": pr_url,
     }

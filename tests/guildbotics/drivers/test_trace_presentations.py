@@ -60,25 +60,25 @@ def test_command_failure_prefers_failure_detail() -> None:
     assert presentation.tone == "danger"
 
 
-def test_github_issue_comment_uses_structured_target() -> None:
+def test_ticket_comment_uses_structured_target() -> None:
     presentation = normalize_trace_presentation(
         _event(
-            "github.issue_comment",
-            payload={"action": "commented", "issue": {"label": "#313"}},
-            attributes={"github.kind": "ticket", "github.label": "#313"},
+            "ticket.comment",
+            payload={"action": "commented", "ticket": {"label": "#313"}},
+            attributes={"target.kind": "ticket", "target.label": "#313"},
         )
     )
 
-    assert presentation.label_key.endswith("github_issue_comment")
+    assert presentation.label_key.endswith("ticket_comment")
     assert presentation.message == "#313"
-    assert presentation.message != "github.issue_comment"
+    assert presentation.message != "ticket.comment"
 
 
 def test_github_target_label_falls_back_to_the_payload_entry() -> None:
     # A local PR is shown by the label its service gives it, not a "#n".
     presentation = normalize_trace_presentation(
         _event(
-            "github.pull_request",
+            "pull_request.item",
             payload={"action": "opened", "pull_request": {"label": "!3"}},
         )
     )
@@ -86,12 +86,12 @@ def test_github_target_label_falls_back_to_the_payload_entry() -> None:
     assert presentation.message == "!3"
 
 
-def test_github_push_shows_the_branch_it_pushed() -> None:
+def test_repository_push_shows_the_branch_it_pushed() -> None:
     presentation = normalize_trace_presentation(
         _event(
-            "github.push",
+            "repository.push",
             payload={"ref": "refs/heads/ticket/T-1", "commits": []},
-            attributes={"github.label": "#9"},
+            attributes={"target.label": "#9"},
         )
     )
 
@@ -258,7 +258,7 @@ def test_cli_agent_credential_failure_uses_agent_name_as_provider() -> None:
 def test_github_scope_refusal_names_the_refused_target() -> None:
     presentation = normalize_trace_presentation(
         _event(
-            "github.scope_refused",
+            "target.scope_refused",
             payload={
                 "target": "POST /repos/other/demo/issues",
                 "scope_owner": "acme",
@@ -266,7 +266,7 @@ def test_github_scope_refusal_names_the_refused_target() -> None:
         )
     )
 
-    assert presentation.label_key.endswith("github_scope_refused")
+    assert presentation.label_key.endswith("target_scope_refused")
     assert presentation.message == "POST /repos/other/demo/issues"
     assert presentation.tone == "danger"
 
@@ -320,32 +320,32 @@ def test_literal_diagnostics_emitters_have_intentional_presentations() -> None:
     assert unsupported == []
 
 
-def test_github_work_target_shows_the_title_it_declares() -> None:
+def test_target_recorded_shows_the_title_it_declares() -> None:
     presentation = normalize_trace_presentation(
         _event(
-            "github.work_target",
+            "target.recorded",
             payload={"pull_request": {"label": "#544"}},
             attributes={
-                "github.kind": "pull_request",
-                "github.label": "#544",
-                "github.title": "診断ログの実行タイトル",
-                "github.action": "inspected",
+                "target.kind": "pull_request",
+                "target.label": "#544",
+                "target.title": "診断ログの実行タイトル",
+                "target.action": "inspected",
             },
         )
     )
 
-    assert presentation.label_key.endswith("github_work_target")
+    assert presentation.label_key.endswith("target_recorded")
     assert presentation.message == "#544 · 診断ログの実行タイトル"
 
 
 @pytest.mark.parametrize(
     "event_type",
     [
-        "github.push",
-        "github.pull_request",
-        "github.issue",
-        "github.work_target",
-        "github.issue_comment",
+        "repository.push",
+        "pull_request.item",
+        "ticket.item",
+        "target.recorded",
+        "ticket.comment",
         "credential.failed",
         "agent_runtime.process",
         "agent_runtime.turn",

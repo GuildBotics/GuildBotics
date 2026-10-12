@@ -5,10 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from logging import getLogger
 
-from guildbotics.capabilities.member_activity_events import (
-    EVENT_SUBJECTS,
-    target_record,
-)
+from guildbotics.capabilities.member_activity_events import target_record
 from guildbotics.entities.team import Service, Team
 from guildbotics.integrations.factory import (
     PROVIDERS,
@@ -50,17 +47,22 @@ async def refresh_activity_events(team: Team, start: datetime, end: datetime) ->
         activity_id = f"{item.kind}:{item.url}:{activity}"
         if activity_id in existing:
             continue
-        entry, attributes = target_record(item.model_dump())
-        subject = EVENT_SUBJECTS[item.kind]
+        entry, attributes = target_record(
+            {
+                **item.model_dump(),
+                "provider": team.project.get_service_name(Service.TICKET_SERVICE),
+            }
+        )
+        subject = item.kind
         record_correlated_event(
-            event_type=f"github.{subject}",
+            event_type=f"{subject}.item",
             payload={"action": "closed", subject: {**entry, "merged": item.merged}},
             attributes={
-                "github.action": "closed",
+                "target.action": "closed",
                 **attributes,
-                "github.activity_id": activity_id,
+                "target.activity_id": activity_id,
             },
-            default_source="github",
+            default_source=attributes["target.provider"],
             timestamp=item.closed_at,
         )
         existing.add(activity_id)
@@ -70,8 +72,8 @@ async def refresh_activity_events(team: Team, start: datetime, end: datetime) ->
 
 def _existing_activity_ids(start: datetime, end: datetime) -> set[str]:
     return {
-        str(attributes.get("github.activity_id"))
+        str(attributes.get("target.activity_id"))
         for item in ActivityEventStore().list_between(start, end)
         if isinstance((attributes := item.get("attributes")), dict)
-        and attributes.get("github.activity_id")
+        and attributes.get("target.activity_id")
     }

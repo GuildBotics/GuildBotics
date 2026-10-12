@@ -115,7 +115,7 @@ def test_unscoped_records_do_not_implicitly_start_system_session(
             "message": "short-lived CLI log",
         }
     )
-    event_route = store.route(_record("github.push", trace_id=None))
+    event_route = store.route(_record("repository.push", trace_id=None))
 
     assert log_route.index_records == []
     assert [item["type"] for item in event_route.index_records] == []

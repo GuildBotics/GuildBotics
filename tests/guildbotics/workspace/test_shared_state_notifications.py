@@ -52,7 +52,7 @@ def test_activity_events_are_announced(port: RecordingPort) -> None:
     ActivityEventStore().record(
         {
             "event_id": "e1",
-            "type": "github.push",
+            "type": "repository.push",
             "occurred_at": "2026-08-15T00:00:00Z",
         }
     )

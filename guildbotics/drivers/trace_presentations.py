@@ -23,16 +23,16 @@ _AGENT_LABELS = {
     "usage": "usage",
     "failed": "failed",
 }
-_GITHUB_LABELS = {
-    "github.push": "github_push",
-    "github.pull_request": "github_pull_request",
-    "github.issue": "github_issue",
-    "github.issue_comment": "github_issue_comment",
-    "github.work_target": "github_work_target",
+_TARGET_LABELS = {
+    "repository.push": "repository_push",
+    "pull_request.item": "pull_request_item",
+    "ticket.item": "ticket_item",
+    "ticket.comment": "ticket_comment",
+    "target.recorded": "target_recorded",
 }
 _EXACT_EVENT_LABELS = {
     "decision.evaluated": "decision_evaluated",
-    "github.scope_refused": "github_scope_refused",
+    "target.scope_refused": "target_scope_refused",
     "agent_environment.network_egress_candidate": "network_egress_candidate",
     "scheduler.worker.failed": "scheduler_worker_failed",
     "workflow.completed": "workflow_completed",
@@ -113,11 +113,11 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
             ),
             tone="warning" if payload.get("error") else "info",
         )
-    if event_type in _GITHUB_LABELS:
-        return _github_presentation(payload, attributes, event_type)
-    if event_type == "github.scope_refused":
+    if event_type in _TARGET_LABELS:
+        return _target_presentation(payload, attributes, event_type)
+    if event_type == "target.scope_refused":
         return _presentation(
-            label_key=_event_key("github_scope_refused"),
+            label_key=_event_key("target_scope_refused"),
             label=event_type,
             message=_first_text(payload, "target") or event_type,
             tone="danger",
@@ -182,7 +182,7 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
 
 def supports_trace_event(event_type: str) -> bool:
     """Whether an event type has an intentional, non-fallback presentation."""
-    if event_type in _EXACT_EVENT_LABELS or event_type in _GITHUB_LABELS:
+    if event_type in _EXACT_EVENT_LABELS or event_type in _TARGET_LABELS:
         return True
     if event_type.startswith(("command.", "member.command.")):
         return event_type.rsplit(".", 1)[-1] in _COMMAND_PHASES
@@ -308,28 +308,28 @@ def _span_presentation(payload: dict[str, Any], event_type: str) -> TracePresent
     )
 
 
-def _github_presentation(
+def _target_presentation(
     payload: dict[str, Any], attributes: dict[str, Any], event_type: str
 ) -> TracePresentation:
     target = str(
-        attributes.get("github.label")
+        attributes.get("target.label")
         or _nested(payload, "pull_request", "label")
-        or _nested(payload, "issue", "label")
+        or _nested(payload, "ticket", "label")
         or ""
     )
     title = str(
         _nested(payload, "pull_request", "title")
-        or _nested(payload, "issue", "title")
+        or _nested(payload, "ticket", "title")
         or payload.get("title")
-        or attributes.get("github.title")
+        or attributes.get("target.title")
         or ""
     )
     if title:
         target = f"{target} · {title}" if target else title
-    if event_type == "github.push":
+    if event_type == "repository.push":
         target = str(payload.get("ref") or "").removeprefix("refs/heads/") or target
     return _presentation(
-        label_key=_event_key(_GITHUB_LABELS[event_type]),
+        label_key=_event_key(_TARGET_LABELS[event_type]),
         label=event_type,
         message=target or _first_text(payload, "action") or event_type,
         tone="success",

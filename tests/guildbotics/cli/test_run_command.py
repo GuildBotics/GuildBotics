@@ -614,7 +614,7 @@ async def test_a_local_runs_record_keeps_what_its_trace_learned(tmp_path, monkey
     _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
 
     async def run(command, *, source):
-        set_attributes(**{"github.title": "ログイン修正"})
+        set_attributes(**{"target.title": "ログイン修正"})
         return CommandOutcome(result=None, text_output="")
 
     monkeypatch.setattr(run_module, "run_main_command", run)
@@ -622,7 +622,7 @@ async def test_a_local_runs_record_keeps_what_its_trace_learned(tmp_path, monkey
     await _run_locally(monkeypatch, _get_context(), "solo", tmp_path)
 
     [record] = RunStore().records()
-    assert record.attributes["github.title"] == "ログイン修正"
+    assert record.attributes["target.title"] == "ログイン修正"
 
 
 @pytest.mark.asyncio

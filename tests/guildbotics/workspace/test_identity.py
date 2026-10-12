@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+
 import json
 import threading
 import uuid
@@ -55,7 +57,7 @@ def test_workspace_identity_is_created_once_and_then_reused(
 
     assert first.workspace_id == second.workspace_id
     assert uuid.UUID(first.workspace_id).version == 7
-    assert first.schema_version == 1
+    assert first.schema_version == SHARED_RECORD_SCHEMA_VERSION
     assert read_workspace_identity() == first
     assert [change.paths for change in port.changes] == [("state/workspace.json",)]
 
@@ -65,7 +67,7 @@ def test_workspace_identity_is_written_as_a_shared_record(port: RecordingPort) -
 
     stored = json.loads(workspace_identity_path().read_text(encoding="utf-8"))
     assert stored == {
-        "schema_version": 1,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "workspace_id": identity.workspace_id,
         "created_at": identity.created_at,
     }
@@ -230,7 +232,7 @@ def test_concurrent_first_use_agrees_on_one_device_id() -> None:
 )
 def test_a_device_record_pins_version_identifier_and_time(override: dict) -> None:
     payload = {
-        "schema_version": 1,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "device_id": "00000000-0000-7000-8000-000000000000",
         "display_name": "Hub",
         "os": "linux",

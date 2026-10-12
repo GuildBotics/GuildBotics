@@ -27,7 +27,7 @@ def _title(
 def test_target_title_wins_over_everything_else() -> None:
     title = _title(
         [{"payload": {"title": "PR #544 の作業記録"}}],
-        {"github.title": ISSUE_TITLE, "github.kind": "ticket", "github.label": "#544"},
+        {"target.title": ISSUE_TITLE, "target.kind": "ticket", "target.label": "#544"},
         command="workflows/ticket_driven_workflow",
         completion_summary=lambda _attributes, _person_id: "Issue #544 を修正\n詳細",
     )
@@ -48,12 +48,12 @@ def test_completion_summary_is_looked_up_only_when_no_target_names_the_trace() -
     calls: list[tuple[str, str]] = []
 
     def lookup(attributes: dict[str, Any], person_id: str) -> str:
-        calls.append((str(attributes.get("event.provider")), person_id))
+        calls.append((str(attributes.get("chat.provider")), person_id))
         return "summary"
 
     assert (
         _title(
-            attributes={"github.title": "Target"},
+            attributes={"target.title": "Target"},
             person_id="alice",
             completion_summary=lookup,
         )
@@ -62,7 +62,7 @@ def test_completion_summary_is_looked_up_only_when_no_target_names_the_trace() -
     assert calls == []
     assert (
         _title(
-            attributes={"event.provider": "slack"},
+            attributes={"chat.provider": "slack"},
             person_id="alice",
             completion_summary=lookup,
         )
@@ -72,10 +72,10 @@ def test_completion_summary_is_looked_up_only_when_no_target_names_the_trace() -
 
 
 def test_target_reference_is_used_when_the_title_is_unknown() -> None:
-    assert _title(attributes={"github.kind": "pull_request", "github.label": "#7"}) == (
+    assert _title(attributes={"target.kind": "pull_request", "target.label": "#7"}) == (
         "PR #7"
     )
-    assert _title(attributes={"github.kind": "ticket", "github.label": "T-1"}) == (
+    assert _title(attributes={"target.kind": "ticket", "target.label": "T-1"}) == (
         "Ticket T-1"
     )
 
@@ -98,7 +98,7 @@ def test_chat_trigger_label_precedes_the_prompt() -> None:
     set_language("ja")
     title = _title(
         [{"payload": {"fields": {"prompt": "長い system prompt"}}}],
-        {"event.provider": "slack"},
+        {"chat.provider": "slack"},
     )
     assert title == t("observability.trace_title.chat_trigger", provider="Slack")
 
@@ -109,8 +109,8 @@ def test_falls_back_through_command_to_the_trace_id() -> None:
 
 
 def test_inspected_github_target_is_read_only() -> None:
-    assert is_read_only_record({"attributes": {"github.action": "inspected"}})
-    assert not is_read_only_record({"attributes": {"github.action": ""}})
+    assert is_read_only_record({"attributes": {"target.action": "inspected"}})
+    assert not is_read_only_record({"attributes": {"target.action": ""}})
     assert is_read_only_record({"attributes": {"memory.action": "touch"}})
 
 

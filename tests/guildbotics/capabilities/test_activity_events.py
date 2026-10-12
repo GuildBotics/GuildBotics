@@ -47,25 +47,25 @@ async def test_closed_board_work_is_recorded_once_with_its_activity():
 
     records = ActivityEventStore().records_between(START, END)
     assert sorted(
-        (record["timestamp"], record["attributes"]["github.activity_id"])
+        (record["timestamp"], record["attributes"]["target.activity_id"])
         for record in records
     ) == [
         ("2026-07-10T01:00:00+00:00", f"pull_request:{merged_url}:merged"),
         ("2026-07-10T02:00:00+00:00", f"ticket:{closed_url}:closed"),
     ]
-    merged = next(r for r in records if r["attributes"]["github.label"] == "!7")
-    assert merged["type"] == "github.pull_request"
+    merged = next(r for r in records if r["attributes"]["target.label"] == "!7")
+    assert merged["type"] == "pull_request.item"
     assert merged["payload"]["pull_request"] == {
         "label": "!7",
         "title": "Pull request 7",
         "url": merged_url,
         "merged": True,
     }
-    assert merged["attributes"]["github.url"] == merged_url
+    assert merged["attributes"]["target.url"] == merged_url
     assert merged["person_id"] == ""
-    closed = next(r for r in records if r["attributes"]["github.label"] == "T-8")
-    assert closed["type"] == "github.issue"
-    assert closed["attributes"]["github.kind"] == "ticket"
+    closed = next(r for r in records if r["attributes"]["target.label"] == "T-8")
+    assert closed["type"] == "ticket.item"
+    assert closed["attributes"]["target.kind"] == "ticket"
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_the_github_board_is_read_with_a_credential_alone(monkeypatch):
 
     assert await refresh_activity_events(team, START, END) == 1
     [record] = ActivityEventStore().records_between(START, END)
-    assert record["attributes"]["github.activity_id"] == (
+    assert record["attributes"]["target.activity_id"] == (
         f"ticket:https://github.com/{REPO}/issues/1:closed"
     )
 
@@ -113,25 +113,25 @@ def test_existing_activity_ids_reads_shared_activity_events():
     events = ActivityEventStore()
     events.record(
         {
-            "type": "github.issue.closed",
+            "type": "ticket.item.closed",
             "timestamp": "2026-07-10T01:00:00Z",
-            "attributes": {"github.activity_id": activity_id},
+            "attributes": {"target.activity_id": activity_id},
         }
     )
     for index in range(20):
         events.record(
             {
-                "type": "github.issue.closed",
+                "type": "ticket.item.closed",
                 "timestamp": "2026-07-10T02:00:00Z",
                 "attributes": {"filler": str(index)},
             }
         )
     events.record(
         {
-            "type": "github.issue.closed",
+            "type": "ticket.item.closed",
             "timestamp": "2026-07-12T01:00:00Z",
             "attributes": {
-                "github.activity_id": "ticket:local://tickets/acme/team/demo-tickets/T-9:closed"
+                "target.activity_id": "ticket:local://tickets/acme/team/demo-tickets/T-9:closed"
             },
         }
     )

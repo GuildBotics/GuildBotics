@@ -88,10 +88,10 @@ def test_traces_endpoint_titles_a_trace_by_its_work_target(tmp_path: Path) -> No
         command="workflows/ticket_driven_workflow",
         person_id="alice",
         attributes={
-            "github.kind": "ticket",
-            "github.label": "#544",
-            "github.url": "https://github.com/owner/repo/issues/544",
-            "github.title": "診断ログの実行タイトルに作業対象を表示する",
+            "target.kind": "ticket",
+            "target.label": "#544",
+            "target.url": "https://github.com/owner/repo/issues/544",
+            "target.title": "診断ログの実行タイトルに作業対象を表示する",
         },
     ):
         bus.publish_event("command.started", {"command": "demo"})
@@ -228,15 +228,15 @@ def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
 
 def test_traces_endpoint_filters_by_exact_attribute(tmp_path: Path) -> None:
     client, bus = _app(tmp_path)
-    with trace_scope("routine", trace_id="t1", attributes={"github.label": "#42"}):
+    with trace_scope("routine", trace_id="t1", attributes={"target.label": "#42"}):
         bus.publish_event("command.started", {})
-    with trace_scope("routine", trace_id="t2", attributes={"github.label": "#7"}):
+    with trace_scope("routine", trace_id="t2", attributes={"target.label": "#7"}):
         bus.publish_event("command.started", {})
 
     with client:
         response = client.get(
             "/diagnostics/traces",
-            params={"attr_key": "github.label", "attr_value": "#42"},
+            params={"attr_key": "target.label", "attr_value": "#42"},
             headers=HEADERS,
         )
 
@@ -361,9 +361,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         person_id="alice",
         command="demo",
         attributes={
-            "github.kind": "ticket",
-            "github.label": "#42",
-            "github.url": "https://github.com/owner/repo/issues/42",
+            "target.kind": "ticket",
+            "target.label": "#42",
+            "target.url": "https://github.com/owner/repo/issues/42",
         },
     ):
         bus.publish_event("command.started", {"command": "demo"})
@@ -410,8 +410,8 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
                 "merged": False,
             },
         }
-        bus.publish_event("github.pull_request", pr_opened)
-        record_github("github.pull_request", pr_opened, person_id="alice")
+        bus.publish_event("pull_request.item", pr_opened)
+        record_github("pull_request.item", pr_opened, person_id="alice")
         push_payload = {
             "action": "push",
             "ref": "refs/heads/feature",
@@ -423,8 +423,8 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
                 }
             ],
         }
-        bus.publish_event("github.push", push_payload)
-        record_github("github.push", push_payload, person_id="alice")
+        bus.publish_event("repository.push", push_payload)
+        record_github("repository.push", push_payload, person_id="alice")
     InteractiveSessionStore().record(
         InteractiveTraceSession(
             trace_id="human-trace",
@@ -457,8 +457,8 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
             "merged": True,
         },
     }
-    bus.publish_event("github.pull_request", merged, source="github")
-    record_github("github.pull_request", merged, source="github")
+    bus.publish_event("pull_request.item", merged, source="github")
+    record_github("pull_request.item", merged, source="github")
     main_push = {
         "ref": "refs/heads/main",
         "compare": "https://github.com/owner/repo/compare/a...b",
@@ -475,18 +475,18 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
             },
         ],
     }
-    bus.publish_event("github.push", main_push, source="github")
-    record_github("github.push", main_push, source="github")
+    bus.publish_event("repository.push", main_push, source="github")
+    record_github("repository.push", main_push, source="github")
     issue_closed = {
         "action": "closed",
-        "issue": {
+        "ticket": {
             "label": "#133",
             "title": "Reconnect websocket",
             "url": "https://github.com/owner/repo/issues/133",
         },
     }
-    bus.publish_event("github.issue", issue_closed, source="github")
-    record_github("github.issue", issue_closed, source="github")
+    bus.publish_event("ticket.item", issue_closed, source="github")
+    record_github("ticket.item", issue_closed, source="github")
     client = TestClient(app)
 
     with client:
@@ -512,7 +512,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert sessions["skill-trace"]["status"] == "success"
     assert [_without_timestamp(link) for link in sessions["agent-trace"]["links"]] == [
         {
-            "kind": "issue",
+            "kind": "ticket",
             "label": "Ticket #42",
             "url": "https://github.com/owner/repo/issues/42",
         }

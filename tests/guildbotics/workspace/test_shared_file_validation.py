@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+
 import json
 
 import pytest
@@ -39,7 +41,7 @@ ACTIVITY_EVENT_JSON = json.dumps(
         "schema_version": 1,
         "event_id": "e1",
         "occurred_at": "2026-08-15T00:00:00Z",
-        "kind": "github.push",
+        "kind": "repository.push",
     }
 ).encode()
 MEMORY_JOURNAL = (
@@ -172,14 +174,18 @@ def test_invalid_shared_files_are_rejected(
 def test_a_record_from_a_newer_build_stops_the_boundary(relative_path: str) -> None:
     """The one thing no writer and no local test can catch: a device running an
     older build cannot read a record a newer one wrote."""
-    payload = json.dumps({"schema_version": 2, "anything": "else"}).encode()
+    payload = json.dumps(
+        {"schema_version": SHARED_RECORD_SCHEMA_VERSION + 1, "anything": "else"}
+    ).encode()
     if relative_path.endswith(".yml"):
-        payload = yaml.safe_dump({"schema_version": 2}).encode()
+        payload = yaml.safe_dump(
+            {"schema_version": SHARED_RECORD_SCHEMA_VERSION + 1}
+        ).encode()
 
     with pytest.raises(SharedSchemaAheadError) as error:
         validate_shared_file(relative_path, REGULAR_FILE_MODE, payload)
 
-    assert error.value.version == 2
+    assert error.value.version == SHARED_RECORD_SCHEMA_VERSION + 1
 
 
 def test_a_newer_task_run_record_stops_the_boundary() -> None:
@@ -187,7 +193,7 @@ def test_a_newer_task_run_record_stops_the_boundary() -> None:
         validate_shared_file(
             "state/task-runs/run-1/result.json",
             REGULAR_FILE_MODE,
-            b'{"schema_version": 2}\n',
+            json.dumps({"schema_version": SHARED_RECORD_SCHEMA_VERSION + 1}).encode(),
         )
 
 

@@ -22,8 +22,8 @@ from guildbotics.app_api.activity_events import (
     event_detail,
     event_label,
     event_url,
-    github_attrs_from_payload,
     rejected_paths,
+    target_attrs_from_payload,
 )
 from guildbotics.app_api.activity_links import links_from_record, links_from_records
 from guildbotics.app_api.models import (
@@ -282,9 +282,9 @@ def _has_work_target_attributes(attributes: dict[str, Any]) -> bool:
     return any(
         _attribute_has_value(attributes, key)
         for key in (
-            "github.label",
-            "github.url",
-            "github.kind",
+            "target.label",
+            "target.url",
+            "target.kind",
             "memory.doc_id",
             "memory.path",
             "memory.title",
@@ -342,7 +342,7 @@ def _activity_event(
         if rejection is None:
             return None
     link_attrs = dict(attributes)
-    link_attrs.update(github_attrs_from_payload(payload))
+    link_attrs.update(target_attrs_from_payload(payload))
     links = links_from_record(payload, link_attrs, item)
     url = event_url(payload, attributes, links[0].url if links else "")
     label = event_label(payload, attributes, classification)
@@ -421,15 +421,15 @@ def run_subject_id(attributes: Mapping[str, Any]) -> str:
 
     Mirrors the ``subject_id`` a workflow records on completion so a trace can
     be joined to its completion summary. Chat traces key on the
-    provider/channel/thread/event tuple; ticket traces key on the GitHub url.
+    provider/channel/thread/event tuple; ticket traces key on the target URL.
     """
-    provider = str(attributes.get("event.provider") or "").strip()
+    provider = str(attributes.get("chat.provider") or "").strip()
     if provider:
-        channel = str(attributes.get("slack.channel") or "")
-        thread_ts = str(attributes.get("slack.thread_ts") or "")
+        channel = str(attributes.get("chat.channel") or "")
+        thread = str(attributes.get("chat.thread") or "")
         event_id = str(attributes.get("event_id") or "")
-        return f"{provider}:{channel}:{thread_ts}:{event_id}"
-    return str(attributes.get("github.url") or "")
+        return f"{provider}:{channel}:{thread}:{event_id}"
+    return str(attributes.get("target.url") or "")
 
 
 def parse_timestamp(value: str) -> datetime | None:

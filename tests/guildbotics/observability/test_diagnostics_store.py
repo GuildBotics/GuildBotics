@@ -133,13 +133,13 @@ def test_list_traces_filters_by_source_person_and_query(tmp_path: Path) -> None:
 
 def test_list_traces_filters_by_exact_attribute(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
-    store.record(_event("t1", "command.started", attributes={"github.number": "42"}))
-    store.record(_event("t2", "command.started", attributes={"github.number": "7"}))
+    store.record(_event("t1", "command.started", attributes={"target.label": "42"}))
+    store.record(_event("t2", "command.started", attributes={"target.label": "7"}))
 
-    matched = store.list_traces(attr_key="github.number", attr_value="42")
+    matched = store.list_traces(attr_key="target.label", attr_value="42")
     assert {s["trace_id"] for s in matched} == {"t1"}
     # A bare number does not fuzzy-match other traces.
-    assert store.list_traces(attr_key="github.number", attr_value="1") == []
+    assert store.list_traces(attr_key="target.label", attr_value="1") == []
 
 
 def test_global_records_returns_unscoped_events_and_logs(tmp_path: Path) -> None:
@@ -520,32 +520,32 @@ def test_summary_title_is_the_first_work_target_recorded_in_the_trace(
             command="workflows/chat_conversation_workflow",
             person_id="alice",
             timestamp="2026-06-12T00:00:01+09:00",
-            attributes={"event.provider": "slack"},
+            attributes={"chat.provider": "slack"},
         )
     )
     store.record(
         _event(
             "t-chat",
-            "github.work_target",
+            "target.recorded",
             timestamp="2026-06-12T00:00:02+09:00",
             attributes={
-                "github.action": "inspected",
-                "github.kind": "pull_request",
-                "github.number": "528",
-                "github.url": "https://github.com/owner/repo/pull/528",
-                "github.title": "Copilot の利用枠を表示する",
+                "target.action": "inspected",
+                "target.kind": "pull_request",
+                "target.label": "528",
+                "target.url": "https://github.com/owner/repo/pull/528",
+                "target.title": "Copilot の利用枠を表示する",
             },
         )
     )
     store.record(
         _event(
             "t-chat",
-            "github.work_target",
+            "target.recorded",
             timestamp="2026-06-12T00:00:03+09:00",
             attributes={
-                "github.kind": "issue",
-                "github.number": "9",
-                "github.title": "A later, different item",
+                "target.kind": "ticket",
+                "target.label": "9",
+                "target.title": "A later, different item",
             },
         )
     )
@@ -553,7 +553,7 @@ def test_summary_title_is_the_first_work_target_recorded_in_the_trace(
     summary = store.get_summary("t-chat")
     assert summary is not None
     assert summary["title"] == "Copilot の利用枠を表示する"
-    assert summary["attributes"]["github.number"] == "528"
+    assert summary["attributes"]["target.label"] == "528"
     assert store.list_traces()[0]["title"] == summary["title"]
 
 
@@ -567,12 +567,12 @@ def test_summary_title_uses_the_completion_summary_the_caller_supplies(
             "command.started",
             command="workflows/chat_conversation_workflow",
             person_id="alice",
-            attributes={"event.provider": "slack"},
+            attributes={"chat.provider": "slack"},
         )
     )
 
     def completion_summary(attributes: dict[str, object], person_id: str) -> str:
-        assert attributes["event.provider"] == "slack"
+        assert attributes["chat.provider"] == "slack"
         return "請求プランの質問に回答" if person_id == "alice" else ""
 
     listed = store.list_traces(completion_summary=completion_summary)[0]
@@ -589,19 +589,19 @@ def test_summary_attributes_follow_timestamp_order_not_append_order(
     # attributes the chip shows, and in the attribute filter.
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     later = {
-        "github.kind": "issue",
-        "github.number": "9",
-        "github.title": "Second",
+        "target.kind": "ticket",
+        "target.label": "9",
+        "target.title": "Second",
     }
     earlier = {
-        "github.kind": "pull_request",
-        "github.number": "528",
-        "github.title": "First",
+        "target.kind": "pull_request",
+        "target.label": "528",
+        "target.title": "First",
     }
     store.record(
         _event(
             "t-chat",
-            "github.work_target",
+            "target.recorded",
             timestamp="2026-06-12T00:00:02+09:00",
             attributes=later,
         )
@@ -609,7 +609,7 @@ def test_summary_attributes_follow_timestamp_order_not_append_order(
     store.record(
         _event(
             "t-chat",
-            "github.work_target",
+            "target.recorded",
             timestamp="2026-06-12T00:00:01+09:00",
             attributes=earlier,
         )
@@ -618,7 +618,7 @@ def test_summary_attributes_follow_timestamp_order_not_append_order(
     summary = store.get_summary("t-chat")
     assert summary is not None
     assert summary["title"] == "First"
-    assert summary["attributes"]["github.number"] == "528"
+    assert summary["attributes"]["target.label"] == "528"
     assert [item["title"] for item in store.list_traces()] == ["First"]
-    assert store.list_traces(attr_key="github.number", attr_value="528")
-    assert not store.list_traces(attr_key="github.number", attr_value="9")
+    assert store.list_traces(attr_key="target.label", attr_value="528")
+    assert not store.list_traces(attr_key="target.label", attr_value="9")

@@ -137,5 +137,5 @@ def test_layers_above_the_lifecycle_still_win() -> None:
 def test_fact_events_never_override_a_lifecycle_failure_with_success() -> None:
     status = TraceStatus()
     status.observe("failed")
-    status.add(_event("github.pull_request"))
+    status.add(_event("pull_request.item"))
     assert status.resolve() == "failed"

@@ -64,7 +64,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.drivers.context import resolve_member_context
-from guildbotics.entities.team import Person
+from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.factory import chat_provider_name
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
@@ -1212,7 +1212,13 @@ async def _git_push(
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
-        record_member_push_event(member_person, payload)
+        record_member_push_event(
+            member_person,
+            payload,
+            provider=context.team.project.get_service_name(
+                Service.CODE_HOSTING_SERVICE
+            ),
+        )
         return payload
     finally:
         await context.aclose()
@@ -1264,7 +1270,13 @@ async def _git_publish(
             result = await service.publish(repo_path=repo_path, message=message)
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
-        record_member_push_event(member_person, payload)
+        record_member_push_event(
+            member_person,
+            payload,
+            provider=context.team.project.get_service_name(
+                Service.CODE_HOSTING_SERVICE
+            ),
+        )
         return payload
     finally:
         await context.aclose()
@@ -1313,11 +1325,19 @@ async def _code_hosting(
         TaskRunStore().append_evidence(current_task_run_id(), evidence, result)
     target = result.get("target")
     if isinstance(target, dict):
+        target = {
+            **target,
+            "provider": context.team.project.get_service_name(
+                Service.TICKET_SERVICE
+                if target["kind"] == "ticket"
+                else Service.CODE_HOSTING_SERVICE
+            ),
+        }
         record_member_work_target(
             member_person, target, read_only=not _member_command_needs_lease()
         )
     if then is not None:
-        then(member_person, result)
+        then(member_person, {**result, "target": target})
     return result
 
 

@@ -82,7 +82,7 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
 
     ActivityEventStore().record(
         {
-            "type": "github.pull_request.opened",
+            "type": "pull_request.item.opened",
             "person_id": "p1",
             "safe_summary": "opened a pull request",
         }
@@ -186,7 +186,7 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
     )
     ActivityEventStore().record(
         {
-            "type": "github.pull_request.opened",
+            "type": "pull_request.item.opened",
             "person_id": "p1",
             "schema_version": AHEAD,
         }

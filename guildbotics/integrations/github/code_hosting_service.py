@@ -423,7 +423,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         return await get_person_github_token(self.person, self.base_url)
 
     def check_push(self, repository: str) -> None:
-        check_path(self.owner, repository)
+        check_path(self.owner, repository, provider="github")
 
     def commit_url(self, repository: str, sha: str) -> str:
         return f"{self.web_base_url()}/{repository}/commit/{sha}"
@@ -516,6 +516,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
 
     def _pull_request_task(self, pull: PullRequest, trigger_reason: str) -> Task:
         return Task(
+            provider="github",
+            label=f"#{pull.number}",
             id=pull.node_id,
             url=pull.url,
             title=pull.title,

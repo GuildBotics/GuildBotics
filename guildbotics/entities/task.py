@@ -34,6 +34,12 @@ class Task(BaseModel):
         default=None, description="The URL of the ticket or pull request."
     )
     title: str = Field(..., description="The title of the task.")
+    provider: str = Field(
+        default="", description="The service provider of the work target."
+    )
+    label: str = Field(
+        default="", description="The short reference the provider shows."
+    )
     description: str = Field(..., description="A description of the task.")
     comments: list[Message] = Field(
         default_factory=list, description="Comments associated with the task."
@@ -65,13 +71,15 @@ class Task(BaseModel):
         ticket / PR on every device.
         """
         attributes = {
-            "github.kind": "pull_request" if self.pull_request_url else "ticket"
+            "target.kind": "pull_request" if self.pull_request_url else "ticket",
+            "target.provider": self.provider,
+            "target.label": self.label,
         }
         if self.title:
-            attributes["github.title"] = self.title
+            attributes["target.title"] = self.title
         url = self.pull_request_url or self.url
         if url:
-            attributes["github.url"] = url
+            attributes["target.url"] = url
         return attributes
 
     def __lt__(self, other: "Task") -> bool:

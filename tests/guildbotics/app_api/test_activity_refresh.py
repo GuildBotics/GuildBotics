@@ -127,7 +127,7 @@ def test_activity_records_keep_the_trace_of_every_device(tmp_path):
     events = ActivityEventStore()
     for trace_id in ("local-1", "remote-1"):
         _shared_event(
-            events, "github.push", trace_id, payload={"ref": "refs/heads/main"}
+            events, "repository.push", trace_id, payload={"ref": "refs/heads/main"}
         )
     runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
 
@@ -135,7 +135,7 @@ def test_activity_records_keep_the_trace_of_every_device(tmp_path):
         datetime(2026, 7, 9, tzinfo=UTC), datetime(2026, 7, 11, tzinfo=UTC)
     )
 
-    pushes = [item for item in records if item["type"] == "github.push"]
+    pushes = [item for item in records if item["type"] == "repository.push"]
     assert sorted(str(item.get("trace_id")) for item in pushes) == [
         "local-1",
         "remote-1",
@@ -175,7 +175,7 @@ def test_history_shows_another_devices_run_whole_and_withholds_only_its_detail(
     for trace_id in ("local-1", "remote-1"):
         _shared_event(
             events,
-            "github.push",
+            "repository.push",
             trace_id,
             timestamp=now.isoformat(),
             payload={
@@ -219,7 +219,7 @@ def test_activity_records_keep_the_whole_window_past_a_thousand_facts(tmp_path):
     for index in range(1201):
         _shared_event(
             events,
-            "github.push",
+            "repository.push",
             f"t-{index}",
             timestamp=(
                 datetime(2026, 7, 6, tzinfo=UTC) + timedelta(minutes=5 * index)

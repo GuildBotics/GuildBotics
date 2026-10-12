@@ -225,10 +225,10 @@ class PendingChatDispatcher:
             trace_id=pending.run_id,
             attributes={
                 "service_run_id": self._service_run_id,
-                "event.provider": service,
-                "slack.channel": channel_id,
-                "slack.thread_ts": pending.event.thread_id,
-                "slack.ts": pending.event.message_id,
+                "chat.provider": service,
+                "chat.channel": channel_id,
+                "chat.thread": pending.event.thread_id,
+                "chat.message": pending.event.message_id,
                 "event_id": event_id,
             },
         ) as trace:
