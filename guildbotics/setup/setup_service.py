@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from yaml import YAMLError
 
 from guildbotics.entities.team import Service
@@ -147,6 +147,9 @@ def _chat_channel(config_dir: Path) -> Callable[[str], dict[str, str]]:
 
 
 class ProjectSetupInput(BaseModel):
+    # A pasted API key often carries the newline it was copied with.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     config_dir: Path
     language: str
     description: str = ""

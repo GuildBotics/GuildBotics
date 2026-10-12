@@ -435,7 +435,7 @@ export const githubAccount: MemberAccountUi<GitHubForm> = {
     } else if (form.accountType === "github_apps") {
       account.installation_id = form.installationId ? Number(form.installationId) : undefined;
       account.app_id = form.appId ? Number(form.appId) : undefined;
-      account.private_key_path = form.privateKeyPath || undefined;
+      account.private_key_path = form.privateKeyPath.trim() || undefined;
     }
     if (form.accountType === "machine_user") {
       account.access_token = form.accessToken.trim() || undefined;

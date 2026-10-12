@@ -87,7 +87,8 @@ describe("githubAccount.request", () => {
           username: "my-app[bot]",
           installationId: "12",
           appId: "34",
-          privateKeyPath: "/keys/app.pem",
+          // A picked or pasted path keeps no whitespace around it.
+          privateKeyPath: " /keys/app.pem ",
         }),
         false,
       ),

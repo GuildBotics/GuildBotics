@@ -846,3 +846,42 @@ def test_chat_channels_and_their_policies_are_named_without_the_hash(
     [channel] = _stored_person(config_dir)["message_channels"]
     assert channel["name"] == "general"
     assert channel["chat"]["participation"] == "social"
+
+
+def test_a_saved_owner_scopes_the_repositories_its_form_named(tmp_path: Path) -> None:
+    # The form's checks look past the whitespace around an owner; the stored
+    # owner must be the one the write scope compares repositories with.
+    from guildbotics.integrations.repository_scope import in_scope
+
+    config_dir = tmp_path / "config"
+    _write_project(
+        config_dir,
+        {"code_hosting_service": {"name": "github", "owner": " GuildBotics "}},
+    )
+
+    owner = _stored_services(config_dir)["code_hosting_service"]["owner"]
+    assert owner == "GuildBotics"
+    assert in_scope(owner, "GuildBotics/GuildBotics")
+    with pytest.raises(ValidationError):
+        ProjectSetupInput(
+            config_dir=config_dir,
+            language="en",
+            services={"code_hosting_service": {"name": "github", "owner": "  "}},
+        )
+
+
+def test_a_pasted_api_key_is_stored_without_its_surrounding_whitespace(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    SimpleProjectSetupService().write_project(
+        ProjectSetupInput(
+            config_dir=config_dir,
+            language="en",
+            llm_api_type="openai",
+            cli_agent="codex",
+            provider_api_keys={"openai": " sk-test\n"},
+        )
+    )
+
+    assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "sk-test"

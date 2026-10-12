@@ -215,7 +215,12 @@ def test_code_hosting_names_the_owner_it_writes_to() -> None:
     assert CodeHosting(owner="GuildBotics").model_dump(exclude_none=True) == {
         "owner": "GuildBotics"
     }
-    for items in ({}, {"owner": ""}, {"owner": "a", "repo_base_url": "b"}):
+    for items in (
+        {},
+        {"owner": ""},
+        {"owner": "  "},
+        {"owner": "a", "repo_base_url": "b"},
+    ):
         with pytest.raises(ValidationError):
             CodeHosting(**items)
 

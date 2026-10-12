@@ -34,6 +34,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.runtime.chat_service import ChatIdentity
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 
@@ -161,6 +162,7 @@ class _StubContext:
     member_brains: dict[str, Any] = field(default_factory=dict)
     ticket_service: Any = field(default_factory=_StubTicketService)
     chat_service: Any = field(default_factory=_StubChatService)
+    code_hosting_service: Any = None
     talk_result: str = "OK"
     close_events: list[str] | None = None
     logger: logging.Logger = field(
@@ -175,6 +177,7 @@ class _StubContext:
             member_brains=self.member_brains,
             ticket_service=self.ticket_service,
             chat_service=self.chat_service,
+            code_hosting_service=self.code_hosting_service,
             talk_result=self.talk_result,
             close_events=self.close_events,
             logger=self.logger,
@@ -193,6 +196,9 @@ class _StubContext:
 
     def get_chat_service(self) -> Any:
         return self.chat_service
+
+    def get_code_hosting_service(self) -> Any:
+        return self.code_hosting_service
 
 
 def _person(person_id: str, **kwargs: Any) -> Person:
@@ -1242,3 +1248,57 @@ async def test_person_id_targets_single_member(
     assert response.active_members == ["bob"]
     llm_checks = [c for c in response.checks if c.code == "llm_live_call"]
     assert [c.person_id for c in llm_checks] == ["bob"]
+
+
+class _StubCodeHost:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.checked: list[bool] = []
+
+    async def identity(self, *, check: bool = False) -> dict[str, str]:
+        self.checked.append(check)
+        if self.error is not None:
+            raise self.error
+        return {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (None, "ok", "github_code_hosting_access"),
+        (ServiceError("Bad credentials"), "error", "github_access"),
+    ],
+    ids=["accepted", "refused"],
+)
+async def test_github_hosting_only_the_code_checks_the_members_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception | None,
+    status: str,
+    code: str,
+) -> None:
+    # Without the tickets on GitHub there is no board to read, and the
+    # credential the code host uses is still what fails a push.
+    _patch_talk(monkeypatch)
+    code_host = _StubCodeHost(error)
+    context = _StubContext(
+        team=_team(
+            [
+                _person("alice", is_active=True, account_info={"github_app_id": "7"}),
+                # No GitHub credential: the member does not use the code host.
+                _person("bob", is_active=True),
+                _person("hana", person_type="human"),
+            ],
+            services={"code_hosting_service": {"name": "github", "owner": "acme"}},
+        ),
+        brain=_StubBrain(_CliResult()),
+        code_hosting_service=code_host,
+    )
+
+    response = await _run(context)
+
+    github = [check for check in response.checks if check.section == "github"]
+    assert [(c.code, c.status, c.person_id, c.credential) for c in github] == [
+        (code, status, "alice", True)
+    ]
+    assert code_host.checked == [True]

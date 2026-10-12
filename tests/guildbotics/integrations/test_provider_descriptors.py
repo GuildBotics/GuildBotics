@@ -17,6 +17,7 @@ import pytest
 import guildbotics
 from guildbotics.entities.team import Project, Service, Team
 from guildbotics.integrations.factory import PROVIDERS, configured_providers
+from guildbotics.integrations.provider import SetupItems
 
 PACKAGE = Path(guildbotics.__file__).parent / "integrations"
 #: The calls that read a member's secret by name.
@@ -111,6 +112,17 @@ def test_a_provider_is_offered_by_setup_for_exactly_the_kinds_it_serves(name):
     assert set(setup.services) == served
 
 
+@pytest.mark.parametrize("name", sorted(n for n, p in PROVIDERS.items() if p.setup))
+def test_what_a_setup_stores_is_read_without_unknown_fields_or_whitespace(name):
+    # A value the form's checks trim, stored as it was typed, means something
+    # else to whatever reads it (an owner of " acme " scopes no repository).
+    setup = PROVIDERS[name].setup
+    assert setup is not None
+    models = [*setup.services.values(), *([setup.member] if setup.member else [])]
+    for model in models:
+        assert issubclass(model, SetupItems), model
+
+
 @pytest.mark.parametrize(
     "name", sorted(n for n, p in PROVIDERS.items() if p.setup and p.setup.member)
 )
@@ -135,7 +147,7 @@ def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tm
 #: The checks of a member's credential: their failing opens the member's
 #: credential alert for the provider, their passing closes it.
 _CREDENTIAL_CHECKS = {
-    "github": {"github_access", "github_project_access"},
+    "github": {"github_access", "github_code_hosting_access", "github_project_access"},
     "slack": {
         "slack_access",
         "slack_app_token",

@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.provider import (
@@ -23,6 +23,7 @@ from guildbotics.integrations.provider import (
     Operation,
     ProviderSetup,
     SetupError,
+    SetupItems,
 )
 from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack.slack_chat_service import (
@@ -50,10 +51,8 @@ SOURCE_NONE = "none"
 logger = logging.getLogger(__name__)
 
 
-class Chat(BaseModel):
+class Chat(SetupItems):
     """The Web API the chat is reached at, when it is not Slack's own."""
-
-    model_config = ConfigDict(extra="forbid")
 
     base_url: str | None = None
 

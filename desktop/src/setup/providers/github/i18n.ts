@@ -123,6 +123,10 @@ export const github = {
     },
     overview: {
       diagnosticSuccess: {
+        github_code_hosting_access: {
+          title: "GitHub accepted the credential",
+          description: "The member's GitHub credential was checked without updating GitHub.",
+        },
         github_project_access: {
           title: "GitHub Project was readable",
           description: "Project status options were fetched without updating GitHub.",
@@ -298,6 +302,10 @@ export const github = {
     },
     overview: {
       diagnosticSuccess: {
+        github_code_hosting_access: {
+          title: "GitHub が資格情報を受け付けました",
+          description: "GitHub を更新せずに、メンバーの GitHub 資格情報を確かめました。",
+        },
         github_project_access: {
           title: "GitHub Project を読み取れました",
           description: "GitHub を更新せず、Project の status options を取得できました。",

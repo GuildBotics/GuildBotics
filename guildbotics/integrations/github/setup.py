@@ -25,7 +25,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from guildbotics.entities.team import Person, Project, Service, Team
 from guildbotics.integrations.github import app_manifest
@@ -37,6 +37,7 @@ from guildbotics.integrations.provider import (
     Page,
     ProviderSetup,
     SetupError,
+    SetupItems,
     page_path,
 )
 from guildbotics.utils.i18n_tool import t
@@ -54,15 +55,13 @@ _REGISTRATION_TTL_SECONDS = 30 * 60
 # -- the items of the services ------------------------------------------------
 
 
-class LaneMap(BaseModel):
+class LaneMap(SetupItems):
     """The workflow lanes as the board's Status options name them.
 
     Blank names are the board's defaults. A working lane the board does not
     have only keeps tickets from moving on start, which the diagnostics
     report; ``ready`` and ``done`` must differ.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     ready: str = GitHubTicketService.DEFAULT_LANE_MAP[GitHubTicketService.LANE_READY]
     working: str = GitHubTicketService.DEFAULT_LANE_MAP[
@@ -74,26 +73,22 @@ class LaneMap(BaseModel):
     def _defaults(self) -> LaneMap:
         defaults = LaneMap.model_fields
         for lane, spec in defaults.items():
-            setattr(self, lane, getattr(self, lane).strip() or spec.default)
+            setattr(self, lane, getattr(self, lane) or spec.default)
         if self.ready == self.done:
             raise ValueError("ready and done lanes must be different")
         return self
 
 
-class CodeHosting(BaseModel):
+class CodeHosting(SetupItems):
     """The owner whose repositories the members write to."""
-
-    model_config = ConfigDict(extra="forbid")
 
     owner: str = Field(min_length=1)
     api_base_url: str | None = None
 
 
-class Board(BaseModel):
+class Board(SetupItems):
     """A Projects board, named by its URL; the owner and the number are the
     URL's."""
-
-    model_config = ConfigDict(extra="forbid")
 
     url: str
     owner: str = ""
@@ -103,13 +98,12 @@ class Board(BaseModel):
 
     @model_validator(mode="after")
     def _identity(self) -> Board:
-        match = _PROJECT_URL.fullmatch(self.url.strip())
+        match = _PROJECT_URL.fullmatch(self.url)
         if match is None:
             raise ValueError(
                 "url must be a GitHub Project URL: "
                 "https://github.com/orgs/<owner>/projects/<number>"
             )
-        self.url = self.url.strip()
         self.owner, self.project_id = match.groups()
         return self
 

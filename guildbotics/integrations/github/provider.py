@@ -64,8 +64,18 @@ def _credentialed(person: Person) -> bool:
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:
-    if context.team.project.get_service_name(Service.TICKET_SERVICE) != "github":
-        return []
+    """The board when GitHub holds the tickets, and the member's credential
+    when GitHub only hosts the code."""
+    project = context.team.project
+    if project.get_service_name(Service.TICKET_SERVICE) != "github":
+        if project.get_service_name(Service.CODE_HOSTING_SERVICE) != "github":
+            return []
+        # A member with no GitHub credential does not use the code host.
+        return [
+            await _code_host_access(context, member)
+            for member in members
+            if member.person_type != "human" and _credentialed(member)
+        ]
     checks: list[ProviderCheck] = []
     lane_checked = False
     for member in members:
@@ -106,6 +116,32 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
         finally:
             await c.aclose()
     return checks
+
+
+async def _code_host_access(context: Context, member: Person) -> ProviderCheck:
+    c = context.clone_for(member)
+    try:
+        await c.get_code_hosting_service().identity(check=True)
+    except Exception as exc:
+        return ProviderCheck(
+            section=_SECTION,
+            code="github_access",
+            credential=True,
+            status="error",
+            message=_safe_error("GitHub read-only check failed", exc),
+            person_id=member.person_id,
+            context={"error_type": type(exc).__name__},
+        )
+    finally:
+        await c.aclose()
+    return ProviderCheck(
+        section=_SECTION,
+        code="github_code_hosting_access",
+        credential=True,
+        status="ok",
+        message="GitHub accepted the member's credential.",
+        person_id=member.person_id,
+    )
 
 
 async def _human_member(context: Context, member: Person) -> ProviderCheck:

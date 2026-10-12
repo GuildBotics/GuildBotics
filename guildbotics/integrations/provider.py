@@ -98,15 +98,22 @@ class SetupError(ValueError):
         return t(self.key, locale=language) if self.key else self.message
 
 
-class MemberAccount(BaseModel):
+class SetupItems(BaseModel):
+    """What a setup stores, as a form gives it: no field the setup does not
+    know, and no value with the whitespace around it, which the form's
+    checks look past and the stored value would keep (an owner of
+    ``" acme "`` scopes no repository)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class MemberAccount(SetupItems):
     """A member's account with a provider, as the member screen edits it.
 
     A provider's account is the fields of its form; it is stored as
     ``account_info`` entries and the member's secrets, and read back as
     :meth:`view`.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     def stored(
         self, person_id: str, human: bool
