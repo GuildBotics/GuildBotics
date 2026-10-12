@@ -1284,8 +1284,12 @@ async def test_github_hosting_only_the_code_checks_the_members_credential(
     context = _StubContext(
         team=_team(
             [
-                _person("alice", is_active=True, account_info={"github_app_id": "7"}),
-                # No GitHub credential: the member does not use the code host.
+                _person(
+                    "alice",
+                    is_active=True,
+                    account_info={"github_account_type": "github_apps"},
+                ),
+                # No GitHub account: the member does not use the code host.
                 _person("bob", is_active=True),
                 _person("hana", person_type="human"),
             ],
@@ -1302,3 +1306,41 @@ async def test_github_hosting_only_the_code_checks_the_members_credential(
         (code, status, "alice", True)
     ]
     assert code_host.checked == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_github_account_without_its_credential_fails_the_code_host_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A member set up as a machine user whose token this device does not hold
+    # (not fetched from the hub yet) still uses the code host: the missing
+    # token is what the check reports.
+    _patch_talk(monkeypatch)
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "carol",
+                    is_active=True,
+                    account_info={
+                        "github_account_type": "machine_user",
+                        "github_username": "carol-bot",
+                    },
+                )
+            ],
+            services={"code_hosting_service": {"name": "github", "owner": "acme"}},
+        ),
+        brain=_StubBrain(_CliResult()),
+        code_hosting_service=_StubCodeHost(KeyError("CAROL_GITHUB_ACCESS_TOKEN")),
+    )
+
+    response = await _run(context)
+
+    [check] = [check for check in response.checks if check.section == "github"]
+    assert (check.code, check.status, check.person_id, check.credential) == (
+        "github_access",
+        "error",
+        "carol",
+        True,
+    )
+    assert response.ok is False

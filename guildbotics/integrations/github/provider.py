@@ -70,11 +70,15 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
     if project.get_service_name(Service.TICKET_SERVICE) != "github":
         if project.get_service_name(Service.CODE_HOSTING_SERVICE) != "github":
             return []
-        # A member with no GitHub credential does not use the code host.
+        # Who uses the code host is what the member's account says, as verify
+        # reads it: a member set up with a GitHub account but missing its
+        # credential (one not fetched to this device yet) is a failure to
+        # report, not a member to skip.
         return [
             await _code_host_access(context, member)
             for member in members
-            if member.person_type != "human" and _credentialed(member)
+            if member.person_type != "human"
+            and get_github_account_type(member) in _REQUIRED_KEYS
         ]
     checks: list[ProviderCheck] = []
     lane_checked = False
