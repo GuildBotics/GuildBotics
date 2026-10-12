@@ -40,10 +40,9 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 )
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
-from guildbotics.setup.github_app import GitHubAppRegistrationInfo
-from guildbotics.setup.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.setup.setup_service import ProjectSetupInput
 from guildbotics.utils.local_api import NONCE_PATTERN
-from guildbotics.utils.person_id import MemberDirectoryName, OptionalPersonId, PersonId
+from guildbotics.utils.person_id import OptionalPersonId, PersonId
 
 
 class CliAgentLastTurn(BaseModel):
@@ -458,7 +457,14 @@ class CommandRequirement(BaseModel):
     ``environment``: it runs there.
     """
 
-    kind: Literal["environment", "github", "slack", "cli_agent", "llm"]
+    kind: Literal[
+        "environment",
+        "cli_agent",
+        "llm",
+        "code_hosting_service",
+        "ticket_service",
+        "chat_service",
+    ]
     satisfied: bool
     message: str = ""
 
@@ -1000,6 +1006,8 @@ class RuntimeUnitStatus(BaseModel):
     events_drained_count: int | None = None
     events_auth_failed_count: int | None = None
     events_auth_failed_persons: list[str] = Field(default_factory=list)
+    #: The provider the listened chat is, whose credentials failed.
+    events_chat_provider: str = ""
     member_routines: list[RuntimeMemberRoutine] = Field(default_factory=list)
 
 
@@ -1071,21 +1079,17 @@ class VerifyResponse(BaseModel):
     errors: list[VerifyCheck]
 
 
-class DiagnosticCheck(ProviderCheck):
-    section: Literal["config", "members", "llm", "cli_agent", "github", "slack", "git"]
-
-
 class ScenarioDiagnosticsResponse(BaseModel):
     ok: bool
     active_members: list[str]
-    checks: list[DiagnosticCheck]
-    warnings: list[DiagnosticCheck]
-    errors: list[DiagnosticCheck]
+    checks: list[ProviderCheck]
+    warnings: list[ProviderCheck]
+    errors: list[ProviderCheck]
 
 
 SystemAlertCode = Literal[
-    "credential_github",
-    "credential_slack",
+    #: A member's credential with a provider, named by ``provider``.
+    "credential",
     "credential_llm",
     "credential_jev",
     "command_failed",
@@ -1116,6 +1120,8 @@ class SystemAlert(BaseModel):
     person_id: str = ""
     command: str = ""
     trace_id: str = ""
+    #: The provider a ``credential`` alert is of.
+    provider: str = ""
     #: What the alert is about when the code alone does not say, such as the
     #: setting a device cannot enforce.
     reason: str = ""
@@ -1470,118 +1476,29 @@ class ProjectConfigResponse(BaseModel):
     description: str = ""
     llm_api_type: str
     cli_agent: str
-    github_enabled: bool
-    github_project_url: str = ""
-    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
+    services: dict[str, Any] = Field(default_factory=dict)
     # provider id -> whether its API key is stored in the OS secret store
     provider_api_keys: dict[str, bool] = Field(default_factory=dict)
 
 
-class ProjectStatusOptionsRequest(BaseModel):
-    """Identify the GitHub Project to read Status options from.
-
-    The form supplies the project being edited (which may not be saved yet);
-    the backend reads its Status options live using a configured member's
-    credentials, without writing anything to GitHub.
-    """
-
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-
-
-class ProjectStatusOptionsResponse(BaseModel):
-    """Status (lane) option names read from a GitHub Project.
-
-    ``available`` is False when options could not be read (incomplete project
-    identity, no member credentials, or a GitHub error); the frontend then
-    falls back to manual lane-name entry.
-    """
-
-    available: bool
-    statuses: list[str] = Field(default_factory=list)
-
-
-class AgentFieldOption(BaseModel):
-    """A single ``Agent`` field option, keyed by a member's agent token."""
+class ProviderOption(BaseModel):
+    """A provider the setup screens offer, and the kinds of service it serves."""
 
     name: str
-    description: str = ""
+    title: str
+    kinds: list[str]
+    #: Whether a member's avatar can be imported from it.
+    avatar: bool
 
 
-class AgentFieldStateResponse(BaseModel):
-    """State of a GitHub Project's ``Agent`` single-select field.
-
-    ``available`` is False when the field state could not be read (incomplete
-    project identity, no member credentials, or a GitHub error). ``options`` are
-    the members currently registered as field options; ``missing`` are
-    configured non-human members not yet registered (what an ensure call adds).
-    """
-
-    available: bool
-    exists: bool = False
-    options: list[AgentFieldOption] = Field(default_factory=list)
-    missing: list[AgentFieldOption] = Field(default_factory=list)
-
-
-class ProjectConfigUpdateRequest(GitHubProjectInput):
-    config_dir: Path
+class ProjectConfigUpdateRequest(ProjectSetupInput):
     # Revisions this form was composed against. Empty during first-time setup,
     # where there is no earlier content to be composed against.
     expected_revisions: dict[str, str] = Field(default_factory=dict)
     language: Literal["en", "ja"]
-    description: str = ""
-    llm_api_type: str
-    cli_agent: str
-    github_enabled: bool
-    # provider id -> new API key value to write to the .env (empty/absent = leave as is)
-    provider_api_keys: dict[str, str] = Field(default_factory=dict)
 
 
 class DefaultPersonUpdateRequest(BaseModel):
     # Empty clears the setting; resolution then falls back to the first active
     # non-human member in person ID order.
     person_id: OptionalPersonId = ""
-
-
-class MemberResolveRequest(BaseModel):
-    person_type: Literal["human", "machine_user", "github_apps"]
-    identity: str = Field(min_length=1)
-
-
-class MemberResolveResponse(BaseModel):
-    person_id: str
-    github_username: str
-    github_user_id: int
-    git_email: str
-
-
-class GitHubAppRegistrationStartRequest(BaseModel):
-    app_name: str = Field(min_length=1)
-    # The member whose save may store this app's key: the one being edited,
-    # or the ID of the member being added.
-    person_id: MemberDirectoryName
-    organization: str = ""
-    # Base URL of this local API as seen from the user's browser; GitHub
-    # redirects the manifest callback here.
-    callback_base_url: str = Field(min_length=1)
-
-
-class GitHubAppRegistrationStatus(GitHubAppRegistrationInfo):
-    status: Literal["pending", "converted", "installed"]
-    # URL the desktop opens in the external browser to post the manifest.
-    start_url: str = ""
-
-
-class SlackAppRegistrationStartRequest(BaseModel):
-    app_name: str = Field(min_length=1)
-
-
-class SlackTokenVerifyRequest(BaseModel):
-    bot_token: str = ""
-    app_token: str = ""
-    # Member being edited, if any. An empty token field means "keep the stored
-    # one" on save, so verification resolves that member's stored token.
-    person_id: MemberDirectoryName | Literal[""] = ""
-    # Channels as currently edited in the form, checked for bot membership.
-    channels: list[str] = Field(default_factory=list)

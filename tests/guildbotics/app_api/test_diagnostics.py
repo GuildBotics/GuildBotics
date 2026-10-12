@@ -34,6 +34,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.runtime.chat_service import ChatIdentity
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 
@@ -161,6 +162,7 @@ class _StubContext:
     member_brains: dict[str, Any] = field(default_factory=dict)
     ticket_service: Any = field(default_factory=_StubTicketService)
     chat_service: Any = field(default_factory=_StubChatService)
+    code_hosting_service: Any = None
     talk_result: str = "OK"
     close_events: list[str] | None = None
     logger: logging.Logger = field(
@@ -175,6 +177,7 @@ class _StubContext:
             member_brains=self.member_brains,
             ticket_service=self.ticket_service,
             chat_service=self.chat_service,
+            code_hosting_service=self.code_hosting_service,
             talk_result=self.talk_result,
             close_events=self.close_events,
             logger=self.logger,
@@ -193,6 +196,9 @@ class _StubContext:
 
     def get_chat_service(self) -> Any:
         return self.chat_service
+
+    def get_code_hosting_service(self) -> Any:
+        return self.code_hosting_service
 
 
 def _person(person_id: str, **kwargs: Any) -> Person:
@@ -609,6 +615,8 @@ async def test_llm_check_skipped_when_api_key_missing(
     assert fast_error.context["provider"] == "openai"
     assert fast_error.context["env_key"] == "OPENAI_API_KEY"
     assert fast_error.person_id == "alice"
+    # A missing key is a credential failure: it opens the key's alert.
+    assert fast_error.credential
     assert talk_calls == []
 
 
@@ -835,9 +843,11 @@ async def test_cli_agent_brain_of_another_kind(
 
 
 @pytest.mark.asyncio
-async def test_github_not_configured_skipped(
+async def test_a_team_without_providers_reports_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Only the providers the project names are diagnosed; one it does not
+    name reports nothing, not a skipped row."""
     _patch_talk(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
@@ -846,9 +856,12 @@ async def test_github_not_configured_skipped(
 
     response = await _run(context)
 
-    check = _by_code(response)["github_not_configured"]
-    assert check.status == "ok"
-    assert "skipped" in check.message
+    assert {check.section for check in response.checks} <= {
+        "config",
+        "members",
+        "llm",
+        "cli_agent",
+    }
 
 
 @pytest.mark.asyncio
@@ -880,6 +893,12 @@ async def test_github_enabled_project_access(
     assert checks["github_project_access"].status == "ok"
     assert checks["github_lane_mapping"].status == "ok"
     assert checks["github_agent_assignment"].status == "ok"
+    # Reading the board is what proves the member's credential.
+    assert [
+        code
+        for code, check in checks.items()
+        if check.credential and check.section == "github"
+    ] == ["github_project_access"]
     assert checks["github_project_access"].context["status_count"] == len(
         TICKET_STATUSES
     )
@@ -1070,6 +1089,7 @@ async def test_github_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     check = _by_code(response)["github_access"]
     assert check.status == "error"
+    assert check.credential
     assert check.message.endswith(t("integrations.github.response.forbidden"))
     assert check.context["error_type"] == "GitHubResponseError"
     assert not response.ok
@@ -1084,22 +1104,6 @@ def _slack_member(person_id: str, *, enabled: bool = True) -> Person:
         chat={"enabled": enabled, "channel_id": "C001", "channel_name": "general"},
     )
     return _person(person_id, is_active=True, message_channels=[channel])
-
-
-@pytest.mark.asyncio
-async def test_slack_not_configured_skipped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_talk(monkeypatch)
-    context = _StubContext(
-        team=_team([_person("alice", is_active=True)]),
-        brain=_StubBrain(_CliResult()),
-    )
-
-    response = await _run(context)
-
-    check = _by_code(response)["slack_not_configured"]
-    assert check.status == "ok"
 
 
 @pytest.mark.asyncio
@@ -1121,6 +1125,15 @@ async def test_slack_credential_present_and_channel_ok(
     assert checks["slack_bot_auth"].status == "ok"
     assert checks["slack_bot_auth"].context["bot_user_id"] == "U123"
     assert checks["slack_channel_history"].status == "ok"
+    # The checks that prove the member's tokens close its credential alert.
+    assert {
+        code
+        for code, check in checks.items()
+        if check.credential and check.section == "slack"
+    } == {
+        "slack_app_token",
+        "slack_bot_auth",
+    }
 
 
 @pytest.mark.asyncio
@@ -1145,6 +1158,7 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
 
     checks = _by_code(response)
     assert checks["slack_channel_not_joined"].status == "error"
+    assert not checks["slack_channel_not_joined"].credential
     assert checks["slack_channel_not_joined"].context["channel_id"] == "C001"
     # The generic credential-shaped failure must not fire for this.
     assert "slack_access" not in checks
@@ -1234,3 +1248,99 @@ async def test_person_id_targets_single_member(
     assert response.active_members == ["bob"]
     llm_checks = [c for c in response.checks if c.code == "llm_live_call"]
     assert [c.person_id for c in llm_checks] == ["bob"]
+
+
+class _StubCodeHost:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.checked: list[bool] = []
+
+    async def identity(self, *, check: bool = False) -> dict[str, str]:
+        self.checked.append(check)
+        if self.error is not None:
+            raise self.error
+        return {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (None, "ok", "github_code_hosting_access"),
+        (ServiceError("Bad credentials"), "error", "github_access"),
+    ],
+    ids=["accepted", "refused"],
+)
+async def test_github_hosting_only_the_code_checks_the_members_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception | None,
+    status: str,
+    code: str,
+) -> None:
+    # Without the tickets on GitHub there is no board to read, and the
+    # credential the code host uses is still what fails a push.
+    _patch_talk(monkeypatch)
+    code_host = _StubCodeHost(error)
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "alice",
+                    is_active=True,
+                    account_info={"github_account_type": "github_apps"},
+                ),
+                # No GitHub account: the member does not use the code host.
+                _person("bob", is_active=True),
+                _person("hana", person_type="human"),
+            ],
+            services={"code_hosting_service": {"name": "github", "owner": "acme"}},
+        ),
+        brain=_StubBrain(_CliResult()),
+        code_hosting_service=code_host,
+    )
+
+    response = await _run(context)
+
+    github = [check for check in response.checks if check.section == "github"]
+    assert [(c.code, c.status, c.person_id, c.credential) for c in github] == [
+        (code, status, "alice", True)
+    ]
+    assert code_host.checked == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_github_account_without_its_credential_fails_the_code_host_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A member set up as a machine user whose token this device does not hold
+    # (not fetched from the hub yet) still uses the code host: the missing
+    # token is what the check reports.
+    _patch_talk(monkeypatch)
+    context = _StubContext(
+        team=_team(
+            [
+                _person(
+                    "carol",
+                    is_active=True,
+                    account_info={
+                        "github_account_type": "machine_user",
+                        "github_username": "carol-bot",
+                    },
+                )
+            ],
+            services={"code_hosting_service": {"name": "github", "owner": "acme"}},
+        ),
+        brain=_StubBrain(_CliResult()),
+        code_hosting_service=_StubCodeHost(KeyError("CAROL_GITHUB_ACCESS_TOKEN")),
+    )
+
+    response = await _run(context)
+
+    [check] = [check for check in response.checks if check.section == "github"]
+    assert (check.code, check.status, check.person_id, check.credential) == (
+        "github_access",
+        "error",
+        "carol",
+        True,
+    )
+    assert response.ok is False

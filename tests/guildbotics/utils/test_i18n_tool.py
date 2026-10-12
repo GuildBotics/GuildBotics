@@ -127,6 +127,19 @@ def _collect_t_call_keys() -> set[str]:
             continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
+        # SetupError renders the key it is raised with (``localized``), so its
+        # keys are the literal ``key=`` of every raise site.
+        keys.update(
+            keyword.value.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "SetupError"
+            for keyword in node.keywords
+            if keyword.arg == "key" and isinstance(keyword.value, ast.Constant)
+        )
+        if relative == Path("integrations/provider.py"):
+            continue
         aliases = _resolve_t_aliases(tree)
         if not aliases:
             continue

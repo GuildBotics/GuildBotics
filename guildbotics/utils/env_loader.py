@@ -10,7 +10,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.log_utils import get_logger
-from guildbotics.utils.person_id import ambiguous_person_env_keys
+from guildbotics.utils.person_id import ambiguous_person_secret
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     SecretStore,
@@ -57,7 +57,7 @@ def read_workspace_secrets(
     except WorkspaceNotConfiguredError:
         return {}
     values: dict[str, str] = {}
-    skip = skip | ambiguous_person_env_keys(config_dir / "team/members")
+    ambiguous = ambiguous_person_secret(config_dir / "team/members")
     try:
         stored_keys = store.keys()
         # Register provenance before the skip decision and before any fetch:
@@ -67,7 +67,7 @@ def read_workspace_secrets(
             key for key in stored_keys if is_environment_secret(key)
         )
         for key in stored_keys:
-            if not is_environment_secret(key) or key in skip:
+            if not is_environment_secret(key) or key in skip or ambiguous(key):
                 continue
             value = store.get(key)
             if value is not None:

@@ -32,6 +32,7 @@ from guildbotics.environment.toolchain import (
     ToolchainError,
     parse_toolchain,
 )
+from guildbotics.integrations.provider import SetupError
 from guildbotics.intelligences.brains.factory import (
     AGNO_BRAIN_CLASS,
     CLI_BRAIN_CLASS,
@@ -51,10 +52,7 @@ from guildbotics.intelligences.llm_providers import (
     PROVIDER_DEFAULT_FILENAME,
     provider_of,
 )
-from guildbotics.setup.setup_service import (
-    CreatedFile,
-    SetupServiceError,
-)
+from guildbotics.setup.setup_service import CreatedFile
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 from guildbotics.utils.person_id import person_config_directory
 
@@ -149,7 +147,7 @@ class IntelligenceConfigService:
                     if not grant.present:
                         raise AccessContractError(local_path_missing(grant.grant))
             except AccessContractError as exc:
-                raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+                raise SetupError("invalid_filesystem_grants", str(exc)) from exc
             if request.local_grants is not None:
                 request.local_grants.paths = [
                     LocalPathGrant(
@@ -414,7 +412,7 @@ class IntelligenceConfigService:
             try:
                 require_cli_agent_path(path, where=f"AI CLI tool slot '{slot}'")
             except ValueError as exc:
-                raise SetupServiceError("unknown_cli_agent", str(exc)) from exc
+                raise SetupError("unknown_cli_agent", str(exc)) from exc
         return dict(mapping)
 
     def _write_model_def(
@@ -764,7 +762,7 @@ class IntelligenceConfigService:
         try:
             return parse_toolchain(data, where=TOOLCHAIN_PATH)
         except ToolchainError as exc:
-            raise SetupServiceError("invalid_agent_environment", str(exc)) from exc
+            raise SetupError("invalid_agent_environment", str(exc)) from exc
 
     def _read_shared_grants(self, config_dir: Path) -> SharedGrants:
         """The workspace's shared grants; absent file, none beyond the built-in."""
@@ -776,7 +774,7 @@ class IntelligenceConfigService:
                 self._read_optional_yaml(path) or None, where=FILESYSTEM_GRANTS_PATH
             )
         except AccessContractError as exc:
-            raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+            raise SetupError("invalid_filesystem_grants", str(exc)) from exc
 
     def _read_local_grants(self, config_dir: Path) -> LocalGrants:
         """This device's own grants; absent file, none."""
@@ -786,7 +784,7 @@ class IntelligenceConfigService:
                 data or None, where=f"local/{LOCAL_GRANTS_FILENAME}"
             )
         except AccessContractError as exc:
-            raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+            raise SetupError("invalid_filesystem_grants", str(exc)) from exc
 
     @staticmethod
     def _local_grants_file(config_dir: Path) -> Path:
@@ -808,7 +806,7 @@ class IntelligenceConfigService:
             effort, validate_effort_fields(describing.get("effort_fields"), where=where)
         )
         if problems:
-            raise SetupServiceError(
+            raise SetupError(
                 "invalid_effort_settings", f"{where}: {'; '.join(problems)}"
             )
 
@@ -851,15 +849,15 @@ class IntelligenceConfigService:
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
         if assignment.engine == "cli" and assignment.name == "chat_decision":
-            raise SetupServiceError(
+            raise SetupError(
                 "invalid_decision", "AI CLI is not supported for chat_decision"
             )
         if assignment.engine == "jev" and assignment.name != "chat_decision":
-            raise SetupServiceError(
+            raise SetupError(
                 "invalid_decision", "Jev is only supported for chat_decision"
             )
         if assignment.engine == "jev" and assignment.target != JEV_MODEL:
-            raise SetupServiceError("invalid_decision", "Unsupported Jev model")
+            raise SetupError("invalid_decision", "Unsupported Jev model")
         if assignment.engine == "cli":
             return {
                 "class": CLI_BRAIN_CLASS,

@@ -62,7 +62,9 @@ FRONTEND_ROUTES = {
     ("api/client.ts", "closeApi"): "closes the connection for good",
     ("api/client.ts", "connected"): "the one reader of the connection",
     ("api/client.ts", "memberAvatarUrl"): "URL query, loaded by <img>",
-    ("api/client.ts", "startGitHubAppRegistration"): "browser callback destination",
+    ("setup/providers/github/api.ts", "startAppRegistration"): (
+        "browser callback destination"
+    ),
     ("api/client.ts", "uploadFile"): "header",
     ("api/client.ts", "subscribeEvents"): "WebSocket subprotocol",
     ("api/client.ts", "request"): "header",

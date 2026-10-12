@@ -33,11 +33,8 @@ test("first-run setup happy path writes project.yml and enters the service view"
     .poll(async () => realpathSync.native(await workspaceField.inputValue()))
     .toBe(realpathSync.native(ctx.workspaceDir));
 
-  // Project section: start without GitHub so the first member can be completed
-  // before GitHub-specific patrol defaults are enabled.
+  // Project section.
   await page.getByLabel("Project description").fill("E2E automation workspace");
-  await page.getByRole("combobox", { name: "GitHub integration", exact: true }).click();
-  await page.getByRole("option", { name: "Do not use GitHub", exact: true }).click();
 
   // LLM / AI CLI tools section: provide an API key for the default OpenAI provider.
   // The section nav buttons share text with option cards (e.g. "GitHub" vs
@@ -48,8 +45,29 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // "Configure OpenAI API key" action.
   await page.getByLabel("OpenAI API key", { exact: true }).fill("sk-e2e-test-key");
 
-  // Members section (now before GitHub): add one active member so the section is
-  // complete. The add form is shown by default and pre-filled with defaults.
+  // Integrations section: one provider per kind of service, chosen from what
+  // the backend offers. The board is named by its URL; the backend cannot reach
+  // GitHub here, so the status-options read reports unavailable and the lane
+  // fields behave as free text, whose names must still persist.
+  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+  const choose = async (kind: string, provider: string) => {
+    await page.getByRole("combobox", { name: kind, exact: true }).click();
+    await page.getByRole("option", { name: provider, exact: true }).click();
+  };
+  await choose("Tickets", "GitHub");
+  await page
+    .getByRole("textbox", { name: "GitHub Project URL" })
+    .fill("https://github.com/orgs/acme/projects/9");
+  await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");
+  await page.getByRole("textbox", { name: "Working lane" }).fill("Doing");
+  await page.getByRole("textbox", { name: "Done lane" }).fill("Shipped");
+  await choose("Code hosting", "GitHub");
+  // The code host's owner starts as the board's.
+  await expect(page.getByRole("textbox", { name: "Owner", exact: true })).toHaveValue("acme");
+  await choose("Chat", "Slack");
+
+  // Members section: add one active member so the section is complete; its
+  // account tabs are those of the providers chosen above. The add form is shown by default and pre-filled with defaults.
   await page.getByRole("button", { name: "Members", exact: true }).click();
   await page.getByLabel("Member ID").fill("local-agent");
   await page.getByLabel("Display name").fill("Local Agent");
@@ -58,28 +76,6 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Add member" }).click();
   const memberList = page.getByRole("list", { name: "Members" });
   await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
-
-  // Enable GitHub after the member is saved, then provide the Project
-  // URL. Both live in the Project section; the GitHub section derives its lane
-  // fields from the URL typed here, and shows only a "not set" notice until it
-  // parses.
-  await page.getByRole("button", { name: "Project", exact: true }).click();
-  await page.getByRole("button", { name: "Members", exact: true }).click();
-  await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Project", exact: true }).click();
-  await page.getByRole("combobox", { name: "GitHub integration", exact: true }).click();
-  await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "GitHub Project URL" })
-    .fill("https://github.com/orgs/acme/projects/9");
-
-  // Override the lane mapping with custom status names. The backend cannot
-  // reach GitHub in CI, so the status-options fetch reports unavailable and the
-  // lane fields behave as free text; the typed names must still persist.
-  await page.getByRole("button", { name: "GitHub", exact: true }).click();
-  await page.getByRole("textbox", { name: "Ready lane" }).fill("Ready");
-  await page.getByRole("textbox", { name: "Working lane" }).fill("Doing");
-  await page.getByRole("textbox", { name: "Done lane" }).fill("Shipped");
 
   // Create the initial settings.
   const createButton = page.getByRole("button", { name: "Create initial settings" });
@@ -98,16 +94,27 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await expect(page).toHaveURL(/#\/service$/);
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
-  // The REAL backend wrote project.yml under the temp workspace, including the
-  // custom lane_map typed into the GitHub section.
+  // The REAL backend wrote project.yml under the temp workspace: each kind's
+  // provider and only that provider's items, the custom lane_map included.
   const projectFile = join(ctx.workspaceDir, ".guildbotics", "config", "team", "project.yml");
   const projectYaml = readFileSync(projectFile, "utf-8");
   expect(projectYaml).toContain("language: en");
   expect(projectYaml).toContain("E2E automation workspace");
-  expect(projectYaml).toContain("lane_map:");
-  expect(projectYaml).toContain("ready: Ready");
-  expect(projectYaml).toContain("working: Doing");
-  expect(projectYaml).toContain("done: Shipped");
+  expect(projectYaml).toContain("  code_hosting_service:\n    name: github\n    owner: acme\n");
+  expect(projectYaml).toContain(
+    [
+      "  ticket_service:",
+      "    name: github",
+      "    url: https://github.com/orgs/acme/projects/9",
+      "    owner: acme",
+      "    project_id: '9'",
+      "    lane_map:",
+      "      ready: Ready",
+      "      working: Doing",
+      "      done: Shipped",
+    ].join("\n"),
+  );
+  expect(projectYaml).toContain("  chat_service:\n    name: slack\n");
 
   // Effort overlay: the settings UI builds typed controls from the descriptor
   // the backend serves for the provider. jsdom can only prove the editor state

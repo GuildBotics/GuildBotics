@@ -11,6 +11,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import RuntimeStatus, RuntimeUnitStatus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.system_alerts import SystemAlertService
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -43,51 +44,57 @@ def _event(
     }
 
 
+def _diagnostics(
+    *checks: dict[str, object], timestamp: str, **payload: object
+) -> dict[str, object]:
+    """A diagnostics run that recorded ``checks``, with ``payload`` besides."""
+    return _event(
+        "diagnostics.completed",
+        timestamp=timestamp,
+        person_id="",
+        command="",
+        payload={"checks": list(checks), **payload},
+    )
+
+
+def _member_check(provider: str, status: str, **fields: object) -> dict[str, object]:
+    """A provider's check of alice's credential."""
+    return {
+        "section": provider,
+        "code": f"{provider}_access",
+        "status": status,
+        "person_id": "alice",
+        "credential": True,
+        **fields,
+    }
+
+
+@pytest.mark.parametrize("provider", ["github", "slack"])
 def test_credential_alert_opens_on_first_error_and_closes_on_success(
-    tmp_path: Path,
+    tmp_path: Path, provider: str
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
-        _event(
-            "diagnostics.completed",
-            timestamp="2026-07-11T10:00:00+09:00",
-            payload={
-                "checks": [
-                    {
-                        "section": "slack",
-                        "code": "slack_bot_auth",
-                        "status": "error",
-                        "person_id": "alice",
-                    }
-                ]
-            },
+        _diagnostics(
+            _member_check(provider, "error"), timestamp="2026-07-11T10:00:00+09:00"
         )
     )
+    service = SystemAlertService(store)
 
-    alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
+    alerts = service.list_alerts(_runtime()).alerts
 
-    assert [(alert.code, alert.severity) for alert in alerts] == [
-        ("credential_slack", "critical")
-    ]
+    assert [
+        (alert.id, alert.code, alert.provider, alert.person_id, alert.severity)
+        for alert in alerts
+    ] == [(f"credential:{provider}:alice", "credential", provider, "alice", "critical")]
 
     store.record(
-        _event(
-            "diagnostics.completed",
-            timestamp="2026-07-11T10:05:00+09:00",
-            payload={
-                "checks": [
-                    {
-                        "section": "slack",
-                        "code": "slack_bot_auth",
-                        "status": "ok",
-                        "person_id": "alice",
-                    }
-                ]
-            },
+        _diagnostics(
+            _member_check(provider, "ok"), timestamp="2026-07-11T10:05:00+09:00"
         )
     )
 
-    assert SystemAlertService(store).list_alerts(_runtime()).alerts == []
+    assert service.list_alerts(_runtime()).alerts == []
 
 
 def test_command_failure_warns_once_and_later_success_closes_it(tmp_path: Path) -> None:
@@ -165,21 +172,15 @@ def test_rate_limit_replaces_command_failure_from_an_earlier_trace(
 def test_non_credential_diagnostic_error_does_not_open_credential_alert(
     tmp_path: Path,
 ) -> None:
+    """Whether a check is of a credential is what the check says, not its code."""
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     store.record(
-        _event(
-            "diagnostics.completed",
+        _diagnostics(
+            _member_check(
+                "github", "error", code="github_lane_missing", credential=False
+            ),
+            _member_check("slack", "error", code="slack_bot_auth", credential=False),
             timestamp="2026-07-11T10:00:00+09:00",
-            payload={
-                "checks": [
-                    {
-                        "section": "github",
-                        "code": "github_lane_missing",
-                        "status": "error",
-                        "person_id": "alice",
-                    }
-                ]
-            },
         )
     )
 
@@ -214,6 +215,9 @@ def _key_check(event_type: str, status: str | None) -> dict[str, object]:
         "code": "llm_api_key",
         "status": status,
         "context": {"provider": "openai"},
+        # Diagnostics says its check is of a credential; verify's checks are
+        # known by their code.
+        **({"credential": True} if event_type == "diagnostics.completed" else {}),
     }
     return _event(
         event_type,
@@ -236,6 +240,7 @@ def test_llm_diagnostics_open_one_alert_per_provider(tmp_path: Path) -> None:
                         "status": "error",
                         "person_id": person_id,
                         "context": {"provider": "openai"},
+                        "credential": True,
                     }
                     for person_id in ("alice", "bob")
                 ]
@@ -402,70 +407,87 @@ def test_full_diagnostics_keep_provider_alerts_of_no_member(tmp_path: Path) -> N
     assert [alert.id for alert in alerts] == ["inference:llm:openai"]
 
 
+def _credential_failed(provider: str, *, timestamp: str) -> dict[str, object]:
+    """A member command refused by ``provider`` for alice's credential."""
+    return _event(
+        "credential.failed", timestamp=timestamp, payload={"provider": provider}
+    )
+
+
+@pytest.mark.parametrize("provider", sorted(PROVIDERS))
+def test_a_providers_refusal_opens_the_members_credential_alert(
+    tmp_path: Path, provider: str
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(_credential_failed(provider, timestamp="2026-07-11T10:00:00+09:00"))
+
+    alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
+
+    assert [
+        (alert.id, alert.code, alert.provider, alert.person_id) for alert in alerts
+    ] == [(f"credential:{provider}:alice", "credential", provider, "alice")]
+
+
 def test_full_diagnostics_closes_alert_for_removed_member(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
-    store.record(
-        _event(
-            "credential.failed",
-            timestamp="2026-07-11T10:00:00+09:00",
-            payload={"provider": "github"},
-        )
-    )
+    store.record(_credential_failed("github", timestamp="2026-07-11T10:00:00+09:00"))
     service = SystemAlertService(store)
-    assert [alert.code for alert in service.list_alerts(_runtime()).alerts] == [
-        "credential_github"
+    assert [alert.id for alert in service.list_alerts(_runtime()).alerts] == [
+        "credential:github:alice"
     ]
 
     store.record(
-        _event(
-            "diagnostics.completed",
+        _diagnostics(
             timestamp="2026-07-11T10:01:00+09:00",
-            person_id="",
-            command="",
-            payload={
-                "active_members": [],
-                "scope_person_id": "",
-                "checks": [],
-            },
+            active_members=[],
+            scope_person_id="",
         )
     )
 
     assert service.list_alerts(_runtime()).alerts == []
 
 
-def test_full_diagnostics_closes_alert_for_removed_provider(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("payload", "kept"),
+    [
+        # The run read the team: a provider it no longer names has no alert.
+        (
+            {"providers": ["github"]},
+            ["credential:github:alice", "credential:llm:openai"],
+        ),
+        # It could not read the team: which providers are used is unknown.
+        (
+            {},
+            [
+                "credential:github:alice",
+                "credential:llm:openai",
+                "credential:slack:alice",
+            ],
+        ),
+    ],
+)
+def test_full_diagnostics_closes_the_alerts_of_providers_no_longer_used(
+    tmp_path: Path, payload: dict[str, object], kept: list[str]
+) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
-    store.record(
-        _event(
-            "credential.failed",
-            timestamp="2026-07-11T10:00:00+09:00",
-            payload={"provider": "slack"},
+    for provider in ("github", "slack"):
+        store.record(
+            _credential_failed(provider, timestamp="2026-07-11T10:00:00+09:00")
         )
-    )
+    store.record(_key_check("diagnostics.completed", "error"))
     service = SystemAlertService(store)
-    assert service.list_alerts(_runtime()).alerts
+    assert len(service.list_alerts(_runtime()).alerts) == 3
 
     store.record(
-        _event(
-            "diagnostics.completed",
-            timestamp="2026-07-11T10:01:00+09:00",
-            person_id="",
-            command="",
-            payload={
-                "active_members": ["alice"],
-                "scope_person_id": "",
-                "checks": [
-                    {
-                        "section": "slack",
-                        "code": "slack_not_configured",
-                        "status": "ok",
-                    }
-                ],
-            },
+        _diagnostics(
+            timestamp="2026-07-11T10:02:00+09:00",
+            active_members=["alice"],
+            scope_person_id="",
+            **payload,
         )
     )
 
-    assert service.list_alerts(_runtime()).alerts == []
+    assert sorted(alert.id for alert in service.list_alerts(_runtime()).alerts) == kept
 
 
 def test_credential_failure_replaces_command_warning_for_same_trace(
@@ -483,7 +505,7 @@ def test_credential_failure_replaces_command_warning_for_same_trace(
 
     alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
 
-    assert [alert.code for alert in alerts] == ["credential_github"]
+    assert [alert.id for alert in alerts] == ["credential:github:alice"]
 
 
 def test_cli_agent_diagnostics_do_not_create_member_credential_alerts(
@@ -593,53 +615,47 @@ def test_hash_state_migrates_without_replaying_old_events(tmp_path: Path) -> Non
     assert "processed" not in saved
 
 
-def test_runtime_failures_are_critical_and_state_based() -> None:
-    runtime = RuntimeStatus(
-        scheduler=RuntimeUnitStatus(
-            target="scheduler",
-            state="running",
-            running=True,
-            active_member_count=2,
-            worker_count=1,
-            started_at="2026-07-11T10:00:00+09:00",
-        ),
-        events=RuntimeUnitStatus(
-            target="events",
-            state="running",
-            running=True,
-            started_at="2026-07-11T10:00:00+09:00",
-            events_auth_failed_persons=["alice"],
-        ),
-    )
-
-    alerts = SystemAlertService(None).list_alerts(runtime).alerts
-
-    assert [(alert.code, alert.severity) for alert in alerts] == [
-        ("credential_slack", "critical")
-    ]
-
-
-def test_runtime_alert_dismissal_lasts_until_condition_resolves() -> None:
-    failed = RuntimeStatus(
+def _listening(chat: str, *failed: str) -> RuntimeStatus:
+    """The runtime while the listener of ``chat`` runs, refused for ``failed``."""
+    return RuntimeStatus(
         scheduler=RuntimeUnitStatus(target="scheduler", state="stopped", running=False),
         events=RuntimeUnitStatus(
             target="events",
             state="running",
             running=True,
-            events_auth_failed_persons=["alice"],
+            started_at="2026-07-11T10:00:00+09:00",
+            events_chat_provider=chat,
+            events_auth_failed_persons=list(failed),
         ),
     )
-    healthy = _runtime()
+
+
+@pytest.mark.parametrize("chat", ["slack", "local"])
+def test_a_listener_refused_for_a_member_opens_its_credential_alert(chat: str) -> None:
+    alerts = SystemAlertService(None).list_alerts(_listening(chat, "alice")).alerts
+
+    assert [
+        (alert.id, alert.code, alert.provider, alert.person_id, alert.severity)
+        for alert in alerts
+    ] == [(f"credential:{chat}:alice", "credential", chat, "alice", "critical")]
+
+
+def test_runtime_alert_dismissal_lasts_until_condition_resolves() -> None:
+    """Dismissing the listener's alert lasts while the chat refuses the member;
+    once it does not, the next refusal shows again. Another chat provider's
+    dismissal is not the listener's to forget."""
     service = SystemAlertService(None)
-    alert_id = service.list_alerts(failed).alerts[0].id
+    for chat in ("slack", "local"):
+        (alert,) = service.list_alerts(_listening(chat, "alice")).alerts
+        service.dismiss(alert.id)
+        assert service.list_alerts(_listening(chat, "alice")).alerts == []
 
-    service.dismiss(alert_id)
+    assert service.list_alerts(_listening("local")).alerts == []
 
-    assert service.list_alerts(failed).alerts == []
-    assert service.list_alerts(healthy).alerts == []
-    assert [alert.code for alert in service.list_alerts(failed).alerts] == [
-        "credential_slack"
+    assert [a.id for a in service.list_alerts(_listening("local", "alice")).alerts] == [
+        "credential:local:alice"
     ]
+    assert service.list_alerts(_listening("slack", "alice")).alerts == []
 
 
 def test_worker_failure_persists_until_scheduler_restarts(tmp_path: Path) -> None:
@@ -807,7 +823,11 @@ def test_credential_alert_closes_when_the_same_credential_is_verified_again(
     )
     service = SystemAlertService(store)
     (alert,) = service.list_alerts(_runtime()).alerts
-    assert (alert.code, alert.person_id) == ("credential_github", "alice")
+    assert (alert.code, alert.provider, alert.person_id) == (
+        "credential",
+        "github",
+        "alice",
+    )
     service.dismiss(alert.id)
 
     store.record(
@@ -834,7 +854,7 @@ def test_credential_alert_closes_when_the_same_credential_is_verified_again(
         )
     )
     (reopened,) = service.list_alerts(_runtime()).alerts
-    assert (reopened.code, reopened.person_id) == ("credential_github", "alice")
+    assert reopened.id == "credential:github:alice"
 
 
 def test_cli_authentication_command_failure_does_not_leave_an_execution_alert(tmp_path):

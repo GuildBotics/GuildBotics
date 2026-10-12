@@ -1057,7 +1057,7 @@ describe("QuickRun", () => {
         option({
           command: "review",
           label: "Review",
-          requirements: [{ kind: "github", satisfied: false, message: "" }],
+          requirements: [{ kind: "ticket_service", satisfied: false, message: "" }],
         }),
       ],
     });
@@ -1066,7 +1066,7 @@ describe("QuickRun", () => {
     await fire({ command: "review", text: "hello" });
 
     expect(await screen.findByText(t("quickRun.requirementsMissing"))).toBeInTheDocument();
-    expect(screen.getByText(t("commands.requirements.github"))).toBeInTheDocument();
+    expect(screen.getByText(t("commands.requirements.ticket_service"))).toBeInTheDocument();
     expect(runCommand).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: t("quickRun.run") })).toBeDisabled();
   });

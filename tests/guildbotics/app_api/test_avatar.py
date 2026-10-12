@@ -1,58 +1,26 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.setup.setup_service import PersonConfigSnapshot
 from guildbotics.utils.secret_store import KeyringSecretStore
+from tests.guildbotics.app_api.provider_doubles import (
+    answer,
+    form_of,
+    route_web,
+    saved_workspace,
+    write_member,
+)
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
-
-
-@pytest.mark.parametrize("requested", ["alice-bak", "alice"])
-def test_slack_avatar_never_reads_or_uses_colliding_member_token(
-    client, test_workspace, monkeypatch, requested
-):
-    config = test_workspace / ".guildbotics/config"
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(config))
-    for name in ("alice", "alice-bak", "alice_bak"):
-        directory = config / "team/members" / name
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / "person.yml").write_text(
-            f"person_id: {name}\nname: Test\nperson_type: agent\naccount_info:\n  slack_user_id: U12345\n"
-        )
-    store = KeyringSecretStore(config)
-    store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-keychain-token")
-    # Cover both sources, including fallback for a unique requested member.
-    monkeypatch.setenv("ALICE_BAK_SLACK_BOT_TOKEN", "fake-env-token")
-    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("ALICE_SLACK_BOT_TOKEN", raising=False)
-    original = KeyringSecretStore.get
-
-    def guarded_get(self, key):
-        assert key != "ALICE_BAK_SLACK_BOT_TOKEN"
-        return original(self, key)
-
-    monkeypatch.setattr(KeyringSecretStore, "get", guarded_get)
-    with patch(
-        "guildbotics.app_api.avatar.get_slack_avatar_url", new_callable=AsyncMock
-    ) as lookup:
-        response = client.post(
-            f"/config/members/{requested}/avatar/slack", headers=AUTH_HEADERS
-        )
-        assert response.status_code == 400
-        assert response.json()["code"] == (
-            "member_config_invalid"
-            if requested == "alice-bak"
-            else "slack_token_missing"
-        )
-        lookup.assert_not_called()
+PNG = b"\x89PNG\r\n\x1a\nimage"
 
 
 class RuntimeStub:
@@ -74,6 +42,9 @@ class RuntimeStub:
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
+
+    def saved_team(self) -> None:
+        raise AssertionError("reading and uploading an avatar need no team")
 
 
 @pytest.fixture
@@ -159,367 +130,6 @@ def test_post_avatar_upload_rejects_large_file(client: TestClient) -> None:
     assert response.json()["code"] == "avatar_invalid"
 
 
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_github(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-) -> None:
-    # Mock member config
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
-    )
-
-    # Mock HTTP response for user info and image download
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {
-        "avatar_url": "https://github.com/avatar/alice.png"
-    }
-    mock_user_response.raise_for_status = MagicMock()
-
-    mock_image_response = MagicMock()
-    mock_image_response.headers = {"Content-Type": "image/png"}
-    mock_image_response.content = b"github image binary"
-    mock_image_response.raise_for_status = MagicMock()
-
-    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
-
-    response = client.post("/config/members/alice/avatar/github", headers=AUTH_HEADERS)
-    assert response.status_code == 200
-
-    # Assert get calls
-    assert mock_client.get.call_count == 2
-    mock_client.get.assert_any_call(
-        "https://api.github.com/users/alice-git",
-        headers={"User-Agent": "GuildBotics-App"},
-        timeout=10.0,
-    )
-    mock_client.get.assert_any_call(
-        "https://github.com/avatar/alice.png", follow_redirects=True, timeout=15.0
-    )
-
-    # Verify image saved
-    saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
-    assert saved_avatar.exists()
-    assert saved_avatar.read_bytes() == b"github image binary"
-    assert response.json()["avatar_timestamp"] == int(saved_avatar.stat().st_mtime)
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_github_error_message_is_stable(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-) -> None:
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
-    )
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-    # Raw exception text must not leak into the client-facing message.
-    mock_client.get = AsyncMock(side_effect=RuntimeError("secret internal detail"))
-
-    response = client.post("/config/members/alice/avatar/github", headers=AUTH_HEADERS)
-    assert response.status_code == 500
-    payload = response.json()
-    assert payload["code"] == "avatar_import_failed"
-    assert payload["message"] == "Failed to import avatar from GitHub."
-    assert "secret internal detail" not in payload["message"]
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_slack(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-) -> None:
-    # Mock member config
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
-        slack_user_id="U12345",
-    )
-
-    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
-        "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token"
-    )
-
-    # Mock HTTP response for user info and image download
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {
-        "ok": True,
-        "user": {"profile": {"image_512": "https://slack.com/avatar/alice.png"}},
-    }
-    mock_user_response.raise_for_status = MagicMock()
-
-    mock_image_response = MagicMock()
-    mock_image_response.headers = {"Content-Type": "image/png"}
-    mock_image_response.content = b"slack image binary"
-    mock_image_response.raise_for_status = MagicMock()
-
-    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
-
-    response = client.post("/config/members/alice/avatar/slack", headers=AUTH_HEADERS)
-    assert response.status_code == 200
-
-    # Verify calls
-    assert mock_client.get.call_count == 2
-    mock_client.get.assert_any_call(
-        "https://slack.com/api/users.info",
-        params={"user": "U12345"},
-        headers={"Authorization": "Bearer xoxb-alice-token"},
-        timeout=10.0,
-    )
-
-    # Verify image saved
-    saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
-    assert saved_avatar.exists()
-    assert saved_avatar.read_bytes() == b"slack image binary"
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_slack_missing_scope(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-) -> None:
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
-        slack_user_id="U12345",
-    )
-
-    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
-        "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token"
-    )
-
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {"ok": False, "error": "missing_scope"}
-    mock_user_response.raise_for_status = MagicMock()
-    mock_client.get = AsyncMock(return_value=mock_user_response)
-
-    response = client.post("/config/members/alice/avatar/slack", headers=AUTH_HEADERS)
-    assert response.status_code == 400
-    assert response.json()["code"] == "slack_missing_scope"
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_slack_agent_no_user_id(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-) -> None:
-    # Mock bot config (no slack_user_id)
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="bob",
-        person_name="Bob",
-        person_type="agent",
-        is_active=True,
-        github_username="",
-        git_email="",
-    )
-
-    # Create members dir for bob
-    (test_workspace / ".guildbotics/config/team/members/bob").mkdir(
-        parents=True, exist_ok=True
-    )
-    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
-        "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token"
-    )
-
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-
-    # auth.test response
-    mock_auth_response = MagicMock()
-    mock_auth_response.json.return_value = {
-        "ok": True,
-        "user_id": "U99999",
-    }
-    mock_auth_response.raise_for_status = MagicMock()
-
-    # users.info response
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {
-        "ok": True,
-        "user": {"profile": {"image_512": "https://slack.com/avatar/bob.png"}},
-    }
-    mock_user_response.raise_for_status = MagicMock()
-
-    # image download response
-    mock_image_response = MagicMock()
-    mock_image_response.headers = {"Content-Type": "image/png"}
-    mock_image_response.content = b"bob image binary"
-    mock_image_response.raise_for_status = MagicMock()
-
-    mock_client.post = AsyncMock(return_value=mock_auth_response)
-    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
-
-    response = client.post("/config/members/bob/avatar/slack", headers=AUTH_HEADERS)
-    assert response.status_code == 200
-
-    # Verify post and get calls
-    mock_client.post.assert_called_once_with(
-        "https://slack.com/api/auth.test",
-        headers={"Authorization": "Bearer xoxb-bob-token"},
-        timeout=10.0,
-    )
-    assert mock_client.get.call_count == 2
-    mock_client.get.assert_any_call(
-        "https://slack.com/api/users.info",
-        params={"user": "U99999"},
-        headers={"Authorization": "Bearer xoxb-bob-token"},
-        timeout=10.0,
-    )
-
-    # Verify image saved
-    saved_avatar = test_workspace / ".guildbotics/config/team/members/bob/avatar.png"
-    assert saved_avatar.exists()
-    assert saved_avatar.read_bytes() == b"bob image binary"
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_slack_human_token_fallback(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-) -> None:
-    # Human member (has user_id, no bot token)
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        slack_user_id="U12345",
-        github_username="",
-        git_email="",
-    )
-
-    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
-        "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token"
-    )
-
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {
-        "ok": True,
-        "user": {"profile": {"image_512": "https://slack.com/avatar/alice.png"}},
-    }
-    mock_user_response.raise_for_status = MagicMock()
-
-    mock_image_response = MagicMock()
-    mock_image_response.headers = {"Content-Type": "image/png"}
-    mock_image_response.content = b"alice image binary"
-    mock_image_response.raise_for_status = MagicMock()
-
-    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
-
-    response = client.post("/config/members/alice/avatar/slack", headers=AUTH_HEADERS)
-    assert response.status_code == 200
-
-    # Verify calls used Bob's token for Alice's user_id
-    mock_client.get.assert_any_call(
-        "https://slack.com/api/users.info",
-        params={"user": "U12345"},
-        headers={"Authorization": "Bearer xoxb-bob-token"},
-        timeout=10.0,
-    )
-
-    # Verify image saved
-    saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
-    assert saved_avatar.exists()
-    assert saved_avatar.read_bytes() == b"alice image binary"
-
-
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
-def test_import_avatar_from_slack_env_var_wins_over_keychain(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Real environment variables take precedence over OS-keychain values."""
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
-        slack_user_id="U12345",
-    )
-    KeyringSecretStore(test_workspace / ".guildbotics/config").set(
-        "ALICE_SLACK_BOT_TOKEN", "xoxb-keychain-token"
-    )
-    monkeypatch.setenv("ALICE_SLACK_BOT_TOKEN", "xoxb-env-token")
-
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-    mock_user_response = MagicMock()
-    mock_user_response.json.return_value = {
-        "ok": True,
-        "user": {"profile": {"image_512": "https://slack.com/avatar/alice.png"}},
-    }
-    mock_user_response.raise_for_status = MagicMock()
-    mock_image_response = MagicMock()
-    mock_image_response.headers = {"Content-Type": "image/png"}
-    mock_image_response.content = b"slack image binary"
-    mock_image_response.raise_for_status = MagicMock()
-    mock_client.get = AsyncMock(side_effect=[mock_user_response, mock_image_response])
-
-    response = client.post("/config/members/alice/avatar/slack", headers=AUTH_HEADERS)
-
-    assert response.status_code == 200
-    mock_client.get.assert_any_call(
-        "https://slack.com/api/users.info",
-        params={"user": "U12345"},
-        headers={"Authorization": "Bearer xoxb-env-token"},
-        timeout=10.0,
-    )
-
-
 def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
     """An avatar the product accepts but the sync boundary refuses would be
     displayed here and never reach the other machines, with nothing in the
@@ -530,40 +140,377 @@ def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
     assert MAX_AVATAR_BYTES == MAX_SHARED_AVATAR_BYTES
 
 
-@patch("guildbotics.app_api.avatar.httpx.AsyncClient")
-@patch("guildbotics.setup.setup_service.SimplePersonSetupService.read_person_config")
+# --- importing from a provider -------------------------------------------
+
+
+@pytest.fixture
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def app_client(workspace: Path) -> Iterator[TestClient]:
+    with saved_workspace(workspace, {"chat_service": {"name": "slack"}}) as client:
+        yield client
+
+
+def _secret(workspace: Path, key: str, value: str) -> None:
+    KeyringSecretStore(workspace / ".guildbotics/config").set(key, value)
+
+
+def _avatar(workspace: Path, person_id: str) -> Path:
+    return workspace / ".guildbotics/config/team/members" / person_id / "avatar.png"
+
+
+@pytest.fixture
+def web(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[httpx.Request]]:
+    return lambda routes: route_web(monkeypatch, routes)
+
+
+def _image(content: bytes = PNG) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(
+        200, content=content, headers={"Content-Type": "image/png"}
+    )
+
+
+def test_import_avatar_from_github(app_client, workspace, web) -> None:
+    write_member(workspace, "alice", "account_info:\n  github_username: alice-git\n")
+    requests = web(
+        {
+            "api.github.com/users/alice-git": answer(
+                {"avatar_url": "https://avatars.example/alice.png"}
+            ),
+            "avatars.example/alice.png": _image(),
+        }
+    )
+
+    response = app_client.post(
+        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert [str(request.url) for request in requests] == [
+        "https://api.github.com/users/alice-git",
+        "https://avatars.example/alice.png",
+    ]
+    saved = _avatar(workspace, "alice")
+    assert saved.read_bytes() == PNG
+    assert response.json()["avatar_timestamp"] == int(saved.stat().st_mtime)
+
+
+@pytest.mark.parametrize(
+    ("language", "message"),
+    [
+        ("en", "GitHub username is not configured for this member."),
+        ("ja", "このメンバーには GitHub ユーザー名が設定されていません。"),
+    ],
+)
+def test_import_avatar_from_github_needs_the_members_username(
+    app_client, workspace, web, language: str, message: str
+) -> None:
+    write_member(workspace, "alice", "account_info:\n  git_email: a@example.com\n")
+    requests = web({})
+
+    response = app_client.post(
+        "/config/members/alice/avatar/github",
+        headers={**AUTH_HEADERS, "X-GuildBotics-Language": language},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "code": "avatar_account_missing",
+        "message": message,
+        "context": {},
+    }
+    assert requests == []
+
+
+def test_a_provider_failure_is_reported_without_its_detail(
+    app_client, workspace, web
+) -> None:
+    write_member(workspace, "alice", "account_info:\n  github_username: alice-git\n")
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("secret internal detail")
+
+    web({"api.github.com/users/alice-git": boom})
+
+    response = app_client.post(
+        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "code": "avatar_import_failed",
+        "message": "Failed to import avatar from GitHub.",
+        "context": {},
+    }
+
+
+@pytest.mark.parametrize("provider", ["gitlab", "local"])
+def test_import_avatar_from_a_provider_without_avatars_is_not_found(
+    app_client, workspace, provider: str
+) -> None:
+    write_member(workspace, "alice", "account_info:\n  github_username: alice-git\n")
+
+    response = app_client.post(
+        f"/config/members/alice/avatar/{provider}", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "avatar_provider_unknown"
+    assert not _avatar(workspace, "alice").exists()
+
+
+def test_import_avatar_for_an_unknownwrite_member(app_client, workspace) -> None:
+    response = app_client.post(
+        "/config/members/ghost/avatar/github", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "person_not_found"
+
+
+def test_import_avatar_from_slack_by_the_members_user_id(
+    app_client, workspace, web
+) -> None:
+    write_member(
+        workspace,
+        "alice",
+        "person_type: agent\naccount_info:\n  slack_user_id: U12345\n",
+    )
+    _secret(workspace, "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token")
+    requests = web(
+        {
+            "slack.com/api/users.info": answer(
+                {
+                    "ok": True,
+                    "user": {"profile": {"image_512": "https://slack.example/a.png"}},
+                }
+            ),
+            "slack.example/a.png": _image(),
+        }
+    )
+
+    response = app_client.post(
+        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert requests[0].headers["Authorization"] == "Bearer xoxb-alice-token"
+    assert form_of(requests[0]) == {"user": "U12345"}
+    assert _avatar(workspace, "alice").read_bytes() == PNG
+
+
+def test_import_avatar_from_slack_for_a_bot_asks_who_the_token_is(
+    app_client, workspace, web
+) -> None:
+    write_member(workspace, "bob", "person_type: agent\n")
+    _secret(workspace, "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token")
+    requests = web(
+        {
+            "slack.com/api/auth.test": answer(
+                {"ok": True, "user_id": "U99999", "user": "bob", "team": "acme"}
+            ),
+            "slack.com/api/users.info": answer(
+                {
+                    "ok": True,
+                    "user": {"profile": {"image_192": "https://slack.example/b.png"}},
+                }
+            ),
+            "slack.example/b.png": _image(),
+        }
+    )
+
+    response = app_client.post("/config/members/bob/avatar/slack", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert [request.url.path for request in requests] == [
+        "/api/auth.test",
+        "/api/users.info",
+        "/b.png",
+    ]
+    assert form_of(requests[1]) == {"user": "U99999"}
+    assert all(
+        request.headers["Authorization"] == "Bearer xoxb-bob-token"
+        for request in requests[:2]
+    )
+    assert _avatar(workspace, "bob").read_bytes() == PNG
+
+
+def test_import_avatar_from_slack_for_a_human_uses_another_members_token(
+    app_client, workspace, web
+) -> None:
+    write_member(
+        workspace,
+        "alice",
+        "person_type: human\naccount_info:\n  slack_user_id: U12345\n",
+    )
+    write_member(workspace, "bob", "person_type: agent\n")
+    _secret(workspace, "BOB_SLACK_BOT_TOKEN", "xoxb-bob-token")
+    requests = web(
+        {
+            "slack.com/api/users.info": answer(
+                {
+                    "ok": True,
+                    "user": {"profile": {"image_512": "https://slack.example/a.png"}},
+                }
+            ),
+            "slack.example/a.png": _image(),
+        }
+    )
+
+    response = app_client.post(
+        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert requests[0].headers["Authorization"] == "Bearer xoxb-bob-token"
+    assert form_of(requests[0]) == {"user": "U12345"}
+
+
+def test_import_avatar_from_slack_env_var_wins_over_keychain(
+    app_client, workspace, web, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real environment variables take precedence over OS-keychain values."""
+    write_member(
+        workspace,
+        "alice",
+        "person_type: agent\naccount_info:\n  slack_user_id: U12345\n",
+    )
+    _secret(workspace, "ALICE_SLACK_BOT_TOKEN", "xoxb-keychain-token")
+    monkeypatch.setenv("ALICE_SLACK_BOT_TOKEN", "xoxb-env-token")
+    requests = web(
+        {
+            "slack.com/api/users.info": answer(
+                {
+                    "ok": True,
+                    "user": {"profile": {"image_512": "https://slack.example/a.png"}},
+                }
+            ),
+            "slack.example/a.png": _image(),
+        }
+    )
+
+    response = app_client.post(
+        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert requests[0].headers["Authorization"] == "Bearer xoxb-env-token"
+
+
+def test_import_avatar_from_slack_missing_scope(app_client, workspace, web) -> None:
+    write_member(
+        workspace,
+        "alice",
+        "person_type: agent\naccount_info:\n  slack_user_id: U12345\n",
+    )
+    _secret(workspace, "ALICE_SLACK_BOT_TOKEN", "xoxb-alice-token")
+    web(
+        {
+            "slack.com/api/users.info": answer(
+                {"ok": False, "error": "missing_scope", "needed": "users:read"}
+            )
+        }
+    )
+
+    response = app_client.post(
+        "/config/members/alice/avatar/slack",
+        headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "avatar_missing_scope"
+    assert "users:read" in response.json()["message"]
+    assert "再インストール" in response.json()["message"]
+
+
+def test_import_avatar_from_slack_needs_a_bot_token(
+    app_client, workspace, web, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_member(
+        workspace,
+        "alice",
+        "person_type: human\naccount_info:\n  slack_user_id: U12345\n",
+    )
+    monkeypatch.delenv("ALICE_SLACK_BOT_TOKEN", raising=False)
+    requests = web({})
+
+    response = app_client.post(
+        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "code": "avatar_token_missing",
+        "message": "Slack Bot Token is not configured in this workspace.",
+        "context": {},
+    }
+    assert requests == []
+
+
+@pytest.mark.parametrize("requested", ["alice-bak", "alice"])
+def test_slack_avatar_never_reads_or_uses_colliding_member_token(
+    app_client, workspace, web, monkeypatch: pytest.MonkeyPatch, requested: str
+) -> None:
+    for name in ("alice", "alice-bak", "alice_bak"):
+        write_member(
+            workspace,
+            name,
+            "person_type: agent\naccount_info:\n  slack_user_id: U12345\n",
+        )
+    _secret(workspace, "ALICE_BAK_SLACK_BOT_TOKEN", "fake-keychain-token")
+    # Cover both sources, including fallback for a unique requested member.
+    monkeypatch.setenv("ALICE_BAK_SLACK_BOT_TOKEN", "fake-env-token")
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ALICE_SLACK_BOT_TOKEN", raising=False)
+    original = KeyringSecretStore.get
+
+    def guarded_get(self: KeyringSecretStore, key: str) -> str | None:
+        assert key != "ALICE_BAK_SLACK_BOT_TOKEN"
+        return original(self, key)
+
+    monkeypatch.setattr(KeyringSecretStore, "get", guarded_get)
+    requests = web({})
+
+    response = app_client.post(
+        f"/config/members/{requested}/avatar/slack", headers=AUTH_HEADERS
+    )
+
+    # The saved team cannot be read while two members share a secret prefix,
+    # so no member's avatar is imported until the collision is repaired.
+    assert response.status_code == 400
+    assert response.json()["code"] == "member_config_invalid"
+    assert requests == []
+
+
 def test_an_imported_avatar_is_refused_when_it_is_too_large(
-    mock_read_config: MagicMock,
-    mock_async_client_cls: MagicMock,
-    client: TestClient,
-    test_workspace: Path,
+    app_client, workspace, web
 ) -> None:
     """A provider URL is the other way an avatar arrives, so it needs the same
     limit: checking only the upload still lets in one that cannot be shared."""
     from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
 
-    mock_read_config.return_value = PersonConfigSnapshot(
-        person_id="alice",
-        person_name="Alice",
-        person_type="human",
-        is_active=True,
-        github_username="alice-git",
-        git_email="alice@example.com",
+    write_member(workspace, "alice", "account_info:\n  github_username: alice-git\n")
+    web(
+        {
+            "api.github.com/users/alice-git": answer(
+                {"avatar_url": "https://avatars.example/alice.png"}
+            ),
+            "avatars.example/alice.png": _image(b"x" * (MAX_AVATAR_BYTES + 1)),
+        }
     )
-    mock_client = MagicMock()
-    mock_async_client_cls.return_value.__aenter__.return_value = mock_client
-    user_response = MagicMock()
-    user_response.json.return_value = {"avatar_url": "https://github.com/a.png"}
-    user_response.raise_for_status = MagicMock()
-    image_response = MagicMock()
-    image_response.headers = {"Content-Type": "image/png"}
-    image_response.content = b"x" * (MAX_AVATAR_BYTES + 1)
-    image_response.raise_for_status = MagicMock()
-    mock_client.get = AsyncMock(side_effect=[user_response, image_response])
 
-    response = client.post("/config/members/alice/avatar/github", headers=AUTH_HEADERS)
+    response = app_client.post(
+        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
+    )
 
     assert response.status_code != 200
-    assert not (
-        test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
-    ).exists()
+    assert not _avatar(workspace, "alice").exists()

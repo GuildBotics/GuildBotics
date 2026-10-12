@@ -1,4 +1,4 @@
-"""Every path to a member's secret keys goes through ``person_secret_env_keys``.
+"""Every path to a member's secret keys goes through ``person_secret_prefix``.
 
 A member's keys are derived from its ID, so any code can spell them. Code that
 spells them for itself also decides for itself what to do while two stored
@@ -16,7 +16,7 @@ found three ways in every module of the package:
 
 Each finding either goes through the entry or is classified below with the
 reason it is not a member's key. A bare suffix (``"SLACK_BOT_TOKEN"``) cannot
-name a member's key on its own -- it selects one from the entry's answer, or
+name a member's key on its own -- it follows the entry's prefix, or
 names the workspace-wide token -- unless it is used to match keys. Prose (a
 string with whitespace, such as a log message) names no key.
 """
@@ -28,11 +28,11 @@ import re
 from pathlib import Path
 
 import guildbotics
-from guildbotics.utils.person_id import person_secret_env_keys
+from guildbotics.setup.setup_service import MEMBER_SECRET_NAMES
 
 PACKAGE = Path(guildbotics.__file__).parent
 ENTRY_MODULE = "utils/person_id.py"
-SUFFIXES = tuple(person_secret_env_keys(PACKAGE / "missing", "x"))
+SUFFIXES = tuple(sorted(MEMBER_SECRET_NAMES))
 NAMES_SUFFIX = re.compile(rf"(?<![A-Z0-9])({'|'.join(SUFFIXES)})(?![A-Z0-9_])")
 
 STORE_ACQUISITIONS = {
@@ -42,11 +42,11 @@ STORE_ACQUISITIONS = {
 }
 #: Calls that reach a member's keys only through the entry.
 ENTRY_CALLS = {
-    "person_secret_env_keys",
-    "ambiguous_person_env_keys",
+    "person_secret_prefix",
+    "ambiguous_person_secret",
     "to_person_env_key",
     "_owned_secrets",
-    "_target_env_keys",
+    "_target_prefix",
 }
 MATCHERS = {"endswith", "startswith", "match", "fullmatch", "search"}
 
@@ -95,10 +95,6 @@ STORE_ELSEWHERE = {
 
 #: Strings that name or match member secret keys outside the entry, and why.
 SUFFIX_ELSEWHERE = {
-    ("app_api/api.py", "create_app.config_member_avatar_slack", "_SLACK_BOT_TOKEN"): (
-        "falls back to any member's bot token to read a public Slack profile; "
-        "ambiguous keys are excluded from the candidates first"
-    ),
     ("utils/secret_store.py", "<module>", "_GITHUB_PRIVATE_KEY"): (
         "keeps every key of this kind out of the environment; reads none"
     ),

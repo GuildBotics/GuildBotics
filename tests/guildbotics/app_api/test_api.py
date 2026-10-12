@@ -24,17 +24,12 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
-    AgentFieldOption,
-    AgentFieldStateResponse,
     ChatReceiveResetResponse,
     CliAgentUsageResponse,
     CommandOption,
     CommandOptionsResponse,
     CommandRunRequest,
     ConfigStatus,
-    DiagnosticCheck,
-    ProjectStatusOptionsRequest,
-    ProjectStatusOptionsResponse,
     RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
@@ -56,7 +51,9 @@ from guildbotics.drivers.service_lock import ServiceLock
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.environment.spec import guest_path
 from guildbotics.integrations.chat_state_store import ChannelCursorState
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.integrations.provider import Operation, ProviderCheck, SetupError
 from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     CliAgentUsageSnapshot,
     CliAgentUsageWindow,
@@ -65,12 +62,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.setup.setup_service import (
-    GitHubUserReference,
-    SetupServiceError,
-    SimplePersonSetupService,
-    SimpleProjectSetupService,
-)
+from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
@@ -333,29 +325,10 @@ class RuntimeStub:
     def selected_workspace(self) -> Path | None:
         return self.config_status.workspace
 
-    async def fetch_project_status_options(
-        self, request: ProjectStatusOptionsRequest
-    ) -> ProjectStatusOptionsResponse:
-        self.status_options_request = request
-        return getattr(
-            self, "status_options", ProjectStatusOptionsResponse(available=False)
-        )
+    team = Team(project=Project(name="stub"), members=[])
 
-    async def fetch_agent_field_state(
-        self, request: ProjectStatusOptionsRequest
-    ) -> AgentFieldStateResponse:
-        self.agent_field_request = request
-        return getattr(
-            self, "agent_field_state", AgentFieldStateResponse(available=False)
-        )
-
-    async def ensure_agent_field(
-        self, request: ProjectStatusOptionsRequest
-    ) -> AgentFieldStateResponse:
-        self.agent_field_ensure_request = request
-        return getattr(
-            self, "agent_field_state", AgentFieldStateResponse(available=False)
-        )
+    def saved_team(self) -> Team:
+        return self.team
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         project_file = workspace_dir / ".guildbotics/config/team/project.yml"
@@ -546,7 +519,7 @@ class RuntimeStub:
             ok=False,
             active_members=[person_id] if person_id else [],
             checks=[
-                DiagnosticCheck(
+                ProviderCheck(
                     section="members",
                     code="active_members",
                     status="error",
@@ -555,7 +528,7 @@ class RuntimeStub:
             ],
             warnings=[],
             errors=[
-                DiagnosticCheck(
+                ProviderCheck(
                     section="members",
                     code="active_members",
                     status="error",
@@ -587,9 +560,6 @@ class RuntimeStub:
 
     async def close_cli_agent_usage(self) -> None:
         self.usage_closed = True
-
-    def is_github_integration_enabled(self) -> bool:
-        return False
 
 
 def test_shutdown_asks_the_hosting_server_to_exit(tmp_path: Path) -> None:
@@ -709,14 +679,7 @@ def test_app_runtime_command_options_describe_workspace_commands(
     )
 
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type(
-        "ProjectStub",
-        (),
-        {
-            "get_language_code": lambda self: "en",
-            "is_available_service": lambda self, service: False,
-        },
-    )()
+    project = Project(services={"ticket_service": {"name": "github"}})
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -738,7 +701,7 @@ def test_app_runtime_command_options_describe_workspace_commands(
     assert option.category == "workflow"
     assert [argument.name for argument in option.arguments] == ["title", "dry_run"]
     requirements = {req.kind: req.satisfied for req in option.requirements}
-    assert requirements == {"environment": True, "github": False}
+    assert requirements == {"environment": True, "ticket_service": True}
 
 
 def test_app_runtime_command_options_exclude_template_commands(
@@ -749,7 +712,7 @@ def test_app_runtime_command_options_exclude_template_commands(
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    project = Project()
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -784,7 +747,7 @@ def test_app_runtime_command_options_do_not_seed_empty_workspace(
     commands_dir = tmp_path / ".guildbotics/config/commands"
     commands_dir.mkdir(parents=True)
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type("ProjectStub", (), {"get_language_code": lambda self: "ja"})()
+    project = Project(language="ja")
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -826,7 +789,7 @@ def test_app_runtime_command_options_propagate_nested_requirements(
         )
     )
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    project = Project()
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -900,7 +863,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
         )
     )
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    project = Project()
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -948,7 +911,7 @@ def test_app_runtime_command_options_extract_markdown_arguments(
         )
     )
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
-    project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
+    project = Project()
     team = type("TeamStub", (), {"project": project, "members": [person]})()
     context = type(
         "ContextStub",
@@ -1571,6 +1534,13 @@ def test_config_project_endpoints_read_and_update_non_destructively(
         assert payload["provider_api_keys"]["openai"] is True
         assert payload["provider_api_keys"]["gemini"] is False
 
+        # A provider's name reads as the runtime reads it: case-insensitively.
+        assert payload["services"]["code_hosting_service"] == {
+            "name": "github",
+            "owner": "GuildBotics",
+            "repo_base_url": "https://github.com",
+        }
+
         put_response = client.put(
             "/config/project",
             headers={"X-GuildBotics-Session-Token": "secret"},
@@ -1580,61 +1550,105 @@ def test_config_project_endpoints_read_and_update_non_destructively(
                 "description": "Updated description",
                 "llm_api_type": "gemini",
                 "cli_agent": "codex",
-                "github_enabled": True,
-                "owner": "GuildBotics",
-                "project_id": "7",
-                "github_project_url": "https://github.com/orgs/GuildBotics/projects/7",
+                "services": {
+                    "ticket_service": {
+                        "name": "GitHub",
+                        "url": "https://github.com/orgs/GuildBotics/projects/7",
+                        "lane_map": {"working": "Doing"},
+                    },
+                    "code_hosting_service": {"name": "github", "owner": "GuildBotics"},
+                    "chat_service": {"name": "slack"},
+                },
             },
         )
         assert put_response.status_code == HTTP_OK
 
+        reread = client.get(
+            "/config/project",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        ).json()
+
     updated_project = safe_load((team_dir / "project.yml").read_text())
     assert updated_project["language"] == "ja"
     assert updated_project["description"] == "Updated description"
-    code_hosting = updated_project["services"]["code_hosting_service"]
-    assert code_hosting["owner"] == "GuildBotics"
-    # Clone access is always HTTPS now, so the stale repo_base_url seeded in the
-    # original file is dropped on update.
-    assert "repo_base_url" not in code_hosting
-    # ``repositories`` is no longer part of the schema; a stale entry seeded in
-    # the original file is dropped on update.
-    assert "repositories" not in updated_project
+    # The services are replaced whole, each written as the provider's
+    # descriptor name with the items its setup derives and defaults.
+    expected_services = {
+        "ticket_service": {
+            "name": "github",
+            "url": "https://github.com/orgs/GuildBotics/projects/7",
+            "owner": "GuildBotics",
+            "project_id": "7",
+            "lane_map": {"ready": "Todo", "working": "Doing", "done": "Done"},
+        },
+        "code_hosting_service": {"name": "github", "owner": "GuildBotics"},
+        "chat_service": {"name": "slack"},
+    }
+    assert updated_project["services"] == expected_services
+    assert reread["services"] == expected_services
+    assert reread["language"] == "ja"
 
     assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "existing-openai"
     assert not (tmp_path / ".env").exists()
 
 
-def test_config_members_resolve_endpoint(tmp_path: Path, monkeypatch) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+def test_config_project_update_without_services_removes_them(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    config_dir = tmp_path / ".guildbotics/config"
+    project_file = config_dir / "team/project.yml"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text(
+        "language: en\nservices:\n  chat_service:\n    name: slack\n"
+    )
+    runtime.config_status.project_file_exists = True
+    client = _client(runtime)
 
-    class ReferenceStub:
-        def model_dump(self) -> dict[str, Any]:
-            return {
-                "person_id": "alice",
-                "github_username": "alice",
-                "github_user_id": 123,
-                "git_email": "123+alice@users.noreply.github.com",
-            }
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.api.SimplePersonSetupService.resolve_github_user",
-        lambda self, identity, is_github_apps=False: ReferenceStub(),
+    response = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json={"config_dir": str(config_dir), "language": "en", "services": {}},
     )
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/config/members/resolve",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-            json={"person_type": "machine_user", "identity": "alice"},
-        )
-
     assert response.status_code == HTTP_OK
-    assert response.json() == {
-        "person_id": "alice",
-        "github_username": "alice",
-        "github_user_id": 123,
-        "git_email": "123+alice@users.noreply.github.com",
-    }
+    assert "services" not in safe_load(project_file.read_text())
+    assert client.get("/config/project", headers=AUTH_HEADERS).json()["services"] == {}
+
+
+@pytest.mark.parametrize(
+    "services",
+    [
+        # A provider that does not serve the kind.
+        {"chat_service": {"name": "github"}},
+        # A provider that does not exist.
+        {"ticket_service": {"name": "jira"}},
+        # A kind that does not exist.
+        {"wiki_service": {"name": "github"}},
+        # An item the provider's setup does not know.
+        {"code_hosting_service": {"name": "github", "owner": "a", "team": "b"}},
+        # A board URL that names no board.
+        {"ticket_service": {"name": "github", "url": "https://example.com/7"}},
+    ],
+)
+def test_config_project_update_rejects_invalid_services(
+    tmp_path: Path, services: dict[str, Any]
+) -> None:
+    runtime = RuntimeStub(tmp_path)
+    config_dir = tmp_path / ".guildbotics/config"
+    project_file = config_dir / "team/project.yml"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text("language: en\n")
+    runtime.config_status.project_file_exists = True
+    client = _client(runtime)
+
+    response = client.put(
+        "/config/project",
+        headers=AUTH_HEADERS,
+        json={"config_dir": str(config_dir), "language": "en", "services": services},
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "validation_error"
+    assert project_file.read_text() == "language: en\n"
 
 
 def test_roles_endpoint_returns_template_roles(tmp_path: Path) -> None:
@@ -1794,7 +1808,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "speaking_style: concise",
                 "relationships: team lead",
                 "message_channels:",
-                "  - name: C012345",
+                "  - name: C01234567",
                 "    service: slack",
                 "    chat:",
                 "      enabled: True",
@@ -1804,7 +1818,9 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     )
     team_dir = config_dir / "team"
     (team_dir / "project.yml").parent.mkdir(parents=True, exist_ok=True)
-    (team_dir / "project.yml").write_text("language: en")
+    (team_dir / "project.yml").write_text(
+        "language: en\nservices:\n  chat_service:\n    name: slack\n"
+    )
     runtime.config_status.project_file_exists = True
     from guildbotics.utils.secret_store import KeyringSecretStore
 
@@ -1825,10 +1841,23 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert (
             payload["character"]["archetype"] == "strategic_project_manager_architect"
         )
-        assert payload["has_github_access_token"] is True
-        assert payload["has_slack_bot_token"] is True
-        assert payload["slack_channels"] == ["C012345"]
-        assert payload["slack_channel_participation"] == {"C012345": "social"}
+        assert payload["accounts"]["github"] == {
+            "account_type": "",
+            "username": "alice",
+            "installation_id": None,
+            "app_id": None,
+            "has_private_key": False,
+            "has_access_token": True,
+        }
+        assert payload["accounts"]["slack"] == {
+            "user_id": "",
+            "has_bot_token": True,
+            "has_app_token": True,
+        }
+        assert payload["secret_env_keys"]["SLACK_BOT_TOKEN"] == "ALICE_SLACK_BOT_TOKEN"
+        assert payload["chat_channels"] == ["C01234567"]
+        assert payload["chat_channel_participation"] == {"C01234567": "social"}
+        assert "token-a" not in get_response.text
 
         put_response = client.put(
             "/config/members/alice",
@@ -1840,7 +1869,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "person_id": "alice-renamed",
                 "person_name": "Alice Updated",
                 "is_active": False,
-                "github_username": "alice-renamed",
                 "git_email": "123+alice-renamed@users.noreply.github.com",
                 "roles": ["reviewer"],
                 "speaking_style": "updated",
@@ -1855,11 +1883,16 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                         "contribution_style": ["user perspective"],
                     },
                 },
-                "github_access_token": "token-b",
-                "slack_bot_token": "xoxb-b",
-                "slack_app_token": "xapp-b",
-                "slack_channels": ["C0999"],
-                "slack_channel_participation": {"C0999": "muted"},
+                "accounts": {
+                    "github": {
+                        "account_type": "machine_user",
+                        "username": "alice-renamed",
+                        "access_token": "token-b",
+                    },
+                    "slack": {"bot_token": "xoxb-b", "app_token": "xapp-b"},
+                },
+                "chat_channels": ["C09999999"],
+                "chat_channel_participation": {"C09999999": "muted"},
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -1870,12 +1903,24 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert updated["name"] == "Alice Updated"
         assert "reviewer" in updated["profile"]["roles"]
         assert updated["profile"]["character"]["archetype"] == "creative_designer"
-        assert updated["message_channels"][0]["name"] == "C0999"
-        assert updated["message_channels"][0]["chat"]["participation"] == "muted"
+        assert updated["account_info"] == {
+            "git_user": "Alice Updated",
+            "git_email": "123+alice-renamed@users.noreply.github.com",
+            "github_account_type": "machine_user",
+            "github_username": "alice-renamed",
+        }
+        assert updated["message_channels"][0]["name"] == "C09999999"
+        # The project's chat is Slack, which names a channel ID as an ID.
+        assert updated["message_channels"][0]["chat"] == {
+            "enabled": True,
+            "participation": "muted",
+            "channel_id": "C09999999",
+        }
         store = KeyringSecretStore(config_dir)
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
         assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") == "token-b"
         assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") == "xoxb-b"
+        assert store.get("ALICE_RENAMED_SLACK_APP_TOKEN") == "xapp-b"
 
         delete_response = client.request(
             "DELETE",
@@ -1911,7 +1956,6 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
                 "person_id": "new_member",
                 "person_name": "New Member",
                 "is_active": True,
-                "github_username": "",
                 "git_email": "",
                 "roles": ["architect"],
             },
@@ -1968,7 +2012,6 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
                 "is_active": True,
-                "github_username": "",
                 "git_email": "",
                 "roles": ["architect"],
                 "speaking_style": "concise",
@@ -2541,7 +2584,8 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/config/members/alice"),
     ("PUT", "/config/members/alice"),
     ("DELETE", "/config/members/alice"),
-    ("POST", "/config/members/resolve"),
+    ("GET", "/config/providers"),
+    ("POST", "/config/members/alice/avatar/github"),
 ]
 
 
@@ -2716,7 +2760,7 @@ def test_config_init_maps_setup_service_error(
     client = _client(RuntimeStub(tmp_path))
 
     def _boom(self: SimpleProjectSetupService, request: Any) -> Any:
-        raise SetupServiceError("project_invalid", "Project config is invalid.")
+        raise SetupError("project_invalid", "Project config is invalid.")
 
     monkeypatch.setattr(
         "guildbotics.app_api.api.SimpleProjectSetupService.write_project", _boom
@@ -2756,103 +2800,13 @@ def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
     )
 
 
-def test_config_project_status_options_returns_payload(tmp_path: Path) -> None:
-    runtime = RuntimeStub(tmp_path)
-    runtime.status_options = ProjectStatusOptionsResponse(
-        available=True, statuses=["Todo", "In Progress", "Done"]
-    )
-    client = _client(runtime)
-
-    response = client.post(
-        "/config/project/status-options",
-        headers=AUTH_HEADERS,
-        json={
-            "owner": "acme",
-            "project_id": "9",
-            "github_project_url": "https://github.com/orgs/acme/projects/9",
-        },
-    )
-
-    assert response.status_code == HTTP_OK
-    assert response.json() == {
-        "available": True,
-        "statuses": ["Todo", "In Progress", "Done"],
-    }
-    assert runtime.status_options_request.owner == "acme"
-    assert runtime.status_options_request.project_id == "9"
-
-
-def test_config_project_agent_field_returns_state(tmp_path: Path) -> None:
-    runtime = RuntimeStub(tmp_path)
-    runtime.agent_field_state = AgentFieldStateResponse(
-        available=True,
-        exists=True,
-        options=[AgentFieldOption(name="⚙bot1", description="Bot One")],
-        missing=[AgentFieldOption(name="⚙bot2", description="Bot Two")],
-    )
-    client = _client(runtime)
-
-    response = client.post(
-        "/config/project/agent-field",
-        headers=AUTH_HEADERS,
-        json={
-            "owner": "acme",
-            "project_id": "9",
-            "github_project_url": "https://github.com/orgs/acme/projects/9",
-        },
-    )
-
-    assert response.status_code == HTTP_OK
-    body = response.json()
-    assert body["available"] is True
-    assert body["exists"] is True
-    assert body["options"] == [{"name": "⚙bot1", "description": "Bot One"}]
-    assert body["missing"] == [{"name": "⚙bot2", "description": "Bot Two"}]
-    assert runtime.agent_field_request.owner == "acme"
-
-
-def test_config_project_agent_field_ensure_applies(tmp_path: Path) -> None:
-    runtime = RuntimeStub(tmp_path)
-    runtime.agent_field_state = AgentFieldStateResponse(
-        available=True, exists=True, options=[], missing=[]
-    )
-    client = _client(runtime)
-
-    response = client.post(
-        "/config/project/agent-field/ensure",
-        headers=AUTH_HEADERS,
-        json={
-            "owner": "acme",
-            "project_id": "9",
-            "github_project_url": "https://github.com/orgs/acme/projects/9",
-        },
-    )
-
-    assert response.status_code == HTTP_OK
-    assert response.json()["available"] is True
-    assert runtime.agent_field_ensure_request.project_id == "9"
-
-
-def test_config_project_status_options_unavailable_falls_back(tmp_path: Path) -> None:
-    client = _client(RuntimeStub(tmp_path))
-
-    response = client.post(
-        "/config/project/status-options",
-        headers=AUTH_HEADERS,
-        json={"owner": "", "project_id": "", "github_project_url": ""},
-    )
-
-    assert response.status_code == HTTP_OK
-    assert response.json() == {"available": False, "statuses": []}
-
-
 def test_config_project_update_maps_setup_service_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
 
     def _boom(self: SimpleProjectSetupService, request: Any) -> Any:
-        raise SetupServiceError("project_invalid", "Project config is invalid.")
+        raise SetupError("project_invalid", "Project config is invalid.")
 
     monkeypatch.setattr(
         "guildbotics.app_api.api.SimpleProjectSetupService.update_project", _boom
@@ -2867,7 +2821,6 @@ def test_config_project_update_maps_setup_service_error(
             "description": "desc",
             "llm_api_type": "openai",
             "cli_agent": "codex",
-            "github_enabled": False,
         },
     )
 
@@ -2902,7 +2855,6 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
             "person_id": "alice",
             "person_name": "Alice",
             "is_active": True,
-            "github_username": "alice",
             "git_email": "1+alice@users.noreply.github.com",
             "roles": ["architect"],
         },
@@ -2916,83 +2868,314 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
     }
 
 
-def test_members_resolve_github_apps_url_branch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+# --- providers -----------------------------------------------------------
+
+
+def test_config_providers_lists_the_providers_the_setup_screens_offer(
+    tmp_path: Path,
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
-    captured: dict[str, Any] = {}
 
-    def _parse(self: SimplePersonSetupService, url: str) -> str:
-        captured["url"] = url
-        return "my-app"
-
-    def _resolve(
-        self: SimplePersonSetupService, identity: str, is_github_apps: bool = False
-    ) -> GitHubUserReference:
-        captured["identity"] = identity
-        captured["is_github_apps"] = is_github_apps
-        return GitHubUserReference(
-            person_id="my-app",
-            github_username="my-app[bot]",
-            github_user_id=GITHUB_APPS_USER_ID,
-            git_email="42+my-app[bot]@users.noreply.github.com",
-        )
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.api.SimplePersonSetupService.parse_github_apps_url",
-        _parse,
-    )
-    monkeypatch.setattr(
-        "guildbotics.app_api.api.SimplePersonSetupService.resolve_github_user",
-        _resolve,
-    )
-
-    response = client.post(
-        "/config/members/resolve",
-        headers=AUTH_HEADERS,
-        json={
-            "person_type": "github_apps",
-            "identity": "https://github.com/apps/my-app",
-        },
-    )
+    response = client.get("/config/providers", headers=AUTH_HEADERS)
 
     assert response.status_code == HTTP_OK
-    assert captured == {
-        "url": "https://github.com/apps/my-app",
-        "identity": "my-app",
-        "is_github_apps": True,
-    }
-    assert response.json()["github_username"] == "my-app[bot]"
-    assert response.json()["github_user_id"] == GITHUB_APPS_USER_ID
+    # ``local`` is the reference provider and has no setup, so it is not offered.
+    assert response.json() == [
+        {
+            "name": "github",
+            "title": "GitHub",
+            "kinds": ["ticket_service", "code_hosting_service"],
+            "avatar": True,
+        },
+        {
+            "name": "slack",
+            "title": "Slack",
+            "kinds": ["chat_service"],
+            "avatar": True,
+        },
+    ]
 
 
-def test_members_resolve_maps_setup_service_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _provider_operations() -> list[tuple[str, str]]:
+    return [
+        ("POST", f"/config/providers/{provider.name}/{name}")
+        for provider in PROVIDERS.values()
+        if provider.setup
+        for name in provider.setup.operations
+    ]
+
+
+@pytest.mark.parametrize("method,path", _provider_operations())
+def test_provider_operations_require_the_session_token(
+    tmp_path: Path, method: str, path: str
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    def _boom(
-        self: SimplePersonSetupService, identity: str, is_github_apps: bool = False
-    ) -> GitHubUserReference:
-        raise SetupServiceError("github_user_not_found", "GitHub user not found.")
+    response = client.request(method, path, json={})
 
-    monkeypatch.setattr(
-        "guildbotics.app_api.api.SimplePersonSetupService.resolve_github_user",
-        _boom,
+    assert response.status_code == HTTP_UNAUTHORIZED
+    assert response.json()["code"] == "invalid_session_token"
+
+
+def test_provider_pages_are_served_without_the_session_token(tmp_path: Path) -> None:
+    """A page is opened by the user's browser, which carries no token."""
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.get(
+        "/providers/github/pages/app-manifest", params={"state": "unknown"}
     )
 
+    # The page itself answers: an unknown registration is its error page,
+    # not the API's token refusal.
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.headers["content-type"].startswith("text/html")
+    assert "GitHub App registration was not found or has expired." in response.text
+
+
+@pytest.mark.parametrize(
+    ("language", "message"),
+    [
+        ("en", "GitHub username is not configured for this member."),
+        ("ja", "このメンバーには GitHub ユーザー名が設定されていません。"),
+    ],
+)
+def test_a_setup_error_from_an_operation_is_rendered_in_the_screen_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: str, message: str
+) -> None:
+    async def refuse(request: Any, team: Any) -> Any:
+        raise SetupError(
+            "account_refused",
+            key="integrations.github.setup.username_missing",
+            status_code=HTTP_CONFLICT,
+        )
+
+    resolve = PROVIDERS["github"].setup.operations["resolve-user"]
+    monkeypatch.setitem(
+        PROVIDERS["github"].setup.operations,
+        "resolve-user",
+        Operation(resolve.request, resolve.response, refuse),
+    )
+    client = _client(RuntimeStub(tmp_path))
+
     response = client.post(
-        "/config/members/resolve",
+        "/config/providers/github/resolve-user",
+        headers={**AUTH_HEADERS, "X-GuildBotics-Language": language},
+        json={"account_type": "machine_user", "identity": "alice"},
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json() == {
+        "code": "account_refused",
+        "message": message,
+        "context": {},
+    }
+
+
+def test_an_operation_request_is_validated_by_its_model(tmp_path: Path) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/config/providers/github/resolve-user",
         headers=AUTH_HEADERS,
-        json={"person_type": "machine_user", "identity": "ghost"},
+        json={"account_type": "robot", "identity": "alice"},
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "validation_error"
+
+
+def test_resolve_user_refuses_a_github_apps_identity_that_is_not_an_app_url(
+    tmp_path: Path,
+) -> None:
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/config/providers/github/resolve-user",
+        headers=AUTH_HEADERS,
+        json={"account_type": "github_apps", "identity": "https://example.com/x"},
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json() == {
-        "code": "github_user_not_found",
-        "message": "GitHub user not found.",
+        "code": "invalid_github_apps_url",
+        "message": "Invalid GitHub Apps URL.",
         "context": {},
     }
+
+
+def test_resolve_user_answers_with_the_github_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+
+    async def get_user(username: str) -> dict[str, Any]:
+        requested.append(username)
+        return {"id": GITHUB_APPS_USER_ID, "login": username}
+
+    monkeypatch.setattr("guildbotics.integrations.github.setup._get_user", get_user)
+    client = _client(RuntimeStub(tmp_path))
+
+    response = client.post(
+        "/config/providers/github/resolve-user",
+        headers=AUTH_HEADERS,
+        json={
+            "account_type": "github_apps",
+            "identity": "https://github.com/organizations/acme/settings/apps/my-app",
+        },
+    )
+
+    assert response.status_code == HTTP_OK
+    assert requested == ["my-app[bot]"]
+    assert response.json() == {
+        "person_id": "my-app",
+        "username": "my-app[bot]",
+        "user_id": GITHUB_APPS_USER_ID,
+        "git_email": "42+my-app[bot]@users.noreply.github.com",
+    }
+
+
+BOARD_URL = "https://github.com/orgs/acme/projects/9"
+
+
+class _FakeBoard:
+    """A Projects board reached with one member's credentials."""
+
+    constructed: ClassVar[list[str]] = []
+    boards: ClassVar[list[dict[str, Any]]] = []
+    synced: ClassVar[bool] = False
+
+    def __init__(self, logger: object, person: Person, team: Team) -> None:
+        if not person.account_info.get("github_username"):
+            # The real service refuses a member it cannot authenticate as.
+            raise ValueError("github username required")
+        self.constructed.append(person.person_id)
+        self.boards.append(team.project.services["ticket_service"])
+
+    async def aclose(self) -> None:
+        pass
+
+    async def get_statuses(self) -> list[str]:
+        return ["Todo", "In Progress", "Done"]
+
+    async def get_agent_field_state(self) -> dict[str, Any]:
+        return {
+            "exists": True,
+            "options": [{"name": "⚙bot1", "description": "Bot One"}],
+            "missing": [{"name": "⚙bot2", "description": "Bot Two"}],
+        }
+
+    async def sync_agent_field(self) -> dict[str, Any]:
+        type(self).synced = True
+        return {
+            "exists": True,
+            "options": [{"name": "⚙bot1", "description": "Bot One"}],
+            "missing": [],
+        }
+
+
+@pytest.fixture
+def board_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RuntimeStub:
+    """A saved team whose first active member has no GitHub account."""
+    monkeypatch.setattr(_FakeBoard, "constructed", [])
+    monkeypatch.setattr(_FakeBoard, "boards", [])
+    monkeypatch.setattr(_FakeBoard, "synced", False)
+    monkeypatch.setattr(
+        "guildbotics.integrations.github.setup.GitHubTicketService", _FakeBoard
+    )
+    runtime = RuntimeStub(tmp_path)
+    runtime.team = Team(
+        project=Project(name="demo"),
+        members=[
+            Person(person_id="bot", name="Bot", is_active=True),
+            Person(
+                person_id="alice",
+                name="Alice",
+                is_active=True,
+                account_info={"github_username": "alice"},
+            ),
+        ],
+    )
+    return runtime
+
+
+def test_status_options_read_the_named_board_with_a_member_who_can_reach_it(
+    board_runtime: RuntimeStub,
+) -> None:
+    response = _client(board_runtime).post(
+        "/config/providers/github/status-options",
+        headers=AUTH_HEADERS,
+        json={"url": BOARD_URL},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "available": True,
+        "statuses": ["Todo", "In Progress", "Done"],
+    }
+    # The member without a GitHub account is skipped, not reported as a 500.
+    assert _FakeBoard.constructed == ["alice"]
+    # The board the form names, which need not be saved yet.
+    assert _FakeBoard.boards[0]["owner"] == "acme"
+    assert _FakeBoard.boards[0]["project_id"] == "9"
+
+
+@pytest.mark.parametrize(
+    ("operation", "unavailable"),
+    [
+        ("status-options", {"available": False, "statuses": []}),
+        (
+            "agent-field",
+            {"available": False, "exists": False, "options": [], "missing": []},
+        ),
+    ],
+)
+def test_a_board_that_cannot_be_named_is_unavailable(
+    board_runtime: RuntimeStub, operation: str, unavailable: dict[str, Any]
+) -> None:
+    """The form then falls back to typing lane names."""
+    response = _client(board_runtime).post(
+        f"/config/providers/github/{operation}",
+        headers=AUTH_HEADERS,
+        json={"url": "https://github.com/acme/repo"},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == unavailable
+    assert _FakeBoard.constructed == []
+
+
+def test_agent_field_reports_the_registered_and_missing_members(
+    board_runtime: RuntimeStub,
+) -> None:
+    response = _client(board_runtime).post(
+        "/config/providers/github/agent-field",
+        headers=AUTH_HEADERS,
+        json={"url": BOARD_URL},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "available": True,
+        "exists": True,
+        "options": [{"name": "⚙bot1", "description": "Bot One"}],
+        "missing": [{"name": "⚙bot2", "description": "Bot Two"}],
+    }
+    assert _FakeBoard.synced is False
+
+
+def test_agent_field_ensure_adds_the_missing_members(
+    board_runtime: RuntimeStub,
+) -> None:
+    response = _client(board_runtime).post(
+        "/config/providers/github/agent-field/ensure",
+        headers=AUTH_HEADERS,
+        json={"url": BOARD_URL},
+    )
+
+    assert response.status_code == HTTP_OK
+    assert _FakeBoard.synced is True
+    assert response.json()["available"] is True
+    assert response.json()["missing"] == []
 
 
 # --- intelligences -------------------------------------------------------
@@ -3023,7 +3206,7 @@ def test_config_intelligences_update_maps_setup_service_error(
     client = _client(RuntimeStub(tmp_path))
 
     def _boom(self: Any, request: Any) -> Any:
-        raise SetupServiceError("intelligence_invalid", "Intelligence config invalid.")
+        raise SetupError("intelligence_invalid", "Intelligence config invalid.")
 
     monkeypatch.setattr(
         "guildbotics.app_api.api.IntelligenceConfigService.update_config", _boom

@@ -1,6 +1,7 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
+import { InfoCallout, RequiredLabel, isTauriRuntime } from "./formParts";
 import {
   Avatar,
   FileButton,
@@ -13,7 +14,6 @@ import {
   Button,
   Card,
   Divider,
-  Fieldset,
   Group,
   HoverCard,
   Indicator,
@@ -46,7 +46,6 @@ import {
   CircleAlert,
   Copy,
   Eraser,
-  FileKey,
   Folder,
   FolderOpen,
   Plus,
@@ -58,7 +57,7 @@ import {
 } from "lucide-react";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -77,10 +76,8 @@ import {
   type IntelligenceConfig,
   type ModelDefinition,
   type MemberSetupRequest,
-  type GitHubAppRegistrationStatus,
   type ChatParticipationPolicy,
   type MemberConfig,
-  type LaneMap,
   type MemberConfigUpdateRequest,
   type MemberTaskSchedule,
   type RoleOption,
@@ -89,10 +86,7 @@ import {
   type ProjectSetupRequest,
   ApiRequestError,
   addMemberConfig,
-  type AgentFieldState,
   deleteMemberConfig,
-  ensureAgentField,
-  getAgentFieldState,
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
@@ -101,12 +95,9 @@ import {
   type LlmProviderInfo,
   getMemberConfig,
   getProjectConfig,
-  getProjectStatusOptions,
-  type ProjectStatusOptionsRequest,
   getRoleOptions,
   getTeam,
   initConfig,
-  resolveMemberIdentity,
   runScenarioDiagnostics,
   stopScheduler,
   updateDefaultPerson,
@@ -121,8 +112,12 @@ import {
   updateProjectConfig,
   memberAvatarUrl,
   uploadMemberAvatar,
-  importAvatarFromGithub,
-  importAvatarFromSlack,
+  importAvatarFromProvider,
+  SERVICE_KINDS,
+  type ProjectServices,
+  type ProviderOption,
+  type ServiceKind,
+  type ServiceSelection,
 } from "../api/client";
 import {
   type CliAgentSkillState,
@@ -140,13 +135,8 @@ import {
 } from "../cliAgent";
 import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
 import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailureNotice";
-import {
-  GitHubAppRegistrationPanel,
-  githubAppSaveFailure,
-  type GitHubAppSaveOutcome,
-} from "./GitHubAppRegistration";
-import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
-import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
+import { PROVIDER_UIS, serviceErrors, servicesReady, useServiceProviders } from "./providers";
+import type { MemberContext } from "./providers/types";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { CloneFromHubButton } from "../sync/CloneFromHub";
 import { DeviceSettings } from "../sync/DeviceSettings";
@@ -169,48 +159,16 @@ export function createProjectSchema(t: TFunction | ((key: string) => string)) {
       cliAgent: z.string(),
       // provider id -> API key value typed in the form (server maps to env vars)
       providerApiKeys: z.record(z.string(), z.string()),
-      githubDecision: z.enum(["", "disabled", "enabled"]),
-      githubEnabled: z.boolean(),
-      githubProjectUrl: z.string(),
-      laneReady: z.string(),
-      laneWorking: z.string(),
-      laneDone: z.string(),
+      services: z.custom<ProjectServices>(),
     })
     .superRefine((values, ctx) => {
-      if (!values.githubDecision) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["githubDecision"],
-          message: t("setup.validation.githubDecisionRequired"),
-        });
-        return;
-      }
-      if (values.githubDecision !== "enabled") {
-        return;
-      }
-      const githubErrors = getGitHubFieldErrors(values, t);
-      if (githubErrors.githubProjectUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["githubProjectUrl"],
-          message: githubErrors.githubProjectUrl,
-        });
-      }
-      const ready = (values.laneReady || DEFAULT_LANE_READY).trim();
-      const done = (values.laneDone || DEFAULT_LANE_DONE).trim();
-      if (ready === done) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["laneDone"],
-          message: t("setup.validation.laneReadyDoneSame"),
-        });
+      for (const [kind, errors] of Object.entries(serviceErrors(values.services, t))) {
+        if (Object.keys(errors ?? {}).length > 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["services", kind], message: "" });
+        }
       }
     });
 }
-
-export const DEFAULT_LANE_READY = "Todo";
-export const DEFAULT_LANE_WORKING = "In Progress";
-export const DEFAULT_LANE_DONE = "Done";
 
 type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
 type ProjectForm = UseFormReturnType<ProjectFormValues>;
@@ -223,8 +181,10 @@ type IntelligenceDraftState = {
 const CORE_SETUP_SECTIONS_INITIAL = [
   "project",
   "intelligence",
+  // The integrations come first: a member's accounts are those of the
+  // providers they choose.
+  "integrations",
   "members",
-  "github",
   "verification",
   // Hosting a hub and this device's key belong to the machine rather than to a
   // workspace, so the section has to be reachable before there is one: a
@@ -235,8 +195,10 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   "project",
   "intelligence",
   "environment",
+  // The integrations come first: a member's accounts are those of the
+  // providers they choose.
+  "integrations",
   "members",
-  "github",
   // Hotkeys are an everyday convenience rather than part of getting running,
   // and sharing needs a workspace to share, so both are offered only once the
   // workspace is configured.
@@ -254,7 +216,7 @@ const CORE_SECTION_LABEL_KEYS = {
   intelligence: "setup.nav.intelligence",
   environment: "setup.nav.environment",
   members: "setup.nav.members",
-  github: "setup.nav.github",
+  integrations: "setup.nav.integrations",
   shortcuts: "setup.nav.shortcuts",
   sync: "setup.nav.sync",
   verification: "setup.nav.verification",
@@ -317,17 +279,17 @@ type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
-const GITHUB_ACCOUNT_TYPE_OPTIONS = ["none", "human", "machine_user", "github_apps"] as const;
 const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
-type GitHubAccountType = (typeof GITHUB_ACCOUNT_TYPE_OPTIONS)[number];
-type GitHubMemberType = Exclude<GitHubAccountType, "none">;
-type MemberEditorTab = "basic" | "intelligence" | "patrol" | "github" | "slack" | "diagnostics";
+/** The providers whose accounts a member form holds, whatever the project uses. */
+const MEMBER_ACCOUNT_UIS = Object.entries(PROVIDER_UIS).flatMap(([name, ui]) =>
+  ui.member ? [[name, ui.member] as const] : [],
+);
+/** A member editor tab: one of these, or a provider's name for its account. */
+type MemberEditorTab = string;
 const MEMBER_EDITOR_TABS = new Set<MemberEditorTab>([
   "basic",
   "intelligence",
   "patrol",
-  "github",
-  "slack",
   "diagnostics",
 ]);
 type CronPreset = "hourly" | "daily" | "weekly" | "custom";
@@ -489,8 +451,9 @@ export function SetupPage() {
   const setSection = (value: CoreSection) => setSearchParams({ section: value }, { replace: true });
   const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
-    requestedMemberTab && MEMBER_EDITOR_TABS.has(requestedMemberTab as MemberEditorTab)
-      ? (requestedMemberTab as MemberEditorTab)
+    requestedMemberTab &&
+      (MEMBER_EDITOR_TABS.has(requestedMemberTab) || requestedMemberTab in PROVIDER_UIS)
+      ? requestedMemberTab
       : undefined,
   );
   const [focusMemberId] = useState(searchParams.get("person_id")?.trim() || undefined);
@@ -538,8 +501,9 @@ export function SetupPage() {
         activeMemberCount,
         selectedCliAgentProvisioned,
         storedProviderKeys,
+        t,
       ),
-    [activeMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys],
+    [activeMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys, t],
   );
   const activeSection = coreSections.includes(section) ? section : coreSections[0];
   const currentCoreSectionIndex = coreSections.indexOf(activeSection);
@@ -824,7 +788,15 @@ export function SetupPage() {
               status={environmentStatus.data}
             />
           ) : null}
-          {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
+          {activeSection === "integrations" ? (
+            <IntegrationsSection
+              form={form}
+              saveState={saveState}
+              persisted={canSaveProject && !workspaceSwitching}
+              saving={saveMutation.isPending}
+              onSave={saveNow}
+            />
+          ) : null}
           {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
           {activeSection === "sync" ? <SyncSettings /> : null}
           {activeSection === "device" ? <DeviceSettings /> : null}
@@ -842,11 +814,7 @@ export function SetupPage() {
               defaultPersonId={teamSummary?.default_person_id ?? ""}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
-              projectGithubEnabled={form.values.githubDecision === "enabled"}
-              githubOrganizationDefault={parseGitHub(form.values.githubProjectUrl).organization}
-              agentFieldTarget={
-                form.values.githubDecision === "enabled" ? buildLaneFetchTarget(form.values) : null
-              }
+              services={form.values.services}
               cliTools={cliTools}
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
@@ -1100,36 +1068,79 @@ function ProjectSection({
             form.setFieldValue("language", value as ProjectFormValues["language"])
           }
         />
-        <Select
-          label={<RequiredLabel text={t("setup.github.decision")} />}
-          aria-label={t("setup.github.decision")}
-          aria-required
-          description={t("setup.github.decisionHint")}
-          placeholder={t("setup.github.decisionPlaceholder")}
-          data={[
-            { value: "disabled", label: t("setup.github.disabled") },
-            { value: "enabled", label: t("setup.github.enabled") },
-          ]}
-          value={form.values.githubDecision || null}
-          onChange={(value) => {
-            const decision = (value ?? "") as ProjectFormValues["githubDecision"];
-            form.setFieldValue("githubDecision", decision);
-            form.setFieldValue("githubEnabled", decision === "enabled");
-          }}
-          error={form.errors.githubDecision}
-        />
-        {form.values.githubDecision === "enabled" ? (
-          <TextInput
-            label={<RequiredLabel text={t("setup.github.projectUrl")} />}
-            aria-label={t("setup.github.projectUrl")}
-            aria-required
-            description={t("setup.github.projectUrlHint")}
-            {...form.getInputProps("githubProjectUrl")}
-            error={
-              getGitHubFieldErrors(form.values, t).githubProjectUrl || form.errors.githubProjectUrl
-            }
-          />
-        ) : null}
+      </Stack>
+    </Card>
+  );
+}
+
+function IntegrationsSection({
+  form,
+  saveState,
+  persisted,
+  saving,
+  onSave,
+}: {
+  form: ProjectForm;
+  saveState: "idle" | "saving" | "saved" | "error";
+  persisted: boolean;
+  saving: boolean;
+  onSave: () => Promise<ConfigRevisions | null>;
+}) {
+  const { t } = useTranslation();
+  const providers = useServiceProviders();
+  const services = form.values.services;
+  const errors = serviceErrors(services, t);
+  const setService = (kind: ServiceKind, value: ServiceSelection | undefined) => {
+    const next = { ...services, [kind]: value };
+    if (!value) delete next[kind];
+    form.setFieldValue("services", next);
+  };
+  return (
+    <Card withBorder radius="md" p="lg">
+      <PanelHeader
+        title={t("setup.integrations.title")}
+        subtitle={t("setup.integrations.subtitle")}
+        save={persisted ? { state: saveState, saving, onSave: () => void onSave() } : undefined}
+      />
+      <Stack mt="md" gap="lg">
+        {SERVICE_KINDS.map((kind) => {
+          const selected = services[kind];
+          const ui = selected ? PROVIDER_UIS[selected.name]?.services[kind] : undefined;
+          return (
+            <Stack key={kind} gap="sm">
+              <Select
+                label={t(`setup.integrations.kinds.${kind}`)}
+                description={t(`setup.integrations.kindHints.${kind}`)}
+                data={[
+                  { value: "", label: t("setup.integrations.none") },
+                  ...providers
+                    .filter((provider) => provider.kinds.includes(kind))
+                    .map((provider) => ({ value: provider.name, label: provider.title })),
+                  // A provider the screens do not offer (the reference one)
+                  // stays shown while the project names it.
+                  ...(selected && !providers.some((provider) => provider.name === selected.name)
+                    ? [{ value: selected.name, label: selected.name }]
+                    : []),
+                ]}
+                value={selected?.name ?? ""}
+                allowDeselect={false}
+                onChange={(name) => {
+                  const items = name
+                    ? (PROVIDER_UIS[name]?.services[kind]?.initial(services) ?? {})
+                    : undefined;
+                  setService(kind, name ? { ...items, name } : undefined);
+                }}
+              />
+              {selected && ui ? (
+                <ui.Fields
+                  value={selected}
+                  onChange={(value) => setService(kind, value)}
+                  errors={errors[kind] ?? {}}
+                />
+              ) : null}
+            </Stack>
+          );
+        })}
       </Stack>
     </Card>
   );
@@ -2976,9 +2987,7 @@ function MembersSection({
   defaultPersonId,
   config,
   workspaceDir,
-  projectGithubEnabled,
-  githubOrganizationDefault,
-  agentFieldTarget,
+  services,
   cliTools,
   llmProviderAvailability,
   providers,
@@ -2997,9 +3006,8 @@ function MembersSection({
   defaultPersonId: string;
   config: ConfigStatus | undefined;
   workspaceDir: string;
-  projectGithubEnabled: boolean;
-  githubOrganizationDefault: string;
-  agentFieldTarget: ProjectStatusOptionsRequest | null;
+  /** The kinds of service the project uses, as the project form holds them. */
+  services: ProjectServices;
   cliTools: EnvironmentToolStatus[];
   llmProviderAvailability: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -3025,30 +3033,12 @@ function MembersSection({
     if (tab) setOpenedTabs((opened) => (opened.has(tab) ? opened : new Set(opened).add(tab)));
   }, []);
   const [personType, setPersonType] = useState<MemberType>("agent");
-  const [githubAccountType, setGithubAccountType] = useState<GitHubAccountType>("none");
-  const [identity, setIdentity] = useState("");
   const [personId, setPersonId] = useState("");
   const [personName, setPersonName] = useState("");
-  const [githubUsername, setGithubUsername] = useState("");
   const [gitEmail, setGitEmail] = useState("");
   const [roles, setRoles] = useState<string[]>([]);
-  const [githubAccessToken, setGithubAccessToken] = useState("");
-  const [githubInstallationId, setGithubInstallationId] = useState("");
-  const [githubAppId, setGithubAppId] = useState("");
-  const [githubPrivateKeyPath, setGithubPrivateKeyPath] = useState("");
-  // A GitHub App registered from this form: once installed, the save names it
-  // and the backend stores its key and IDs, so neither passes through here.
-  const [githubAppRegistration, setGithubAppRegistration] =
-    useState<GitHubAppRegistrationStatus | null>(null);
-  const [githubAppSaveOutcome, setGithubAppSaveOutcome] = useState<GitHubAppSaveOutcome | null>(
-    null,
-  );
-  // GitHub Apps entry mode: register a new app on GitHub, or reference an
-  // already-registered one via its settings URL.
-  const [githubAppsSetupMode, setGithubAppsSetupMode] = useState<"create" | "existing">("create");
-  // Slack App entry mode, mirroring GitHub Apps: create a new app from a
-  // manifest deep link, or paste tokens from an app that already exists.
-  const [slackAppsSetupMode, setSlackAppsSetupMode] = useState<"create" | "existing">("create");
+  // The member's account with each provider, as that provider's panel edits it.
+  const [accounts, setAccounts] = useState<Record<string, unknown>>({});
   const [speakingStylePreset, setSpeakingStylePreset] = useState<SpeakingStylePreset | "">(
     "energetic",
   );
@@ -3061,32 +3051,20 @@ function MembersSection({
   const [characterAvoidWhenText, setCharacterAvoidWhenText] = useState("");
   const [characterContributionText, setCharacterContributionText] = useState("");
   const [characterExtras, setCharacterExtras] = useState<Record<string, unknown>>({});
-  const [slackBotToken, setSlackBotToken] = useState("");
-  const [slackAppToken, setSlackAppToken] = useState("");
-  const [slackUserId, setSlackUserId] = useState("");
-  const [slackChannelsText, setSlackChannelsText] = useState("");
-  const [slackChannelInput, setSlackChannelInput] = useState("");
-  const [slackChannelInputError, setSlackChannelInputError] = useState<string | null>(null);
-  const [slackChannelParticipation, setSlackChannelParticipation] = useState<
+  const [chatChannels, setChatChannels] = useState<string[]>([]);
+  const [chatChannelInput, setChatChannelInput] = useState("");
+  const [chatChannelInputError, setChatChannelInputError] = useState<string | null>(null);
+  const [chatChannelParticipation, setChatChannelParticipation] = useState<
     Record<string, ChatParticipationPolicy>
   >({});
   const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
   const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
   const [isActive, setIsActive] = useState(true);
-  const [storedMemberSecrets, setStoredMemberSecrets] = useState({
-    githubInstallationId: false,
-    githubAppId: false,
-    githubPrivateKeyPath: false,
-    githubAccessToken: false,
-    slackBotToken: false,
-    slackAppToken: false,
-  });
   // Which environment key each of this member's credentials is stored under.
   // Only a saved member has them: the naming is the backend's, and a member
   // being created has nothing stored to have a state yet.
   const [memberSecretEnvKeys, setMemberSecretEnvKeys] = useState<Record<string, string>>({});
-  const [identityResolveError, setIdentityResolveError] = useState("");
   const [savingMember, setSavingMember] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
@@ -3110,23 +3088,8 @@ function MembersSection({
     [cliAgentBadgeQuery.data, cliTools],
   );
 
-  const getAvatarErrorMessage = (err: unknown, defaultMsg: string): string => {
-    if (err instanceof ApiRequestError) {
-      if (err.code === "slack_token_missing") {
-        return t("setup.members.avatar.errors.slackTokenMissing");
-      }
-      if (err.code === "slack_missing_scope") {
-        return t("setup.members.avatar.errors.slackMissingScope");
-      }
-      if (err.code === "slack_user_id_missing") {
-        return t("setup.members.avatar.errors.slackUserIdMissing");
-      }
-      if (err.code === "github_username_missing") {
-        return t("setup.members.avatar.errors.githubUsernameMissing");
-      }
-    }
-    return err instanceof Error ? err.message : defaultMsg;
-  };
+  const getAvatarErrorMessage = (err: unknown, defaultMsg: string): string =>
+    err instanceof Error ? err.message : defaultMsg;
 
   const handleAvatarUpload = async (file: File | null) => {
     if (!file || !editingPersonId) return;
@@ -3148,41 +3111,21 @@ function MembersSection({
     }
   };
 
-  const handleImportFromGithub = async () => {
+  const handleImportAvatar = async (provider: ProviderOption) => {
     if (!editingPersonId) return;
     setImportingAvatar(true);
     setAvatarError(null);
     try {
-      const result = await importAvatarFromGithub(editingPersonId);
+      const result = await importAvatarFromProvider(editingPersonId, provider.name);
       setAvatarTimestamp(result.avatar_timestamp);
       notifications.show({
         color: "success",
         title: t("setup.members.avatar.importSuccessTitle", "Success"),
-        message: t("setup.members.avatar.githubSuccess", "Avatar imported from GitHub."),
+        message: t("setup.members.avatar.importSuccess", { provider: provider.title }),
       });
       await queryClient.invalidateQueries({ queryKey: ["team"] });
     } catch (err) {
-      setAvatarError(getAvatarErrorMessage(err, "Failed to import avatar from GitHub"));
-    } finally {
-      setImportingAvatar(false);
-    }
-  };
-
-  const handleImportFromSlack = async () => {
-    if (!editingPersonId) return;
-    setImportingAvatar(true);
-    setAvatarError(null);
-    try {
-      const result = await importAvatarFromSlack(editingPersonId);
-      setAvatarTimestamp(result.avatar_timestamp);
-      notifications.show({
-        color: "success",
-        title: t("setup.members.avatar.importSuccessTitle", "Success"),
-        message: t("setup.members.avatar.slackSuccess", "Avatar imported from Slack."),
-      });
-      await queryClient.invalidateQueries({ queryKey: ["team"] });
-    } catch (err) {
-      setAvatarError(getAvatarErrorMessage(err, "Failed to import avatar from Slack"));
+      setAvatarError(getAvatarErrorMessage(err, "Failed to import avatar"));
     } finally {
       setImportingAvatar(false);
     }
@@ -3323,19 +3266,11 @@ function MembersSection({
   }, [activeTab, isHumanMember, showTab]);
 
   const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
-    setIdentity("");
     setPersonId("");
     setPersonName("");
-    setGithubUsername("");
     setGitEmail("");
     setRoles([]);
-    setGithubAccessToken("");
-    setGithubInstallationId("");
-    setGithubAppId("");
-    setGithubPrivateKeyPath("");
-    setGithubAppRegistration(null);
-    setGithubAppSaveOutcome(null);
-    setGithubAppsSetupMode("create");
+    setAccounts({});
     if (withDefaults) {
       setSpeakingStylePreset("energetic");
       applyPresetFields("energetic");
@@ -3345,31 +3280,17 @@ function MembersSection({
     }
     setRelationships("");
     setCharacterExtras({});
-    setSlackBotToken("");
-    setSlackAppToken("");
-    setSlackChannelsText("");
-    setSlackChannelInput("");
-    setSlackChannelInputError(null);
-    setSlackChannelParticipation({});
+    setChatChannels([]);
+    setChatChannelInput("");
+    setChatChannelInputError(null);
+    setChatChannelParticipation({});
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
     routineDefaultDismissedRef.current = false;
     setScheduledCommands([]);
     setPersonType("agent");
-    setGithubAccountType("none");
     setIsActive(true);
-    setSlackUserId("");
-    setStoredMemberSecrets({
-      githubInstallationId: false,
-      githubAppId: false,
-      githubPrivateKeyPath: false,
-      githubAccessToken: false,
-      slackBotToken: false,
-      slackAppToken: false,
-    });
     setMemberSecretEnvKeys({});
-    setSlackAppsSetupMode("create");
-    setIdentityResolveError("");
     showTab(initialTab ?? "basic");
   };
 
@@ -3379,20 +3300,20 @@ function MembersSection({
     // deterministic across reloads (changes only when the avatar changes).
     setAvatarTimestamp(member.avatar_timestamp ?? 0);
     setPersonType(nextPersonType);
-    // A registration started in this form outlives a reload of the member:
-    // its app already exists on GitHub, and only a save stores its key.
-    const keepsRegistration = githubAppRegistration !== null;
-    setGithubAccountType(
-      keepsRegistration
-        ? "github_apps"
-        : nextPersonType === "human"
-          ? "human"
-          : toGitHubAccountType(member.github_account_type || member.person_type),
+    setAccounts((current) =>
+      Object.fromEntries(
+        MEMBER_ACCOUNT_UIS.map(([name, ui]) => [
+          name,
+          ui.fromView(
+            member.accounts?.[name],
+            current[name] ?? ui.initial(),
+            nextPersonType === "human",
+          ),
+        ]),
+      ),
     );
-    setIdentity("");
     setPersonId(member.person_id);
     setPersonName(member.person_name);
-    setGithubUsername(member.github_username);
     setGitEmail(member.git_email);
     setRoles(member.roles);
     const preset = inferSpeakingStylePreset(member.speaking_style, speakingStyleTemplates);
@@ -3407,47 +3328,20 @@ function MembersSection({
     setCharacterAvoidWhenText(characterFields.avoidWhen.join("\n"));
     setCharacterContributionText(characterFields.contributionStyle.join("\n"));
     setCharacterExtras(characterFields.extras);
-    setSlackChannelsText(member.slack_channels.join(", "));
-    setSlackChannelInput("");
-    setSlackChannelInputError(null);
-    setSlackChannelParticipation(member.slack_channel_participation ?? {});
-    setSlackUserId(member.slack_user_id ?? "");
-    setGithubAccessToken("");
-    setGithubInstallationId(member.github_installation_id?.toString() ?? "");
-    setGithubAppId(member.github_app_id?.toString() ?? "");
-    setGithubPrivateKeyPath("");
-    setGithubAppsSetupMode(
-      !keepsRegistration && (member.github_app_id != null || member.has_github_app_id)
-        ? "existing"
-        : "create",
-    );
-    setSlackBotToken("");
-    setSlackAppToken("");
+    setChatChannels(member.chat_channels ?? []);
+    setChatChannelInput("");
+    setChatChannelInputError(null);
+    setChatChannelParticipation(member.chat_channel_participation ?? {});
     setRoutineOverrideEnabled(member.routine_commands.length > 0);
     setRoutineCommands(member.routine_commands);
     routineDefaultDismissedRef.current =
-      nextPersonType === "human" ||
-      member.routine_commands.length > 0 ||
-      toGitHubAccountType(member.github_account_type || member.person_type) === "none";
+      nextPersonType === "human" || member.routine_commands.length > 0;
     setScheduledCommands(
       flattenTaskSchedules(member.task_schedules).map((entry) =>
         scheduledCommandToDraft(entry, commandCatalog),
       ),
     );
-    setStoredMemberSecrets({
-      githubInstallationId: member.has_github_installation_id,
-      githubAppId: member.has_github_app_id,
-      githubPrivateKeyPath: member.has_github_private_key,
-      githubAccessToken: member.has_github_access_token,
-      slackBotToken: member.has_slack_bot_token,
-      slackAppToken: member.has_slack_app_token,
-    });
     setMemberSecretEnvKeys(member.secret_env_keys ?? {});
-    // A member that already carries Slack credentials is being edited, not
-    // set up, so default to the mode that does not push them into Slack.
-    setSlackAppsSetupMode(
-      member.has_slack_bot_token || member.has_slack_app_token ? "existing" : "create",
-    );
     setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
@@ -3494,9 +3388,6 @@ function MembersSection({
   });
   const memberLoading =
     memberConfigMutation.isPending || (mode === "edit" && memberRevisions === null);
-  const resolveMutation = useMutation({
-    mutationFn: resolveMemberIdentity,
-  });
   const defaultPersonMutation = useMutation({
     mutationFn: (personId: string) => updateDefaultPerson(personId),
     onSuccess: () => {
@@ -3559,52 +3450,33 @@ function MembersSection({
     savingMember || memberConfigMutation.isPending || deleteMemberMutation.isPending;
 
   const effectiveIsActive = isHumanMember ? false : isActive;
-  const slackChannels = useMemo(() => parseSlackChannels(slackChannelsText), [slackChannelsText]);
-  const slackChannelsConfigured = slackChannels.length > 0;
-  const usesGitHubMember = githubAccountType !== "none";
-  const shouldSeedDefaultRoutine = projectGithubEnabled || usesGitHubMember;
   const configDir = resolveConfigDir(workspaceDir);
-
-  const requiresGitHubAuth = githubAccountType === "machine_user";
-  const requiresGitHubAppsAuth = githubAccountType === "github_apps";
-  // Leaving the registration flow abandons its registration, so no app ID of
-  // it can be saved beside another app's key.
-  if (githubAppRegistration && (!requiresGitHubAppsAuth || githubAppsSetupMode !== "create")) {
-    setGithubAppRegistration(null);
-    setGithubAppSaveOutcome(null);
-  }
-  const githubAppRegistrationId =
-    githubAppRegistration?.status === "installed" ? githubAppRegistration.state : "";
-  const authReady = requiresGitHubAuth
-    ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
-    : requiresGitHubAppsAuth
-      ? githubAppRegistration
-        ? Boolean(githubAppRegistrationId)
-        : githubInstallationId.trim().length > 0 &&
-          githubAppId.trim().length > 0 &&
-          (githubPrivateKeyPath.trim().length > 0 || storedMemberSecrets.githubPrivateKeyPath)
-      : true;
-  const githubIdentityReady =
-    !usesGitHubMember || (githubUsername.trim().length > 0 && gitEmail.trim().length > 0);
+  const shouldSeedDefaultRoutine = Boolean(services.ticket_service);
+  // The accounts of the providers the project uses, each in its own tab.
+  const serviceProviders = useServiceProviders();
+  const usedProviders = new Set(Object.values(services).map((service) => service?.name));
+  const accountTabs = serviceProviders.filter(
+    (provider) => usedProviders.has(provider.name) && PROVIDER_UIS[provider.name]?.member,
+  );
+  const chatProvider = services.chat_service?.name ?? "";
+  // The member's chat channels are edited in the chat provider's tab, or in
+  // a tab of their own when the provider has no account panel.
+  const chatChannelsTab =
+    !isHumanMember && Boolean(chatProvider) && !accountTabs.some((p) => p.name === chatProvider);
+  const isChatChannel = PROVIDER_UIS[chatProvider]?.chatChannel ?? ((ref) => ref.trim() !== "");
+  const accountForm = (name: string) => accounts[name] ?? PROVIDER_UIS[name]?.member?.initial();
+  const updateAccount = (name: string) => (update: (form: unknown) => unknown) =>
+    setAccounts((current) => ({
+      ...current,
+      [name]: update(current[name] ?? PROVIDER_UIS[name]?.member?.initial()),
+    }));
   const memberErrors = getMemberFieldErrors(
     {
       personType,
-      githubAccountType,
-      identity,
       personId,
       personName,
-      githubUsername,
-      gitEmail,
-      githubInstallationId,
-      githubAppId,
-      githubPrivateKeyPath,
-      githubAppRegistrationId: githubAppRegistration?.state ?? "",
-      githubAccessToken,
-      slackBotToken,
-      slackAppToken,
-      slackUserId,
-      storedMemberSecrets,
-      slackChannelsText,
+      chatChannels: isHumanMember ? [] : chatChannels,
+      isChatChannel,
       roles,
       speakingStyle,
       characterArchetype,
@@ -3654,6 +3526,9 @@ function MembersSection({
       formMode === "add" &&
       !isHumanMember &&
       shouldSeedDefaultRoutine &&
+      // Without a default to offer (no saved project to read commands from
+      // yet), the routine is left to the save, which seeds the same default.
+      routineDefaultCommand &&
       !routineDefaultDismissedRef.current &&
       (!routineOverrideEnabled || routineCommands.length === 0)
     ) {
@@ -3663,16 +3538,32 @@ function MembersSection({
     formMode,
     isHumanMember,
     shouldSeedDefaultRoutine,
+    routineDefaultCommand,
     routineOverrideEnabled,
     routineCommands.length,
     seedDefaultRoutineCommands,
   ]);
-  const canResolveIdentity =
-    usesGitHubMember &&
-    getGitHubResolveInput(githubAccountType, identity, githubUsername).trim().length > 0 &&
-    (githubAccountType === "github_apps"
-      ? isGitHubAppsUrl(identity)
-      : isGitHubUsername(githubUsername));
+  const memberContext: MemberContext = {
+    human: isHumanMember,
+    personId,
+    savedPersonId: formMode === "edit" ? (editingPersonId ?? "") : "",
+    memberKey: memberFormKey,
+    gitEmail,
+    setGitEmail,
+    secretEnvKeys: memberSecretEnvKeys,
+    chatChannels: isHumanMember ? [] : chatChannels,
+    chatChannelsField: null,
+    services,
+  };
+  const personIdHolder = accountTabs.find((provider) =>
+    PROVIDER_UIS[provider.name].member!.holdsPersonId?.(accountForm(provider.name)),
+  );
+  const accountErrors = Object.fromEntries(
+    accountTabs.map((provider) => [
+      provider.name,
+      PROVIDER_UIS[provider.name].member!.errors(accountForm(provider.name), memberContext, t),
+    ]),
+  );
   const canSubmit =
     configDir.trim().length > 0 &&
     workspaceDir.trim().length > 0 &&
@@ -3680,10 +3571,9 @@ function MembersSection({
     personName.trim().length > 0 &&
     roles.length > 0 &&
     memberProfileValid &&
-    githubIdentityReady &&
-    authReady &&
     patrolSettingsValid &&
-    Object.keys(memberErrors).length === 0;
+    Object.keys(memberErrors).length === 0 &&
+    Object.values(accountErrors).every((errors) => Object.keys(errors).length === 0);
   const activePresetSample = characterPresetExamples[speakingStylePreset || "energetic"];
   const hasMemberError = (keys: Array<keyof MemberFieldErrors>) =>
     keys.some((key) => Boolean(memberErrors[key]));
@@ -3702,71 +3592,38 @@ function MembersSection({
         "characterContributionText",
       ];
   const basicTabHasError = hasMemberError(basicErrorKeys);
-  const githubTabHasError = hasMemberError([
-    "identity",
-    "githubUsername",
-    "gitEmail",
-    "githubInstallationId",
-    "githubAppId",
-    "githubPrivateKeyPath",
-    "githubAccessToken",
-  ]);
-  const slackTabHasError = hasMemberError([
-    "slackUserId",
-    "slackChannelsText",
-    "slackBotToken",
-    "slackAppToken",
-  ]);
-  const githubResolveLabel =
-    githubAccountType === "github_apps"
-      ? t("setup.members.githubAppsUrl")
-      : t("setup.members.githubUsername");
-  const githubResolveDescription =
-    githubAccountType === "github_apps"
-      ? t("setup.members.githubAppsUrlHint")
-      : t("setup.members.githubUsernameHint");
-  const githubResolveValue = githubAccountType === "github_apps" ? identity : githubUsername;
-  const githubResolveError =
-    githubAccountType === "github_apps"
-      ? memberErrors.identity || identityResolveError
-      : memberErrors.githubUsername || identityResolveError;
-
-  const setSlackChannels = (channels: string[]) => {
-    setSlackChannelsText(channels.join(", "));
-  };
-
-  const addSlackChannel = () => {
-    const channel = slackChannelInput.trim();
+  const addChatChannel = () => {
+    const channel = chatChannelInput.trim();
     if (!channel) {
       return;
     }
-    if (!isSlackChannelReference(channel)) {
-      setSlackChannelInputError(t("setup.validation.slackChannelsInvalid"));
+    if (!isChatChannel(channel)) {
+      setChatChannelInputError(t("setup.validation.chatChannelsInvalid"));
       return;
     }
-    const channelRef = normalizeSlackChannelReference(channel);
-    const nextChannels = slackChannels.filter(
-      (existing) => normalizeSlackChannelReference(existing) !== channelRef,
-    );
-    setSlackChannels([...nextChannels, channel]);
-    setSlackChannelParticipation((current) => ({
+    const channelRef = normalizeChatChannel(channel);
+    setChatChannels([
+      ...chatChannels.filter((existing) => normalizeChatChannel(existing) !== channelRef),
+      channel,
+    ]);
+    setChatChannelParticipation((current) => ({
       ...current,
       [channelRef]: current[channelRef] ?? "strict",
     }));
-    setSlackChannelInput("");
-    setSlackChannelInputError(null);
+    setChatChannelInput("");
+    setChatChannelInputError(null);
   };
 
-  const updateSlackChannel = (index: number, value: string) => {
-    const previousRef = normalizeSlackChannelReference(slackChannels[index] ?? "");
-    const nextRef = normalizeSlackChannelReference(value);
-    setSlackChannels(
-      slackChannels.map((channel, currentIndex) => (currentIndex === index ? value : channel)),
+  const updateChatChannel = (index: number, value: string) => {
+    const previousRef = normalizeChatChannel(chatChannels[index] ?? "");
+    const nextRef = normalizeChatChannel(value);
+    setChatChannels(
+      chatChannels.map((channel, currentIndex) => (currentIndex === index ? value : channel)),
     );
     if (!nextRef || previousRef === nextRef) {
       return;
     }
-    setSlackChannelParticipation((current) => {
+    setChatChannelParticipation((current) => {
       const { [previousRef]: previousPolicy, ...rest } = current;
       return {
         ...rest,
@@ -3775,50 +3632,101 @@ function MembersSection({
     });
   };
 
-  const removeSlackChannel = (index: number) => {
-    const removedRef = normalizeSlackChannelReference(slackChannels[index] ?? "");
-    setSlackChannels(slackChannels.filter((_, currentIndex) => currentIndex !== index));
-    setSlackChannelParticipation((current) => {
+  const removeChatChannel = (index: number) => {
+    const removedRef = normalizeChatChannel(chatChannels[index] ?? "");
+    setChatChannels(chatChannels.filter((_, currentIndex) => currentIndex !== index));
+    setChatChannelParticipation((current) => {
       const next = { ...current };
       delete next[removedRef];
       return next;
     });
   };
 
-  const handleResolve = async () => {
-    if (!canResolveIdentity) {
-      return;
-    }
-    setIdentityResolveError("");
-    try {
-      const resolved = await resolveMutation.mutateAsync({
-        person_type: githubAccountType as GitHubMemberType,
-        identity: getGitHubResolveInput(githubAccountType, identity, githubUsername).trim(),
-      });
-      if (
-        !resolved.github_username.trim() ||
-        !resolved.git_email.trim() ||
-        resolved.github_user_id <= 0
-      ) {
-        setIdentityResolveError(t("setup.validation.memberGithubIdentityNotFound"));
-        return;
-      }
-      setGithubUsername(resolved.github_username);
-      setGitEmail(resolved.git_email);
-    } catch (error) {
-      setIdentityResolveError(getMemberResolveErrorMessage(error, t));
-    }
-  };
+  const chatChannelsField = (
+    <Stack gap="xs">
+      <Group align="end">
+        <TextInput
+          className="member-chat-channel-input"
+          label={t("setup.members.chatChannelAdd")}
+          description={t("setup.members.chatChannelAddHint")}
+          value={chatChannelInput}
+          onChange={(event) => {
+            setChatChannelInput(event.currentTarget.value);
+            setChatChannelInputError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              addChatChannel();
+            }
+          }}
+          error={chatChannelInputError ?? memberErrors.chatChannels}
+        />
+        <Button leftSection={<Plus size={16} />} onClick={addChatChannel}>
+          {t("setup.members.chatChannelAddButton")}
+        </Button>
+      </Group>
+      {chatChannels.length === 0 ? (
+        <div className="empty-row">{t("setup.members.chatChannelsEmpty")}</div>
+      ) : (
+        <Stack gap="sm">
+          {chatChannels.map((channel, index) => {
+            const channelRef = normalizeChatChannel(channel);
+            return (
+              <Group key={`${channelRef}-${index}`} align="start">
+                <TextInput
+                  className="member-chat-channel-input"
+                  label={t("setup.members.chatParticipationChannel")}
+                  value={channel}
+                  onChange={(event) => updateChatChannel(index, event.currentTarget.value)}
+                />
+                <Select
+                  className="member-chat-policy-select"
+                  label={t("setup.members.chatParticipationPolicy")}
+                  data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
+                    value: option,
+                    label: t(`setup.members.chatParticipationOptions.${option}`),
+                  }))}
+                  value={chatChannelParticipation[channelRef] ?? "strict"}
+                  onChange={(value) =>
+                    setChatChannelParticipation((current) => ({
+                      ...current,
+                      [channelRef]: toChatParticipationPolicy(value),
+                    }))
+                  }
+                  renderOption={({ option }) => (
+                    <Stack gap={2}>
+                      <Text size="sm">{option.label}</Text>
+                      <Text size="xs" c="dimmed">
+                        {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
+                      </Text>
+                    </Stack>
+                  )}
+                />
+                <ActionIcon
+                  aria-label={t("setup.members.chatChannelRemove")}
+                  color="danger"
+                  mt={25}
+                  variant="subtle"
+                  onClick={() => removeChatChannel(index)}
+                >
+                  <Trash2 size={16} />
+                </ActionIcon>
+              </Group>
+            );
+          })}
+        </Stack>
+      )}
+    </Stack>
+  );
 
   const buildMemberRequest = (): MemberSetupRequest => {
     const request: MemberSetupRequest = {
       config_dir: configDir,
       person_type: personType,
-      github_account_type: githubAccountType === "none" ? "" : githubAccountType,
       person_id: personId.trim(),
       person_name: personName.trim(),
       is_active: effectiveIsActive,
-      github_username: githubUsername.trim(),
       git_email: gitEmail.trim(),
       roles,
       speaking_style: isHumanMember ? "" : speakingStyle.trim(),
@@ -3834,59 +3742,42 @@ function MembersSection({
             contributionStyle: splitLines(characterContributionText),
             extras: characterExtras,
           }),
-      slack_user_id: personType === "human" ? slackUserId.trim() : "",
-      slack_bot_token: personType === "agent" ? slackBotToken.trim() : "",
-      slack_app_token: personType === "agent" ? slackAppToken.trim() : "",
-      slack_channels: personType === "agent" ? slackChannels : [],
-      slack_channel_participation:
-        personType === "agent"
-          ? Object.fromEntries(
-              slackChannels.map((channel) => {
-                const channelRef = normalizeSlackChannelReference(channel);
-                return [channelRef, slackChannelParticipation[channelRef] ?? "strict"];
-              }),
-            )
-          : {},
+      // Every account the form holds is sent, so an account with a provider
+      // the project does not use right now is kept as it is.
+      accounts: Object.fromEntries(
+        MEMBER_ACCOUNT_UIS.map(([name, ui]) => [
+          name,
+          ui.request(accounts[name] ?? ui.initial(), isHumanMember),
+        ]),
+      ),
+      chat_channels: isHumanMember ? [] : chatChannels,
+      chat_channel_participation: isHumanMember
+        ? {}
+        : Object.fromEntries(
+            chatChannels.map((channel) => {
+              const channelRef = normalizeChatChannel(channel);
+              return [channelRef, chatChannelParticipation[channelRef] ?? "strict"];
+            }),
+          ),
       routine_commands: isHumanMember || !routineOverrideEnabled ? [] : routineCommands,
       task_schedules: isHumanMember
         ? []
         : buildTaskSchedules(scheduledCommands, commandOptionByValue),
     };
-    if (githubAppRegistrationId) {
-      request.github_app_registration_id = githubAppRegistrationId;
-    } else if (githubAccountType === "github_apps") {
-      request.github_installation_id = githubInstallationId
-        ? Number(githubInstallationId)
-        : undefined;
-      request.github_app_id = githubAppId ? Number(githubAppId) : undefined;
-      request.github_private_key_path = githubPrivateKeyPath || undefined;
-    }
-    if (githubAccountType === "machine_user") {
-      request.github_access_token = githubAccessToken || undefined;
-    }
     return request;
   };
 
-  // A member that cannot be a GitHub assignee is assigned through the
-  // project's Agent field, so keep the field's options in sync whenever a
-  // GitHub-linked non-human member is saved. Best-effort: the member save
-  // itself already succeeded, so a failure only warns.
-  const syncAgentFieldAfterSave = (request: MemberSetupRequest) => {
-    if (!agentFieldTarget || request.person_type === "human" || !request.github_account_type) {
-      return;
-    }
-    ensureAgentField(agentFieldTarget)
-      .then((state) => {
-        queryClient.setQueryData(["agentFieldState", agentFieldTarget], state);
-      })
-      .catch(() => {
-        notifications.show({
-          color: "warning",
-          title: t("setup.members.agentFieldSyncFailedTitle"),
-          message: t("setup.members.agentFieldSyncFailedBody"),
-        });
-      });
-  };
+  /** The accounts as they follow what the save did with them. */
+  const settledAccounts = (failure?: unknown) =>
+    Object.fromEntries(
+      Object.entries(accounts).map(([name, form]) => {
+        const saved = PROVIDER_UIS[name]?.member?.saved;
+        return [
+          name,
+          saved ? saved(form, { failure, context: memberContext, queryClient, t }) : form,
+        ];
+      }),
+    );
 
   const handleSaveMember = async () => {
     if (!canSubmit || memberChanged || memberLoading) {
@@ -3898,7 +3789,6 @@ function MembersSection({
     }
     setSavingMember(true);
     const request = buildMemberRequest();
-    const savedRegistration = githubAppRegistration;
     let memberWritten = false;
     try {
       if (formMode === "edit" && editingPersonId) {
@@ -3912,21 +3802,7 @@ function MembersSection({
           },
         });
         memberWritten = true;
-        if (request.github_app_registration_id && savedRegistration) {
-          // The backend consumed the registration; the member now holds its
-          // key and IDs as any stored member does.
-          setGithubAppId(String(savedRegistration.app_id ?? ""));
-          setGithubInstallationId(String(savedRegistration.installation_id ?? ""));
-          setGithubAppRegistration(null);
-          setGithubAppSaveOutcome("saved");
-          setStoredMemberSecrets((current) => ({
-            ...current,
-            githubInstallationId: true,
-            githubAppId: true,
-            githubPrivateKeyPath: true,
-          }));
-        }
-        syncAgentFieldAfterSave(request);
+        setAccounts(settledAccounts());
         if (!isHumanMember) {
           await memberIntelligenceSaveRef.current?.save?.();
         }
@@ -3934,14 +3810,12 @@ function MembersSection({
       }
       await addMemberMutation.mutateAsync(request);
       memberWritten = true;
-      syncAgentFieldAfterSave(request);
+      // The added member's form is cleared by now; what its accounts do after
+      // a save still happens.
+      settledAccounts();
     } catch (error) {
-      if (!memberWritten && request.github_app_registration_id) {
-        const outcome = githubAppSaveFailure(error);
-        setGithubAppSaveOutcome(outcome);
-        if (outcome === "expired") {
-          setGithubAppRegistration(null);
-        }
+      if (!memberWritten) {
+        setAccounts(settledAccounts(error));
       }
       if (isStaleConfigSave(error) && editingPersonId) {
         // Reload the member rather than resend this form: the input it holds
@@ -3980,8 +3854,7 @@ function MembersSection({
 
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
-    setGithubAppRegistration(null);
-    setGithubAppSaveOutcome(null);
+    setAccounts({});
     setMemberRevisions(null);
     setEditingPersonId(memberId);
     setMode("edit");
@@ -4162,8 +4035,8 @@ function MembersSection({
               </Alert>
             ) : null}
             {/* Only the shown panel is mounted, except the ones whose editors
-                keep unsaved state of their own (AI settings, GitHub and Slack app
-                registration), which stay mounted once opened. They are hidden
+                keep unsaved state of their own (AI settings, the providers'
+                accounts with their app registrations), which stay mounted once opened. They are hidden
                 with display:none rather than Mantine's default <Activity>: a
                 hidden Activity runs effect cleanups, and the AI settings editor
                 would withdraw the save it registers with the Save button below. */}
@@ -4190,26 +4063,22 @@ function MembersSection({
                 {!isHumanMember ? (
                   <Tabs.Tab value="patrol">{t("setup.members.tabs.patrol")}</Tabs.Tab>
                 ) : null}
-                <Tabs.Tab
-                  value="github"
-                  rightSection={
-                    githubTabHasError ? (
-                      <TabErrorIcon label={t("setup.members.tabHasError")} />
-                    ) : null
-                  }
-                >
-                  {t("setup.members.tabs.github")}
-                </Tabs.Tab>
-                <Tabs.Tab
-                  value="slack"
-                  rightSection={
-                    slackTabHasError ? (
-                      <TabErrorIcon label={t("setup.members.tabHasError")} />
-                    ) : null
-                  }
-                >
-                  {t("setup.members.tabs.slack")}
-                </Tabs.Tab>
+                {chatChannelsTab ? (
+                  <Tabs.Tab value="chat">{t("setup.integrations.kinds.chat_service")}</Tabs.Tab>
+                ) : null}
+                {accountTabs.map((provider) => (
+                  <Tabs.Tab
+                    key={provider.name}
+                    value={provider.name}
+                    rightSection={
+                      Object.keys(accountErrors[provider.name] ?? {}).length > 0 ? (
+                        <TabErrorIcon label={t("setup.members.tabHasError")} />
+                      ) : null
+                    }
+                  >
+                    {provider.title}
+                  </Tabs.Tab>
+                ))}
                 {!isHumanMember ? (
                   <Tabs.Tab value="diagnostics">{t("setup.members.tabs.diagnostics")}</Tabs.Tab>
                 ) : null}
@@ -4276,49 +4145,22 @@ function MembersSection({
                             )}
                           </FileButton>
 
-                          <Tooltip
-                            label={t(
-                              "setup.members.avatar.githubTooltip",
-                              "Configure GitHub username to import avatar",
-                            )}
-                            disabled={!editingPersonId || !!githubUsername}
-                            withArrow
-                          >
-                            <span>
+                          {serviceProviders
+                            .filter(
+                              (provider) => provider.avatar && usedProviders.has(provider.name),
+                            )
+                            .map((provider) => (
                               <Button
+                                key={provider.name}
                                 size="xs"
                                 variant="default"
-                                onClick={handleImportFromGithub}
+                                onClick={() => void handleImportAvatar(provider)}
                                 loading={importingAvatar}
-                                disabled={!editingPersonId || !githubUsername}
+                                disabled={!editingPersonId}
                               >
-                                {t("setup.members.avatar.github", "Import from GitHub")}
+                                {t("setup.members.avatar.importFrom", { provider: provider.title })}
                               </Button>
-                            </span>
-                          </Tooltip>
-
-                          <Tooltip
-                            label={t(
-                              "setup.members.avatar.slackTooltip",
-                              "Configure Slack user ID to import avatar",
-                            )}
-                            disabled={!editingPersonId || personType !== "human" || !!slackUserId}
-                            withArrow
-                          >
-                            <span>
-                              <Button
-                                size="xs"
-                                variant="default"
-                                onClick={handleImportFromSlack}
-                                loading={importingAvatar}
-                                disabled={
-                                  !editingPersonId || (personType === "human" && !slackUserId)
-                                }
-                              >
-                                {t("setup.members.avatar.slack", "Import from Slack")}
-                              </Button>
-                            </span>
-                          </Tooltip>
+                            ))}
                         </Group>
                         {avatarError && (
                           <Text size="xs" c="danger">
@@ -4334,11 +4176,14 @@ function MembersSection({
                     aria-required
                     value={personId}
                     onChange={(event) => setPersonId(event.currentTarget.value)}
-                    // A registration is for the member it was started for.
-                    disabled={formMode === "add" && githubAppRegistration !== null}
+                    // An account set up for this member (an app registered for
+                    // it, for one) is for the member it was set up for.
+                    disabled={formMode === "add" && personIdHolder !== undefined}
                     description={
-                      formMode === "add" && githubAppRegistration !== null
-                        ? t("setup.members.personIdFixedByGitHubApp")
+                      formMode === "add" && personIdHolder !== undefined
+                        ? t("setup.members.personIdFixedByAccount", {
+                            provider: personIdHolder.title,
+                          })
                         : undefined
                     }
                     error={memberErrors.personId}
@@ -4366,9 +4211,6 @@ function MembersSection({
                       setPersonType(nextType);
                       if (nextType === "human") {
                         setIsActive(false);
-                        setGithubAccountType("human");
-                      } else if (githubAccountType === "human") {
-                        setGithubAccountType("none");
                       }
                     }}
                   />
@@ -4578,6 +4420,13 @@ function MembersSection({
                 </Stack>
               </Tabs.Panel>
 
+              {/* A chat whose provider has no account panel of its own keeps the
+                  member's channels here. */}
+              {chatChannelsTab ? (
+                <Tabs.Panel value="chat" pt="md">
+                  {chatChannelsField}
+                </Tabs.Panel>
+              ) : null}
               {!isHumanMember ? (
                 <Tabs.Panel value="intelligence" pt="md" keepMounted>
                   {openedTabs.has("intelligence") ? (
@@ -4630,408 +4479,27 @@ function MembersSection({
                 </Tabs.Panel>
               ) : null}
 
-              <Tabs.Panel value="github" pt="md" keepMounted>
-                {openedTabs.has("github") ? (
-                  <Stack>
-                    <Select
-                      label={t("setup.members.githubAccountType")}
-                      description={t("setup.members.githubAccountTypeHint")}
-                      data={GITHUB_ACCOUNT_TYPE_OPTIONS.map((option) => ({
-                        value: option,
-                        label: t(`setup.members.githubAccountTypeOptions.${option}`),
-                      }))}
-                      value={githubAccountType}
-                      disabled={personType === "human"}
-                      onChange={(value) => {
-                        const nextAccountType = toGitHubAccountType(value ?? "none");
-                        setGithubAccountType(nextAccountType);
-                        if (
-                          formMode === "add" &&
-                          personType !== "human" &&
-                          nextAccountType !== "none" &&
-                          !routineDefaultDismissedRef.current &&
-                          routineCommands.length === 0
-                        ) {
-                          routineDefaultDismissedRef.current = false;
-                          seedDefaultRoutineCommands();
-                        }
-                        setIdentityResolveError("");
-                      }}
-                    />
-                    {githubAccountType === "github_apps" ? (
-                      <SegmentedControl
-                        aria-label={t("setup.members.githubAppsSetupMode.label")}
-                        value={githubAppsSetupMode}
-                        onChange={(value) => {
-                          setGithubAppsSetupMode(value === "existing" ? "existing" : "create");
-                          setIdentityResolveError("");
-                        }}
-                        data={[
-                          {
-                            value: "create",
-                            label: t("setup.members.githubAppsSetupMode.create"),
-                          },
-                          {
-                            value: "existing",
-                            label: t("setup.members.githubAppsSetupMode.existing"),
-                          },
-                        ]}
-                      />
-                    ) : null}
-                    {githubAccountType === "github_apps" && githubAppsSetupMode === "create" ? (
-                      <GitHubAppRegistrationPanel
-                        memberKey={memberFormKey}
-                        personId={editingPersonId ?? personId}
-                        defaultAppName={personId}
-                        defaultOrganization={githubOrganizationDefault}
-                        registration={githubAppRegistration}
-                        onRegistrationChange={setGithubAppRegistration}
-                        saveOutcome={githubAppSaveOutcome}
-                        onApplied={(fields) => {
-                          if (fields.githubUsername) {
-                            setGithubUsername(fields.githubUsername);
-                          }
-                          if (fields.gitEmail) {
-                            setGitEmail(fields.gitEmail);
-                          }
-                          setIdentityResolveError("");
+              {accountTabs.map((provider) => {
+                const ui = PROVIDER_UIS[provider.name].member!;
+                return (
+                  <Tabs.Panel key={provider.name} value={provider.name} pt="md" keepMounted>
+                    {openedTabs.has(provider.name) ? (
+                      <ui.Panel
+                        form={accountForm(provider.name)}
+                        onChange={updateAccount(provider.name)}
+                        errors={accountErrors[provider.name] ?? {}}
+                        context={{
+                          ...memberContext,
+                          chatChannelsField:
+                            provider.name === chatProvider && !isHumanMember
+                              ? chatChannelsField
+                              : null,
                         }}
                       />
                     ) : null}
-                    {!usesGitHubMember ? (
-                      <Text size="sm" c="dimmed">
-                        {t("setup.members.githubDisabledMemberHint")}
-                      </Text>
-                    ) : (
-                      <>
-                        {githubAccountType !== "github_apps" ||
-                        githubAppsSetupMode === "existing" ? (
-                          <Stack gap={4}>
-                            <div>
-                              <Text fw={500} size="sm">
-                                {githubResolveLabel}
-                                <Text span c="danger" inherit aria-hidden="true">
-                                  {" *"}
-                                </Text>
-                              </Text>
-                              <Text c="dimmed" size="xs">
-                                {githubResolveDescription}
-                              </Text>
-                            </div>
-                            <div className="field-action-row">
-                              <TextInput
-                                aria-label={githubResolveLabel}
-                                aria-required
-                                value={githubResolveValue}
-                                onChange={(event) => {
-                                  if (githubAccountType === "github_apps") {
-                                    setIdentity(event.currentTarget.value);
-                                  } else {
-                                    setGithubUsername(event.currentTarget.value);
-                                  }
-                                  setIdentityResolveError("");
-                                }}
-                                error={Boolean(githubResolveError)}
-                                flex={1}
-                              />
-                              <Button
-                                variant="default"
-                                loading={resolveMutation.isPending}
-                                disabled={!canResolveIdentity}
-                                onClick={() => void handleResolve()}
-                              >
-                                {t("setup.members.resolve")}
-                              </Button>
-                            </div>
-                            {githubResolveError ? (
-                              <Text c="danger" size="xs">
-                                {githubResolveError}
-                              </Text>
-                            ) : null}
-                          </Stack>
-                        ) : null}
-                        {githubAccountType === "github_apps" ? (
-                          <TextInput
-                            label={
-                              <RequiredLabel text={t("setup.members.githubResolvedIdentity")} />
-                            }
-                            aria-label={t("setup.members.githubResolvedIdentity")}
-                            aria-required
-                            value={githubUsername}
-                            onChange={(event) => setGithubUsername(event.currentTarget.value)}
-                            error={memberErrors.githubUsername}
-                          />
-                        ) : null}
-                        <TextInput
-                          label={
-                            usesGitHubMember ? (
-                              <RequiredLabel text={t("setup.members.gitEmail")} />
-                            ) : (
-                              t("setup.members.gitEmail")
-                            )
-                          }
-                          aria-label={t("setup.members.gitEmail")}
-                          aria-required={usesGitHubMember}
-                          value={gitEmail}
-                          onChange={(event) => setGitEmail(event.currentTarget.value)}
-                          error={memberErrors.gitEmail}
-                        />
-                      </>
-                    )}
-                    {githubAccountType === "github_apps" ? (
-                      <>
-                        <TextInput
-                          label={<RequiredLabel text={t("setup.members.installationId")} />}
-                          aria-label={t("setup.members.installationId")}
-                          aria-required
-                          value={
-                            githubAppRegistration
-                              ? String(githubAppRegistration.installation_id ?? "")
-                              : githubInstallationId
-                          }
-                          onChange={(event) => setGithubInstallationId(event.currentTarget.value)}
-                          readOnly={githubAppRegistration !== null}
-                          error={memberErrors.githubInstallationId}
-                        />
-                        <TextInput
-                          label={<RequiredLabel text={t("setup.members.appId")} />}
-                          aria-label={t("setup.members.appId")}
-                          aria-required
-                          value={
-                            githubAppRegistration
-                              ? String(githubAppRegistration.app_id ?? "")
-                              : githubAppId
-                          }
-                          onChange={(event) => setGithubAppId(event.currentTarget.value)}
-                          readOnly={githubAppRegistration !== null}
-                          error={memberErrors.githubAppId}
-                        />
-                        {githubAppRegistration ? null : (
-                          <FilePicker
-                            label={t("setup.members.privateKeyPath")}
-                            withAsterisk={!storedMemberSecrets.githubPrivateKeyPath}
-                            value={githubPrivateKeyPath}
-                            onChange={setGithubPrivateKeyPath}
-                            error={memberErrors.githubPrivateKeyPath}
-                          />
-                        )}
-                      </>
-                    ) : null}
-                    {githubAccountType === "machine_user" ? (
-                      <PasswordInput
-                        label={
-                          storedMemberSecrets.githubAccessToken ? (
-                            t("setup.members.accessToken")
-                          ) : (
-                            <RequiredLabel text={t("setup.members.accessToken")} />
-                          )
-                        }
-                        aria-label={t("setup.members.accessToken")}
-                        aria-required={!storedMemberSecrets.githubAccessToken}
-                        placeholder={
-                          storedMemberSecrets.githubAccessToken
-                            ? MASKED_SECRET_PLACEHOLDER
-                            : t("setup.members.accessTokenPlaceholder")
-                        }
-                        value={githubAccessToken}
-                        onChange={(event) => setGithubAccessToken(event.currentTarget.value)}
-                        error={memberErrors.githubAccessToken}
-                        description={
-                          <SecretStatusHint envKey={memberSecretEnvKeys.github_access_token} />
-                        }
-                      />
-                    ) : null}
-                    {githubAccountType === "human" ? (
-                      <Text size="sm" c="dimmed">
-                        {t("setup.members.githubAuthNotRequired")}
-                      </Text>
-                    ) : null}
-                  </Stack>
-                ) : null}
-              </Tabs.Panel>
-
-              <Tabs.Panel value="slack" pt="md" keepMounted>
-                {openedTabs.has("slack") ? (
-                  <Stack>
-                    {personType === "human" ? (
-                      <TextInput
-                        label={<RequiredLabel text={t("setup.members.slackUserId")} />}
-                        aria-label={t("setup.members.slackUserId")}
-                        aria-required
-                        value={slackUserId}
-                        onChange={(event) => setSlackUserId(event.currentTarget.value)}
-                        description={t("setup.members.slackUserIdHint")}
-                        error={memberErrors.slackUserId}
-                      />
-                    ) : (
-                      <>
-                        <SegmentedControl
-                          aria-label={t("setup.members.slackAppsSetupMode.label")}
-                          value={slackAppsSetupMode}
-                          onChange={(value) =>
-                            setSlackAppsSetupMode(value === "existing" ? "existing" : "create")
-                          }
-                          data={[
-                            {
-                              value: "create",
-                              label: t("setup.members.slackAppsSetupMode.create"),
-                            },
-                            {
-                              value: "existing",
-                              label: t("setup.members.slackAppsSetupMode.existing"),
-                            },
-                          ]}
-                        />
-                        {slackAppsSetupMode === "create" ? (
-                          <SlackAppRegistrationPanel
-                            memberKey={memberFormKey}
-                            defaultAppName={personId}
-                          />
-                        ) : null}
-                        <Stack gap="xs">
-                          <Group align="end">
-                            <TextInput
-                              className="member-slack-channel-input"
-                              label={t("setup.members.slackChannelAdd")}
-                              description={t("setup.members.slackChannelAddHint")}
-                              value={slackChannelInput}
-                              onChange={(event) => {
-                                setSlackChannelInput(event.currentTarget.value);
-                                setSlackChannelInputError(null);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                                  event.preventDefault();
-                                  addSlackChannel();
-                                }
-                              }}
-                              error={slackChannelInputError ?? memberErrors.slackChannelsText}
-                            />
-                            <Button leftSection={<Plus size={16} />} onClick={addSlackChannel}>
-                              {t("setup.members.slackChannelAddButton")}
-                            </Button>
-                          </Group>
-                          {slackChannels.length === 0 ? (
-                            <div className="empty-row">{t("setup.members.slackChannelsEmpty")}</div>
-                          ) : (
-                            <Stack gap="sm">
-                              {slackChannels.map((channel, index) => {
-                                const channelRef = normalizeSlackChannelReference(channel);
-                                const selectedPolicy =
-                                  slackChannelParticipation[channelRef] ?? "strict";
-                                return (
-                                  <Group key={`${channelRef}-${index}`} align="start">
-                                    <TextInput
-                                      className="member-slack-channel-input"
-                                      label={t("setup.members.slackParticipationChannel")}
-                                      value={channel}
-                                      onChange={(event) =>
-                                        updateSlackChannel(index, event.currentTarget.value)
-                                      }
-                                    />
-                                    <Select
-                                      className="member-slack-policy-select"
-                                      label={t("setup.members.slackParticipationPolicy")}
-                                      data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
-                                        value: option,
-                                        label: t(
-                                          `setup.members.slackParticipationOptions.${option}`,
-                                        ),
-                                      }))}
-                                      value={selectedPolicy}
-                                      onChange={(value) =>
-                                        setSlackChannelParticipation((current) => ({
-                                          ...current,
-                                          [channelRef]: toChatParticipationPolicy(value),
-                                        }))
-                                      }
-                                      renderOption={({ option }) => (
-                                        <Stack gap={2}>
-                                          <Text size="sm">{option.label}</Text>
-                                          <Text size="xs" c="dimmed">
-                                            {t(
-                                              `setup.members.slackParticipationDescriptions.${option.value}`,
-                                            )}
-                                          </Text>
-                                        </Stack>
-                                      )}
-                                    />
-                                    <ActionIcon
-                                      aria-label={t("setup.members.slackChannelRemove")}
-                                      color="danger"
-                                      mt={25}
-                                      variant="subtle"
-                                      onClick={() => removeSlackChannel(index)}
-                                    >
-                                      <Trash2 size={16} />
-                                    </ActionIcon>
-                                  </Group>
-                                );
-                              })}
-                            </Stack>
-                          )}
-                        </Stack>
-                        <PasswordInput
-                          label={
-                            slackChannelsConfigured && !storedMemberSecrets.slackBotToken ? (
-                              <RequiredLabel text={t("setup.members.slackBotToken")} />
-                            ) : (
-                              t("setup.members.slackBotToken")
-                            )
-                          }
-                          aria-label={t("setup.members.slackBotToken")}
-                          aria-required={
-                            slackChannelsConfigured && !storedMemberSecrets.slackBotToken
-                          }
-                          placeholder={
-                            storedMemberSecrets.slackBotToken
-                              ? MASKED_SECRET_PLACEHOLDER
-                              : t("setup.members.slackBotTokenPlaceholder")
-                          }
-                          value={slackBotToken}
-                          onChange={(event) => setSlackBotToken(event.currentTarget.value)}
-                          error={memberErrors.slackBotToken}
-                          description={
-                            <SecretStatusHint envKey={memberSecretEnvKeys.slack_bot_token} />
-                          }
-                        />
-                        <PasswordInput
-                          label={
-                            slackChannelsConfigured && !storedMemberSecrets.slackAppToken ? (
-                              <RequiredLabel text={t("setup.members.slackAppToken")} />
-                            ) : (
-                              t("setup.members.slackAppToken")
-                            )
-                          }
-                          aria-label={t("setup.members.slackAppToken")}
-                          aria-required={
-                            slackChannelsConfigured && !storedMemberSecrets.slackAppToken
-                          }
-                          placeholder={
-                            storedMemberSecrets.slackAppToken
-                              ? MASKED_SECRET_PLACEHOLDER
-                              : t("setup.members.slackAppTokenPlaceholder")
-                          }
-                          value={slackAppToken}
-                          onChange={(event) => setSlackAppToken(event.currentTarget.value)}
-                          error={memberErrors.slackAppToken}
-                          description={
-                            <SecretStatusHint envKey={memberSecretEnvKeys.slack_app_token} />
-                          }
-                        />
-                        <SlackTokenVerificationPanel
-                          botToken={slackBotToken}
-                          appToken={slackAppToken}
-                          // Empty fields keep the saved tokens, so verification
-                          // needs to know whose saved tokens those are.
-                          personId={formMode === "edit" ? (editingPersonId ?? "") : ""}
-                          channels={slackChannels}
-                        />
-                      </>
-                    )}
-                  </Stack>
-                ) : null}
-              </Tabs.Panel>
+                  </Tabs.Panel>
+                );
+              })}
               {!isHumanMember ? (
                 <Tabs.Panel value="diagnostics" pt="md">
                   <MemberDiagnosticsPanel
@@ -5088,11 +4556,6 @@ function MembersSection({
         {memberConfigMutation.error || currentMember.error ? (
           <Alert color="danger" title={t("setup.members.loadError")}>
             {(memberConfigMutation.error ?? currentMember.error)?.message}
-          </Alert>
-        ) : null}
-        {resolveMutation.error ? (
-          <Alert color="danger" title={t("setup.members.resolveError")}>
-            {resolveMutation.error.message}
           </Alert>
         ) : null}
         {addMemberMutation.error ? (
@@ -5545,275 +5008,6 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
   );
 }
 
-function LaneField({
-  label,
-  placeholder,
-  description,
-  choices,
-  inputProps,
-  error,
-}: {
-  label: string;
-  placeholder: string;
-  description?: string;
-  choices: string[];
-  inputProps: ReturnType<ProjectForm["getInputProps"]>;
-  error?: ReactNode;
-}) {
-  // When status options were read from the Project, pick strictly from them: a
-  // non-searchable Select shows every option (no filtering) and disallows
-  // values that are not real board lanes. Only fall back to free text when no
-  // options could be read.
-  if (choices.length > 0) {
-    return (
-      <Select
-        label={label}
-        aria-label={label}
-        placeholder={placeholder}
-        description={description}
-        data={choices}
-        searchable={false}
-        allowDeselect={false}
-        {...inputProps}
-        error={error}
-      />
-    );
-  }
-  return (
-    <TextInput
-      label={label}
-      aria-label={label}
-      placeholder={placeholder}
-      description={description}
-      {...inputProps}
-      error={error}
-    />
-  );
-}
-
-function buildLaneFetchTarget(values: ProjectFormValues): ProjectStatusOptionsRequest | null {
-  const parsed = parseGitHub(values.githubProjectUrl);
-  if (!parsed.projectValid) {
-    return null;
-  }
-  return {
-    owner: parsed.owner,
-    project_id: parsed.projectId,
-    github_project_url: parsed.projectUrl,
-  };
-}
-
-function GitHubIntegrationSection({ form }: { form: ProjectForm }) {
-  const { t } = useTranslation();
-  const githubEnabled = form.values.githubDecision === "enabled";
-
-  // Lane status options are fetched live for the Project URL entered in the
-  // Project section (not the saved project) so they appear before saving. The
-  // section remounts on navigation, so the target reflects the current URL.
-  const laneFetchTarget = buildLaneFetchTarget(form.values);
-  const statusOptions = useQuery({
-    queryKey: ["projectStatusOptions", laneFetchTarget],
-    queryFn: () => getProjectStatusOptions(laneFetchTarget as ProjectStatusOptionsRequest),
-    enabled: githubEnabled && laneFetchTarget !== null,
-  });
-  const laneChoices =
-    githubEnabled && laneFetchTarget !== null && statusOptions.data?.available
-      ? statusOptions.data.statuses
-      : [];
-
-  if (!githubEnabled) {
-    return (
-      <Card withBorder radius="md" p="lg">
-        <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
-        <Box mt="md">
-          <InfoCallout title={t("setup.github.disabledTitle")}>
-            {t("setup.github.disabledHint")}
-          </InfoCallout>
-        </Box>
-      </Card>
-    );
-  }
-
-  if (laneFetchTarget === null) {
-    return (
-      <Card withBorder radius="md" p="lg">
-        <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
-        <Box mt="md">
-          <InfoCallout title={t("setup.github.projectUrlMissingTitle")}>
-            {t("setup.github.projectUrlMissingHint")}
-          </InfoCallout>
-        </Box>
-      </Card>
-    );
-  }
-
-  return (
-    <Card withBorder radius="md" p="lg">
-      <PanelHeader title={t("setup.github.title")} subtitle={t("setup.github.subtitle")} />
-      <Stack mt="md">
-        <div>
-          <Text fw={500} size="sm">
-            {t("setup.github.projectUrl")}
-          </Text>
-          <Text size="sm" c="dimmed">
-            {laneFetchTarget.github_project_url}
-          </Text>
-        </div>
-        <Fieldset legend={t("setup.github.laneMapping")} radius="md">
-          <Stack>
-            <Text size="sm" c="dimmed">
-              {laneChoices.length > 0
-                ? t("setup.github.laneMappingHint")
-                : t("setup.github.laneMappingManualHint")}
-            </Text>
-            <LaneField
-              label={t("setup.github.laneReady")}
-              placeholder={DEFAULT_LANE_READY}
-              choices={laneChoices}
-              inputProps={form.getInputProps("laneReady")}
-            />
-            <LaneField
-              label={t("setup.github.laneWorking")}
-              placeholder={DEFAULT_LANE_WORKING}
-              description={t("setup.github.laneWorkingHint")}
-              choices={laneChoices}
-              inputProps={form.getInputProps("laneWorking")}
-            />
-            <LaneField
-              label={t("setup.github.laneDone")}
-              placeholder={DEFAULT_LANE_DONE}
-              choices={laneChoices}
-              inputProps={form.getInputProps("laneDone")}
-              error={form.errors.laneDone}
-            />
-          </Stack>
-        </Fieldset>
-        <AgentFieldPanel target={laneFetchTarget} />
-      </Stack>
-    </Card>
-  );
-}
-
-function AgentFieldMemberBadges({
-  options,
-  color,
-  variant,
-}: {
-  options: AgentFieldState["options"];
-  color: string;
-  variant: "light" | "outline";
-}) {
-  return (
-    <Group gap="xs">
-      {options.map((option) => (
-        <Badge key={option.name} color={color} variant={variant}>
-          {option.description || option.name}
-        </Badge>
-      ))}
-    </Group>
-  );
-}
-
-function AgentFieldActionLabel({ state }: { state: AgentFieldState }) {
-  const { t } = useTranslation();
-  if (!state.exists) {
-    return <>{t("setup.github.agentFieldCreate")}</>;
-  }
-  if (state.missing.length > 0) {
-    return <>{t("setup.github.agentFieldAddMembers", { count: state.missing.length })}</>;
-  }
-  return <>{t("setup.github.agentFieldUpToDate")}</>;
-}
-
-function AgentFieldPanel({ target }: { target: ProjectStatusOptionsRequest | null }) {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const stateQuery = useQuery({
-    queryKey: ["agentFieldState", target],
-    queryFn: () => getAgentFieldState(target as ProjectStatusOptionsRequest),
-    enabled: target !== null,
-  });
-  const ensureMutation = useMutation({
-    mutationFn: () => ensureAgentField(target as ProjectStatusOptionsRequest),
-    onSuccess: (data) => {
-      queryClient.setQueryData(["agentFieldState", target], data);
-    },
-  });
-  const state = stateQuery.data;
-
-  return (
-    <Fieldset legend={t("setup.github.agentField")} radius="md">
-      <Stack>
-        <Text size="sm" c="dimmed">
-          {t("setup.github.agentFieldHint")}
-        </Text>
-        {target === null ? (
-          <Text size="sm" c="dimmed">
-            {t("setup.github.agentFieldNeedsProject")}
-          </Text>
-        ) : stateQuery.isLoading ? (
-          <Text size="sm" c="dimmed">
-            {t("setup.github.agentFieldLoading")}
-          </Text>
-        ) : !state?.available ? (
-          <InfoCallout title={t("setup.github.agentFieldUnavailableTitle")}>
-            {t("setup.github.agentFieldUnavailableHint")}
-          </InfoCallout>
-        ) : (
-          <>
-            <Group gap="xs">
-              <Text size="sm" fw={500}>
-                {t("setup.github.agentFieldStatus")}
-              </Text>
-              <Badge color={state.exists ? "success" : "neutral"} variant="light">
-                {state.exists
-                  ? t("setup.github.agentFieldExists")
-                  : t("setup.github.agentFieldMissing")}
-              </Badge>
-            </Group>
-            {state.exists && (
-              <div>
-                <Text size="sm" fw={500} mb={4}>
-                  {t("setup.github.agentFieldRegistered")}
-                </Text>
-                {state.options.length > 0 ? (
-                  <AgentFieldMemberBadges options={state.options} color="neutral" variant="light" />
-                ) : (
-                  <Text size="sm" c="dimmed">
-                    {t("setup.github.agentFieldNoMembers")}
-                  </Text>
-                )}
-              </div>
-            )}
-            {state.missing.length > 0 && (
-              <div>
-                <Text size="sm" fw={500} mb={4}>
-                  {t("setup.github.agentFieldMissingMembers")}
-                </Text>
-                <AgentFieldMemberBadges options={state.missing} color="warning" variant="outline" />
-              </div>
-            )}
-            <Group>
-              <Button
-                onClick={() => ensureMutation.mutate()}
-                loading={ensureMutation.isPending}
-                disabled={state.exists && state.missing.length === 0}
-              >
-                <AgentFieldActionLabel state={state} />
-              </Button>
-            </Group>
-            {ensureMutation.isError && (
-              <Text size="sm" c="danger">
-                {t("setup.github.agentFieldError")}
-              </Text>
-            )}
-          </>
-        )}
-      </Stack>
-    </Fieldset>
-  );
-}
-
 function MemberDiagnosticsPanel({
   personId,
   formMode,
@@ -5830,6 +5024,7 @@ function MemberDiagnosticsPanel({
   onRun: () => void;
 }) {
   const { t } = useTranslation();
+  const sectionLabel = useDiagnosticSectionLabel();
   if (formMode !== "edit" || !personId) {
     return (
       <InfoCallout title={t("setup.members.diagnostics.saveFirstTitle")}>
@@ -5892,7 +5087,7 @@ function MemberDiagnosticsPanel({
               title={diagnosticTitle(t, check)}
             >
               <Text size="xs" c="dimmed" mb={4}>
-                {t(`overview.diagnosticSections.${check.section}`)}
+                {sectionLabel(check.section)}
                 {check.target ? ` / ${check.target}` : ""}
               </Text>
               {diagnosticDescription(t, check) ? (
@@ -5944,6 +5139,17 @@ function diagnosticValues(check: DiagnosticCheck): Record<string, string | numbe
     }
   }
   return values;
+}
+
+/** A check's section as the screen names it: a neutral section by its own
+ * label, a provider's by the provider's name. */
+function useDiagnosticSectionLabel(): (section: string) => string {
+  const { t } = useTranslation();
+  const providers = useServiceProviders();
+  return (section) =>
+    t(`overview.diagnosticSections.${section}`, {
+      defaultValue: providers.find((provider) => provider.name === section)?.title ?? section,
+    });
 }
 
 function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
@@ -6081,61 +5287,6 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (value: st
   );
 }
 
-function FilePicker({
-  label,
-  withAsterisk,
-  value,
-  onChange,
-  error,
-}: {
-  label: string;
-  withAsterisk?: boolean;
-  value: string;
-  onChange: (value: string) => void;
-  error?: string;
-}) {
-  const { t } = useTranslation();
-  const [picking, setPicking] = useState(false);
-  const pickFile = async () => {
-    setPicking(true);
-    try {
-      if (!isTauriRuntime()) {
-        return;
-      }
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: false, multiple: false });
-      if (typeof selected === "string") {
-        onChange(selected);
-      }
-    } finally {
-      setPicking(false);
-    }
-  };
-  return (
-    <div className="field-action-row">
-      <TextInput
-        label={withAsterisk ? <RequiredLabel text={label} /> : label}
-        aria-label={label}
-        aria-required={withAsterisk}
-        leftSection={<FileKey size={16} />}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        error={error}
-        flex={1}
-      />
-      <Button
-        className="field-action-button"
-        leftSection={<FolderOpen size={16} />}
-        loading={picking}
-        onClick={pickFile}
-        variant="default"
-      >
-        {t("setup.project.choose")}
-      </Button>
-    </div>
-  );
-}
-
 function LabeledSegmentedControl({
   label,
   description,
@@ -6161,17 +5312,6 @@ function LabeledSegmentedControl({
       ) : null}
       <SegmentedControl data={data} value={value} onChange={onChange} />
     </Stack>
-  );
-}
-
-function RequiredLabel({ text }: { text: string }) {
-  return (
-    <>
-      {text}
-      <Text span c="danger" inherit aria-hidden="true">
-        {" *"}
-      </Text>
-    </>
   );
 }
 
@@ -6215,45 +5355,36 @@ function TabErrorIcon({ label }: { label: string }) {
   );
 }
 
-function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Alert color="warning" icon={<CircleAlert size={18} />} title={title}>
-      {children}
-    </Alert>
-  );
-}
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 function useSetupStatus(
   config: ConfigStatus | undefined,
   activeMemberCount: number,
   values: ProjectFormValues,
 ): SetupStatus {
+  const { t } = useTranslation();
   const projectReady = Boolean(config?.project_file_exists);
-  const githubReady = isGitHubDecisionComplete(values);
+  const integrationsReady = servicesReady(values.services, t);
   const intelligenceReady = projectReady;
   const membersReady = activeMemberCount > 0;
-  const verificationReady = projectReady && githubReady && intelligenceReady && membersReady;
-  const done = [projectReady, intelligenceReady, githubReady, membersReady].filter(Boolean).length;
+  const verificationReady = projectReady && integrationsReady && intelligenceReady && membersReady;
+  const done = [projectReady, intelligenceReady, integrationsReady, membersReady].filter(
+    Boolean,
+  ).length;
   return {
     projectReady,
     intelligenceReady,
-    githubReady,
+    integrationsReady,
     membersReady,
     verificationReady,
     done,
     total: 4,
-    ready: projectReady && intelligenceReady && githubReady && membersReady,
+    ready: projectReady && intelligenceReady && integrationsReady && membersReady,
   };
 }
 
 type SetupStatus = {
   projectReady: boolean;
   intelligenceReady: boolean;
-  githubReady: boolean;
+  integrationsReady: boolean;
   membersReady: boolean;
   verificationReady: boolean;
   done: number;
@@ -6264,7 +5395,7 @@ type SetupStatus = {
 type InitialProgress = {
   projectReady: boolean;
   intelligenceReady: boolean;
-  githubReady: boolean;
+  integrationsReady: boolean;
   membersReady: boolean;
   verificationReady: boolean;
   done: number;
@@ -6280,8 +5411,8 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   if (section === "intelligence") {
     return status.intelligenceReady;
   }
-  if (section === "github") {
-    return status.githubReady;
+  if (section === "integrations") {
+    return status.integrationsReady;
   }
   if (section === "members") {
     return status.membersReady;
@@ -6300,26 +5431,25 @@ function getInitialCoreStatus(
   activeMemberCount: number,
   selectedCliAgentProvisioned: boolean,
   storedProviderKeys: Record<string, boolean> | undefined,
+  t: TFunction,
 ): InitialProgress {
   const projectReady =
-    values.workspaceDir.trim().length > 0 &&
-    values.description.trim().length > 0 &&
-    Boolean(values.githubDecision);
+    values.workspaceDir.trim().length > 0 && values.description.trim().length > 0;
   const intelligenceReady =
     Boolean(values.llmApiType) &&
     Boolean(values.cliAgent) &&
     selectedCliAgentProvisioned &&
     isProviderKeyAvailable(values.llmApiType, values, storedProviderKeys);
-  const githubReady = isGitHubDecisionComplete(values);
+  const integrationsReady = servicesReady(values.services, t);
   const membersReady = activeMemberCount > 0;
-  const verificationReady = projectReady && intelligenceReady && githubReady && membersReady;
-  const checks = [projectReady, intelligenceReady, githubReady, membersReady];
+  const verificationReady = projectReady && intelligenceReady && integrationsReady && membersReady;
+  const checks = [projectReady, intelligenceReady, integrationsReady, membersReady];
   const done = checks.filter(Boolean).length;
   const total = checks.length;
   return {
     projectReady,
     intelligenceReady,
-    githubReady,
+    integrationsReady,
     membersReady,
     verificationReady,
     done,
@@ -6327,34 +5457,6 @@ function getInitialCoreStatus(
     percent: Math.round((done / total) * 100),
     ready: done === total,
   };
-}
-
-function isGitHubDecisionComplete(values: ProjectFormValues): boolean {
-  if (values.githubDecision === "disabled") {
-    return true;
-  }
-  if (values.githubDecision !== "enabled") {
-    return false;
-  }
-  const parsed = parseGitHub(values.githubProjectUrl);
-  return parsed.projectValid;
-}
-
-function getGitHubFieldErrors(
-  values: ProjectFormValues,
-  t: TFunction | ((key: string) => string),
-): { githubProjectUrl?: string } {
-  if (values.githubDecision !== "enabled") {
-    return {};
-  }
-  const parsed = parseGitHub(values.githubProjectUrl);
-  const errors: { githubProjectUrl?: string } = {};
-  if (!values.githubProjectUrl.trim()) {
-    errors.githubProjectUrl = t("setup.validation.githubProjectRequired");
-  } else if (!parsed.projectValid) {
-    errors.githubProjectUrl = t("setup.validation.githubProjectInvalid");
-  }
-  return errors;
 }
 
 type MemberFieldErrors = Partial<
@@ -6369,17 +5471,7 @@ type MemberFieldErrors = Partial<
     | "characterJoinWhenText"
     | "characterAvoidWhenText"
     | "characterContributionText"
-    | "identity"
-    | "githubUsername"
-    | "gitEmail"
-    | "githubInstallationId"
-    | "githubAppId"
-    | "githubPrivateKeyPath"
-    | "githubAccessToken"
-    | "slackUserId"
-    | "slackBotToken"
-    | "slackAppToken"
-    | "slackChannelsText",
+    | "chatChannels",
     string
   >
 >;
@@ -6387,31 +5479,11 @@ type MemberFieldErrors = Partial<
 export function getMemberFieldErrors(
   values: {
     personType: MemberType;
-    githubAccountType: GitHubAccountType;
-    identity: string;
     personId: string;
     personName: string;
-    githubUsername: string;
-    gitEmail: string;
-    githubInstallationId: string;
-    githubAppId: string;
-    githubPrivateKeyPath: string;
-    // A registration supplies the app's IDs and key; the save waits for it
-    // to be installed.
-    githubAppRegistrationId: string;
-    githubAccessToken: string;
-    slackUserId: string;
-    slackBotToken: string;
-    slackAppToken: string;
-    slackChannelsText: string;
-    storedMemberSecrets: {
-      githubInstallationId: boolean;
-      githubAppId: boolean;
-      githubPrivateKeyPath: boolean;
-      githubAccessToken: boolean;
-      slackBotToken: boolean;
-      slackAppToken: boolean;
-    };
+    chatChannels: string[];
+    /** Whether the project's chat accepts a channel named this way. */
+    isChatChannel: (reference: string) => boolean;
     roles: string[];
     speakingStyle: string;
     characterArchetype: string;
@@ -6469,162 +5541,13 @@ export function getMemberFieldErrors(
     }
   }
 
-  const usesGitHubMember = values.githubAccountType !== "none";
-  if (values.githubAccountType === "github_apps") {
-    const missingGitHubReference = !values.githubUsername.trim() || !values.gitEmail.trim();
-    if (missingGitHubReference && !values.identity.trim()) {
-      errors.identity = t("setup.validation.memberGithubAppsUrlRequired");
-    } else if (values.identity.trim() && !isGitHubAppsUrl(values.identity)) {
-      errors.identity = t("setup.validation.memberGithubAppsUrlInvalid");
-    }
-    if (!values.githubUsername.trim()) {
-      errors.githubUsername = t("setup.validation.memberGithubUsernameRequired");
-    }
-  } else if (usesGitHubMember) {
-    if (!values.githubUsername.trim()) {
-      errors.githubUsername = t("setup.validation.memberGithubUsernameRequired");
-    } else if (!isGitHubUsername(values.githubUsername)) {
-      errors.githubUsername = t("setup.validation.memberGithubUsernameInvalid");
-    }
+  if (values.chatChannels.some((channel) => !values.isChatChannel(channel))) {
+    errors.chatChannels = t("setup.validation.chatChannelsInvalid");
   }
-  if (usesGitHubMember && !values.gitEmail.trim()) {
-    errors.gitEmail = t("setup.validation.memberGitEmailRequired");
-  } else if (values.gitEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.gitEmail.trim())) {
-    errors.gitEmail = t("setup.validation.memberGitEmailInvalid");
-  }
-
-  if (values.githubAccountType === "github_apps" && !values.githubAppRegistrationId) {
-    if (!values.githubInstallationId.trim()) {
-      errors.githubInstallationId = t("setup.validation.githubInstallationIdRequired");
-    } else if (
-      values.githubInstallationId.trim() &&
-      !/^\d+$/.test(values.githubInstallationId.trim())
-    ) {
-      errors.githubInstallationId = t("setup.validation.githubInstallationIdInvalid");
-    }
-    if (!values.githubAppId.trim()) {
-      errors.githubAppId = t("setup.validation.githubAppIdRequired");
-    } else if (values.githubAppId.trim() && !/^\d+$/.test(values.githubAppId.trim())) {
-      errors.githubAppId = t("setup.validation.githubAppIdInvalid");
-    }
-    if (!values.githubPrivateKeyPath.trim() && !values.storedMemberSecrets.githubPrivateKeyPath) {
-      errors.githubPrivateKeyPath = t("setup.validation.githubPrivateKeyPathRequired");
-    }
-  }
-
-  if (
-    values.githubAccountType === "machine_user" &&
-    !values.githubAccessToken.trim() &&
-    !values.storedMemberSecrets.githubAccessToken
-  ) {
-    errors.githubAccessToken = t("setup.validation.githubAccessTokenRequired");
-  } else if (values.githubAccessToken.trim() && !isGitHubAccessToken(values.githubAccessToken)) {
-    errors.githubAccessToken = t("setup.validation.githubAccessTokenInvalid");
-  }
-
-  if (values.personType === "human") {
-    if (!values.slackUserId.trim()) {
-      errors.slackUserId = t("setup.validation.slackUserIdRequired");
-    } else if (!isSlackUserId(values.slackUserId)) {
-      errors.slackUserId = t("setup.validation.slackUserIdInvalid");
-    }
-    return errors;
-  }
-
-  if (values.slackBotToken.trim() && !isSlackBotToken(values.slackBotToken)) {
-    errors.slackBotToken = t("setup.validation.slackBotTokenInvalid");
-  }
-  if (values.slackAppToken.trim() && !isSlackAppToken(values.slackAppToken)) {
-    errors.slackAppToken = t("setup.validation.slackAppTokenInvalid");
-  }
-
-  const slackChannels = parseSlackChannels(values.slackChannelsText);
-  if (
-    slackChannels.length > 0 &&
-    !values.slackBotToken.trim() &&
-    !values.storedMemberSecrets.slackBotToken
-  ) {
-    errors.slackBotToken = t("setup.validation.slackBotTokenRequired");
-  }
-  if (
-    slackChannels.length > 0 &&
-    !values.slackAppToken.trim() &&
-    !values.storedMemberSecrets.slackAppToken
-  ) {
-    errors.slackAppToken = t("setup.validation.slackAppTokenRequired");
-  }
-
-  const invalidSlackChannels = slackChannels.filter((channel) => !isSlackChannelReference(channel));
-  if (invalidSlackChannels.length > 0) {
-    errors.slackChannelsText = t("setup.validation.slackChannelsInvalid");
-  }
-
   return errors;
 }
 
-export function getMemberResolveErrorMessage(
-  error: unknown,
-  t: TFunction | ((key: string) => string),
-): string {
-  if (error instanceof ApiRequestError) {
-    if (error.code === "invalid_github_username" || error.code === "invalid_github_apps_url") {
-      return t("setup.validation.memberGithubIdentityNotFound");
-    }
-  }
-  return t("setup.validation.memberGithubIdentityResolveFailed");
-}
-
-function isGitHubAppsUrl(value: string): boolean {
-  const parts = value.trim().split("/");
-  return Boolean(
-    value.trim().startsWith("https://github.com/") &&
-    parts[3] === "organizations" &&
-    parts[4] &&
-    parts[5] === "settings" &&
-    parts[6] === "apps" &&
-    parts[7],
-  );
-}
-
-function getGitHubResolveInput(
-  githubAccountType: GitHubAccountType,
-  identity: string,
-  githubUsername: string,
-): string {
-  return githubAccountType === "github_apps" ? identity : githubUsername;
-}
-
-function toGitHubAccountType(value: string): GitHubAccountType {
-  return GITHUB_ACCOUNT_TYPE_OPTIONS.includes(value as GitHubAccountType)
-    ? (value as GitHubAccountType)
-    : "none";
-}
-
-function isGitHubUsername(value: string): boolean {
-  const username = value.trim();
-  return (
-    /^[A-Za-z0-9-]{1,39}$/.test(username) && !username.startsWith("-") && !username.endsWith("-")
-  );
-}
-
-function isSlackChannelReference(value: string): boolean {
-  const channel = value.trim();
-  return (
-    /^[CGD][A-Z0-9]{8,}$/.test(channel) ||
-    /^#?[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9][\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}a-z0-9_-]{0,79}$/u.test(
-      channel,
-    )
-  );
-}
-
-function parseSlackChannels(value: string): string[] {
-  return value
-    .split(",")
-    .map((channel) => channel.trim())
-    .filter(Boolean);
-}
-
-function normalizeSlackChannelReference(value: string): string {
+function normalizeChatChannel(value: string): string {
   return value.trim().replace(/^#/, "");
 }
 
@@ -6633,22 +5556,6 @@ function toChatParticipationPolicy(value: string | null): ChatParticipationPolic
     return value;
   }
   return "strict";
-}
-
-function isSlackUserId(value: string): boolean {
-  return /^U[A-Z0-9]{8,}$/.test(value.trim());
-}
-
-function isSlackBotToken(value: string): boolean {
-  return /^xoxb-[A-Za-z0-9-]{8,}$/.test(value.trim());
-}
-
-function isSlackAppToken(value: string): boolean {
-  return /^xapp-[A-Za-z0-9-]{8,}$/.test(value.trim());
-}
-
-function isGitHubAccessToken(value: string): boolean {
-  return /^(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})$/.test(value.trim());
 }
 
 // A provider is usable when its API key was typed into the form now, or when it
@@ -6683,12 +5590,7 @@ export function initialProjectValues(
       llmApiType: projectConfig.llm_api_type,
       cliAgent: projectConfig.cli_agent,
       providerApiKeys: {},
-      githubDecision: projectConfig.github_enabled ? "enabled" : "disabled",
-      githubEnabled: projectConfig.github_enabled,
-      githubProjectUrl: projectConfig.github_project_url ?? "",
-      laneReady: projectConfig.lane_map?.ready ?? DEFAULT_LANE_READY,
-      laneWorking: projectConfig.lane_map?.working ?? DEFAULT_LANE_WORKING,
-      laneDone: projectConfig.lane_map?.done ?? DEFAULT_LANE_DONE,
+      services: projectConfig.services ?? {},
     };
   }
   return {
@@ -6698,36 +5600,19 @@ export function initialProjectValues(
     llmApiType: "openai",
     cliAgent: "codex",
     providerApiKeys: {},
-    githubDecision: "",
-    githubEnabled: false,
-    githubProjectUrl: "",
-    laneReady: DEFAULT_LANE_READY,
-    laneWorking: DEFAULT_LANE_WORKING,
-    laneDone: DEFAULT_LANE_DONE,
+    services: {},
   };
 }
 
 export function toProjectSetupRequest(values: ProjectFormValues): ProjectSetupRequest {
-  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: resolveConfigDir(values.workspaceDir),
     language: values.language,
     description: values.description,
-    owner: github?.owner ?? "",
-    project_id: github?.projectId ?? "",
-    github_project_url: github?.projectUrl ?? "",
-    lane_map: github ? toLaneMap(values) : undefined,
+    services: values.services,
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     provider_api_keys: values.providerApiKeys,
-  };
-}
-
-function toLaneMap(values: ProjectFormValues): LaneMap {
-  return {
-    ready: values.laneReady.trim() || DEFAULT_LANE_READY,
-    working: values.laneWorking.trim() || DEFAULT_LANE_WORKING,
-    done: values.laneDone.trim() || DEFAULT_LANE_DONE,
   };
 }
 
@@ -6736,7 +5621,6 @@ export function toProjectUpdateRequest(
   config: ConfigStatus | undefined,
   snapshot: ProjectConfig,
 ): ProjectConfigUpdateRequest {
-  const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: snapshot.config_dir || config?.config_dir || resolveConfigDir(values.workspaceDir),
     // What this form was composed against. Another machine's edit can arrive
@@ -6747,11 +5631,7 @@ export function toProjectUpdateRequest(
     description: values.description,
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
-    github_enabled: values.githubDecision === "enabled",
-    owner: github?.owner ?? "",
-    project_id: github?.projectId ?? "",
-    github_project_url: github?.projectUrl ?? "",
-    lane_map: github ? toLaneMap(values) : undefined,
+    services: values.services,
     // Only send providers the user actually typed a key for; empty = leave the
     // existing OS secret-store value unchanged.
     provider_api_keys: Object.fromEntries(
@@ -7080,32 +5960,6 @@ function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-export function parseGitHub(projectUrl: string) {
-  const normalizedProjectUrl = projectUrl.trim();
-  const projectParts = normalizedProjectUrl.split("/");
-  const projectType = projectParts[3] ?? "";
-  const owner = projectParts[4] ?? "";
-  const projectId = projectParts[6]?.split("?")[0] ?? "";
-  const projectValid = Boolean(
-    normalizedProjectUrl.startsWith("https://github.com/") &&
-    ["orgs", "users"].includes(projectType) &&
-    owner &&
-    projectParts[5] === "projects" &&
-    projectId,
-  );
-  return {
-    owner: projectValid ? owner : "",
-    // Owner only when the project lives under an organization; a `users/`
-    // project has no organization to create a GitHub App under.
-    organization: projectValid && projectType === "orgs" ? owner : "",
-    projectId: projectValid ? projectId : "",
-    projectUrl: projectValid
-      ? `https://github.com/${projectType}/${owner}/projects/${projectId}`
-      : normalizedProjectUrl,
-    projectValid,
-  };
-}
-
 function joinPath(base: string, suffix: string) {
   return `${base.replace(/\/$/, "")}/${suffix}`;
 }
@@ -7337,6 +6191,7 @@ function ScenarioDiagnosticsSummary({
   loading: boolean;
 }) {
   const { t } = useTranslation();
+  const sectionLabel = useDiagnosticSectionLabel();
   if (loading) {
     return (
       <Text size="sm" c="dimmed">
@@ -7377,7 +6232,7 @@ function ScenarioDiagnosticsSummary({
           title={diagnosticTitle(t, check)}
         >
           <Text size="xs" c="dimmed" mb={4}>
-            {t(`overview.diagnosticSections.${check.section}`)}
+            {sectionLabel(check.section)}
             {check.person_id ? ` / ${check.person_id}` : ""}
           </Text>
           <Text size="sm">{diagnosticDescription(t, check)}</Text>
@@ -7412,7 +6267,7 @@ function VerificationSection({
   });
 
   const hasProjectConfig = Boolean(config?.project_file_exists);
-  const githubEnabled = Boolean(projectConfig?.github_enabled);
+  const providers = useServiceProviders();
 
   return (
     <Card withBorder radius="md" p="lg">
@@ -7441,12 +6296,21 @@ function VerificationSection({
           </dd>
           <dt>{t("overview.activeMembers")}</dt>
           <dd>{activeMemberCount}</dd>
-          <dt>{t("overview.github")}</dt>
-          <dd>
-            <Badge color={githubEnabled ? "success" : "neutral"} variant="light">
-              {githubEnabled ? t("overview.enabled") : t("overview.disabled")}
-            </Badge>
-          </dd>
+          {SERVICE_KINDS.map((kind) => {
+            const name = projectConfig?.services?.[kind]?.name;
+            return (
+              <Fragment key={kind}>
+                <dt>{t(`setup.integrations.kinds.${kind}`)}</dt>
+                <dd>
+                  <Badge color={name ? "success" : "neutral"} variant="light">
+                    {name
+                      ? (providers.find((provider) => provider.name === name)?.title ?? name)
+                      : t("overview.disabled")}
+                  </Badge>
+                </dd>
+              </Fragment>
+            );
+          })}
         </dl>
         <ScenarioDiagnosticsSummary
           checks={diagnosticsMutation.data?.checks ?? []}

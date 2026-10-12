@@ -37,7 +37,6 @@ from guildbotics.app_api.models import (
     TroubleshootingRequest,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.cli.member import run_in_process
 from guildbotics.commands.authoring import (
     CommandAuthoringChange,
@@ -63,6 +62,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -89,7 +89,7 @@ def _make_context(
     members: list[Person],
     *,
     language_code: str = "en",
-    github_enabled: bool = False,
+    services: dict | None = None,
     person: Person | None = None,
 ) -> object:
     # A host context starts on a placeholder person until a member is
@@ -97,22 +97,14 @@ def _make_context(
     person = person if person is not None else members[0]
     # A real team so member resolution (including the default executor) behaves
     # exactly as it does in production; only the context wrapper is a stub.
-    services: dict = (
-        {
-            "ticket_service": {"name": "GitHub", "owner": "acme"},
-            "code_hosting_service": {"name": "GitHub", "owner": "acme"},
-        }
-        if github_enabled
-        else {}
-    )
-    project = Project(name="demo", language=language_code, services=services)
+    project = Project(name="demo", language=language_code, services=services or {})
     team = Team(project=project, members=members)
 
     def clone_for(self: object, selected: object) -> object:
         return _make_context(
             [selected],
             language_code=language_code,
-            github_enabled=github_enabled,
+            services=services,
         )
 
     async def aclose(self: object) -> None:
@@ -517,12 +509,29 @@ def test_command_options_tolerate_invalid_manual_input_contract(
     }
 
 
-def test_command_options_detect_github_and_slack_requirements(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("services", "satisfied"),
+    [
+        ({}, {"ticket_service": False, "chat_service": False}),
+        (
+            {"ticket_service": {"name": "github"}},
+            {"ticket_service": True, "chat_service": False},
+        ),
+        (
+            {"ticket_service": {"name": "local"}, "chat_service": {"name": "slack"}},
+            {"ticket_service": True, "chat_service": True},
+        ),
+    ],
+)
+def test_command_options_require_the_kinds_of_service_a_command_uses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    services: dict,
+    satisfied: dict[str, bool],
 ) -> None:
+    """A Python command's port use names the kind it needs, which is met when
+    the project names a provider for that kind, whichever provider it is."""
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("SLACK_APP_TOKEN", raising=False)
     _write(
         config_dir / "commands/integrations.py",
         "\n".join(
@@ -535,7 +544,7 @@ def test_command_options_detect_github_and_slack_requirements(
             ]
         ),
     )
-    context = _make_context([_make_person()], github_enabled=True)
+    context = _make_context([_make_person()], services=services)
     runtime = _runtime_with_context(monkeypatch, context)
 
     option = next(
@@ -543,14 +552,12 @@ def test_command_options_detect_github_and_slack_requirements(
         for item in runtime.get_command_options().options
         if item.command == "integrations"
     )
-    requirements = {req.kind: req for req in option.requirements}
 
-    assert set(requirements) == {"environment", "github", "slack"}
-    # github_enabled context -> github requirement is satisfied.
-    assert requirements["github"].satisfied is True
-    assert requirements["github"].message == ""
-    # Slack tokens missing -> unsatisfied.
-    assert requirements["slack"].satisfied is False
+    services_needed = {
+        req.kind: req for req in option.requirements if req.kind != "environment"
+    }
+    assert {kind: req.satisfied for kind, req in services_needed.items()} == satisfied
+    assert all(req.message == "" for req in services_needed.values())
 
 
 def test_command_options_detect_llm_and_cli_requirements(
@@ -1897,7 +1904,7 @@ def test_run_command_rejects_missing_requirement(
     # even though the frontend may briefly enable the button.
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     _write(
-        config_dir / "commands/needs_github.py",
+        config_dir / "commands/needs_tickets.py",
         "\n".join(
             [
                 "from guildbotics.runtime.ticket_service import TicketService",
@@ -1907,16 +1914,14 @@ def test_run_command_rejects_missing_requirement(
             ]
         ),
     )
-    runtime = _runtime_with_context(
-        monkeypatch, _make_context([_make_person()], github_enabled=False)
-    )
-    file_id, revision = _file_reference(config_dir, "needs_github.py")
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    file_id, revision = _file_reference(config_dir, "needs_tickets.py")
 
     with pytest.raises(AppApiError) as caught:
         asyncio.run(
             runtime.run_command(
                 CommandRunRequest(
-                    command="needs_github",
+                    command="needs_tickets",
                     person="bot",
                     expected_command_file_id=file_id,
                     expected_command_file_revision=revision,

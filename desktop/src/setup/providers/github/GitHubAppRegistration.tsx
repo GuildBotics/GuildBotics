@@ -11,17 +11,17 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApiRequestError } from "../../../api/client";
+import { openExternal } from "../../../openExternal";
 import {
-  ApiRequestError,
-  getGitHubAppRegistration,
-  startGitHubAppRegistration,
-  type GitHubAppRegistrationStatus,
-} from "../api/client";
-import { openExternal } from "../openExternal";
+  getAppRegistration as getGitHubAppRegistration,
+  startAppRegistration as startGitHubAppRegistration,
+  type AppRegistrationStatus as GitHubAppRegistrationStatus,
+} from "./api";
 
 const POLL_INTERVAL_MS = 3000;
 
-// Mirrors GITHUB_APP_NAME_MAX_LENGTH in setup/github_app.py.
+// Mirrors _APP_NAME_MAX_LENGTH in integrations/github/setup.py.
 const APP_NAME_MAX_LENGTH = 34;
 
 /** Suggest an app name that is unlikely to collide and short enough to submit.
@@ -73,8 +73,8 @@ export function getRegistrationErrorMessage(
 
 function toFields(registration: GitHubAppRegistrationStatus): GitHubAppRegistrationFields {
   const fields: GitHubAppRegistrationFields = {};
-  if (registration.github_username) {
-    fields.githubUsername = registration.github_username;
+  if (registration.username) {
+    fields.githubUsername = registration.username;
   }
   if (registration.git_email) {
     fields.gitEmail = registration.git_email;

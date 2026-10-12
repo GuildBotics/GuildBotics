@@ -107,6 +107,10 @@ CLIENTS = {
         "integrations/github/actions_client.py",
         "_anonymous",
     ): "GETs a short-lived download or log URL without credentials",
+    (
+        "integrations/github/setup.py",
+        "_get_user",
+    ): "GETs one public user without credentials, for setup and the avatar",
 }
 
 #: ``(module, function)`` of every use of a member's credential for git, in

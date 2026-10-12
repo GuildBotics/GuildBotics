@@ -16,6 +16,7 @@ from guildbotics.integrations.provider import (
     ProviderCheck,
     configured_check,
 )
+from guildbotics.integrations.slack.setup import SETUP
 from guildbotics.integrations.slack.slack_chat_service import (
     DEFAULT_BASE_URL,
     SlackApiError,
@@ -161,6 +162,7 @@ async def _app_token_check(context: Context, member: Person) -> ProviderCheck:
         return ProviderCheck(
             section=_SECTION,
             code="slack_app_token",
+            credential=True,
             status="error",
             message="Slack App token is required for Socket Mode runtime.",
             person_id=member.person_id,
@@ -172,6 +174,7 @@ async def _app_token_check(context: Context, member: Person) -> ProviderCheck:
         return ProviderCheck(
             section=_SECTION,
             code="slack_app_token_invalid",
+            credential=True,
             status="error",
             message=_safe_error("Slack App token (Socket Mode) check failed", exc),
             person_id=member.person_id,
@@ -181,6 +184,7 @@ async def _app_token_check(context: Context, member: Person) -> ProviderCheck:
     return ProviderCheck(
         section=_SECTION,
         code="slack_app_token",
+        credential=True,
         status="ok",
         message="Slack App token (Socket Mode) is valid.",
         person_id=member.person_id,
@@ -198,6 +202,7 @@ async def _bot_checks(
             ProviderCheck(
                 section=_SECTION,
                 code="slack_bot_auth",
+                credential=True,
                 status="ok",
                 message="Slack bot authentication succeeded.",
                 person_id=member.person_id,
@@ -216,6 +221,7 @@ async def _bot_checks(
             ProviderCheck(
                 section=_SECTION,
                 code="slack_access",
+                credential=True,
                 status="error",
                 message=_safe_error("Slack read-only check failed", exc),
                 person_id=member.person_id,
@@ -292,4 +298,5 @@ SLACK = Provider(
     credentialed=lambda person: person.has_secret("SLACK_BOT_TOKEN"),
     verify=_verify,
     diagnose=_diagnose,
+    setup=SETUP,
 )

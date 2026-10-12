@@ -14,6 +14,7 @@ from guildbotics.integrations.github.github_utils import (
     get_github_account_type,
     get_github_username,
 )
+from guildbotics.integrations.github.setup import SETUP
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
     Provider,
@@ -63,8 +64,22 @@ def _credentialed(person: Person) -> bool:
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:
-    if context.team.project.get_service_name(Service.TICKET_SERVICE) != "github":
-        return []
+    """The board when GitHub holds the tickets, and the member's credential
+    when GitHub only hosts the code."""
+    project = context.team.project
+    if project.get_service_name(Service.TICKET_SERVICE) != "github":
+        if project.get_service_name(Service.CODE_HOSTING_SERVICE) != "github":
+            return []
+        # Who uses the code host is what the member's account says, as verify
+        # reads it: a member set up with a GitHub account but missing its
+        # credential (one not fetched to this device yet) is a failure to
+        # report, not a member to skip.
+        return [
+            await _code_host_access(context, member)
+            for member in members
+            if member.person_type != "human"
+            and get_github_account_type(member) in _REQUIRED_KEYS
+        ]
     checks: list[ProviderCheck] = []
     lane_checked = False
     for member in members:
@@ -79,6 +94,7 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
                 ProviderCheck(
                     section=_SECTION,
                     code="github_project_access",
+                    credential=True,
                     status="ok",
                     message="GitHub project status options were fetched.",
                     person_id=member.person_id,
@@ -94,6 +110,7 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
                 ProviderCheck(
                     section=_SECTION,
                     code="github_access",
+                    credential=True,
                     status="error",
                     message=_safe_error("GitHub read-only check failed", exc),
                     person_id=member.person_id,
@@ -103,6 +120,32 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
         finally:
             await c.aclose()
     return checks
+
+
+async def _code_host_access(context: Context, member: Person) -> ProviderCheck:
+    c = context.clone_for(member)
+    try:
+        await c.get_code_hosting_service().identity(check=True)
+    except Exception as exc:
+        return ProviderCheck(
+            section=_SECTION,
+            code="github_access",
+            credential=True,
+            status="error",
+            message=_safe_error("GitHub read-only check failed", exc),
+            person_id=member.person_id,
+            context={"error_type": type(exc).__name__},
+        )
+    finally:
+        await c.aclose()
+    return ProviderCheck(
+        section=_SECTION,
+        code="github_code_hosting_access",
+        credential=True,
+        status="ok",
+        message="GitHub accepted the member's credential.",
+        person_id=member.person_id,
+    )
 
 
 async def _human_member(context: Context, member: Person) -> ProviderCheck:
@@ -279,4 +322,5 @@ GITHUB = Provider(
     credentialed=_credentialed,
     verify=_verify,
     diagnose=_diagnose,
+    setup=SETUP,
 )

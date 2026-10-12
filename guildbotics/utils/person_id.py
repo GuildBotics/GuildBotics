@@ -1,7 +1,7 @@
 """Member identifiers are directory components on every supported OS."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Annotated
 
@@ -33,16 +33,6 @@ def validate_optional_person_id(value: str) -> str:
 
 OptionalPersonId = Annotated[str, AfterValidator(validate_optional_person_id)]
 
-# Person-scoped keys whose values are secrets; IDs and file paths stay in plain
-# configuration. GITHUB_PRIVATE_KEY holds the App PEM content itself and is
-# never published to the environment (see ``secret_store.is_environment_secret``).
-_PERSON_SECRET_ENV_SUFFIXES = (
-    "GITHUB_ACCESS_TOKEN",
-    "GITHUB_PRIVATE_KEY",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-)
-
 
 def _namespaces(members: Path) -> dict[str, list[Path]]:
     """Group all stored members, including repairable configs, by namespace."""
@@ -53,17 +43,14 @@ def _namespaces(members: Path) -> dict[str, list[Path]]:
 
 
 def _prefix(name: str) -> str:
-    return name.replace("-", "_").upper()
+    return name.replace("-", "_").upper() + "_"
 
 
-def _keys(prefix: str) -> dict[str, str]:
-    return {suffix: f"{prefix}_{suffix}" for suffix in _PERSON_SECRET_ENV_SUFFIXES}
-
-
-def person_secret_env_keys(
+def person_secret_prefix(
     members: Path, person_id: str, *, exclude: str | None = None
-) -> dict[str, str]:
-    """The only way to a member's secret keys: those it alone owns, by suffix.
+) -> str:
+    """The only way to a member's secret keys: the prefix of those it alone
+    owns, which a member-relative name such as ``SLACK_BOT_TOKEN`` follows.
 
     Every stored member counts, including configs awaiting repair, and the
     directory is read on every call, so a collision that appears later
@@ -79,17 +66,21 @@ def person_secret_env_keys(
         if directory.name not in {person_id, exclude}
     ]:
         raise PersonEnvPrefixConflictError(members / person_id, conflicts)
-    return _keys(prefix)
+    return prefix
 
 
-def ambiguous_person_env_keys(members: Path) -> frozenset[str]:
-    """Keys whose stored member owner cannot be identified uniquely."""
-    return frozenset(
-        key
-        for prefix, directories in _namespaces(members).items()
-        if len(directories) > 1
-        for key in _keys(prefix).values()
-    )
+def ambiguous_person_secret(members: Path) -> Callable[[str], bool]:
+    """Whether a key belongs to a member whose owner cannot be identified
+    uniquely: the member of the longest prefix the key has is shared."""
+    namespaces = sorted(_namespaces(members).items(), key=lambda item: -len(item[0]))
+
+    def ambiguous(key: str) -> bool:
+        return next(
+            (len(dirs) > 1 for prefix, dirs in namespaces if key.startswith(prefix)),
+            False,
+        )
+
+    return ambiguous
 
 
 def validate_member_directory_name(value: str) -> str:

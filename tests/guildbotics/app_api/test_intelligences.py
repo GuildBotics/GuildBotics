@@ -26,11 +26,11 @@ from guildbotics.environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
 )
+from guildbotics.integrations.provider import SetupError
 from guildbotics.intelligences.brains.factory import (
     AGNO_BRAIN_CLASS,
     CLI_BRAIN_CLASS,
 )
-from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 
@@ -57,7 +57,7 @@ def test_saving_a_protected_parent_refuses_the_whole_update(tmp_path: Path) -> N
             paths=[LocalPathGrant(path=str(inactive.parent), access="read")]
         ),
     )
-    with pytest.raises(SetupServiceError):
+    with pytest.raises(SetupError):
         IntelligenceConfigService().update_config(request)
     assert not config.exists()
     assert not (Path.home() / "safe-new").exists()
@@ -265,7 +265,7 @@ def test_read_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> No
         {"default": "cli_agents/mytool/default.yml"},
     )
 
-    with pytest.raises(SetupServiceError) as excinfo:
+    with pytest.raises(SetupError) as excinfo:
         IntelligenceConfigService().read_config(config_dir=tmp_path)
 
     assert excinfo.value.code == "unknown_cli_agent"
@@ -276,7 +276,7 @@ def test_read_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> No
 def test_update_config_rejects_a_mapping_outside_the_catalog(tmp_path: Path) -> None:
     _write_team_config(tmp_path)
 
-    with pytest.raises(SetupServiceError) as excinfo:
+    with pytest.raises(SetupError) as excinfo:
         IntelligenceConfigService().update_config(
             IntelligenceConfigUpdateRequest(
                 config_dir=tmp_path,
@@ -933,7 +933,7 @@ def test_saving_a_setting_the_provider_does_not_accept_is_refused(
         }
     )
 
-    with pytest.raises(SetupServiceError) as error:
+    with pytest.raises(SetupError) as error:
         IntelligenceConfigService().update_config(request)
 
     assert error.value.code == "invalid_effort_settings"
@@ -989,7 +989,7 @@ def test_such_a_definition_still_rejects_a_setting_the_provider_refuses(
         }
     )
 
-    with pytest.raises(SetupServiceError) as error:
+    with pytest.raises(SetupError) as error:
         IntelligenceConfigService().update_config(request)
 
     assert error.value.code == "invalid_effort_settings"
@@ -1061,7 +1061,7 @@ def test_a_saved_native_tool_keeps_its_typed_editing_and_validation(
             ]
         }
     )
-    with pytest.raises(SetupServiceError) as error:
+    with pytest.raises(SetupError) as error:
         IntelligenceConfigService().update_config(request)
     assert error.value.code == "invalid_effort_settings"
 
@@ -1315,7 +1315,7 @@ def test_a_malformed_declaration_is_reported_where_it_is_edited(
         {"packages": {}, "dns": {"nameservers": "host"}},
     )
 
-    with pytest.raises(SetupServiceError) as excinfo:
+    with pytest.raises(SetupError) as excinfo:
         IntelligenceConfigService().read_config(config_dir=config_dir)
 
     assert excinfo.value.code == "invalid_agent_environment"
@@ -1408,7 +1408,7 @@ def test_a_malformed_grants_file_is_reported_where_it_is_edited(tmp_path: Path) 
         {"documents": [{"path": "/etc", "access": "read_write"}]},
     )
 
-    with pytest.raises(SetupServiceError) as excinfo:
+    with pytest.raises(SetupError) as excinfo:
         IntelligenceConfigService().read_config(config_dir=tmp_path)
 
     assert excinfo.value.code == "invalid_filesystem_grants"

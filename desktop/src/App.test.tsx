@@ -80,16 +80,6 @@ vi.mock("./api/client", async (importOriginal) => {
       members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["developer"] }],
       default_person_id: "alice",
     })),
-    getSchedulerRoutines: vi.fn(async () => ({
-      routines: [
-        {
-          command: "workflows/ticket_driven_workflow",
-          label: "Ticket driven workflow",
-          description: "",
-          requires_github: false,
-        },
-      ],
-    })),
     getSchedulerStatus: vi.fn(async () => ({
       scheduler: runtimeUnit("scheduler"),
       events: runtimeUnit("events"),
@@ -165,6 +155,14 @@ vi.mock("./api/client", async (importOriginal) => {
       warnings: [],
       errors: [],
     })),
+    getProviders: vi.fn(async () => [
+      {
+        name: "slack",
+        title: "Slack",
+        kinds: ["chat_service"],
+        avatar: true,
+      },
+    ]),
     getSystemAlerts: vi.fn(async () => ({ alerts: [] })),
     dismissSystemAlert: vi.fn(async () => ({ alerts: [] })),
     subscribeEvents: vi.fn(() => () => {}),
@@ -288,7 +286,7 @@ describe("App", () => {
       alerts: [
         {
           id: "credential:slack:alice",
-          code: "credential_slack",
+          code: "credential",
           severity: "critical",
           opened_at: "2026-07-11T10:00:00+09:00",
           updated_at: "2026-07-11T10:00:00+09:00",
@@ -296,6 +294,7 @@ describe("App", () => {
           person_id: "alice",
           command: "",
           trace_id: "",
+          provider: "slack",
           actions: ["diagnostics", "setup"],
         },
       ],
@@ -308,7 +307,10 @@ describe("App", () => {
     expect(
       await screen.findByText("Slack credentials for alice could not be verified."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open setup" })).toHaveAttribute("href", "#/setup");
+    expect(screen.getByRole("link", { name: "Open setup" })).toHaveAttribute(
+      "href",
+      "#/setup?section=members&person_id=alice&tab=slack",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Run diagnostics" }));
     await waitFor(() => {
       expect(verify).toHaveBeenCalledOnce();
@@ -331,6 +333,7 @@ describe("App", () => {
       updated_at: "",
       occurrence_count: 1,
       trace_id: "",
+      provider: "",
       reason: "x",
       actions: ["setup" as const],
     };
@@ -403,6 +406,7 @@ describe("App", () => {
         person_id: "",
         command: "",
         trace_id: "",
+        provider: "",
         reason: "why",
         setting,
         actions: ["setup"],
@@ -432,6 +436,7 @@ describe("App", () => {
         person_id: "",
         command: provider,
         trace_id: "",
+        provider: "",
         reason,
         actions: ["setup" as const],
       });
@@ -448,21 +453,48 @@ describe("App", () => {
     },
   );
 
-  it("links a GitHub credential alert to the affected member's GitHub settings", () => {
-    expect(
-      systemAlertSetupTarget({
-        id: "credential:github:alice",
-        code: "credential_github",
-        severity: "critical",
-        opened_at: "2026-07-11T10:00:00+09:00",
-        updated_at: "2026-07-11T10:00:00+09:00",
-        occurrence_count: 1,
-        person_id: "alice",
-        command: "",
-        trace_id: "",
-        actions: ["diagnostics", "setup"],
-      }),
-    ).toBe("/setup?section=members&person_id=alice&tab=github");
+  describe("credential alerts", () => {
+    const credentialAlert = (provider: string, personId: string) => ({
+      id: `credential:${provider}:${personId}`,
+      code: "credential" as const,
+      severity: "critical" as const,
+      opened_at: "2026-07-11T10:00:00+09:00",
+      updated_at: "2026-07-11T10:00:00+09:00",
+      occurrence_count: 1,
+      person_id: personId,
+      command: "",
+      trace_id: "",
+      provider,
+      actions: ["diagnostics" as const, "setup" as const],
+    });
+    const providers = [
+      {
+        name: "github",
+        title: "GitHub",
+        kinds: ["code_hosting_service" as const, "ticket_service" as const],
+        avatar: true,
+      },
+    ];
+
+    it("names the provider by its title, or by its name when it is not offered", () => {
+      expect(systemAlertMessage(t(), credentialAlert("github", "alice"), providers)).toBe(
+        t()("systemAlerts.codes.credential", { provider: "GitHub", person: "alice" }),
+      );
+      expect(systemAlertMessage(t(), credentialAlert("gitlab", "alice"), providers)).toBe(
+        t()("systemAlerts.codes.credential", { provider: "gitlab", person: "alice" }),
+      );
+    });
+
+    it("links to the affected member's account with the provider", () => {
+      expect(systemAlertSetupTarget(credentialAlert("github", "alice"))).toBe(
+        "/setup?section=members&person_id=alice&tab=github",
+      );
+      expect(systemAlertSetupTarget(credentialAlert("slack", "alice"))).toBe(
+        "/setup?section=members&person_id=alice&tab=slack",
+      );
+      // A credential alert of no member: the setup page itself.
+      expect(systemAlertSetupTarget(credentialAlert("github", ""))).toBe("/setup");
+    });
   });
 });
 
@@ -990,6 +1022,7 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_drained_count: 0,
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
+    events_chat_provider: "",
     member_routines: [],
   };
 }

@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
 import { setApiLanguage } from "./api/client";
+import { providerResources } from "./setup/providers/resources";
 
 export type AppLanguage = "en" | "ja";
 
@@ -427,8 +428,7 @@ const resources = {
           warning: "System warning",
         },
         codes: {
-          credential_github: "GitHub credentials for {{person}} could not be verified.",
-          credential_slack: "Slack credentials for {{person}} could not be verified.",
+          credential: "{{provider}} credentials for {{person}} could not be verified.",
           credential_llm: "The API key of the LLM provider {{command}} could not be verified.",
           credential_jev: "The Jev API key could not be verified.",
           command_failed: "{{command}} failed for {{person}}.",
@@ -469,7 +469,7 @@ const resources = {
       activity: {
         title: "Activity",
         search: "Search activity",
-        searchPlaceholder: "command / member / #42 / GitHub URL...",
+        searchPlaceholder: "command / member / #42 / URL...",
         previous: "Previous period",
         next: "Next period",
         date: "Date",
@@ -622,14 +622,14 @@ const resources = {
           effort: "effort: {{level}}",
           source: "Source",
           search: "Search",
-          searchPlaceholder: "trace id / command / error / #42 / GitHub URL...",
+          searchPlaceholder: "trace id / command / error / #42 / URL...",
           searchClear: "Clear search",
           displayed: "Displayed",
           displayedValue: "Latest {{count}} executions (limit {{limit}})",
           ticket: {
             clear: "Clear ticket filter",
             filterTo: "Show all runs for this ticket",
-            open: "Open on GitHub",
+            open: "Open ticket",
           },
           empty: "No executions recorded yet.",
           selectHint: "Select an execution to see its timeline.",
@@ -851,6 +851,22 @@ const resources = {
         },
       },
       setup: {
+        integrations: {
+          title: "Integrations",
+          subtitle:
+            "Choose the service that hosts the code, the tickets, and the chat. Each is optional.",
+          none: "Not used",
+          kinds: {
+            code_hosting_service: "Code hosting",
+            ticket_service: "Tickets",
+            chat_service: "Chat",
+          },
+          kindHints: {
+            code_hosting_service: "Where the members clone repositories and open pull requests.",
+            ticket_service: "Where the members take tickets from and report on them.",
+            chat_service: "Where the members are asked for work and reply.",
+          },
+        },
         title: "First setup",
         configuredTitle: "Settings",
         saveInitial: "Create initial settings",
@@ -871,11 +887,10 @@ const resources = {
         },
         status: {
           readyTitle: "Required setup complete",
-          readyMessage:
-            "GuildBotics can run. Optional integrations such as GitHub can be added later.",
+          readyMessage: "GuildBotics can run. Integrations can be added later when you need them.",
           progressTitle: "Required setup: {{done}} of {{total}} items configured",
           progressMessage:
-            "Fill the missing items to complete the minimum setup required to run GuildBotics. GitHub integration can be added later.",
+            "Fill the missing items to complete the minimum setup required to run GuildBotics. Integrations can be added later.",
           inputProgressTitle: "Input progress: {{done}} of {{total}} sections completed",
           inputProgressMessage:
             "Complete the required inputs. When all items are completed, you can create the initial settings.",
@@ -889,7 +904,7 @@ const resources = {
           intelligence: "LLM / AI CLI tools",
           environment: "Agent execution environment",
           members: "Members",
-          github: "GitHub",
+          integrations: "Integrations",
           shortcuts: "Shortcuts",
           sync: "Sync",
           verification: "Verification",
@@ -1194,23 +1209,12 @@ const resources = {
         members: {
           avatar: {
             upload: "Upload File",
-            github: "Import from GitHub",
-            slack: "Import from Slack",
-            githubTooltip: "Configure GitHub username to import avatar",
-            slackTooltip: "Configure Slack user ID to import avatar",
             addFirstTooltip: "You can set the avatar after adding the member.",
             uploadSuccessTitle: "Success",
             uploadSuccess: "Avatar uploaded successfully.",
             importSuccessTitle: "Success",
-            githubSuccess: "Avatar imported from GitHub.",
-            slackSuccess: "Avatar imported from Slack.",
-            errors: {
-              slackTokenMissing: "Slack Bot Token is not configured in this workspace.",
-              slackMissingScope:
-                "Slack Bot Token is missing the 'users:read' scope. Add it under OAuth & Permissions and reinstall the app.",
-              slackUserIdMissing: "Slack user ID is required for human members.",
-              githubUsernameMissing: "GitHub username is not configured.",
-            },
+            importFrom: "Import from {{provider}}",
+            importSuccess: "Avatar imported from {{provider}}.",
           },
           title: "Members",
           subtitle: "Manage team members and their roles.",
@@ -1234,33 +1238,16 @@ const resources = {
             agent: "Agent",
             human: "Human",
           },
-          githubAccountType: "GitHub account type",
-          githubAccountTypeHint:
-            "Required only when this member works with GitHub tickets, issues, or pull requests.",
-          githubAccountTypeOptions: {
-            none: "Do not link GitHub",
-            machine_user: "Machine Account (Machine User)",
-            github_apps: "GitHub Apps",
-            human: "Human",
-          },
           tabs: {
             basic: "Basic",
             intelligence: "LLM / AI CLI tools",
             patrol: "Patrol",
-            github: "GitHub",
-            slack: "Slack",
             diagnostics: "Diagnostics",
           },
-          githubAppsUrl: "GitHub Apps URL for resolution",
-          githubAppsUrlHint:
-            "Enter the app settings URL, then click Resolve. This URL is not saved.",
-          githubResolvedIdentity: "GitHub identity",
-          githubUsernameHint: "Enter the GitHub username, then click Resolve.",
-          resolve: "Resolve",
           personId: "Member ID",
+          personIdFixedByAccount:
+            "The member ID stays fixed while the {{provider}} account set up for it is pending.",
           personName: "Display name",
-          githubUsername: "GitHub username",
-          gitEmail: "Git email",
           roles: "Roles",
           rolesPlaceholder: "Select one or more roles",
           rolesEmpty: "No roles found",
@@ -1293,125 +1280,20 @@ const resources = {
           relationships: "Relationship with other members",
           activeSwitch: "Active member",
           activeHumanHint: "Human members are not run by the scheduler.",
-          installationId: "GitHub Installation ID",
-          appId: "GitHub App ID",
-          privateKeyPath: "GitHub private key path",
-          personIdFixedByGitHubApp:
-            "The member ID stays fixed while a GitHub App is registered for it.",
-          agentFieldSyncFailedTitle: "Agent field update failed",
-          agentFieldSyncFailedBody:
-            "The member was saved, but the project's Agent field could not be updated. Update it from Setup → GitHub, or it will be synced automatically on the first run.",
-          githubAppsSetupMode: {
-            label: "GitHub App setup method",
-            create: "Register a new app",
-            existing: "Use a registered app",
-          },
-          githubAppRegistration: {
-            hint: "Create the GitHub App from here. Approve the creation and installation in the browser, and the fields below are filled in automatically. The app is created under your personal account, or under an organization when you enter its name.",
-            appName: "App name",
-            organization: "Organization",
-            register: "Register on GitHub",
-            pending: "In the browser, click “Create GitHub App”…",
-            reopen: "Reopen the registration page",
-            converted:
-              "Created app “{{slug}}”. Choose the repositories to install it on in the browser…",
-            openInstall: "Open the install page",
-            installed:
-              "Registered, waiting for save. Saving the member stores the app's private key in the keychain.",
-            saved: "Saved. The app's private key is stored in the keychain.",
-            saveFailed:
-              "The member was not saved. Until the registration expires, you can save again with it.",
-            installCheckError: "Failed to check the installation status: {{message}}",
-            errors: {
-              invalidAppName: "App name must be 1-34 characters.",
-              expired: "The registration has expired. Register the app on GitHub again.",
-            },
-          },
-          slackAppsSetupMode: {
-            label: "Slack App setup method",
-            create: "Register a new app",
-            existing: "Use a registered app",
-          },
-          slackAppRegistration: {
-            hint: "Create the Slack App from here. The browser opens with the scopes, Socket Mode and event subscriptions already configured, so all you do is pick a workspace and copy the two tokens back.",
-            appName: "App name",
-            register: "Create the app on Slack",
-            reopen: "Reopen the creation page",
-            openAppList: "Open the Slack app list",
-            signedOutHint:
-              "If Slack asks you to sign in, sign in first and then press the button again — Slack drops the prepared settings on the sign-in redirect.",
-            stepsTitle: "Then, in the browser:",
-            steps: {
-              create: "Pick the workspace and click “Create”.",
-              reinstall:
-                "Open “OAuth & Permissions” and press “Reinstall to Workspace”, then approve. Slack issues the app's first bot token without the manifest's scopes, so this step is required — not optional.",
-              copyBot: "On that same page, copy the Bot User OAuth Token (xoxb-…).",
-              copyAppToken:
-                "Open “Basic Information” → “App-Level Tokens” and copy the token (xapp-…).",
-              paste: "Paste both tokens into the fields below and verify them.",
-            },
-            errors: {
-              invalidAppName: "App name must be 1-35 characters.",
-            },
-          },
-          slackTokenVerify: {
-            button: "Verify app",
-            labels: {
-              bot: "Bot token",
-              botStored: "Saved bot token",
-              appToken: "App token",
-              appTokenStored: "Saved app token",
-              scopes: "Bot permissions",
-            },
-            ok: {
-              bot: "OK — {{displayName}} ({{userId}}) in {{workspace}}",
-              botNoWorkspace: "OK — {{displayName}} ({{userId}})",
-              appToken: "OK — Socket Mode connected.",
-              scopes: "OK — the token can read channels.",
-              channel: "OK — the bot can read this channel.",
-            },
-            channelNotJoined:
-              "the bot has not joined this channel. Run /invite @{{botName}} in it.",
-            channelNotFound:
-              "no such channel in this workspace. Check the name, or use the channel ID.",
-            scopeMissing:
-              "the token carries none of the scopes this read needs ({{needed}}). Scopes reach a token only when the app is installed, so ones added later need a reinstall: open the app's “OAuth & Permissions”, press “Reinstall to Workspace”, and copy the bot token again.",
-            scopeMissingUnnamed:
-              "the token is missing a required scope. Reinstall the app from “OAuth & Permissions” and copy the bot token again.",
-            errors: {
-              missing: "not entered.",
-              wrong_token_type: "wrong token type. Check that xoxb- and xapp- are not swapped.",
-              unreachable: "could not reach Slack. Check your network connection.",
-              invalid_auth: "rejected by Slack (invalid_auth). The token is invalid or revoked.",
-              unknown: "verification failed ({{code}}).",
-            },
-          },
-          accessToken: "GitHub access token",
-          accessTokenPlaceholder: "ghp_... or github_pat_...",
-          githubAuthNotRequired: "GitHub auth is not required for human members.",
-          githubDisabledMemberHint:
-            "GitHub is not linked for this member. You can still use local commands, LLM / CLI settings, and Slack settings.",
-          slackUserId: "Slack User ID",
-          slackUserIdHint:
-            "Enter the Slack member ID that starts with U. Open the user's Slack profile and choose Copy member ID from the more menu.",
-          slackBotToken: "Slack Bot token",
-          slackBotTokenPlaceholder: "xoxb-...",
-          slackAppToken: "Slack App token",
-          slackAppTokenPlaceholder: "xapp-...",
-          slackChannelAdd: "Channel",
-          slackChannelAddHint:
+          chatChannelAdd: "Channel",
+          chatChannelAddHint:
             "Enter a channel name or ID that the member joins. Examples: general, random, C0123456789",
-          slackChannelAddButton: "Add channel",
-          slackChannelRemove: "Remove channel",
-          slackChannelsEmpty: "No Slack channels configured.",
-          slackParticipationChannel: "Channel",
-          slackParticipationPolicy: "When to join",
-          slackParticipationOptions: {
+          chatChannelAddButton: "Add channel",
+          chatChannelRemove: "Remove channel",
+          chatChannelsEmpty: "No chat channels configured.",
+          chatParticipationChannel: "Channel",
+          chatParticipationPolicy: "When to join",
+          chatParticipationOptions: {
             social: "Join actively",
             strict: "Join when needed",
             muted: "Mentions only",
           },
-          slackParticipationDescriptions: {
+          chatParticipationDescriptions: {
             social:
               "For casual channels. Allows the agent to briefly join even when it is not mentioned.",
             strict:
@@ -1432,11 +1314,10 @@ const resources = {
           editingBadge: "Editing: {{id}}",
           changedTitle: "This member's settings have changed",
           changedBody:
-            "The saved settings changed while this form was open. Your entries are still here. Reload the latest settings to replace these entries before saving. This replaces entries in all tabs, including AI settings, GitHub, and Slack.",
+            "The saved settings changed while this form was open. Your entries are still here. Reload the latest settings to replace these entries before saving. This replaces entries in all tabs, including AI settings and the accounts with integrated services.",
           changedSaveHint: "Settings have changed. Reload the latest settings above before saving.",
           reloadButton: "Reload latest settings",
           loadError: "Failed to load member details",
-          resolveError: "Failed to resolve member identity",
           addError: "Failed to add member",
           updateError: "Failed to update member",
           deleteError: "Failed to delete member",
@@ -1487,7 +1368,7 @@ const resources = {
           diagnostics: {
             title: "Member diagnostics",
             description:
-              "Runs a read-only scenario check for this member. GitHub and Slack data are not updated.",
+              "Runs a read-only scenario check for this member. The integrated services' data are not updated.",
             run: "Validate this member",
             notRun: "Run diagnostics after saving changes.",
             failed: "Diagnostics failed",
@@ -1500,54 +1381,6 @@ const resources = {
             saveFirstBody:
               "Diagnostics run against saved settings. Add or save this member before validating it.",
           },
-        },
-        github: {
-          title: "GitHub",
-          subtitle: "Configure this project's GitHub Projects integration.",
-          decision: "GitHub integration",
-          decisionHint:
-            "Decides whether members need a GitHub identity and whether the GitHub connection section applies.",
-          decisionPlaceholder: "Choose whether to use GitHub",
-          disabled: "Do not use GitHub",
-          enabled: "Use GitHub",
-          disabledTitle: "GitHub is not used",
-          disabledHint:
-            "GitHub-dependent routines stay disabled until you enable GitHub in the Project section.",
-          projectUrl: "GitHub Project URL",
-          projectUrlHint:
-            "URL of the GitHub Project used as the task board (https://github.com/orgs/<org>/projects/<number>).",
-          projectUrlMissingTitle: "GitHub Project URL is not set",
-          projectUrlMissingHint:
-            "Enter the GitHub Project URL in the Project section; the board settings below become available afterwards.",
-          laneMapping: "Lane mapping",
-          laneMappingHint:
-            "Map workflow lanes to your GitHub Project status options. Defaults work with a standard Todo / In Progress / Done board.",
-          laneMappingManualHint:
-            "Status options could not be read automatically; enter the status names used by your GitHub Project (defaults assume Todo / In Progress / Done).",
-          laneReady: "Ready lane",
-          laneWorking: "Working lane",
-          laneWorkingHint:
-            "Tickets are moved here when work starts. If this lane does not exist on the board, tickets are simply not moved.",
-          laneDone: "Done lane",
-          agentField: "Agent field (for agent assignment)",
-          agentFieldHint:
-            "Non-human members are assigned tickets through the Project's Agent single-select field. Create the field and register members here so they can be assigned.",
-          agentFieldNeedsProject: "Enter a valid GitHub Project URL above first.",
-          agentFieldLoading: "Reading the Agent field state...",
-          agentFieldUnavailableTitle: "Agent field state could not be read",
-          agentFieldUnavailableHint:
-            "This needs a saved active member with GitHub credentials and a reachable Project. Save members first, then reopen this section.",
-          agentFieldStatus: "Agent field:",
-          agentFieldExists: "Exists",
-          agentFieldMissing: "Not created",
-          agentFieldRegistered: "Registered members",
-          agentFieldNoMembers: "No members are registered as options yet.",
-          agentFieldMissingMembers: "Not yet registered",
-          agentFieldCreate: "Create Agent field",
-          agentFieldAddMembers: "Add members ({{count}})",
-          agentFieldUpToDate: "Up to date",
-          agentFieldError:
-            "Could not update the Agent field. Check member credentials and the Project URL.",
         },
         save: {
           action: "Save",
@@ -1569,11 +1402,6 @@ const resources = {
         validation: {
           workspaceRequired: "Workspace is required.",
           descriptionRequired: "Project description is required.",
-          githubDecisionRequired: "Choose whether to use GitHub.",
-          githubProjectRequired: "GitHub project URL is required.",
-          laneReadyDoneSame: "Ready and done lanes must be different.",
-          githubProjectInvalid:
-            "Enter a GitHub Project URL such as https://github.com/orgs/<org>/projects/<number> or https://github.com/users/<user>/projects/<number>.",
           memberIdRequired: "Member ID is required.",
           memberIdInvalid: "Use only lowercase letters, digits, underscores, or hyphens.",
           memberIdDuplicate: "This member ID is already in use.",
@@ -1586,34 +1414,7 @@ const resources = {
           memberCharacterJoinWhenRequired: "Join-when guidance is required.",
           memberCharacterAvoidWhenRequired: "Avoid-when guidance is required.",
           memberCharacterContributionRequired: "Contribution style is required.",
-          memberGithubAppsUrlRequired: "Enter the GitHub Apps URL, then click Resolve.",
-          memberGithubIdentityNotFound:
-            "Could not resolve this GitHub identity. Check the username, email, or GitHub Apps URL.",
-          memberGithubIdentityResolveFailed:
-            "Failed to resolve this GitHub identity. Check your network connection and try again.",
-          memberGithubAppsUrlInvalid:
-            "Enter a GitHub Apps settings URL such as https://github.com/organizations/<org>/settings/apps/<app>.",
-          memberGithubUsernameRequired: "Resolve the GitHub identity or enter the GitHub username.",
-          memberGithubUsernameInvalid:
-            "Enter a valid GitHub username. Email addresses are not supported here.",
-          memberGitEmailRequired: "Resolve the GitHub identity or enter the Git email address.",
-          memberGitEmailInvalid: "Enter a valid email address.",
-          githubInstallationIdRequired: "GitHub Installation ID is required.",
-          githubInstallationIdInvalid: "GitHub Installation ID must be digits only.",
-          githubAppIdRequired: "GitHub App ID is required.",
-          githubAppIdInvalid: "GitHub App ID must be digits only.",
-          githubPrivateKeyPathRequired: "GitHub private key path is required.",
-          githubAccessTokenRequired: "GitHub access token is required.",
-          githubAccessTokenInvalid:
-            "Enter a GitHub access token starting with ghp_, gho_, ghu_, ghs_, ghr_, or github_pat_.",
-          slackUserIdRequired: "Slack User ID is required for human members.",
-          slackUserIdInvalid: "Enter a Slack User ID starting with U.",
-          slackBotTokenRequired: "Slack Bot token is required when Slack channels are configured.",
-          slackBotTokenInvalid: "Enter a Slack Bot token starting with xoxb-.",
-          slackAppTokenRequired: "Slack App token is required when Slack channels are configured.",
-          slackAppTokenInvalid: "Enter a Slack App token starting with xapp-.",
-          slackChannelsInvalid:
-            "Enter a Slack channel name or ID. Channel names can use Japanese characters, lowercase letters, numbers, hyphens, and underscores. Examples: general, 開発, C0123456789.",
+          chatChannelsInvalid: "Enter a channel name or ID the chat accepts.",
         },
       },
       overview: {
@@ -1621,11 +1422,11 @@ const resources = {
         scenarioDiagnostics: {
           run: "Validate settings",
           notRun:
-            "Runs a read-only scenario check across LLM, AI CLI tool, GitHub, Slack, and Git. It does not update GitHub or Slack data.",
+            "Runs a read-only scenario check across LLM, AI CLI tool, integrated services, and Git. It does not update the integrated services' data.",
           running: "Validating settings...",
           failed: "Validation failed",
           ok: "Settings validated",
-          okDescription: "{{count}} checks passed. GitHub and Slack checks are read-only.",
+          okDescription: "{{count}} checks passed. Integrated services are checked read-only.",
           target: "Target",
         },
         diagnosticSections: {
@@ -1633,8 +1434,6 @@ const resources = {
           members: "Members",
           llm: "LLM",
           cli_agent: "AI CLI tool",
-          github: "GitHub",
-          slack: "Slack",
           git: "Git",
         },
         diagnosticSuccess: {
@@ -1664,36 +1463,6 @@ const resources = {
             title: "AI CLI tool check passed",
             description:
               "The configured AI CLI tool ran through CliAgentBrain and returned a response to a minimal read-only request.",
-          },
-          github_not_configured: {
-            title: "GitHub is not configured",
-            description:
-              "GitHub diagnostics were skipped because this project does not use GitHub.",
-          },
-          github_project_access: {
-            title: "GitHub Project was readable",
-            description: "Project status options were fetched without updating GitHub.",
-          },
-          github_lane_mapping: {
-            title: "Workflow lanes are valid",
-            description: "The ready and done lanes exist in the GitHub Project.",
-          },
-          github_agent_assignment: {
-            title: "Member can be assigned tickets",
-            description:
-              "The member resolves to a GitHub user account or has a matching Agent field option.",
-          },
-          slack_not_configured: {
-            title: "Slack channels are not configured",
-            description: "Slack diagnostics were skipped for this member.",
-          },
-          slack_bot_auth: {
-            title: "Slack Bot authentication passed",
-            description: "Slack Bot identity was read successfully.",
-          },
-          slack_channel_history: {
-            title: "Slack channel history was readable",
-            description: "Channel history was read without posting messages.",
           },
         },
         diagnosticChecks: {
@@ -1738,10 +1507,6 @@ const resources = {
             description:
               "The configured CliAgentBrain could not complete a minimal read-only request. See details below.",
           },
-          github_credential: {
-            title: "Member GitHub credential is missing",
-            description: "Configure the member's GitHub credentials before using GitHub workflows.",
-          },
           llm_live_call: {
             title: "LLM check failed",
             description: "The selected LLM provider did not accept the minimal validation request.",
@@ -1754,66 +1519,10 @@ const resources = {
                 "The selected LLM provider is limiting requests for now. Try again in a while.",
             },
           },
-          github_project_access: {
-            title: "GitHub project access failed",
-            description: "The GitHub Project could not be read with this member's credentials.",
-          },
-          github_lane_missing: {
-            title: "Workflow lanes are missing",
-            description:
-              "The configured ready or done lane was not found among the GitHub Project status options.",
-          },
-          github_working_lane_missing: {
-            title: "Working lane was not found",
-            description:
-              "The configured working lane is not a GitHub Project status; tickets will not be moved to a working lane on start.",
-          },
-          github_member_not_assignable: {
-            title: "Member cannot be assigned tickets",
-            description:
-              "The member's GitHub username could not be resolved to a user account; check the member's GitHub username.",
-          },
-          github_agent_field_required: {
-            title: "Member cannot be assigned tickets",
-            description:
-              "The member is not a resolvable GitHub user and has no Agent field option; set the Agent field for this member.",
-          },
-          github_access: {
-            title: "GitHub read-only check failed",
-            description:
-              "Project or repository access failed. Check GitHub credentials and repository settings.",
-          },
-          slack_app_token: {
-            title: "Slack App token is missing",
-            description: "Socket Mode runtime requires a Slack App token for this member.",
-          },
-          slack_bot_auth: {
-            title: "Slack bot authentication failed",
-            description: "Slack bot authentication failed. Check the member's Slack Bot token.",
-          },
-          slack_channel: {
-            title: "Slack channel could not be resolved",
-            description: "The configured Slack channel name or ID could not be resolved.",
-          },
-          slack_channel_history: {
-            title: "Slack channel history could not be read",
-            description:
-              "Slack channel history could not be read. Check channel access and token scopes.",
-          },
-          slack_channel_not_joined: {
-            title: "Slack bot has not joined #{{channel}}",
-            description:
-              "The bot is not a member of #{{channel}}, so it cannot read its history. Run /invite @{{bot_name}} in that channel.",
-          },
-          slack_access: {
-            title: "Slack read-only check failed",
-            description: "Slack read-only access failed. Check Slack tokens and channel settings.",
-          },
         },
         config: "Settings file",
         ready: "Configured",
         missing: "Missing",
-        github: "GitHub",
         enabled: "Enabled",
         disabled: "Disabled",
         activeMembers: "Active members",
@@ -1877,9 +1586,9 @@ const resources = {
           workerValue: "{{workers}}",
           processed: "Received events",
           processedValue: "received {{drained}} / failures {{failures}}",
-          authFailedTitle: "Slack authentication failed",
+          authFailedTitle: "Chat authentication failed",
           authFailedBody:
-            "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
+            "The chat rejected the credentials of: {{persons}}. These members cannot receive events until their credentials are fixed and the service is restarted.",
           chatReset: {
             description:
               "Ignores every chat message up to now (including received but unprocessed ones). The next start handles only messages that arrive afterwards.",
@@ -1887,7 +1596,7 @@ const resources = {
             stoppedOnlyHint: "Available only while the service is stopped.",
             confirmTitle: "Ignore past chat messages",
             confirmBody:
-              "This discards received but unprocessed messages for all active Slack members and moves the cutoff to now. It cannot be undone.",
+              "This discards received but unprocessed messages for all active chat members and moves the cutoff to now. It cannot be undone.",
             confirm: "Discard messages",
             cancel: "Cancel",
             successBody: "Reset receive state for {{members}} member(s), {{channels}} channel(s).",
@@ -2041,10 +1750,11 @@ const resources = {
         },
         requirements: {
           environment: "Isolated environment",
-          github: "GitHub",
-          slack: "Slack",
           cli_agent: "AI CLI tool",
           llm: "LLM",
+          code_hosting_service: "Code hosting",
+          ticket_service: "Tickets",
+          chat_service: "Chat",
         },
         requirementUnmet: "{{requirement}}: {{reason}}",
         status: {
@@ -2522,8 +2232,7 @@ const resources = {
           warning: "システム警告",
         },
         codes: {
-          credential_github: "{{person}} の GitHub 資格情報を検証できませんでした。",
-          credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
+          credential: "{{person}} の {{provider}} 資格情報を検証できませんでした。",
           credential_llm: "LLM provider {{command}} の API キーを検証できませんでした。",
           credential_jev: "Jev の API キーを検証できませんでした。",
           command_failed: "{{person}} の {{command}} が失敗しました。",
@@ -2564,7 +2273,7 @@ const resources = {
       activity: {
         title: "アクティビティ",
         search: "アクティビティ検索",
-        searchPlaceholder: "コマンド / メンバー / #42 / GitHub URL...",
+        searchPlaceholder: "コマンド / メンバー / #42 / URL...",
         previous: "前の期間",
         next: "次の期間",
         date: "日付",
@@ -2637,6 +2346,21 @@ const resources = {
         },
       },
       setup: {
+        integrations: {
+          title: "連携",
+          subtitle: "コード・チケット・チャットに使うサービスを選びます。どれも任意です。",
+          none: "使わない",
+          kinds: {
+            code_hosting_service: "コードホスティング",
+            ticket_service: "チケット",
+            chat_service: "チャット",
+          },
+          kindHints: {
+            code_hosting_service: "メンバーがリポジトリを clone し、プルリクエストを作る場所です。",
+            ticket_service: "メンバーがチケットを受け取り、結果を報告する場所です。",
+            chat_service: "メンバーに作業を依頼し、メンバーが返信する場所です。",
+          },
+        },
         title: "はじめに",
         configuredTitle: "設定",
         saveInitial: "初期設定を作成",
@@ -2656,10 +2380,10 @@ const resources = {
         },
         status: {
           readyTitle: "必須設定 完了",
-          readyMessage: "実行できます。GitHub などの連携は必要になったタイミングで追加できます。",
+          readyMessage: "実行できます。連携は必要になったタイミングで追加できます。",
           progressTitle: "必須設定: {{total}}項目中 {{done}}項目 設定済み",
           progressMessage:
-            "不足項目を埋めると、GuildBoticsの実行に必要な初期設定が完了します。GitHub連携は後から追加できます。",
+            "不足項目を埋めると、GuildBoticsの実行に必要な初期設定が完了します。連携は後から追加できます。",
           inputProgressTitle: "入力進捗: {{total}}セクション中 {{done}}セクション完了",
           inputProgressMessage:
             "必須項目を入力してください。すべて入力すると初期設定を作成できます。",
@@ -2673,7 +2397,7 @@ const resources = {
           intelligence: "LLM・AI CLIツール",
           environment: "エージェント実行環境",
           members: "メンバー",
-          github: "GitHub",
+          integrations: "連携",
           shortcuts: "ショートカット",
           sync: "同期",
           verification: "検証",
@@ -2977,23 +2701,12 @@ const resources = {
         members: {
           avatar: {
             upload: "ファイルをアップロード",
-            github: "GitHubからインポート",
-            slack: "Slackからインポート",
-            githubTooltip: "GitHubユーザー名を設定するとインポート可能になります",
-            slackTooltip: "SlackユーザーIDを設定するとインポート可能になります",
             addFirstTooltip: "メンバーを追加後に設定ができます",
             uploadSuccessTitle: "成功",
             uploadSuccess: "アバターをアップロードしました。",
             importSuccessTitle: "成功",
-            githubSuccess: "GitHubからアバターをインポートしました。",
-            slackSuccess: "Slackからアバターをインポートしました。",
-            errors: {
-              slackTokenMissing: "ワークスペースに Slack ボットトークンが設定されていません。",
-              slackMissingScope:
-                "Slack ボットトークンに 'users:read' スコープがありません。OAuth & Permissions で追加し、アプリを再インストールしてください。",
-              slackUserIdMissing: "人間のメンバーの場合、Slack ユーザーIDの指定が必要です。",
-              githubUsernameMissing: "GitHub ユーザー名が設定されていません。",
-            },
+            importFrom: "{{provider}} から取り込む",
+            importSuccess: "{{provider}} からアバターを取り込みました。",
           },
           title: "メンバー",
           subtitle: "チームメンバーと役割を管理します。",
@@ -3017,33 +2730,16 @@ const resources = {
             agent: "エージェント",
             human: "人間",
           },
-          githubAccountType: "GitHub アカウント種別",
-          githubAccountTypeHint:
-            "GitHub のチケット、Issue、Pull Request を扱うメンバーだけ設定します。",
-          githubAccountTypeOptions: {
-            none: "GitHub連携なし",
-            machine_user: "マシンアカウント（マシンユーザー）",
-            github_apps: "GitHub Apps",
-            human: "人間",
-          },
           tabs: {
             basic: "基本",
             intelligence: "LLM・AI CLIツール",
             patrol: "巡回",
-            github: "GitHub",
-            slack: "Slack",
             diagnostics: "検証",
           },
-          githubAppsUrl: "解決用 GitHub Apps URL",
-          githubAppsUrlHint:
-            "GitHub App の設定URLを入力して「解決」を実行します。このURLは保存されません。",
-          githubResolvedIdentity: "GitHub識別子",
-          githubUsernameHint: "GitHubユーザー名を入力して「解決」を実行します。",
-          resolve: "解決",
           personId: "メンバーID",
+          personIdFixedByAccount:
+            "このメンバー用の {{provider}} のアカウントを設定している間は、メンバー ID を変更できません。",
           personName: "表示名",
-          githubUsername: "GitHubユーザー名",
-          gitEmail: "Gitメールアドレス",
           roles: "ロール",
           rolesPlaceholder: "1つ以上選択",
           rolesEmpty: "ロールが見つかりません",
@@ -3075,126 +2771,20 @@ const resources = {
           relationships: "他のメンバーとの関係性",
           activeSwitch: "有効メンバーにする",
           activeHumanHint: "人間メンバーはスケジューラでは実行されません。",
-          installationId: "GitHub Installation ID",
-          appId: "GitHub App ID",
-          privateKeyPath: "GitHub秘密鍵パス",
-          personIdFixedByGitHubApp: "GitHub App の登録中はメンバー ID を変更できません。",
-          agentFieldSyncFailedTitle: "Agent フィールドの更新に失敗しました",
-          agentFieldSyncFailedBody:
-            "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → GitHub から更新するか、初回実行時の自動同期をお待ちください。",
-          githubAppsSetupMode: {
-            label: "GitHub App の設定方法",
-            create: "新規に App を登録",
-            existing: "登録済みの App を使う",
-          },
-          githubAppRegistration: {
-            hint: "ここから GitHub 上に App を作成できます。ブラウザで作成とインストールを承認すると、以下の項目が自動入力されます。App は個人アカウント配下に作成されます。組織配下に作成する場合は Organization に組織名を入力してください。",
-            appName: "App 名",
-            organization: "Organization",
-            register: "GitHub に登録",
-            pending: "ブラウザで「Create GitHub App」をクリックしてください…",
-            reopen: "登録ページを再度開く",
-            converted:
-              "App「{{slug}}」を作成しました。ブラウザでインストール先リポジトリを選択してください…",
-            openInstall: "インストール画面を開く",
-            installed:
-              "登録済み・保存待ちです。メンバーを保存すると、App の秘密鍵をキーチェーンに保存します。",
-            saved: "保存しました。App の秘密鍵はキーチェーンに保存済みです。",
-            saveFailed:
-              "メンバーを保存できませんでした。登録の有効期限内は、この登録のまま再度保存できます。",
-            installCheckError: "インストール状態の確認に失敗しました: {{message}}",
-            errors: {
-              invalidAppName: "App 名は 1〜34 文字で入力してください。",
-              expired: "登録の有効期限が切れました。もう一度 GitHub に登録してください。",
-            },
-          },
-          slackAppsSetupMode: {
-            label: "Slack App の設定方法",
-            create: "新規に App を登録",
-            existing: "登録済みの App を使う",
-          },
-          slackAppRegistration: {
-            hint: "ここから Slack 上に App を作成できます。scope・Socket Mode・イベント購読を設定済みの状態でブラウザが開くので、ワークスペースを選んで 2 つのトークンをコピーするだけです。",
-            appName: "App 名",
-            register: "Slack で App を作成",
-            reopen: "作成ページを再度開く",
-            openAppList: "Slack の App 一覧を開く",
-            signedOutHint:
-              "Slack からサインインを求められた場合は、サインインしてからもう一度ボタンを押してください（サインインの遷移で設定内容が失われます）。",
-            stepsTitle: "続けて、ブラウザ側で以下を行います:",
-            steps: {
-              create: "ワークスペースを選び「Create」をクリックします。",
-              reinstall:
-                "「OAuth & Permissions」を開き「Reinstall to Workspace」を実行して承認します。作成直後に発行される Bot トークンには manifest の scope が付与されないため、この手順は必須です。",
-              copyBot: "同じ画面の Bot User OAuth Token（xoxb-…）をコピーします。",
-              copyAppToken:
-                "「Basic Information」→「App-Level Tokens」でトークン（xapp-…）をコピーします。",
-              paste: "2 つのトークンを下の入力欄に貼り付けて検証します。",
-            },
-            errors: {
-              invalidAppName: "App 名は 1〜35 文字で入力してください。",
-            },
-          },
-          slackTokenVerify: {
-            button: "App を検証",
-            labels: {
-              bot: "Bot トークン",
-              botStored: "保存済みの Bot トークン",
-              appToken: "App トークン",
-              appTokenStored: "保存済みの App トークン",
-              scopes: "Bot の権限",
-            },
-            ok: {
-              bot: "OK — {{displayName}}（{{userId}}）/ {{workspace}}",
-              botNoWorkspace: "OK — {{displayName}}（{{userId}}）",
-              appToken: "OK — Socket Mode に接続できました。",
-              scopes: "OK — チャンネルを読み取れます。",
-              channel: "OK — Bot が読み取れます。",
-            },
-            channelNotJoined:
-              "Bot が参加していません。このチャンネルで /invite @{{botName}} を実行してください。",
-            channelNotFound:
-              "このワークスペースに見つかりません。名前を確認するか、チャンネル ID を指定してください。",
-            scopeMissing:
-              "この読み取りに必要な scope（{{needed}}）がトークンに付与されていません。scope はインストール時にトークンへ付与されるため、後から追加した分は再インストールが必要です。App の「OAuth & Permissions」で「Reinstall to Workspace」を実行し、Bot トークンをコピーし直してください。",
-            scopeMissingUnnamed:
-              "トークンに必要な scope が不足しています。App の「OAuth & Permissions」から再インストールし、Bot トークンをコピーし直してください。",
-            errors: {
-              missing: "入力されていません。",
-              wrong_token_type:
-                "トークンの種類が違います。xoxb- と xapp- が入れ替わっていないか確認してください。",
-              unreachable: "Slack に接続できませんでした。ネットワーク接続を確認してください。",
-              invalid_auth:
-                "Slack に拒否されました（invalid_auth）。トークンが無効か失効しています。",
-              unknown: "検証に失敗しました（{{code}}）。",
-            },
-          },
-          accessToken: "GitHubアクセストークン",
-          accessTokenPlaceholder: "ghp_... または github_pat_...",
-          githubAuthNotRequired: "人間メンバーでは GitHub 認証は不要です。",
-          githubDisabledMemberHint:
-            "このメンバーは GitHub と連携しません。ローカルコマンド、LLM・CLI設定、Slack設定は利用できます。",
-          slackUserId: "Slack User ID",
-          slackUserIdHint:
-            "U で始まる Slack member ID を入力してください。Slack で対象ユーザーのプロフィールを開き、その他メニューから Copy member ID を選択して取得できます。",
-          slackBotToken: "Slack Bot トークン",
-          slackBotTokenPlaceholder: "xoxb-...",
-          slackAppToken: "Slack App トークン",
-          slackAppTokenPlaceholder: "xapp-...",
-          slackChannelAdd: "チャンネル",
-          slackChannelAddHint:
+          chatChannelAdd: "チャンネル",
+          chatChannelAddHint:
             "メンバーが参加するチャンネル名またはIDを入力します。例: general, random, C0123456789",
-          slackChannelAddButton: "チャンネルを追加",
-          slackChannelRemove: "チャンネルを削除",
-          slackChannelsEmpty: "Slackチャンネルはまだ設定されていません。",
-          slackParticipationChannel: "チャンネル",
-          slackParticipationPolicy: "会話への参加条件",
-          slackParticipationOptions: {
+          chatChannelAddButton: "チャンネルを追加",
+          chatChannelRemove: "チャンネルを削除",
+          chatChannelsEmpty: "チャットのチャンネルはまだ設定されていません。",
+          chatParticipationChannel: "チャンネル",
+          chatParticipationPolicy: "会話への参加条件",
+          chatParticipationOptions: {
             social: "積極的に参加",
             strict: "必要なときだけ参加",
             muted: "メンションのみに対応",
           },
-          slackParticipationDescriptions: {
+          chatParticipationDescriptions: {
             social:
               "雑談チャンネル向け。メンションされていない会話にも、エージェントが自然に一言だけ入る余地を作ります。",
             strict:
@@ -3215,12 +2805,11 @@ const resources = {
           editingBadge: "編集中: {{id}}",
           changedTitle: "このメンバーの設定が変更されました",
           changedBody:
-            "このフォームを開いた後に、保存された設定が変更されました。入力はそのまま残っています。保存する前に、最新の設定を再読込して入力を置き換えてください。AI 設定・GitHub・Slack など、すべてのタブの入力が置き換わります。",
+            "このフォームを開いた後に、保存された設定が変更されました。入力はそのまま残っています。保存する前に、最新の設定を再読込して入力を置き換えてください。AI 設定や連携先のアカウントなど、すべてのタブの入力が置き換わります。",
           changedSaveHint:
             "設定が変更されたため保存できません。上の案内から最新の設定を再読込してください。",
           reloadButton: "最新の設定を再読込",
           loadError: "メンバー詳細の取得に失敗しました",
-          resolveError: "メンバー識別子の解決に失敗しました",
           addError: "メンバー追加に失敗しました",
           updateError: "メンバー更新に失敗しました",
           deleteError: "メンバー削除に失敗しました",
@@ -3272,7 +2861,7 @@ const resources = {
           diagnostics: {
             title: "メンバー設定の検証",
             description:
-              "このメンバーの設定を読み取り専用で検証します。GitHub や Slack のデータは更新しません。",
+              "このメンバーの設定を読み取り専用で検証します。連携先のデータは更新しません。",
             run: "このメンバーを検証",
             notRun: "変更を保存した後に検証を実行してください。",
             failed: "検証に失敗しました",
@@ -3285,54 +2874,6 @@ const resources = {
             saveFirstBody:
               "検証は保存済みの設定を対象に実行します。メンバーを追加または保存してから検証してください。",
           },
-        },
-        github: {
-          title: "GitHub",
-          subtitle: "このプロジェクトの GitHub Projects 連携を設定します。",
-          decision: "GitHub連携",
-          decisionHint:
-            "メンバーに GitHub アイデンティティが必要か、GitHub 接続セクションを使うかを決めます。",
-          decisionPlaceholder: "GitHubを使うか選択",
-          disabled: "GitHubを使わない",
-          enabled: "GitHubを使う",
-          disabledTitle: "GitHub を使用しません",
-          disabledHint:
-            "GitHub が必要な routine は、プロジェクト画面で GitHub を有効にするまで起動できません。",
-          projectUrl: "GitHub Project URL",
-          projectUrlHint:
-            "タスクボードとして使う GitHub Project の URL（https://github.com/orgs/<組織>/projects/<番号> 形式）。",
-          projectUrlMissingTitle: "GitHub Project URL が未設定です",
-          projectUrlMissingHint:
-            "プロジェクトセクションで GitHub Project URL を入力すると、以下のボード設定が利用できます。",
-          laneMapping: "レーンマッピング",
-          laneMappingHint:
-            "ワークフローのレーンを GitHub Project の status option に対応付けます。標準的な Todo / In Progress / Done のボードなら既定値のままで動作します。",
-          laneMappingManualHint:
-            "status options を自動取得できませんでした。GitHub Project で使っている status 名を入力してください（既定は Todo / In Progress / Done）。",
-          laneReady: "着手可能レーン",
-          laneWorking: "作業中レーン",
-          laneWorkingHint:
-            "着手時にチケットをここへ移動します。このレーンがボード上に存在しない場合は移動を行いません。",
-          laneDone: "完了レーン",
-          agentField: "Agent (エージェント割り当て用) フィールド設定",
-          agentFieldHint:
-            "非人間メンバーは Project の Agent 単一選択フィールド経由でチケットを割り当てます。ここでフィールドを作成し、メンバーを選択肢として登録してください。",
-          agentFieldNeedsProject: "先に上の GitHub Project URL を正しく入力してください。",
-          agentFieldLoading: "Agent フィールドの状態を取得しています...",
-          agentFieldUnavailableTitle: "Agent フィールドの状態を取得できません",
-          agentFieldUnavailableHint:
-            "GitHub 認証情報を持つ有効メンバーの保存と、到達可能な Project が必要です。先にメンバーを保存してから、このセクションを開き直してください。",
-          agentFieldStatus: "Agent フィールド:",
-          agentFieldExists: "あり",
-          agentFieldMissing: "未作成",
-          agentFieldRegistered: "登録済みメンバー",
-          agentFieldNoMembers: "選択肢として登録されたメンバーはまだありません。",
-          agentFieldMissingMembers: "未登録",
-          agentFieldCreate: "Agent フィールドを作成",
-          agentFieldAddMembers: "メンバーを追加（{{count}}）",
-          agentFieldUpToDate: "設定済み",
-          agentFieldError:
-            "Agent フィールドを更新できませんでした。メンバーの認証情報と Project URL を確認してください。",
         },
         save: {
           action: "保存",
@@ -3354,11 +2895,6 @@ const resources = {
         validation: {
           workspaceRequired: "ワークスペースは必須です。",
           descriptionRequired: "プロジェクトの説明は必須です。",
-          githubDecisionRequired: "GitHubを使うか選択してください。",
-          githubProjectRequired: "GitHub Project URL が必要です。",
-          laneReadyDoneSame: "着手可能レーンと完了レーンは異なる必要があります。",
-          githubProjectInvalid:
-            "GitHub Project URL は https://github.com/orgs/<org>/projects/<number> または https://github.com/users/<user>/projects/<number> の形式で入力してください。",
           memberIdRequired: "メンバーIDは必須です。",
           memberIdInvalid: "メンバーIDは小文字英数字、アンダースコア、ハイフンのみ使えます。",
           memberIdDuplicate: "このメンバーIDはすでに使われています。",
@@ -3371,37 +2907,7 @@ const resources = {
           memberCharacterJoinWhenRequired: "会話に参加する場面は必須です。",
           memberCharacterAvoidWhenRequired: "参加を控える場面は必須です。",
           memberCharacterContributionRequired: "参加時の貢献スタイルは必須です。",
-          memberGithubAppsUrlRequired: "GitHub Apps URL を入力し、「解決」を実行してください。",
-          memberGithubIdentityNotFound:
-            "このGitHub識別子は解決できませんでした。ユーザー名、メール、GitHub Apps URL を確認してください。",
-          memberGithubIdentityResolveFailed:
-            "GitHub識別子の解決に失敗しました。ネットワーク接続を確認して再実行してください。",
-          memberGithubAppsUrlInvalid:
-            "GitHub Apps URL は https://github.com/organizations/<org>/settings/apps/<app> の形式で入力してください。",
-          memberGithubUsernameRequired:
-            "GitHub識別子を解決するか、GitHubユーザー名を入力してください。",
-          memberGithubUsernameInvalid:
-            "有効なGitHubユーザー名を入力してください。この欄ではメールアドレスは使えません。",
-          memberGitEmailRequired: "GitHub識別子を解決するか、Gitメールアドレスを入力してください。",
-          memberGitEmailInvalid: "有効なメールアドレスを入力してください。",
-          githubInstallationIdRequired: "GitHub Installation ID は必須です。",
-          githubInstallationIdInvalid: "GitHub Installation ID は数字のみで入力してください。",
-          githubAppIdRequired: "GitHub App ID は必須です。",
-          githubAppIdInvalid: "GitHub App ID は数字のみで入力してください。",
-          githubPrivateKeyPathRequired: "GitHub秘密鍵パスは必須です。",
-          githubAccessTokenRequired: "GitHubアクセストークンは必須です。",
-          githubAccessTokenInvalid:
-            "GitHubアクセストークンは ghp_、gho_、ghu_、ghs_、ghr_、github_pat_ のいずれかで始まる値を入力してください。",
-          slackUserIdRequired: "人間メンバーには Slack User ID が必要です。",
-          slackUserIdInvalid: "Slack User ID は U で始まる値を入力してください。",
-          slackBotTokenRequired:
-            "参加するSlackチャンネルを設定する場合、Slack Bot トークンは必須です。",
-          slackBotTokenInvalid: "Slack Bot トークンは xoxb- で始まる値を入力してください。",
-          slackAppTokenRequired:
-            "参加するSlackチャンネルを設定する場合、Slack App トークンは必須です。",
-          slackAppTokenInvalid: "Slack App トークンは xapp- で始まる値を入力してください。",
-          slackChannelsInvalid:
-            "Slackチャンネル名またはIDを入力してください。チャンネル名には日本語、英小文字、数字、ハイフン、アンダーバーが使えます。例: general, 開発, C0123456789",
+          chatChannelsInvalid: "チャットが受け付けるチャンネル名または ID を入力してください。",
         },
       },
       service: {
@@ -3483,14 +2989,14 @@ const resources = {
           effort: "エフォート: {{level}}",
           source: "ソース",
           search: "検索",
-          searchPlaceholder: "trace id / コマンド / エラー / #42 / GitHub URL...",
+          searchPlaceholder: "trace id / コマンド / エラー / #42 / URL...",
           searchClear: "検索をクリア",
           displayed: "表示件数",
           displayedValue: "最新 {{count}} 件（上限 {{limit}} 件）",
           ticket: {
             clear: "チケット絞り込みを解除",
             filterTo: "このチケットの全実行を表示",
-            open: "GitHub で開く",
+            open: "チケットを開く",
           },
           empty: "まだ実行履歴がありません。",
           selectHint: "実行を選択するとタイムラインを表示します。",
@@ -3717,12 +3223,12 @@ const resources = {
         scenarioDiagnostics: {
           run: "設定を検証",
           notRun:
-            "LLM、AI CLIツール、GitHub、Slack、Git を読み取り専用で検証します。GitHub や Slack のデータは更新しません。",
+            "LLM、AI CLIツール、連携先、Git を読み取り専用で検証します。連携先のデータは更新しません。",
           running: "設定を検証しています...",
           failed: "検証に失敗しました",
           ok: "設定を検証しました",
           okDescription:
-            "{{count}}件のチェックに問題はありません。GitHub / Slack の検証は読み取り専用です。",
+            "{{count}}件のチェックに問題はありません。連携先は読み取り専用で検証しています。",
           target: "対象",
         },
         diagnosticSections: {
@@ -3730,8 +3236,6 @@ const resources = {
           members: "メンバー",
           llm: "LLM",
           cli_agent: "AI CLIツール",
-          github: "GitHub",
-          slack: "Slack",
           git: "Git",
         },
         diagnosticSuccess: {
@@ -3760,37 +3264,6 @@ const resources = {
             title: "AI CLIツールの検証に成功しました",
             description:
               "設定された AI CLIツールが CliAgentBrain 経由で実行され、最小の読み取り専用リクエストに応答しました。",
-          },
-          github_not_configured: {
-            title: "GitHub は未設定です",
-            description:
-              "このプロジェクトは GitHub を使わないため、GitHub 検証をスキップしました。",
-          },
-          github_project_access: {
-            title: "GitHub Project を読み取れました",
-            description: "GitHub を更新せず、Project の status options を取得できました。",
-          },
-          github_lane_mapping: {
-            title: "ワークフローのレーンが有効です",
-            description: "着手可能レーンと完了レーンが GitHub Project に存在します。",
-          },
-          github_agent_assignment: {
-            title: "メンバーにチケットを割り当て可能です",
-            description:
-              "GitHub ユーザーアカウントとして解決できるか、対応する Agent field option が存在します。",
-          },
-          slack_not_configured: {
-            title: "Slack チャンネルは未設定です",
-            description:
-              "このメンバーには Slack チャンネルがないため、Slack 検証をスキップしました。",
-          },
-          slack_bot_auth: {
-            title: "Slack Bot 認証に成功しました",
-            description: "Slack Bot の identity を読み取れました。",
-          },
-          slack_channel_history: {
-            title: "Slack チャンネル履歴を読み取れました",
-            description: "メッセージを投稿せず、チャンネル履歴を読み取れました。",
           },
         },
         diagnosticChecks: {
@@ -3834,11 +3307,6 @@ const resources = {
             description:
               "設定された CliAgentBrain が最小の読み取り専用リクエストを完了できませんでした。詳細を確認してください。",
           },
-          github_credential: {
-            title: "メンバーの GitHub 認証情報が不足しています",
-            description:
-              "GitHub ワークフローを使う前に、対象メンバーの GitHub 認証情報を設定してください。",
-          },
           llm_live_call: {
             title: "LLM の検証に失敗しました",
             description: "選択中の LLM provider が最小リクエストを受け付けませんでした。",
@@ -3851,68 +3319,10 @@ const resources = {
                 "選択中の LLM provider が一時的にリクエストを制限しています。しばらくしてから再度お試しください。",
             },
           },
-          github_project_access: {
-            title: "GitHub Project にアクセスできません",
-            description: "このメンバーの認証情報で GitHub Project を読み取れませんでした。",
-          },
-          github_lane_missing: {
-            title: "ワークフローのレーンが不足しています",
-            description:
-              "設定した着手可能レーンまたは完了レーンが GitHub Project の status options に見つかりません。",
-          },
-          github_working_lane_missing: {
-            title: "作業中レーンが見つかりません",
-            description:
-              "設定した作業中レーンが GitHub Project の status に存在しないため、着手時にチケットを移動しません。",
-          },
-          github_member_not_assignable: {
-            title: "メンバーにチケットを割り当てられません",
-            description:
-              "メンバーの GitHub ユーザー名を GitHub ユーザーアカウントとして解決できませんでした。GitHub ユーザー名を確認してください。",
-          },
-          github_agent_field_required: {
-            title: "メンバーにチケットを割り当てられません",
-            description:
-              "GitHub ユーザーとして解決できず、Agent field option もありません。このメンバーの Agent field を設定してください。",
-          },
-          github_access: {
-            title: "GitHub の読み取り検証に失敗しました",
-            description:
-              "Project または repository の読み取りに失敗しました。GitHub 認証情報とリポジトリ設定を確認してください。",
-          },
-          slack_app_token: {
-            title: "Slack App トークンが不足しています",
-            description: "Socket Mode runtime には、このメンバーの Slack App トークンが必要です。",
-          },
-          slack_bot_auth: {
-            title: "Slack Bot 認証に失敗しました",
-            description:
-              "Slack Bot 認証に失敗しました。メンバーの Slack Bot トークンを確認してください。",
-          },
-          slack_channel: {
-            title: "Slack チャンネルを解決できません",
-            description: "設定された Slack チャンネル名または ID を解決できませんでした。",
-          },
-          slack_channel_history: {
-            title: "Slack チャンネル履歴を読み取れません",
-            description:
-              "Slack チャンネル履歴を読み取れませんでした。チャンネル権限と token scope を確認してください。",
-          },
-          slack_channel_not_joined: {
-            title: "Bot が #{{channel}} に参加していません",
-            description:
-              "Bot が #{{channel}} のメンバーではないため、履歴を読み取れません。このチャンネルで /invite @{{bot_name}} を実行して招待してください。",
-          },
-          slack_access: {
-            title: "Slack の読み取り検証に失敗しました",
-            description:
-              "Slack の読み取りアクセスに失敗しました。Slack トークンとチャンネル設定を確認してください。",
-          },
         },
         config: "設定ファイル",
         ready: "設定済み",
         missing: "未設定",
-        github: "GitHub",
         enabled: "有効",
         disabled: "未設定",
         activeMembers: "有効なメンバー",
@@ -3977,9 +3387,9 @@ const resources = {
           workerValue: "{{workers}}",
           processed: "受信イベント",
           processedValue: "受信 {{drained}} / 失敗 {{failures}}",
-          authFailedTitle: "Slack 認証に失敗しました",
+          authFailedTitle: "チャットの認証に失敗しました",
           authFailedBody:
-            "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
+            "チャットが次のメンバーの資格情報を拒否しました: {{persons}}。これらのメンバーは資格情報を修正してサービスを再起動するまでイベントを受信できません。",
           chatReset: {
             description:
               "現在までのチャットメッセージ（受信済み・未処理を含む）をすべて無視します。次回開始以降に届くメッセージだけを処理します。",
@@ -3987,7 +3397,7 @@ const resources = {
             stoppedOnlyHint: "サービス停止中のみ実行できます。",
             confirmTitle: "過去のチャットメッセージを無視する",
             confirmBody:
-              "アクティブな全 Slack メンバーの受信済み・未処理メッセージを破棄し、カットオフを現在時刻に移動します。この操作は取り消せません。",
+              "アクティブな全チャットメンバーの受信済み・未処理メッセージを破棄し、カットオフを現在時刻に移動します。この操作は取り消せません。",
             confirm: "メッセージを破棄",
             cancel: "キャンセル",
             successBody:
@@ -4143,10 +3553,11 @@ const resources = {
         },
         requirements: {
           environment: "隔離環境",
-          github: "GitHub",
-          slack: "Slack",
           cli_agent: "AI CLIツール",
           llm: "LLM",
+          code_hosting_service: "コードホスティング",
+          ticket_service: "チケット",
+          chat_service: "チャット",
         },
         requirementUnmet: "{{requirement}}：{{reason}}",
         status: {
@@ -4283,6 +3694,23 @@ export function normalizeLanguage(value: string | null | undefined): AppLanguage
     return "en";
   }
   return null;
+}
+
+for (const provider of providerResources) {
+  for (const language of ["en", "ja"] as const) {
+    mergeInto(resources[language].translation, provider[language]);
+  }
+}
+
+function mergeInto(target: Record<string, unknown>, source: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(source)) {
+    const current = target[key];
+    if (typeof value === "object" && typeof current === "object" && current) {
+      mergeInto(current as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      target[key] = value;
+    }
+  }
 }
 
 i18n.use(initReactI18next).init({

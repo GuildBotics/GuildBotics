@@ -31,8 +31,6 @@ __all__ = [
     "clean_existing_avatars",
     "download_avatar",
     "find_avatar_file",
-    "get_github_avatar_url",
-    "get_slack_avatar_url",
     "read_upload",
     "require_shareable_avatar",
     "store_avatar",
@@ -122,67 +120,3 @@ async def download_avatar(url: str) -> tuple[bytes, str]:
         suffix = url_suffix if url_suffix in SUPPORTED_EXTENSIONS else ".png"
 
     return content, suffix
-
-
-async def get_github_avatar_url(github_username: str) -> str:
-    headers = {"User-Agent": "GuildBotics-App"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"https://api.github.com/users/{github_username}",
-            headers=headers,
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    avatar_url = data.get("avatar_url")
-    if not avatar_url:
-        raise ValueError(f"GitHub user '{github_username}' has no avatar URL.")
-    return str(avatar_url)
-
-
-async def get_slack_avatar_url(slack_user_id: str | None, slack_bot_token: str) -> str:
-    headers = {"Authorization": f"Bearer {slack_bot_token}"}
-    async with httpx.AsyncClient() as client:
-        if not slack_user_id:
-            auth_response = await client.post(
-                "https://slack.com/api/auth.test",
-                headers=headers,
-                timeout=10.0,
-            )
-            auth_response.raise_for_status()
-            auth_data = auth_response.json()
-            if not auth_data.get("ok"):
-                error = auth_data.get("error", "unknown_error")
-                raise ValueError(f"Slack auth.test error: {error}")
-            slack_user_id = auth_data.get("user_id")
-
-        if not slack_user_id:
-            raise ValueError("Could not resolve Slack User ID.")
-
-        response = await client.get(
-            "https://slack.com/api/users.info",
-            params={"user": slack_user_id},
-            headers=headers,
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    if not data.get("ok"):
-        error = data.get("error", "unknown_error")
-        raise ValueError(f"Slack API error: {error}")
-
-    user_info = data.get("user", {})
-    profile = user_info.get("profile", {})
-
-    # Try multiple resolution sizes, fallback to default profile image
-    avatar_url = (
-        profile.get("image_512")
-        or profile.get("image_192")
-        or profile.get("image_72")
-        or profile.get("image_original")
-    )
-    if not avatar_url:
-        raise ValueError(f"Slack user '{slack_user_id}' has no avatar URL.")
-    return str(avatar_url)

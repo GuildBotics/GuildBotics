@@ -161,6 +161,22 @@ class SlackChatService(ChatService):
             workspace=str(payload.get("team", "")),
         )
 
+    async def get_user_avatar_url(self, user_id: str) -> str:
+        """The URL of the largest profile image of ``user_id``.
+
+        Raises:
+            SlackUnreachableError: If the user has none.
+        """
+        payload = await self._post_form("users.info", {"user": user_id})
+        user = payload.get("user")
+        profile = user.get("profile") if isinstance(user, dict) else None
+        images = profile if isinstance(profile, dict) else {}
+        for size in ("image_512", "image_192", "image_72", "image_original"):
+            image = images.get(size)
+            if isinstance(image, str) and image:
+                return image
+        raise SlackUnreachableError("users.info", "the answer names no image")
+
     async def check_credentials(self) -> list[CredentialCheck]:
         """Try the bot token with ``auth.test`` and the app-level token with
         ``apps.connections.open``, the call the event listener makes; a failure

@@ -6,16 +6,22 @@ import i18n
 import pytest
 
 from guildbotics.entities.team import Person
+from guildbotics.integrations.provider import SetupError
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup.setup_service import (
+    MEMBER_SECRET_NAMES,
     PersonSetupInput,
     PersonUpdateInput,
-    SetupServiceError,
     SimplePersonSetupService,
 )
 from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.person_id import MemberConfigError, person_secret_env_keys
+from guildbotics.utils.person_id import (
+    MemberConfigError,
+    PersonEnvPrefixConflictError,
+    ambiguous_person_secret,
+    person_secret_prefix,
+)
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
@@ -43,8 +49,6 @@ def member_input(config, **overrides):
             "person_name": "Test",
             "person_type": "agent",
             "is_active": True,
-            "github_username": "",
-            "git_email": "",
             **overrides,
         }
     )
@@ -61,22 +65,35 @@ def member_input(config, **overrides):
     ],
 )
 def test_person_prefix_format_is_shared(tmp_path, name, prefix):
-    assert person_secret_env_keys(tmp_path, name) == {
-        "GITHUB_ACCESS_TOKEN": f"{prefix}_GITHUB_ACCESS_TOKEN",
-        "GITHUB_PRIVATE_KEY": f"{prefix}_GITHUB_PRIVATE_KEY",
-        "SLACK_BOT_TOKEN": f"{prefix}_SLACK_BOT_TOKEN",
-        "SLACK_APP_TOKEN": f"{prefix}_SLACK_APP_TOKEN",
-    }
+    assert person_secret_prefix(tmp_path, name) == f"{prefix}_"
 
 
-def test_pending_alias_cannot_read_an_existing_members_slack_tokens(
-    namespace_workspace, monkeypatch
-):
+def test_prefix_is_refused_while_another_member_shares_it(namespace_workspace):
+    members = namespace_workspace / "team/members"
     stored_member(namespace_workspace, "alice-bak")
-    forbid_store(monkeypatch)
-    assert SimplePersonSetupService().read_slack_tokens(
-        config_dir=namespace_workspace, person_id="alice_bak"
-    ) == ("", "")
+
+    with pytest.raises(PersonEnvPrefixConflictError) as error:
+        person_secret_prefix(members, "alice_bak")
+
+    assert error.value.conflicts == [members / "alice-bak"]
+    # A rename's source does not conflict with its own target.
+    assert person_secret_prefix(members, "alice_bak", exclude="alice-bak") == (
+        "ALICE_BAK_"
+    )
+
+
+def test_a_key_is_ambiguous_by_the_member_of_its_longest_prefix(
+    namespace_workspace,
+):
+    for name in ("alice-bak", "alice_bak", "alice_bak_other", "bob"):
+        stored_member(namespace_workspace, name)
+
+    ambiguous = ambiguous_person_secret(namespace_workspace / "team/members")
+
+    assert ambiguous("ALICE_BAK_SLACK_BOT_TOKEN") is True
+    assert ambiguous("ALICE_BAK_OTHER_SLACK_BOT_TOKEN") is False
+    assert ambiguous("BOB_SLACK_BOT_TOKEN") is False
+    assert ambiguous("OPENAI_API_KEY") is False
 
 
 def test_repair_can_store_new_credentials_at_unique_target(namespace_workspace):
@@ -88,7 +105,9 @@ def test_repair_can_store_new_credentials_at_unique_target(namespace_workspace):
     SimplePersonSetupService().update_person(
         PersonUpdateInput(
             **member_input(
-                config, person_id="repaired", slack_bot_token="fake-new"
+                config,
+                person_id="repaired",
+                accounts={"slack": {"bot_token": "fake-new"}},
             ).model_dump(),
             original_person_id="alice-bak",
         )
@@ -123,9 +142,11 @@ def test_save_refuses_other_namespace_owner_before_secrets(
     previous = i18n.get("locale")
     i18n.set("locale", language)
     try:
-        with pytest.raises(SetupServiceError) as error:
+        with pytest.raises(SetupError) as error:
             data = member_input(
-                config, person_id=target, slack_bot_token="fake-new-token"
+                config,
+                person_id=target,
+                accounts={"slack": {"bot_token": "fake-new-token"}},
             )
             if action == "create":
                 service.write_person(data)
@@ -160,7 +181,7 @@ def test_load_refuses_all_colliding_configs_even_invalid_ones(
         assert str(path) in str(error.value)
 
 
-@pytest.mark.parametrize("action", ["snapshot", "slack", "rename", "delete"])
+@pytest.mark.parametrize("action", ["snapshot", "rename", "delete"])
 @pytest.mark.parametrize("names", [("alice-bak", "alice_bak"), ("Alice", "alıce")])
 def test_repair_preserves_ambiguous_secrets_without_access(
     namespace_workspace, monkeypatch, tmp_path, names, action
@@ -168,7 +189,8 @@ def test_repair_preserves_ambiguous_secrets_without_access(
     config = namespace_workspace
     paths = [stored_member(config, name) for name in names]
     store = KeyringSecretStore(config)
-    keys = person_secret_env_keys(tmp_path, names[0]).values()
+    prefix = person_secret_prefix(tmp_path, names[0])
+    keys = [prefix + name for name in MEMBER_SECRET_NAMES]
     for key in keys:
         store.set(key, "fake-existing-value")
     before = store.location.read_bytes()
@@ -177,18 +199,13 @@ def test_repair_preserves_ambiguous_secrets_without_access(
         service = SimplePersonSetupService()
         if action == "snapshot":
             snapshot = service.read_person_config(config_dir=config, person_id=names[0])
+            assert snapshot.secret_env_keys == {}
+            assert set(snapshot.accounts) == {"github", "slack"}
             assert not any(
-                [
-                    snapshot.has_github_access_token,
-                    snapshot.has_github_private_key,
-                    snapshot.has_slack_bot_token,
-                    snapshot.has_slack_app_token,
-                ]
-            )
-        elif action == "slack":
-            assert service.read_slack_tokens(config_dir=config, person_id=names[0]) == (
-                "",
-                "",
+                value
+                for view in snapshot.accounts.values()
+                for field, value in view.items()
+                if field.startswith("has_")
             )
         elif action == "rename":
             service.update_person(

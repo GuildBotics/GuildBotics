@@ -13,8 +13,6 @@ import {
   buildAgentEnvironment,
   cloneWorkspaceFromHub,
   deleteMemberConfig,
-  ensureAgentField,
-  getAgentFieldState,
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
@@ -25,27 +23,25 @@ import {
   getMemberConfig,
   getAgentEnvironmentStatus,
   getProjectConfig,
-  getProjectStatusOptions,
   getRoleOptions,
   getTeam,
   getWorkspaceSyncStatus,
+  importAvatarFromProvider,
   initConfig,
-  resolveMemberIdentity,
   runScenarioDiagnostics,
-  startGitHubAppRegistration,
   stopScheduler,
   updateDefaultPerson,
   updateIntelligenceConfig,
   updateMemberConfig,
   updateProjectConfig,
-  verifySlackTokens,
   type CommandOption,
   type ConfigStatus,
   type IntelligenceConfig,
   type MemberConfig,
+  type ProjectServices,
+  type ProviderOption,
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
-  type GitHubAppRegistrationStatus,
 } from "../api/client";
 import { type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
@@ -54,6 +50,15 @@ import i18n from "../i18n";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 import { SyncAlerts } from "../sync/SyncAlerts";
+import {
+  ensureAgentField,
+  getAgentFieldState,
+  getStatusOptions,
+  resolveUser,
+  startAppRegistration,
+  type AppRegistrationStatus,
+} from "./providers/github/api";
+import { verifySlackTokens } from "./providers/slack/api";
 import {
   type ScheduledCommandDraft,
   SetupPage,
@@ -64,13 +69,11 @@ import {
   createScheduledCommandDraft,
   draftToCron,
   getMemberFieldErrors,
-  getMemberResolveErrorMessage,
   initialProjectValues,
   isValidCron,
   parseCharacterFields,
   parseCommandExpression,
   parseCron,
-  parseGitHub,
   quoteCommandArg,
   splitCommandLine,
   toIntelligenceUpdatePayload,
@@ -247,19 +250,6 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
     getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
-    getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
-    getAgentFieldState: vi.fn(async () => ({
-      available: false,
-      exists: false,
-      options: [],
-      missing: [],
-    })),
-    ensureAgentField: vi.fn(async () => ({
-      available: true,
-      exists: true,
-      options: [],
-      missing: [],
-    })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
       revisions: {},
@@ -267,11 +257,11 @@ vi.mock("../api/client", async (importOriginal) => {
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
-      github_enabled: false,
-      github_project_url: "",
-      lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+      services: {},
       provider_api_keys: { openai: true, gemini: false, anthropic: false },
     })),
+    getProviders: vi.fn(async () => PROVIDERS),
+    importAvatarFromProvider: vi.fn(async () => ({ avatar_timestamp: 2 })),
     getRoleOptions: vi.fn(async () => ({
       roles: [{ role_id: "product", summary: "Product", description: "" }],
     })),
@@ -281,12 +271,6 @@ vi.mock("../api/client", async (importOriginal) => {
       members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
     })),
     initConfig: vi.fn(async () => configWriteResponse()),
-    resolveMemberIdentity: vi.fn(async () => ({
-      person_id: "alice",
-      github_username: "alice",
-      github_user_id: 1,
-      git_email: "alice@example.com",
-    })),
     runScenarioDiagnostics: vi.fn(async () => ({
       ok: true,
       active_members: ["alice"],
@@ -345,6 +329,43 @@ vi.mock("../api/client", async (importOriginal) => {
       },
       active_works: [],
     })),
+    updateDefaultPerson: vi.fn(async () => configWriteResponse()),
+    updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
+    updateMemberConfig: vi.fn(async () => configWriteResponse()),
+    updateProjectConfig: vi.fn(async () => configWriteResponse()),
+  };
+});
+vi.mock("./providers/github/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./providers/github/api")>();
+  return {
+    ...actual,
+    getStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
+    getAgentFieldState: vi.fn(async () => ({
+      available: false,
+      exists: false,
+      options: [],
+      missing: [],
+    })),
+    ensureAgentField: vi.fn(async () => ({
+      available: true,
+      exists: true,
+      options: [],
+      missing: [],
+    })),
+    resolveUser: vi.fn(async () => ({
+      person_id: "alice",
+      username: "alice",
+      user_id: 1,
+      git_email: "alice@example.com",
+    })),
+    startAppRegistration: vi.fn(),
+    getAppRegistration: vi.fn(),
+  };
+});
+vi.mock("./providers/slack/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./providers/slack/api")>();
+  return {
+    ...actual,
     startSlackAppRegistration: vi.fn(async () => ({
       app_name: "alice",
       registration_url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
@@ -363,12 +384,8 @@ vi.mock("../api/client", async (importOriginal) => {
       app_token_ok: true,
       app_token_error: "",
       app_token_source: "input",
+      channels: [],
     })),
-    updateDefaultPerson: vi.fn(async () => configWriteResponse()),
-    updateIntelligenceConfig: vi.fn(async () => configWriteResponse()),
-    updateMemberConfig: vi.fn(async () => configWriteResponse()),
-    updateProjectConfig: vi.fn(async () => configWriteResponse()),
-    startGitHubAppRegistration: vi.fn(),
   };
 });
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
@@ -435,14 +452,15 @@ function userOnFakeClock() {
 }
 
 describe("SetupPage", () => {
-  it("opens the requested member and editor tab from a deep link", async () => {
+  it("opens the requested member and provider account tab from a deep link", async () => {
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
     renderSetupPage("/setup?section=members&person_id=alice&tab=github");
 
     await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
     expect(
       await screen.findByText(t("setup.members.editingBadge", { id: "alice" })),
     ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: t("setup.members.tabs.github") })).toHaveAttribute(
+    expect(await screen.findByRole("tab", { name: "GitHub" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -609,6 +627,17 @@ describe("SetupPage", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
+  it("puts the integrations before the members whose accounts follow them", async () => {
+    renderSetupPage("/setup");
+
+    const integrations = await screen.findByRole("button", { name: t("setup.nav.integrations") });
+    const members = screen.getByRole("button", { name: t("setup.nav.members") });
+
+    expect(
+      integrations.compareDocumentPosition(members) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("allows sidebar navigation after opening a members deep link", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup?section=members&tab=patrol");
@@ -644,7 +673,7 @@ describe("SetupPage", () => {
 
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/empty-workspace"));
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
-    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
   });
 
@@ -710,7 +739,7 @@ describe("SetupPage", () => {
     // and the section explains what is still missing.
     expect(screen.queryByText(t("setup.intelligence.apiKeyConfigured"))).not.toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.apiKeyRequiredTitle"))).toBeInTheDocument();
-    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
   });
 
   it("completes the LLM section in first setup once the selected provider key is typed", async () => {
@@ -728,7 +757,7 @@ describe("SetupPage", () => {
     expect(
       await screen.findByText(t("setup.intelligence.apiKeyRequiredTitle")),
     ).toBeInTheDocument();
-    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", {
@@ -742,7 +771,7 @@ describe("SetupPage", () => {
         screen.queryByText(t("setup.intelligence.apiKeyRequiredTitle")),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 2 of 4 sections completed")).toBeInTheDocument();
   });
 
   it("keeps the stored key valid for the LLM section of a configured workspace", async () => {
@@ -839,7 +868,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
-    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByText(t("setup.saveMode.manual"))).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
@@ -1033,7 +1062,7 @@ describe("SetupPage", () => {
     expect(vi.mocked(forceUpdateCliAgentSkill).mock.calls[0][0]).toBe("codex");
   });
 
-  it("marks GitHub section ready for the disabled decision and incomplete when enabled without URLs", async () => {
+  it("offers per kind the providers serving it and shows the chosen one's fields", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
@@ -1042,56 +1071,76 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
 
-    // The GitHub use/don't decision lives in the Project section (default).
-    // The control is a Mantine Select; its listbox shares the accessible
-    // label, so target the input via its combobox role.
-    const decision = await screen.findByRole("combobox", { name: "GitHub integration" });
-    await user.click(decision);
-    await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
+    // Each kind is optional: using none of them is complete.
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
 
-    // Choosing "use" reveals the required Project URL right below the decision.
-    expect(screen.getByLabelText(t("setup.github.projectUrl"))).toBeEnabled();
+    // Only the providers serving a kind are offered for it.
+    await user.click(
+      screen.getByRole("combobox", { name: t("setup.integrations.kinds.chat_service") }),
+    );
+    expect(await screen.findByRole("option", { name: "Slack" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "GitHub" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
 
-    // Without a URL the GitHub section only points back to the Project section.
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
-    expect(screen.getByText(t("setup.github.projectUrlMissingHint"))).toBeInTheDocument();
+    // Choosing a provider shows its items, and the section stays incomplete
+    // until they are valid.
+    await chooseProvider(user, "ticket_service", "GitHub");
+    const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
+    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
+    await fill(user, projectUrl, PROJECT_URL);
+    await waitFor(() =>
+      expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument(),
+    );
 
-    // Switch the decision off from the Project section: the URL field
-    // disappears and the GitHub section shows the disabled hint instead.
-    await user.click(screen.getByRole("button", { name: "Project" }));
-    await user.click(screen.getByRole("combobox", { name: "GitHub integration" }));
-    await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    // Code hosting starts from the board's owner.
+    await chooseProvider(user, "code_hosting_service", "GitHub");
+    expect(screen.getByLabelText(t("setup.github.owner"))).toHaveValue("acme");
+
+    // Not using the kind any more drops its items.
+    await chooseProvider(user, "ticket_service", t("setup.integrations.none"));
     expect(screen.queryByLabelText(t("setup.github.projectUrl"))).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
-    expect(screen.getByText(t("setup.github.disabledHint"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t("setup.github.owner"))).toBeInTheDocument();
   });
 
-  it("offers fetched status options for lane mapping when GitHub is enabled", async () => {
+  it("saves the chosen services from the integrations section", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    await chooseProvider(user, "ticket_service", "GitHub");
+    await fill(user, screen.getByLabelText(t("setup.github.projectUrl")), PROJECT_URL);
+    await chooseProvider(user, "code_hosting_service", "GitHub");
+    await chooseProvider(user, "chat_service", "Slack");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual(GITHUB_AND_SLACK);
+  });
+
+  it("offers fetched status options for lane mapping on the chosen board", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
-    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+    vi.mocked(getStatusOptions).mockResolvedValue({
       available: true,
       statuses: ["Backlog", "Todo", "In Progress", "Done"],
     });
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    await chooseProvider(user, "ticket_service", "GitHub");
+    await fill(user, screen.getByLabelText(t("setup.github.projectUrl")), PROJECT_URL);
 
-    // Enable GitHub and enter the Project URL, both in the Project section.
-    const decision = await screen.findByRole("combobox", { name: "GitHub integration" });
-    await user.click(decision);
-    await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
-    const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
-    await fill(user, projectUrl, "https://github.com/orgs/acme/projects/9");
-
-    // The GitHub section reads the URL from the Project section and fetches
-    // the lane options for it on open.
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    // The lane options are read live for the URL being edited.
     const readyInput = await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
+    expect(getStatusOptions).toHaveBeenCalledWith({ url: PROJECT_URL });
     expect(readyInput).toHaveValue("Todo");
     // Opening the lane Select shows every fetched option, with no filtering by
     // the current value ("Todo").
@@ -1108,26 +1157,18 @@ describe("SetupPage", () => {
 
   it("loads lane options on open when the Project URL is already configured", async () => {
     const user = userEvent.setup();
-    // Configured project (the default getConfigStatus mock reports an existing
-    // project file) with GitHub already enabled and a Project URL set.
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-      }),
-    );
-    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
+    vi.mocked(getStatusOptions).mockResolvedValue({
       available: true,
       statuses: ["Backlog", "Todo", "In Progress", "Done"],
     });
     renderSetupPage("/setup");
 
     await screen.findByLabelText("Project description");
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
 
-    // No blur is performed: opening the section with a pre-filled Project URL
-    // must fetch the lane options on mount, so the strict Select is populated.
+    // Opening the section with a pre-filled Project URL fetches the lane
+    // options on mount, so the strict Select is populated.
     const readyInput = await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
     await user.click(readyInput);
     expect(await screen.findByRole("option", { name: "Backlog" })).toBeInTheDocument();
@@ -1136,13 +1177,7 @@ describe("SetupPage", () => {
 
   it("shows Agent field state and adds missing members", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-      }),
-    );
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
     vi.mocked(getAgentFieldState).mockResolvedValue({
       available: true,
       exists: true,
@@ -1161,11 +1196,10 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     // Wait for the saved project config to be reflected in the form before
-    // opening the GitHub section, otherwise the agent field has no Project URL
-    // target yet.
+    // opening the integrations section, otherwise the board has no URL yet.
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Existing project"));
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
 
     // Registered and not-yet-registered members are both surfaced.
     expect(await screen.findByText("Bot One")).toBeInTheDocument();
@@ -1178,6 +1212,7 @@ describe("SetupPage", () => {
     await user.click(addButton);
 
     await waitFor(() => expect(vi.mocked(ensureAgentField)).toHaveBeenCalledTimes(1));
+    expect(ensureAgentField).toHaveBeenCalledWith({ url: PROJECT_URL });
     // After syncing nothing is missing, so the action reports it is up to date.
     expect(
       await screen.findByRole("button", { name: t("setup.github.agentFieldUpToDate") }),
@@ -1186,37 +1221,31 @@ describe("SetupPage", () => {
 
   it("clears fetched lane options when the Project URL becomes invalid", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-        lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
-      }),
-    );
-    vi.mocked(getProjectStatusOptions).mockResolvedValue({
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
+    vi.mocked(getStatusOptions).mockResolvedValue({
       available: true,
       statuses: ["Backlog", "Todo", "In Progress", "Done"],
     });
     renderSetupPage("/setup");
 
     await screen.findByLabelText("Project description");
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
 
     // Options load for the configured URL.
     await screen.findByRole("combobox", { name: t("setup.github.laneReady") });
     expect(screen.getByText(t("setup.github.laneMappingHint"))).toBeInTheDocument();
 
-    // Corrupting the URL in the Project section must drop the stale options:
-    // the GitHub section gates on the missing URL rather than showing another
-    // project's lanes.
-    await user.click(screen.getByRole("button", { name: "Project" }));
+    // Corrupting the URL drops the stale options rather than showing another
+    // project's lanes, and says what is wrong with it.
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
     await user.clear(projectUrl);
     await fill(user, projectUrl, "not-a-valid-url");
-    await user.click(screen.getByRole("button", { name: "GitHub" }));
 
-    expect(await screen.findByText(t("setup.github.projectUrlMissingHint"))).toBeInTheDocument();
+    expect(await screen.findByText(t("setup.validation.githubProjectInvalid"))).toBeInTheDocument();
     expect(screen.queryByText(t("setup.github.laneMappingHint"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: t("setup.github.laneReady") }),
+    ).not.toBeInTheDocument();
   });
 
   it("navigates between sections with the next and back buttons", async () => {
@@ -1231,11 +1260,8 @@ describe("SetupPage", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     // The Next button stays disabled until the current section is complete, so
-    // fill in the required project description and make the GitHub decision
-    // (which now lives in the Project section).
+    // fill in the required project description.
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("combobox", { name: "GitHub integration" }));
-    await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     const nextButton = screen.getByRole("button", { name: t("setup.status.next") });
     await waitFor(() => expect(nextButton).toBeEnabled());
 
@@ -1292,12 +1318,10 @@ describe("SetupPage", () => {
     await screen.findByRole("heading", { name: "First setup" });
 
     // Complete every required section so the Create action becomes available:
-    // project description, the provider API key, and a GitHub decision.
+    // the project description and the provider API key. Using no service is
+    // complete as it is.
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    // The GitHub decision now lives in the Project section.
-    await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
-    await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
@@ -1316,14 +1340,11 @@ describe("SetupPage", () => {
     await user.click(createButton);
 
     await waitFor(() => expect(initConfig).toHaveBeenCalledTimes(1));
-    // The init payload conveys "GitHub disabled" by leaving the owner /
-    // project URL fields empty (there is no github_enabled flag).
     expect(vi.mocked(initConfig).mock.calls[0][0]).toMatchObject({
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
-      owner: "",
-      github_project_url: "",
+      services: {},
       provider_api_keys: { openai: "sk-test" },
     });
     await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/workspace"));
@@ -1452,15 +1473,22 @@ describe("SetupPage", () => {
 
   it("renders the verification section and runs diagnostics", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { ticket_service: GITHUB_AND_SLACK.ticket_service } }),
+    );
     vi.mocked(runScenarioDiagnostics).mockResolvedValue(scenarioResponse());
     renderSetupPage("/setup?section=verification");
 
     await screen.findByRole("heading", { name: t("setup.verification.title") });
 
     expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
-    expect(await screen.findByText(t("overview.enabled"))).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
+    // One row per kind of service: its provider, or that it is not used.
+    const row = (kind: string) =>
+      screen.getByText(t(`setup.integrations.kinds.${kind}`)).nextElementSibling;
+    await waitFor(() => expect(row("ticket_service")).toHaveTextContent("GitHub"));
+    expect(row("code_hosting_service")).toHaveTextContent(t("overview.disabled"));
+    expect(row("chat_service")).toHaveTextContent(t("overview.disabled"));
 
     await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
 
@@ -1642,31 +1670,44 @@ function environmentStatus(
   };
 }
 
-function memberConfig() {
+const PROVIDERS: ProviderOption[] = [
+  {
+    name: "github",
+    title: "GitHub",
+    kinds: ["code_hosting_service", "ticket_service"],
+    avatar: true,
+  },
+  { name: "slack", title: "Slack", kinds: ["chat_service"], avatar: true },
+];
+
+const PROJECT_URL = "https://github.com/orgs/acme/projects/9";
+
+/** A project whose code and tickets are on GitHub and whose chat is Slack. */
+const GITHUB_AND_SLACK: ProjectServices = {
+  code_hosting_service: { name: "github", owner: "acme" },
+  ticket_service: {
+    name: "github",
+    url: PROJECT_URL,
+    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+  },
+  chat_service: { name: "slack" },
+};
+
+function memberConfig(): MemberConfig {
   return {
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
     person_type: "agent",
-    github_account_type: "",
     is_active: true,
-    github_username: "",
     git_email: "",
     roles: ["product"],
     speaking_style: "Professional",
     relationships: "",
     character: {},
-    github_installation_id: null,
-    github_app_id: null,
-    has_github_installation_id: false,
-    has_github_app_id: false,
-    has_github_private_key: false,
-    has_github_access_token: false,
-    slack_user_id: "",
-    has_slack_bot_token: false,
-    has_slack_app_token: false,
-    slack_channels: [],
-    slack_channel_participation: {},
+    accounts: {},
+    chat_channels: [],
+    chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
   };
@@ -1692,12 +1733,7 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
     llmApiType: "openai",
     cliAgent: "codex",
     providerApiKeys: {},
-    githubDecision: "disabled",
-    githubEnabled: false,
-    githubProjectUrl: "",
-    laneReady: "Todo",
-    laneWorking: "In Progress",
-    laneDone: "Done",
+    services: {},
     ...overrides,
   };
 }
@@ -1705,29 +1741,10 @@ function baseProjectValues(overrides: Partial<ProjectFormValues> = {}): ProjectF
 function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberFormValues {
   return {
     personType: "human",
-    githubAccountType: "human",
-    identity: "",
     personId: "alice",
     personName: "Alice",
-    githubUsername: "alice",
-    gitEmail: "alice@example.com",
-    githubInstallationId: "",
-    githubAppId: "",
-    githubPrivateKeyPath: "",
-    githubAppRegistrationId: "",
-    githubAccessToken: "",
-    slackUserId: "U012345678",
-    slackBotToken: "",
-    slackAppToken: "",
-    slackChannelsText: "",
-    storedMemberSecrets: {
-      githubInstallationId: false,
-      githubAppId: false,
-      githubPrivateKeyPath: false,
-      githubAccessToken: false,
-      slackBotToken: false,
-      slackAppToken: false,
-    },
+    chatChannels: [],
+    isChatChannel: (reference) => reference.trim() !== "",
     roles: ["product"],
     speakingStyle: "Professional",
     characterArchetype: "manager",
@@ -1764,9 +1781,7 @@ function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigVa
     description: "Existing project",
     llm_api_type: "openai",
     cli_agent: "codex",
-    github_enabled: false,
-    github_project_url: "",
-    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+    services: {},
     provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
   } as ProjectConfigValue;
@@ -1836,82 +1851,37 @@ describe("createProjectSchema", () => {
     expect(firstError(result, "description")).toBe(t("setup.validation.descriptionRequired"));
   });
 
-  it("requires a GitHub decision", () => {
-    const result = schema.safeParse(baseProjectValues({ githubDecision: "" }));
-    expect(firstError(result, "githubDecision")).toBe(t("setup.validation.githubDecisionRequired"));
+  it("accepts a project that uses no service", () => {
+    expect(schema.safeParse(baseProjectValues({ services: {} })).success).toBe(true);
   });
 
-  it("does not validate the GitHub Project URL when GitHub is disabled", () => {
+  it("rejects a chosen provider whose items are incomplete", () => {
     const result = schema.safeParse(
-      baseProjectValues({
-        githubDecision: "disabled",
-        githubProjectUrl: "",
-      }),
+      baseProjectValues({ services: { ticket_service: { name: "github", url: "not-a-url" } } }),
     );
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join("."))).toEqual([
+      "services.ticket_service",
+    ]);
   });
 
-  it("validates the GitHub Project URL when enabled", () => {
-    const result = schema.safeParse(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "not-a-url",
-      }),
-    );
-    expect(firstError(result, "githubProjectUrl")).toBe(t("setup.validation.githubProjectInvalid"));
-  });
-
-  it("accepts a fully valid GitHub-enabled project", () => {
-    const result = schema.safeParse(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/7",
-      }),
-    );
-    expect(result.success).toBe(true);
+  it("accepts every chosen provider with valid items", () => {
+    expect(schema.safeParse(baseProjectValues({ services: GITHUB_AND_SLACK })).success).toBe(true);
   });
 
   it("rejects identical ready and done lanes", () => {
     const result = schema.safeParse(
       baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/7",
-        laneReady: "Done",
-        laneDone: "Done",
+        services: {
+          ticket_service: {
+            name: "github",
+            url: PROJECT_URL,
+            lane_map: { ready: "Done", working: "", done: "Done" },
+          },
+        },
       }),
     );
-    expect(firstError(result, "laneDone")).toBe(t("setup.validation.laneReadyDoneSame"));
-  });
-});
-
-describe("parseGitHub", () => {
-  it("parses an organization project URL", () => {
-    const parsed = parseGitHub("https://github.com/orgs/acme/projects/12");
-    expect(parsed).toMatchObject({
-      owner: "acme",
-      organization: "acme",
-      projectId: "12",
-      projectUrl: "https://github.com/orgs/acme/projects/12",
-      projectValid: true,
-    });
-  });
-
-  it("parses a user project URL", () => {
-    const parsed = parseGitHub("https://github.com/users/alice/projects/3?query=1");
-    expect(parsed.owner).toBe("alice");
-    // A personal-account project has no organization to create a GitHub App
-    // under.
-    expect(parsed.organization).toBe("");
-    expect(parsed.projectId).toBe("3");
-    expect(parsed.projectUrl).toBe("https://github.com/users/alice/projects/3");
-    expect(parsed.projectValid).toBe(true);
-  });
-
-  it("invalidates non-github project URLs", () => {
-    const parsed = parseGitHub("https://example.com/orgs/acme/projects/1");
-    expect(parsed.projectValid).toBe(false);
-    expect(parsed.owner).toBe("");
-    expect(parsed.projectId).toBe("");
+    expect(result.success).toBe(false);
   });
 });
 
@@ -1925,8 +1895,7 @@ describe("initialProjectValues", () => {
       description: "",
       llmApiType: "openai",
       cliAgent: "codex",
-      githubDecision: "",
-      githubEnabled: false,
+      services: {},
     });
   });
 
@@ -1954,78 +1923,27 @@ describe("initialProjectValues", () => {
       projectConfig({
         language: "ja",
         description: "Existing",
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/1",
+        services: GITHUB_AND_SLACK,
       }),
     );
     expect(values.language).toBe("ja");
     expect(values.description).toBe("Existing");
-    expect(values.githubDecision).toBe("enabled");
-    expect(values.githubEnabled).toBe(true);
+    expect(values.services).toEqual(GITHUB_AND_SLACK);
     expect(values.providerApiKeys).toEqual({});
   });
 });
 
 describe("toProjectSetupRequest", () => {
-  it("omits GitHub fields when disabled", () => {
-    const request = toProjectSetupRequest(baseProjectValues({ githubDecision: "disabled" }));
+  it("sends the chosen services as the form holds them", () => {
+    const request = toProjectSetupRequest(baseProjectValues({ services: GITHUB_AND_SLACK }));
     expect(request).not.toHaveProperty("env_file_path");
     expect(request).not.toHaveProperty("env_file_option");
     expect(request.config_dir).toBe("/workspace/.guildbotics/config");
-    expect(request.owner).toBe("");
-    expect(request.project_id).toBe("");
-    expect(request.github_project_url).toBe("");
+    expect(request.services).toEqual(GITHUB_AND_SLACK);
   });
 
-  it("populates GitHub fields when enabled", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-      }),
-    );
-    expect(request.owner).toBe("acme");
-    expect(request.project_id).toBe("9");
-    expect(request.github_project_url).toBe("https://github.com/orgs/acme/projects/9");
-  });
-
-  it("includes a trimmed lane_map when GitHub is enabled", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-        laneReady: " Ready ",
-        laneWorking: " Doing ",
-        laneDone: " Shipped ",
-      }),
-    );
-    expect(request.lane_map).toEqual({
-      ready: "Ready",
-      working: "Doing",
-      done: "Shipped",
-    });
-  });
-
-  it("falls back to default lane names when fields are blank", () => {
-    const request = toProjectSetupRequest(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/9",
-        laneReady: "",
-        laneWorking: "",
-        laneDone: "",
-      }),
-    );
-    expect(request.lane_map).toEqual({
-      ready: "Todo",
-      working: "In Progress",
-      done: "Done",
-    });
-  });
-
-  it("omits lane_map when GitHub is disabled", () => {
-    const request = toProjectSetupRequest(baseProjectValues({ githubDecision: "disabled" }));
-    expect(request.lane_map).toBeUndefined();
+  it("sends no service when none is chosen", () => {
+    expect(toProjectSetupRequest(baseProjectValues()).services).toEqual({});
   });
 });
 
@@ -2050,28 +1968,14 @@ describe("toProjectUpdateRequest", () => {
     expect(request.provider_api_keys).toEqual({ openai: "sk-new" });
   });
 
-  it("disables GitHub and clears related fields", () => {
+  it("sends the chosen services against the revisions it was composed against", () => {
     const request = toProjectUpdateRequest(
-      baseProjectValues({ githubDecision: "disabled" }),
+      baseProjectValues({ services: GITHUB_AND_SLACK }),
       configStatus(),
       snapshot,
     );
-    expect(request.github_enabled).toBe(false);
-    expect(request.owner).toBe("");
-  });
-
-  it("enables GitHub from the Project URL", () => {
-    const request = toProjectUpdateRequest(
-      baseProjectValues({
-        githubDecision: "enabled",
-        githubProjectUrl: "https://github.com/orgs/acme/projects/5",
-      }),
-      configStatus(),
-      snapshot,
-    );
-    expect(request.github_enabled).toBe(true);
-    expect(request.owner).toBe("acme");
-    expect(request.project_id).toBe("5");
+    expect(request.services).toEqual(GITHUB_AND_SLACK);
+    expect(request.expected_revisions).toEqual(snapshot.revisions);
   });
 });
 
@@ -2108,11 +2012,8 @@ describe("getMemberFieldErrors", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
         personType: "agent",
-        githubAccountType: "none",
         personId: "",
         personName: "",
-        githubUsername: "",
-        gitEmail: "",
         roles: [],
         speakingStyle: "",
         characterArchetype: "",
@@ -2158,193 +2059,28 @@ describe("getMemberFieldErrors", () => {
     ).toBe(t("setup.validation.memberIdDuplicate"));
   });
 
-  it("requires an access token for machine_user members", () => {
+  it("rejects a chat channel the project's chat does not accept", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
         personType: "agent",
-        githubAccountType: "machine_user",
-        githubAccessToken: "",
+        chatChannels: ["general", "not ok"],
+        isChatChannel: (reference) => !reference.includes(" "),
       }),
       t,
     );
-    expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenRequired"));
+    expect(errors.chatChannels).toBe(t("setup.validation.chatChannelsInvalid"));
   });
 
-  it("accepts a stored access token for machine_user members", () => {
+  it("accepts chat channels the project's chat accepts", () => {
     const errors = getMemberFieldErrors(
       baseMemberValues({
         personType: "agent",
-        githubAccountType: "machine_user",
-        githubAccessToken: "",
-        storedMemberSecrets: {
-          githubInstallationId: false,
-          githubAppId: false,
-          githubPrivateKeyPath: false,
-          githubAccessToken: true,
-          slackBotToken: false,
-          slackAppToken: false,
-        },
+        chatChannels: ["general", "開発"],
+        isChatChannel: () => true,
       }),
       t,
     );
-    expect(errors.githubAccessToken).toBeUndefined();
-  });
-
-  it("validates the format of a provided access token", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "machine_user",
-        githubAccessToken: "bad-token",
-      }),
-      t,
-    );
-    expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenInvalid"));
-  });
-
-  it("requires installation id, app id, and private key path for github_apps", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "github_apps",
-        identity: "https://github.com/organizations/acme/settings/apps/my-app",
-        githubInstallationId: "",
-        githubAppId: "",
-        githubPrivateKeyPath: "",
-      }),
-      t,
-    );
-    expect(errors.githubInstallationId).toBe(t("setup.validation.githubInstallationIdRequired"));
-    expect(errors.githubAppId).toBe(t("setup.validation.githubAppIdRequired"));
-    expect(errors.githubPrivateKeyPath).toBe(t("setup.validation.githubPrivateKeyPathRequired"));
-  });
-
-  it("lets an installed registration supply the app's IDs and key", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "github_apps",
-        githubAppRegistrationId: "registration-1",
-      }),
-      t,
-    );
-    expect(errors.githubInstallationId).toBeUndefined();
-    expect(errors.githubAppId).toBeUndefined();
-    expect(errors.githubPrivateKeyPath).toBeUndefined();
-  });
-
-  it("accepts a stored private key for github_apps members", () => {
-    // After registration, the PEM content lives in the OS secret store and
-    // the path is not persisted; editing the member must not force the user
-    // to re-enter a path.
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "github_apps",
-        identity: "https://github.com/organizations/acme/settings/apps/my-app",
-        githubInstallationId: "1",
-        githubAppId: "2",
-        githubPrivateKeyPath: "",
-        storedMemberSecrets: {
-          githubInstallationId: false,
-          githubAppId: false,
-          githubPrivateKeyPath: true,
-          githubAccessToken: false,
-          slackBotToken: false,
-          slackAppToken: false,
-        },
-      }),
-      t,
-    );
-    expect(errors.githubPrivateKeyPath).toBeUndefined();
-  });
-
-  it("validates Slack channels, bot token, and app token", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "none",
-        slackChannelsText: "general, Dev",
-        slackBotToken: "not-a-bot-token",
-        slackAppToken: "not-an-app-token",
-      }),
-      t,
-    );
-    expect(errors.slackChannelsText).toBe(t("setup.validation.slackChannelsInvalid"));
-    expect(errors.slackBotToken).toBe(t("setup.validation.slackBotTokenInvalid"));
-    expect(errors.slackAppToken).toBe(t("setup.validation.slackAppTokenInvalid"));
-  });
-
-  it("accepts localized Slack channel names", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "none",
-        slackChannelsText: "general, 開発, かいはつ, カイハツ, C0123456789",
-        slackBotToken: "xoxb-valid-token",
-        slackAppToken: "xapp-valid-token",
-      }),
-      t,
-    );
-    expect(errors.slackChannelsText).toBeUndefined();
-  });
-
-  it("rejects Slack channel names that start with separators", () => {
-    for (const channel of ["_dev", "-dev", "#_dev", "#-dev"]) {
-      const errors = getMemberFieldErrors(
-        baseMemberValues({
-          personType: "agent",
-          githubAccountType: "none",
-          slackChannelsText: channel,
-          slackBotToken: "xoxb-valid-token",
-          slackAppToken: "xapp-valid-token",
-        }),
-        t,
-      );
-      expect(errors.slackChannelsText).toBe(t("setup.validation.slackChannelsInvalid"));
-    }
-  });
-
-  it("requires Slack tokens when channels are configured", () => {
-    const errors = getMemberFieldErrors(
-      baseMemberValues({
-        personType: "agent",
-        githubAccountType: "none",
-        slackChannelsText: "general",
-      }),
-      t,
-    );
-    expect(errors.slackBotToken).toBe(t("setup.validation.slackBotTokenRequired"));
-    expect(errors.slackAppToken).toBe(t("setup.validation.slackAppTokenRequired"));
-  });
-
-  it("requires a Slack User ID for human members", () => {
-    const errors = getMemberFieldErrors(baseMemberValues({ slackUserId: "" }), t);
-    expect(errors.slackUserId).toBe(t("setup.validation.slackUserIdRequired"));
-    expect(
-      getMemberFieldErrors(baseMemberValues({ slackUserId: "not-a-slack-id" }), t).slackUserId,
-    ).toBe(t("setup.validation.slackUserIdInvalid"));
-  });
-});
-
-describe("getMemberResolveErrorMessage", () => {
-  it("maps known GitHub identity API error codes", () => {
-    for (const code of ["invalid_github_username", "invalid_github_apps_url"]) {
-      const error = new ApiRequestError({ code, message: "boom", context: {} });
-      expect(getMemberResolveErrorMessage(error, t)).toBe(
-        t("setup.validation.memberGithubIdentityNotFound"),
-      );
-    }
-  });
-
-  it("falls back to the generic resolve failure for unknown errors", () => {
-    expect(getMemberResolveErrorMessage(new Error("network"), t)).toBe(
-      t("setup.validation.memberGithubIdentityResolveFailed"),
-    );
-    const otherApiError = new ApiRequestError({ code: "rate_limited", message: "x", context: {} });
-    expect(getMemberResolveErrorMessage(otherApiError, t)).toBe(
-      t("setup.validation.memberGithubIdentityResolveFailed"),
-    );
+    expect(errors.chatChannels).toBeUndefined();
   });
 });
 
@@ -2631,12 +2367,10 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     revisions: {},
     person_id: "alice",
     person_name: "Alice",
-    // No GitHub linking keeps the loaded member valid for save without extra
-    // GitHub identity fields.
+    // No account with any provider keeps the loaded member valid for save
+    // without extra identity fields.
     person_type: "agent",
-    github_account_type: "",
     is_active: true,
-    github_username: "",
     git_email: "",
     roles: ["product"],
     speaking_style: "Professional and concise",
@@ -2651,17 +2385,9 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
         contribution_style: ["Clarify next actions"],
       },
     },
-    github_installation_id: null,
-    github_app_id: null,
-    has_github_installation_id: false,
-    has_github_app_id: false,
-    has_github_private_key: false,
-    has_github_access_token: false,
-    slack_user_id: "",
-    has_slack_bot_token: false,
-    has_slack_app_token: false,
-    slack_channels: [],
-    slack_channel_participation: {},
+    accounts: {},
+    chat_channels: [],
+    chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
     ...overrides,
@@ -2685,6 +2411,11 @@ function lastMemberAddRequest() {
 }
 
 describe("MembersSection", () => {
+  beforeEach(() => {
+    // The member's account tabs are those of the providers the project uses.
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
+  });
+
   afterEach(async () => {
     await i18n.changeLanguage("en");
   });
@@ -2813,7 +2544,9 @@ describe("MembersSection", () => {
       expect(await screen.findByText(t("setup.members.changedTitle"))).toBeInTheDocument();
       const body = screen.getByText(t("setup.members.changedBody"));
       expect(body).toHaveTextContent(language === "en" ? "all tabs" : "すべてのタブ");
-      for (const tab of ["AI", "GitHub", "Slack"]) expect(body).toHaveTextContent(tab);
+      // It names the tabs neutrally, not the providers the project happens to use.
+      expect(body).toHaveTextContent("AI");
+      expect(body).not.toHaveTextContent("GitHub");
       expect(name).toHaveValue("Unsaved name");
       const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
       expect(save).toBeDisabled();
@@ -3009,20 +2742,23 @@ describe("MembersSection", () => {
     expect(request).toMatchObject({
       person_id: "bob",
       person_name: "Bob",
-      // The default add form creates an agent without GitHub linking.
       person_type: "agent",
-      github_account_type: "",
       is_active: true,
       roles: ["product"],
       config_dir: "/workspace/.guildbotics/config",
+      git_email: "",
+      chat_channels: [],
+      chat_channel_participation: {},
     });
-    // A member without GitHub linking sends no GitHub credentials.
-    expect(request.github_username).toBe("");
-    expect(request.github_access_token).toBeUndefined();
-    expect(request.github_installation_id).toBeUndefined();
+    // The default add form links the agent to no provider: each account is
+    // sent empty, with no credential.
+    expect(request.accounts).toEqual({
+      github: { account_type: "", username: "" },
+      slack: { bot_token: "", app_token: "" },
+    });
   });
 
-  it("preselects the ticket workflow for a new GitHub-backed agent", async () => {
+  it("sends each provider's account and the neutral chat channels of a new agent", async () => {
     const user = userEvent.setup();
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
@@ -3032,29 +2768,176 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
-    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), " bot@example.com ");
     await fill(
       user,
       screen.getByLabelText(t("setup.members.accessToken")),
       "ghp_0123456789abcdef0123456789abcdef0123",
     );
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
+    await user.click(
+      screen.getByRole("radio", { name: t("setup.members.slackAppsSetupMode.existing") }),
+    );
+    await fill(user, screen.getByLabelText(t("setup.members.chatChannelAdd")), "#general");
+    await user.click(screen.getByRole("button", { name: t("setup.members.chatChannelAddButton") }));
+    await fill(user, screen.getByLabelText(t("setup.members.slackBotToken")), "xoxb-0123456789");
+    await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-0123456789");
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
-    expect(lastMemberAddRequest().routine_commands).toEqual(["workflows/ticket_driven_workflow"]);
+    expect(lastMemberAddRequest()).toMatchObject({
+      git_email: "bot@example.com",
+      chat_channels: ["#general"],
+      chat_channel_participation: { general: "strict" },
+      accounts: {
+        github: {
+          account_type: "machine_user",
+          username: "bot",
+          access_token: "ghp_0123456789abcdef0123456789abcdef0123",
+        },
+        slack: { bot_token: "xoxb-0123456789", app_token: "xapp-0123456789" },
+      },
+    });
+  });
+
+  it("offers the account tabs of the providers the project uses only", async () => {
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { chat_service: { name: "slack" } } }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "GitHub" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the chat channels in a tab of their own for a chat without an account", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { chat_service: { name: "local" } } }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await user.click(
+      await screen.findByRole("tab", { name: t("setup.integrations.kinds.chat_service") }),
+    );
+
+    expect(
+      await screen.findByRole("textbox", { name: t("setup.members.chatChannelAdd") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Slack" })).not.toBeInTheDocument();
+  });
+
+  it("blocks saving while a chat channel is one the chat does not accept", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+        chat_channels: ["general"],
+        chat_channel_participation: { general: "strict" },
+      }),
+    );
+    renderSetupPage("/setup?section=members&tab=slack");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    const channel = await screen.findByDisplayValue("general");
+    const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
+    await waitFor(() => expect(save).toBeEnabled());
+
+    await user.clear(channel);
+    await fill(user, channel, "Not A Channel");
+
+    expect(await screen.findByText(t("setup.validation.chatChannelsInvalid"))).toBeInTheDocument();
+    expect(save).toBeDisabled();
+  });
+
+  it("marks the account tab and blocks saving while the account is incomplete", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+    const addButton = screen.getByRole("button", { name: t("setup.members.addButton") });
+    await waitFor(() => expect(addButton).toBeEnabled());
+    const githubTab = await screen.findByRole("tab", { name: "GitHub" });
+    expect(tabErrorMark(githubTab)).toBeNull();
+
+    // A machine user without a token cannot be saved.
+    await user.click(githubTab);
+    await selectGitHubAccountType(user, "Machine Account (Machine User)");
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+
+    expect(
+      await screen.findByText(t("setup.validation.githubAccessTokenRequired")),
+    ).toBeInTheDocument();
+    expect(addButton).toBeDisabled();
+    const mark = tabErrorMark(githubTab);
+    expect(mark).not.toBeNull();
+    await user.hover(mark!);
+    expect(await screen.findByText(t("setup.members.tabHasError"))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["has a ticket service", GITHUB_AND_SLACK, ["workflows/ticket_driven_workflow"]],
+    ["has no ticket service", { chat_service: { name: "slack" } }, []],
+  ])(
+    "preselects the ticket workflow for a new agent only when the project %s",
+    async (_, services: ProjectServices, routine: string[]) => {
+      const user = userEvent.setup();
+      vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services }));
+      vi.mocked(getTeam).mockResolvedValue({
+        project: { name: "Demo", language_code: "en", language_name: "English" },
+        default_person_id: "",
+        members: [],
+      });
+      renderSetupPage("/setup?section=members");
+
+      await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+      await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+      await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+      expect(lastMemberAddRequest().routine_commands).toEqual(routine);
+    },
+  );
+
+  it("adds an agent while there is no default routine to offer yet", async () => {
+    // Before the project is saved there are no commands to read a default
+    // from; the form must not ask for a routine the save will seed itself.
+    const user = userEvent.setup();
+    vi.mocked(getRoutineCommandOptions).mockResolvedValue({ options: [], default_command: "" });
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(lastMemberAddRequest().routine_commands).toEqual([]);
   });
 
   it("syncs the project's Agent field after saving a GitHub-linked member", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-      }),
-    );
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       default_person_id: "",
@@ -3063,7 +2946,7 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
     await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
@@ -3075,23 +2958,11 @@ describe("MembersSection", () => {
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(ensureAgentField).toHaveBeenCalledWith({
-        owner: "acme",
-        project_id: "9",
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-      }),
-    );
+    await waitFor(() => expect(ensureAgentField).toHaveBeenCalledWith({ url: PROJECT_URL }));
   });
 
   it("does not touch the Agent field when the saved member has no GitHub link", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-      }),
-    );
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       default_person_id: "",
@@ -3106,13 +2977,7 @@ describe("MembersSection", () => {
     expect(ensureAgentField).not.toHaveBeenCalled();
   });
 
-  it("preselects patrol commands for a new agent when the project uses GitHub", async () => {
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({
-        github_enabled: true,
-        github_project_url: "https://github.com/orgs/acme/projects/9",
-      }),
-    );
+  it("preselects patrol commands for a new agent when the project has a ticket service", async () => {
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
       default_person_id: "",
@@ -3150,21 +3015,6 @@ describe("MembersSection", () => {
 
     expect(screen.getAllByText("Alice (alice)").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Upload File" })).toBeInTheDocument();
-    const githubBtn = screen.getByRole("button", { name: "Import from GitHub" });
-    expect(githubBtn).toBeInTheDocument();
-    expect(githubBtn).toBeDisabled();
-    // For agent (default), Slack button is enabled even without user_id
-    const slackBtn = screen.getByRole("button", { name: "Import from Slack" });
-    expect(slackBtn).toBeInTheDocument();
-    expect(slackBtn).not.toBeDisabled();
-
-    // Switch type to human to verify it becomes disabled without slackUserId
-    await selectBasicMemberType(user, "Human");
-    expect(slackBtn).toBeDisabled();
-
-    // Switch back to Agent to restore form validity
-    await selectBasicMemberType(user, "Agent");
-    expect(slackBtn).not.toBeDisabled();
 
     const nameInput = await screen.findByLabelText("Display name");
     await waitFor(() => expect(nameInput).toHaveValue("Alice"));
@@ -3182,8 +3032,51 @@ describe("MembersSection", () => {
     });
   });
 
+  it("imports the avatar from each provider the project uses that offers one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { chat_service: { name: "slack" } } }),
+    );
+    vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
+    renderSetupPage("/setup?section=members");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    const slack = await screen.findByRole("button", {
+      name: t("setup.members.avatar.importFrom", { provider: "Slack" }),
+    });
+    expect(
+      screen.queryByRole("button", {
+        name: t("setup.members.avatar.importFrom", { provider: "GitHub" }),
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.click(slack);
+
+    await waitFor(() => expect(importAvatarFromProvider).toHaveBeenCalledWith("alice", "slack"));
+    expect(
+      await screen.findByText(t("setup.members.avatar.importSuccess", { provider: "Slack" })),
+    ).toBeInTheDocument();
+  });
+
+  it("offers no avatar import until the member is saved", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    for (const provider of ["GitHub", "Slack"]) {
+      expect(
+        await screen.findByRole("button", {
+          name: t("setup.members.avatar.importFrom", { provider }),
+        }),
+      ).toBeDisabled();
+    }
+  });
+
   describe("saving a member with a registered GitHub App", () => {
-    const installed: GitHubAppRegistrationStatus = {
+    const installed: AppRegistrationStatus = {
       state: "registration-1",
       status: "installed",
       app_name: "alice-app",
@@ -3192,7 +3085,7 @@ describe("MembersSection", () => {
       slug: "alice-app",
       app_id: 1978826,
       html_url: "https://github.com/apps/alice-app",
-      github_username: "alice-app[bot]",
+      username: "alice-app[bot]",
       git_email: "1+alice-app[bot]@users.noreply.github.com",
       installation_id: 86632391,
       installation_page_url: "https://github.com/apps/alice-app/installations/new",
@@ -3223,12 +3116,12 @@ describe("MembersSection", () => {
 
     async function editAlice(user: User, member = memberConfigDetail()) {
       vi.mocked(getMemberConfig).mockResolvedValue(member);
-      vi.mocked(startGitHubAppRegistration).mockResolvedValue(installed);
+      vi.mocked(startAppRegistration).mockResolvedValue(installed);
       renderSetupPage("/setup?section=members");
 
       await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
       await screen.findByText(t("setup.members.editingBadge", { id: "alice" }));
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     }
 
     async function save(user: User, calls = 1) {
@@ -3244,7 +3137,7 @@ describe("MembersSection", () => {
       await fill(
         user,
         screen.getByLabelText(t("setup.members.githubResolvedIdentity")),
-        installed.github_username,
+        installed.username,
       );
       await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), installed.git_email);
       return save(user);
@@ -3252,26 +3145,33 @@ describe("MembersSection", () => {
 
     const appMember = () =>
       memberConfigDetail({
-        github_account_type: "github_apps",
-        github_username: "old-app[bot]",
         git_email: "2+old-app[bot]@users.noreply.github.com",
-        github_app_id: 11,
-        github_installation_id: 22,
-        has_github_app_id: true,
-        has_github_installation_id: true,
-        has_github_private_key: true,
+        accounts: {
+          github: {
+            account_type: "github_apps",
+            username: "old-app[bot]",
+            app_id: 11,
+            installation_id: 22,
+            has_private_key: true,
+            has_access_token: false,
+          },
+        },
       });
+
+    const githubAccount = (body: { accounts?: Record<string, Record<string, unknown>> }) =>
+      body.accounts?.github ?? {};
 
     it("names the registration instead of sending the key or the app's IDs", async () => {
       const body = await registerAndSave(userEvent.setup());
 
-      expect(startGitHubAppRegistration).toHaveBeenCalledWith(
+      expect(startAppRegistration).toHaveBeenCalledWith(
         expect.objectContaining({ person_id: "alice" }),
       );
-      expect(body.github_app_registration_id).toBe("registration-1");
-      expect(body).not.toHaveProperty("github_private_key_path");
-      expect(body).not.toHaveProperty("github_app_id");
-      expect(body).not.toHaveProperty("github_installation_id");
+      expect(githubAccount(body)).toEqual({
+        account_type: "github_apps",
+        username: installed.username,
+        app_registration_id: "registration-1",
+      });
       expect(
         await screen.findByText(t("setup.members.githubAppRegistration.saved")),
       ).toBeInTheDocument();
@@ -3279,7 +3179,7 @@ describe("MembersSection", () => {
       expect(screen.getByLabelText(t("setup.members.appId"))).toHaveValue("1978826");
       expect(screen.getByLabelText(t("setup.members.installationId"))).toHaveValue("86632391");
 
-      vi.mocked(startGitHubAppRegistration).mockResolvedValue({ ...installed, status: "pending" });
+      vi.mocked(startAppRegistration).mockResolvedValue({ ...installed, status: "pending" });
       await userEvent
         .setup()
         .click(
@@ -3304,8 +3204,8 @@ describe("MembersSection", () => {
 
       expect(screen.getByLabelText(t("setup.members.appId"))).toHaveValue("11");
       const body = await save(user);
-      expect(body).not.toHaveProperty("github_app_registration_id");
-      expect(body).toMatchObject({ github_app_id: 11, github_installation_id: 22 });
+      expect(githubAccount(body)).not.toHaveProperty("app_registration_id");
+      expect(githubAccount(body)).toMatchObject({ app_id: 11, installation_id: 22 });
     });
 
     it("keeps the registration through a reload of a member changed elsewhere", async () => {
@@ -3330,7 +3230,7 @@ describe("MembersSection", () => {
         await screen.findByText(t("setup.members.githubAppRegistration.installed")),
       ).toBeInTheDocument();
       const body = await save(user, 2);
-      expect(body.github_app_registration_id).toBe("registration-1");
+      expect(githubAccount(body).app_registration_id).toBe("registration-1");
     });
 
     it("fixes a new member's ID only while its registration lasts", async () => {
@@ -3340,20 +3240,20 @@ describe("MembersSection", () => {
         default_person_id: "",
         members: [],
       });
-      vi.mocked(startGitHubAppRegistration).mockResolvedValue({ ...installed, person_id: "bot" });
+      vi.mocked(startAppRegistration).mockResolvedValue({ ...installed, person_id: "bot" });
       renderSetupPage("/setup?section=members");
 
       await fill(user, await screen.findByLabelText("Member ID"), "bot");
       const personId = async () => {
         await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
         const field = screen.getByLabelText("Member ID");
-        await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+        await user.click(await screen.findByRole("tab", { name: "GitHub" }));
         return field;
       };
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
       await selectGitHubAccountType(user, "GitHub Apps");
       await register(user);
-      expect(startGitHubAppRegistration).toHaveBeenCalledWith(
+      expect(startAppRegistration).toHaveBeenCalledWith(
         expect.objectContaining({ person_id: "bot" }),
       );
       expect(await personId()).toBeDisabled();
@@ -3367,8 +3267,8 @@ describe("MembersSection", () => {
     });
 
     function deferredStart() {
-      let resolve: (registration: GitHubAppRegistrationStatus) => void = () => {};
-      vi.mocked(startGitHubAppRegistration).mockReturnValue(
+      let resolve: (registration: AppRegistrationStatus) => void = () => {};
+      vi.mocked(startAppRegistration).mockReturnValue(
         new Promise((done) => {
           resolve = done;
         }),
@@ -3382,7 +3282,7 @@ describe("MembersSection", () => {
           name: t("setup.members.githubAppRegistration.register"),
         }),
       );
-      await waitFor(() => expect(startGitHubAppRegistration).toHaveBeenCalled());
+      await waitFor(() => expect(startAppRegistration).toHaveBeenCalled());
     }
 
     async function expectNoRegistrationApplied() {
@@ -3410,14 +3310,14 @@ describe("MembersSection", () => {
       const answer = deferredStart();
       renderSetupPage("/setup?section=members");
       await fill(user, await screen.findByLabelText("Member ID"), "bot");
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
       await selectGitHubAccountType(user, "GitHub Apps");
       await clickRegister(user);
 
       await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
       await user.clear(screen.getByLabelText("Member ID"));
       await fill(user, screen.getByLabelText("Member ID"), "other-bot");
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
       answer({ ...installed, person_id: "bot", status: "pending" });
 
       await expectNoRegistrationApplied();
@@ -3435,7 +3335,7 @@ describe("MembersSection", () => {
 
       await user.click(screen.getByRole("button", { name: t("setup.members.newButton") }));
       answer({ ...installed, status: "pending" });
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
       await selectGitHubAccountType(user, "GitHub Apps");
 
       await expectNoRegistrationApplied();
@@ -3538,21 +3438,18 @@ describe("MembersSection", () => {
       await fill(
         user,
         screen.getByLabelText(t("setup.members.githubResolvedIdentity")),
-        installed.github_username,
+        installed.username,
       );
       await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), installed.git_email);
       await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
       await user.clear(screen.getByLabelText("Member ID"));
       await fill(user, screen.getByLabelText("Member ID"), "alice-2");
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
       const body = await save(user);
 
-      expect(body).toMatchObject({
-        original_person_id: "alice",
-        person_id: "alice-2",
-        github_app_registration_id: "registration-1",
-      });
+      expect(body).toMatchObject({ original_person_id: "alice", person_id: "alice-2" });
+      expect(githubAccount(body).app_registration_id).toBe("registration-1");
       expect(
         await screen.findByText(t("setup.members.githubAppRegistration.saved")),
       ).toBeInTheDocument();
@@ -3618,7 +3515,9 @@ describe("MembersSection", () => {
 
   it("defaults a member that already has Slack tokens to the existing-app mode", async () => {
     vi.mocked(getMemberConfig).mockResolvedValue(
-      memberConfigDetail({ has_slack_bot_token: true, has_slack_app_token: true }),
+      memberConfigDetail({
+        accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+      }),
     );
     const user = userEvent.setup();
     renderSetupPage("/setup?section=members&tab=slack");
@@ -3648,18 +3547,18 @@ describe("MembersSection", () => {
     const slackAppName = () =>
       screen.getByRole("textbox", { name: t("setup.members.slackAppRegistration.appName") });
 
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "GitHub Apps");
     await user.clear(githubAppName());
     await fill(user, githubAppName(), "github-app");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
     await user.clear(slackAppName());
     await fill(user, slackAppName(), "slack-app");
 
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     expect(githubAppName()).toHaveValue("github-app");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
     expect(slackAppName()).toHaveValue("slack-app");
   });
 
@@ -3750,10 +3649,9 @@ describe("MembersSection", () => {
     const user = userEvent.setup();
     vi.mocked(getMemberConfig).mockResolvedValue(
       memberConfigDetail({
-        has_slack_bot_token: true,
-        has_slack_app_token: true,
-        slack_channels: ["general", "random"],
-        slack_channel_participation: { general: "strict", random: "social" },
+        accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+        chat_channels: ["general", "random"],
+        chat_channel_participation: { general: "strict", random: "social" },
       }),
     );
     renderSetupPage("/setup?section=members&tab=slack");
@@ -3766,22 +3664,22 @@ describe("MembersSection", () => {
     // Mantine 9 labels the Select listbox as well as its input, so query by
     // the combobox role to get the inputs alone.
     const policyInputs = screen.getAllByRole("combobox", {
-      name: t("setup.members.slackParticipationPolicy"),
+      name: t("setup.members.chatParticipationPolicy"),
     });
     expect(policyInputs[0]).toHaveValue("Join when needed");
     expect(policyInputs[1]).toHaveValue("Join actively");
 
     await user.click(policyInputs[1]);
     expect(
-      (await screen.findAllByText(t("setup.members.slackParticipationDescriptions.social"))).length,
+      (await screen.findAllByText(t("setup.members.chatParticipationDescriptions.social"))).length,
     ).toBeGreaterThan(0);
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateMemberConfig).mock.calls[0][1];
-    expect(body.slack_channels).toEqual(["general", "random"]);
-    expect(body.slack_channel_participation).toEqual({
+    expect(body.chat_channels).toEqual(["general", "random"]);
+    expect(body.chat_channel_participation).toEqual({
       general: "strict",
       random: "muted",
     });
@@ -3843,7 +3741,7 @@ describe("MembersSection", () => {
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
-    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
+    expect(screen.getByText("Input progress: 2 of 4 sections completed")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Project" }));
     expect(screen.queryByText("Carol (carol)")).not.toBeInTheDocument();
@@ -3885,25 +3783,25 @@ describe("MembersSection", () => {
       default_person_id: "",
       members: [],
     });
-    vi.mocked(resolveMemberIdentity).mockResolvedValue({
+    vi.mocked(resolveUser).mockResolvedValue({
       person_id: "octo",
-      github_username: "octocat",
-      github_user_id: 42,
+      username: "octocat",
+      user_id: 42,
       git_email: "octo@example.com",
     });
     renderSetupPage("/setup?section=members");
 
     await screen.findByLabelText("Member ID");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     const usernameField = await screen.findByLabelText(t("setup.members.githubUsername"));
     await fill(user, usernameField, "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
 
-    await waitFor(() => expect(resolveMemberIdentity).toHaveBeenCalled());
-    expect(vi.mocked(resolveMemberIdentity).mock.calls[0][0]).toEqual({
-      person_type: "machine_user",
+    await waitFor(() => expect(resolveUser).toHaveBeenCalled());
+    expect(vi.mocked(resolveUser).mock.calls[0][0]).toEqual({
+      account_type: "machine_user",
       identity: "octocat",
     });
     expect(await screen.findByLabelText(t("setup.members.gitEmail"))).toHaveValue(
@@ -3918,13 +3816,13 @@ describe("MembersSection", () => {
       default_person_id: "",
       members: [],
     });
-    vi.mocked(resolveMemberIdentity).mockRejectedValue(
+    vi.mocked(resolveUser).mockRejectedValue(
       new ApiRequestError({ code: "invalid_github_username", message: "nope", context: {} }),
     );
     renderSetupPage("/setup?section=members");
 
     await screen.findByLabelText("Member ID");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
@@ -3944,7 +3842,7 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await screen.findByLabelText("Member ID");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
 
     // none: no GitHub auth required.
     expect(
@@ -3975,7 +3873,7 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await screen.findByLabelText("Member ID");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "GitHub Apps");
 
     // A new member defaults to registering the app on GitHub; the resolve-URL
@@ -4038,7 +3936,7 @@ describe("MembersSection", () => {
     await waitFor(() => expect(activeSwitch).not.toBeChecked());
     expect(screen.getByText(t("setup.members.activeHumanHint"))).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     const accountType = await screen.findByRole("combobox", {
       name: t("setup.members.githubAccountType"),
     });
@@ -4050,11 +3948,11 @@ describe("MembersSection", () => {
     expect(screen.queryByLabelText(t("setup.members.privateKeyPath"))).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
     expect(await screen.findByLabelText(t("setup.members.slackUserId"))).toBeInTheDocument();
-    expect(screen.queryByLabelText(t("setup.members.slackChannelAdd"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.chatChannelAdd"))).not.toBeInTheDocument();
     expect(
-      screen.queryByLabelText(t("setup.members.slackParticipationPolicy")),
+      screen.queryByLabelText(t("setup.members.chatParticipationPolicy")),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.slackBotToken"))).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.slackAppToken"))).not.toBeInTheDocument();
@@ -4071,27 +3969,30 @@ describe("MembersSection", () => {
 
     await fillRequiredMemberBasics(user, { personId: "bob", personName: "Bob" });
     await selectBasicMemberType(user, "Human");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bob");
     await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bob@example.com");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
     await fill(user, await screen.findByLabelText(t("setup.members.slackUserId")), "U012345678");
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
     expect(lastMemberAddRequest()).toMatchObject({
       person_type: "human",
-      github_account_type: "human",
       is_active: false,
+      git_email: "bob@example.com",
       speaking_style: "",
       relationships: "",
       character: {},
       routine_commands: [],
       task_schedules: [],
-      slack_channels: [],
-      slack_channel_participation: {},
-      slack_bot_token: "",
-      slack_app_token: "",
+      chat_channels: [],
+      chat_channel_participation: {},
+      // A human's accounts are the human's own: no token of any provider.
+      accounts: {
+        github: { account_type: "human", username: "bob" },
+        slack: { user_id: "U012345678" },
+      },
     });
   });
 
@@ -4105,7 +4006,7 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await user.click(await screen.findByRole("tab", { name: "GitHub" }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
     await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
@@ -4134,20 +4035,18 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members");
 
     await screen.findByLabelText("Member ID");
-    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.click(await screen.findByRole("tab", { name: "Slack" }));
 
-    const channelInput = await screen.findByLabelText(t("setup.members.slackChannelAdd"));
+    const channelInput = await screen.findByLabelText(t("setup.members.chatChannelAdd"));
     await user.type(channelInput, "Dev");
-    await user.click(
-      screen.getByRole("button", { name: t("setup.members.slackChannelAddButton") }),
-    );
-    expect(await screen.findByText(t("setup.validation.slackChannelsInvalid"))).toBeInTheDocument();
-    expect(screen.queryAllByLabelText(t("setup.members.slackParticipationPolicy"))).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: t("setup.members.chatChannelAddButton") }));
+    expect(await screen.findByText(t("setup.validation.chatChannelsInvalid"))).toBeInTheDocument();
+    expect(screen.queryAllByLabelText(t("setup.members.chatParticipationPolicy"))).toHaveLength(0);
 
     await user.clear(channelInput);
     await user.type(channelInput, "開発");
     fireEvent.keyDown(channelInput, { key: "Enter", isComposing: true });
-    expect(screen.queryAllByLabelText(t("setup.members.slackParticipationPolicy"))).toHaveLength(0);
+    expect(screen.queryAllByLabelText(t("setup.members.chatParticipationPolicy"))).toHaveLength(0);
     fireEvent.keyDown(channelInput, { key: "Enter", isComposing: false });
     await screen.findByDisplayValue("開発");
 
@@ -4227,6 +4126,11 @@ describe("MembersSection", () => {
     expect(await screen.findByText(t("setup.members.diagnostics.issuesTitle"))).toBeInTheDocument();
   });
 });
+
+/** The warning a member editor tab carries while its fields hold an error. */
+function tabErrorMark(tab: HTMLElement) {
+  return tab.querySelector<HTMLElement>(".mantine-Tabs-tabSection .mantine-ThemeIcon-root");
+}
 
 async function selectBasicMemberType(
   user: ReturnType<typeof userEvent.setup>,
@@ -4318,12 +4222,20 @@ describe("PatrolSettingsEditor", () => {
 
   it("does not seed the default routine while editing an existing GitHub member with no patrol commands", async () => {
     const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: GITHUB_AND_SLACK }));
     vi.mocked(getMemberConfig).mockResolvedValue(
       memberConfigDetail({
-        github_account_type: "machine_user",
-        github_username: "bot",
         git_email: "bot@example.com",
-        has_github_access_token: true,
+        accounts: {
+          github: {
+            account_type: "machine_user",
+            username: "bot",
+            installation_id: null,
+            app_id: null,
+            has_private_key: false,
+            has_access_token: true,
+          },
+        },
         routine_commands: [],
       }),
     );
@@ -4622,6 +4534,17 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
 }
 
 /** Saving is deliberate now, so every settings test has to press the button. */
+async function chooseProvider(
+  user: ReturnType<typeof userEvent.setup>,
+  kind: "code_hosting_service" | "ticket_service" | "chat_service",
+  option: string,
+) {
+  await user.click(
+    await screen.findByRole("combobox", { name: t(`setup.integrations.kinds.${kind}`) }),
+  );
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 async function saveSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("button", { name: t("setup.save.action") }));
 }

@@ -11,14 +11,11 @@ import {
   troubleshoot,
   configureApi,
   createCommandFile,
-  ensureAgentField,
   dismissSystemAlert,
-  getAgentFieldState,
   getActivityHistory,
   getCommandFile,
   getCommandFileExecutionStatus,
   getCommandOptions,
-  getGitHubAppRegistration,
   getRoutineCommandOptions,
   listCommandFiles,
   updateCommandFile,
@@ -28,6 +25,9 @@ import {
   getAgentEnvironmentStatus,
   getMemoryEvents,
   getMemberConfig,
+  getProviders,
+  importAvatarFromProvider,
+  providerOperation,
   getRuntimeDebug,
   getServiceKeepAwake,
   getSystemAlerts,
@@ -35,9 +35,6 @@ import {
   memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
-  startGitHubAppRegistration,
-  startSlackAppRegistration,
-  verifySlackTokens,
   subscribeEvents,
   updateRuntimeDebug,
   updateServiceKeepAwake,
@@ -48,6 +45,14 @@ import {
   type RuntimeEvent,
   type StreamStatus,
 } from "./client";
+import {
+  ensureAgentField,
+  getAgentFieldState,
+  getAppRegistration,
+  getStatusOptions,
+  startAppRegistration,
+} from "../setup/providers/github/api";
+import { startSlackAppRegistration, verifySlackTokens } from "../setup/providers/slack/api";
 import { makeRuntimeEvent } from "../test/factories";
 
 type FetchArgs = { url: string; init: RequestInit };
@@ -115,7 +120,7 @@ describe("closeApi", () => {
       client.uploadMemberAvatar("alice", new File(["x"], "a.png", { type: "image/png" })),
     ).rejects.toBe(reason);
     await expect(
-      client.startGitHubAppRegistration({ person_id: "alice", app_name: "app" }),
+      client.providerOperation("github", "app-registrations", { app_name: "app" }),
     ).rejects.toBe(reason);
     expect(() => client.subscribeEvents(() => undefined)).toThrow(reason);
     expect(client.memberAvatarUrl("alice")).toBeUndefined();
@@ -209,15 +214,51 @@ describe("request headers and body", () => {
     expect(copy.calls[0].init.body).toBe(JSON.stringify({ path: "/a" }));
   });
 
+  it("GETs the providers the setup screens offer", async () => {
+    const providers = [
+      {
+        name: "github",
+        title: "GitHub",
+        kinds: ["code_hosting_service", "ticket_service"],
+        avatar: true,
+      },
+    ];
+    const { calls } = captureFetch(jsonResponse(providers));
+    const result = await getProviders();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers");
+    expect(calls[0].init.method).toBe("GET");
+    expect(result).toEqual(providers);
+  });
+
+  it("POSTs a provider operation to the provider's path with a JSON body", async () => {
+    const { calls } = captureFetch(jsonResponse({ ok: true }));
+    await providerOperation("slack", "verify-tokens", { bot_token: "xoxb-1" });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/verify-tokens");
+    expect(calls[0].init.method).toBe("POST");
+    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1" }));
+  });
+
+  it("POSTs an avatar import from a provider with the path segments encoded", async () => {
+    const { calls } = captureFetch(jsonResponse({ avatar_timestamp: 1 }));
+    await importAvatarFromProvider("a/b", "git hub");
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/a%2Fb/avatar/git%20hub");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBeUndefined();
+  });
+
   it("POSTs the GitHub App registration with the API base as callback", async () => {
     const { calls } = captureFetch(jsonResponse({ state: "s1", status: "pending" }));
-    await startGitHubAppRegistration({
+    await startAppRegistration({
       app_name: "my-bot",
       person_id: "my-bot",
       organization: "acme",
     });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/github-app/registrations");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/github/app-registrations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
@@ -229,14 +270,13 @@ describe("request headers and body", () => {
     );
   });
 
-  it("GETs the GitHub App registration status by state", async () => {
+  it("asks for the GitHub App registration status by state", async () => {
     const { calls } = captureFetch(jsonResponse({ state: "s/1", status: "pending" }));
-    await getGitHubAppRegistration("s/1");
+    await getAppRegistration("s/1");
 
-    expect(calls[0].url).toBe(
-      "http://127.0.0.1:8765/config/members/github-app/registrations/s%2F1",
-    );
-    expect(calls[0].init.method).toBe("GET");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/github/app-registration");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify({ state: "s/1" }));
   });
 
   it("POSTs the Slack App name and returns the manifest deep link", async () => {
@@ -245,18 +285,17 @@ describe("request headers and body", () => {
     );
     const result = await startSlackAppRegistration({ app_name: "alice" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/slack-app/registrations");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/app-registrations");
     expect(calls[0].init.method).toBe("POST");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
     expect(calls[0].init.body).toBe(JSON.stringify({ app_name: "alice" }));
     expect(result.registration_url).toBe("https://api.slack.com/apps?new_app=1");
   });
 
-  it("POSTs both Slack tokens to the verification endpoint", async () => {
+  it("POSTs both Slack tokens to the verification operation", async () => {
     const { calls } = captureFetch(jsonResponse({ bot_ok: true, app_token_ok: true }));
     await verifySlackTokens({ bot_token: "xoxb-1", app_token: "xapp-1" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/slack-app/verify");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/verify-tokens");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1", app_token: "xapp-1" }));
   });
@@ -283,36 +322,24 @@ describe("request headers and body", () => {
     expect(calls[0].init.body).toBeUndefined();
   });
 
-  it("POSTs the project identity for getAgentFieldState", async () => {
+  it("POSTs the GitHub board to the agent field operations", async () => {
     const { calls } = captureFetch(
       jsonResponse({ available: true, exists: false, options: [], missing: [] }),
     );
-    const body = {
-      owner: "acme",
-      project_id: "9",
-      github_project_url: "https://github.com/orgs/acme/projects/9",
-    };
-    await getAgentFieldState(body);
+    const target = { url: "https://github.com/orgs/acme/projects/9" };
+    await getAgentFieldState(target);
+    await ensureAgentField(target);
+    await getStatusOptions(target);
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(JSON.stringify(body));
-  });
-
-  it("POSTs to the ensure endpoint for ensureAgentField", async () => {
-    const { calls } = captureFetch(
-      jsonResponse({ available: true, exists: true, options: [], missing: [] }),
-    );
-    const body = {
-      owner: "acme",
-      project_id: "9",
-      github_project_url: "https://github.com/orgs/acme/projects/9",
-    };
-    await ensureAgentField(body);
-
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/project/agent-field/ensure");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(JSON.stringify(body));
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8765/config/providers/github/agent-field",
+      "http://127.0.0.1:8765/config/providers/github/agent-field/ensure",
+      "http://127.0.0.1:8765/config/providers/github/status-options",
+    ]);
+    for (const call of calls) {
+      expect(call.init.method).toBe("POST");
+      expect(call.init.body).toBe(JSON.stringify(target));
+    }
   });
 });
 

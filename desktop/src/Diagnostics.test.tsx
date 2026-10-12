@@ -54,9 +54,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getTeam: vi.fn(),
     getProjectConfig: vi.fn(),
     getSchedulerStatus: vi.fn(async () => runtimeStatus()),
-    getSchedulerRoutines: vi.fn(async () => ({
-      routines: [{ command: "workflows/ticket_driven_workflow", requires_github: false }],
-    })),
     getCommandOptions: vi.fn(async () => ({ options: [] })),
     getRoutineCommandOptions: vi.fn(async () => ({ options: [] })),
     getTranscriptSettings: vi.fn(),
@@ -1097,9 +1094,7 @@ function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     description: "Demo project",
     llm_api_type: "openai",
     cli_agent: "codex",
-    github_enabled: true,
-    github_project_url: "",
-    lane_map: { ready: "Todo", working: "In Progress", done: "Done" },
+    services: {},
     provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
   };
@@ -1201,6 +1196,7 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
     events_drained_count: 0,
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
+    events_chat_provider: "",
     member_routines: [],
   };
 }

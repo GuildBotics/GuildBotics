@@ -2,25 +2,22 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ApiRequestError,
-  startSlackAppRegistration,
-  type SlackAppRegistrationStatus,
-} from "../api/client";
-import i18n from "../i18n";
-import "../i18n";
-import { openExternal } from "../openExternal";
+import { ApiRequestError } from "../../../api/client";
+import i18n from "../../../i18n";
+import "../../../i18n";
+import { openExternal } from "../../../openExternal";
+import { TestMantineProvider } from "../../../test/TestMantineProvider";
+import { startSlackAppRegistration, type SlackAppRegistrationStatus } from "./api";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
-import { TestMantineProvider } from "../test/TestMantineProvider";
 
-vi.mock("../api/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/client")>();
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
   return {
     ...actual,
     startSlackAppRegistration: vi.fn(),
   };
 });
-vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
+vi.mock("../../../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 const t = i18n.getFixedT("en");
 

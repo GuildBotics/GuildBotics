@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ import guildbotics.workspace.config_repository as config_repository_module
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
@@ -70,13 +72,6 @@ ELSEWHERE = {
         "/commands/input-paths",
     ): "answers what a turn would reach, writes nothing",
     ("POST", "/commands/run"): "starts a run; its own writes go through the port",
-    ("POST", "/config/members/resolve"): "resolves an identity, writes nothing",
-    ("POST", "/config/members/github-app/registrations"): "starts an OAuth flow",
-    ("POST", "/config/members/slack-app/registrations"): "starts an OAuth flow",
-    ("POST", "/config/members/slack-app/verify"): "calls Slack",
-    ("POST", "/config/project/agent-field"): "reads a GitHub project's field",
-    ("POST", "/config/project/agent-field/ensure"): "creates a field on GitHub",
-    ("POST", "/config/project/status-options"): "reads a GitHub project's lanes",
     ("POST", "/diagnostics/scenario"): "local/run diagnostics",
     ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
     ("POST", "/hub"): "~/.guildbotics/hub, outside any workspace",
@@ -119,6 +114,27 @@ ELSEWHERE = {
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
     ("PUT", "/service/keep-awake"): "local/service.yml is device-specific by design",
+}
+
+#: What each provider's setup operation does instead of writing shared config.
+#: A provider's operations are routes like any other, so a new one has to be
+#: classified here too; none of them write config, because what the setup
+#: screens learn from a provider reaches config only through a save.
+PROVIDER_OPERATIONS = {
+    ("github", "resolve-user"): "reads a GitHub user",
+    ("github", "status-options"): "reads a Projects board's lanes",
+    ("github", "agent-field"): "reads a Projects board's Agent field",
+    ("github", "agent-field/ensure"): "adds options to the board's field on GitHub",
+    ("github", "app-registrations"): (
+        "starts a GitHub App registration held in memory"
+    ),
+    ("github", "app-registration"): "polls a registration held in memory",
+    ("slack", "app-registrations"): "builds a Slack App deep link",
+    ("slack", "verify-tokens"): "calls Slack with the entered or stored tokens",
+}
+ELSEWHERE |= {
+    ("POST", f"/config/providers/{provider}/{operation}"): reason
+    for (provider, operation), reason in PROVIDER_OPERATIONS.items()
 }
 
 
@@ -203,7 +219,7 @@ def _post_member(client: TestClient, config_dir: Path) -> Any:
             "person_name": "Alice",
             "is_active": True,
             # The avatar imports need something to look the member up by.
-            "github_username": "alice-gh",
+            "accounts": {"github": {"username": "alice-gh"}},
             "git_email": "",
             "roles": ["architect"],
             "speaking_style": "concise",
@@ -241,7 +257,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
             "description": "Renamed",
             "llm_api_type": "openai",
             "cli_agent": "codex",
-            "github_enabled": False,
         },
     ),
     ("PUT", "/config/project/default-person"): lambda client, workspace: client.put(
@@ -262,7 +277,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
             "person_id": "alice",
             "person_name": "Renamed",
             "is_active": True,
-            "github_username": "",
             "git_email": "",
             "roles": ["architect"],
             "speaking_style": "concise",
@@ -284,16 +298,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
             "/config/members/alice/avatar",
             headers=AUTH_HEADERS,
             files={"file": ("avatar.png", b"\x89PNG\r\n\x1a\n", "image/png")},
-        )
-    ),
-    ("POST", "/config/members/{person_id}/avatar/github"): (
-        lambda client, workspace: client.post(
-            "/config/members/alice/avatar/github", headers=AUTH_HEADERS
-        )
-    ),
-    ("POST", "/config/members/{person_id}/avatar/slack"): (
-        lambda client, workspace: client.post(
-            "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
         )
     ),
     # Commands are config files too; the prefix they are served under is not
@@ -339,6 +343,36 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
 }
 
 
+AVATAR_IMPORT = ("POST", "/config/members/{person_id}/avatar/{provider}")
+
+#: The avatar import is one route, but each provider that has an avatar
+#: answers it through its own setup, so each is exercised.
+AVATAR_PROVIDERS = sorted(
+    name
+    for name, provider in PROVIDERS.items()
+    if provider.setup is not None and provider.setup.avatar_url is not None
+)
+
+
+def _import_avatar(provider: str) -> Callable[[TestClient, Path], Any]:
+    return lambda client, workspace: client.post(
+        f"/config/members/alice/avatar/{provider}", headers=AUTH_HEADERS
+    )
+
+
+CASES = [
+    pytest.param(route, mutation, id=f"{route[0]} {route[1]}")
+    for route, mutation in sorted(MUTATIONS.items())
+] + [
+    pytest.param(
+        AVATAR_IMPORT,
+        _import_avatar(provider),
+        id=f"{AVATAR_IMPORT[0]} {AVATAR_IMPORT[1]} {provider}",
+    )
+    for provider in AVATAR_PROVIDERS
+]
+
+
 def test_every_route_that_changes_anything_is_classified(client: TestClient) -> None:
     """A new route has to be sorted into one list or the other.
 
@@ -346,7 +380,7 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
     drawing it around the URL is what let the command files and the transcript
     settings -- both config -- be written without comparing anything.
     """
-    declared = set(MUTATIONS) | set(ELSEWHERE)
+    declared = set(MUTATIONS) | set(ELSEWHERE) | {AVATAR_IMPORT}
     routing_table = {
         (method, route.path)
         for route in client.app.routes  # type: ignore[attr-defined]
@@ -357,15 +391,14 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
     assert routing_table == declared
 
 
-@pytest.mark.parametrize(
-    "route", sorted(MUTATIONS), ids=lambda route: f"{route[0]} {route[1]}"
-)
+@pytest.mark.parametrize(("route", "mutation"), CASES)
 def test_a_config_change_goes_through_the_comparing_writer(
     client: TestClient,
     workspace: Path,
     compared: list[Path | None],
     monkeypatch: pytest.MonkeyPatch,
     route: tuple[str, str],
+    mutation: Callable[[TestClient, Path], Any],
 ) -> None:
     """Two screens can be open on the same config at once.
 
@@ -373,12 +406,7 @@ def test_a_config_change_goes_through_the_comparing_writer(
     wrote and answers as though nothing happened, because nothing compared the
     revisions the screen was composed against.
     """
-    monkeypatch.setattr(
-        avatar_module, "get_github_avatar_url", _fake_url, raising=False
-    )
-    monkeypatch.setattr(avatar_module, "get_slack_avatar_url", _fake_url, raising=False)
-    monkeypatch.setattr(avatar_module, "download_avatar", _fake_download, raising=False)
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    _fake_avatars(monkeypatch)
     config_dir = _init(client, workspace)
     if route != ("POST", "/config/members"):
         _add_member(client, config_dir)
@@ -386,11 +414,24 @@ def test_a_config_change_goes_through_the_comparing_writer(
         _add_command_file(client)
     compared.clear()
 
-    MUTATIONS[route](client, workspace)
+    mutation(client, workspace)
 
     assert compared, (
         f"{route[0]} {route[1]} wrote config without comparing what it read"
     )
+
+
+def _fake_avatars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every provider's avatar is found and downloaded without the network."""
+    for name in AVATAR_PROVIDERS:
+        provider = PROVIDERS[name]
+        assert provider.setup is not None
+        monkeypatch.setitem(
+            PROVIDERS,
+            name,
+            replace(provider, setup=replace(provider.setup, avatar_url=_fake_url)),
+        )
+    monkeypatch.setattr(avatar_module, "download_avatar", _fake_download)
 
 
 async def _fake_url(*_args: object, **_kwargs: object) -> str:
@@ -412,14 +453,13 @@ def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     monkeypatch.setattr(module, "shared_write_lock", brief)
 
 
-@pytest.mark.parametrize(
-    "route", sorted(MUTATIONS), ids=lambda route: f"{route[0]} {route[1]}"
-)
+@pytest.mark.parametrize(("route", "mutation"), CASES)
 def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
     client: TestClient,
     workspace: Path,
     monkeypatch: pytest.MonkeyPatch,
     route: tuple[str, str],
+    mutation: Callable[[TestClient, Path], Any],
 ) -> None:
     """Waiting on the other writer is not a failure of the request.
 
@@ -428,12 +468,7 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
     writer rather than one of them: a route that wraps its own body in a broad
     ``except`` turns the wait into its own 500, and only that route shows it.
     """
-    monkeypatch.setattr(
-        avatar_module, "get_github_avatar_url", _fake_url, raising=False
-    )
-    monkeypatch.setattr(avatar_module, "get_slack_avatar_url", _fake_url, raising=False)
-    monkeypatch.setattr(avatar_module, "download_avatar", _fake_download, raising=False)
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    _fake_avatars(monkeypatch)
     config_dir = _init(client, workspace)
     if route != ("POST", "/config/members"):
         _add_member(client, config_dir)
@@ -442,7 +477,7 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
     _impatient(monkeypatch, config_repository_module)
 
     with shared_write_lock(workspace):
-        response = MUTATIONS[route](client, workspace)
+        response = mutation(client, workspace)
 
     assert response is not None
     assert response.status_code == HTTP_SERVICE_UNAVAILABLE, response.text
