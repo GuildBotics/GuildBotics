@@ -739,7 +739,9 @@ Antigravityでは、終端の`result`イベントで判定します。`status`�
 `Individual quota reached. ... Resets in 25h57m34s.` という文章でした。上流の状態名とHTTPコードを
 先頭に付けた形（`UNAUTHENTICATED (code 401): ...`、
 `API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`）も、ゲートウェイで推論の応答を
-差し替えて確認しています。そのため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
+差し替えて確認しています。ログインの期限切れについては、1.3.3のリリースノートが
+`Authentication expired. Please log back in.` という文章を示しており、照合の対象に含めていますが、実際の実行では
+観測していません。そのため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
 文章に含まれる復帰時刻は、他のツールと共通の正規化処理へ渡します。
 `Resets in 25h57m34s` のように単位が連結されていても、時間・分・秒をすべて足して復帰時刻を求めます。
 利用制限ではセッションを切り替えず、認証・プロトコル・プロセスの失敗では切り替えます。
@@ -800,7 +802,7 @@ GitHub Copilot CLIは、ACP標準の`usage_update`でセッション文脈量（
 
 GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
 提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
-GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.91を固定しており（1.0.83のserverには
+GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.95を固定しており（1.0.83のserverには
 `account.getQuota`が存在しません）、`connect`のあとに`account.getQuota`を呼ぶと
 `quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
 `entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
@@ -823,7 +825,7 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
 `agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.16
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.3.3
 を固定しており、構造化payloadは1.2.13で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
 既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /
