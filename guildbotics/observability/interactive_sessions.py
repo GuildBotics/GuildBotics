@@ -199,7 +199,7 @@ class InteractiveSessionStore:
             status: How it ended: ``success`` or ``failed``. The session shows
                 its last command's result.
             attributes: The attributes the command recorded. Only the
-                ``github.*`` ones are kept -- the rest (host, workspace path,
+                ``target.*`` ones are kept -- the rest (host, workspace path,
                 thread key) describe this machine -- and the session keeps the
                 first value it saw for each, which is how a trace names its
                 first target.
@@ -216,7 +216,7 @@ class InteractiveSessionStore:
                 {
                     str(key): str(value)
                     for key, value in (attributes or {}).items()
-                    if str(key).startswith("github.")
+                    if str(key).startswith("target.")
                     and value is not None
                     and str(value)
                 }

@@ -12,7 +12,13 @@ TICKET_URL = "local://tickets/acme/team/demo-tickets/T-7"
 
 
 def _target(kind: str, url: str, label: str, title: str = "") -> dict[str, Any]:
-    return {"kind": kind, "url": url, "label": label, "title": title}
+    return {
+        "provider": "local",
+        "kind": kind,
+        "url": url,
+        "label": label,
+        "title": title,
+    }
 
 
 @pytest.fixture
@@ -36,7 +42,7 @@ def test_record_member_work_target_names_the_item_and_marks_reads(
         read_only=read_only,
     )
 
-    assert recorded["event_type"] == "github.work_target"
+    assert recorded["event_type"] == "target.recorded"
     assert recorded["payload"] == {
         "pull_request": {
             "label": "#544",
@@ -45,11 +51,12 @@ def test_record_member_work_target_names_the_item_and_marks_reads(
         }
     }
     assert recorded["attributes"] == {
-        "github.action": "inspected" if read_only else "",
-        "github.kind": "pull_request",
-        "github.label": "#544",
-        "github.url": PR_URL,
-        "github.title": "Show the work target",
+        "target.provider": "local",
+        "target.action": "inspected" if read_only else "",
+        "target.kind": "pull_request",
+        "target.label": "#544",
+        "target.url": PR_URL,
+        "target.title": "Show the work target",
     }
 
 
@@ -63,10 +70,10 @@ def test_a_ticket_target_is_recorded_as_an_issue_by_its_label(
     )
 
     assert recorded["payload"] == {
-        "issue": {"label": "T-7", "title": "A ticket", "url": TICKET_URL}
+        "ticket": {"label": "T-7", "title": "A ticket", "url": TICKET_URL}
     }
-    assert recorded["attributes"]["github.kind"] == "ticket"
-    assert recorded["attributes"]["github.label"] == "T-7"
+    assert recorded["attributes"]["target.kind"] == "ticket"
+    assert recorded["attributes"]["target.label"] == "T-7"
 
 
 def test_record_member_pr_create_event_records_the_created_target(
@@ -82,7 +89,7 @@ def test_record_member_pr_create_event_records_the_created_target(
         },
     )
 
-    assert recorded["event_type"] == "github.pull_request"
+    assert recorded["event_type"] == "pull_request.item"
     assert recorded["payload"] == {
         "action": "opened",
         "pull_request": {
@@ -92,7 +99,7 @@ def test_record_member_pr_create_event_records_the_created_target(
             "merged": False,
         },
     }
-    assert recorded["attributes"]["github.label"] == "#403"
+    assert recorded["attributes"]["target.label"] == "#403"
 
 
 def test_record_member_pr_create_event_ignores_a_reused_pull_request(
@@ -115,19 +122,20 @@ def test_record_member_issue_create_event_builds_github_domain_payload(
     )
 
     assert recorded == {
-        "event_type": "github.issue",
+        "event_type": "ticket.item",
         "payload": {
             "action": "opened",
-            "issue": {"label": "T-7", "title": "Follow-up", "url": TICKET_URL},
+            "ticket": {"label": "T-7", "title": "Follow-up", "url": TICKET_URL},
         },
         "attributes": {
-            "github.action": "opened",
-            "github.kind": "ticket",
-            "github.label": "T-7",
-            "github.url": TICKET_URL,
-            "github.title": "Follow-up",
+            "target.provider": "local",
+            "target.action": "opened",
+            "target.kind": "ticket",
+            "target.label": "T-7",
+            "target.url": TICKET_URL,
+            "target.title": "Follow-up",
         },
-        "default_source": "github",
+        "default_source": "local",
         "person_id": "aiko",
     }
 
@@ -144,13 +152,13 @@ def test_record_member_issue_close_event_reports_the_close_as_activity(
         },
     )
 
-    assert recorded["event_type"] == "github.issue"
+    assert recorded["event_type"] == "ticket.item"
     assert recorded["payload"] == {
         "action": "closed",
-        "issue": {"label": "T-7", "title": "Capability gap", "url": TICKET_URL},
+        "ticket": {"label": "T-7", "title": "Capability gap", "url": TICKET_URL},
     }
-    assert recorded["attributes"]["github.action"] == "closed"
-    assert recorded["attributes"]["github.label"] == "T-7"
+    assert recorded["attributes"]["target.action"] == "closed"
+    assert recorded["attributes"]["target.label"] == "T-7"
     assert recorded["person_id"] == "aiko"
 
 
@@ -187,20 +195,21 @@ def test_record_member_issue_comment_event_keeps_comment_diagnostics_url(
         },
     )
 
-    assert recorded["event_type"] == "github.issue_comment"
+    assert recorded["event_type"] == "ticket.comment"
     assert recorded["payload"] == {
         "action": "commented",
-        "issue": {"label": "#42", "title": "", "url": ticket_url},
+        "ticket": {"label": "#42", "title": "", "url": ticket_url},
         "comment": {
             "id": "issuecomment-123",
             "url": f"{ticket_url}#issuecomment-123",
         },
     }
     assert recorded["attributes"] == {
-        "github.action": "commented",
-        "github.kind": "ticket",
-        "github.label": "#42",
-        "github.url": ticket_url,
-        "github.title": "",
+        "target.provider": "local",
+        "target.action": "commented",
+        "target.kind": "ticket",
+        "target.label": "#42",
+        "target.url": ticket_url,
+        "target.title": "",
     }
     assert recorded["person_id"] == "aiko"

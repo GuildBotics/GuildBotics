@@ -695,8 +695,8 @@ def _summary_matches(
         return False
     if person_id and summary["person_id"] != person_id:
         return False
-    # Exact match on a structured attribute (e.g. github.url / github.label /
-    # slack.thread_ts) — the precise path for ticket/thread lookups.
+    # Exact match on a structured attribute (e.g. target.url / target.label /
+    # chat.thread) — the precise path for ticket/thread lookups.
     if (
         attr_key
         and attr_value

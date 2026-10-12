@@ -413,7 +413,7 @@ export type ActivityHistoryMember = {
 };
 
 export type ActivityHistoryLink = {
-  kind: "doc" | "issue" | "pull_request" | "commit" | "external";
+  kind: "doc" | "ticket" | "pull_request" | "commit" | "external";
   label: string;
   url: string;
   timestamp?: string;

@@ -612,6 +612,8 @@ class GitHubTicketService(GitHubApi, TicketService):
             Task: The converted Task object.
         """
         return Task(
+            provider="github",
+            label=self.item(issue["url"], "ticket").label,
             id=issue["id"],
             url=issue.get("url"),
             title=issue["title"],

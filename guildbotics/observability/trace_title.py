@@ -24,15 +24,15 @@ from guildbotics.utils.text_utils import first_line
 #: Memory reads and signals (``recall`` / ``get`` / ``touch``) change no
 #: document: their payload title is what was read, not what was done.
 MEMORY_READ_ONLY_ACTIONS = frozenset({"recall", "get", "touch"})
-#: A ``github.work_target`` recorded by a read-only member command.
-GITHUB_READ_ONLY_ACTIONS = frozenset({"inspected"})
+#: A ``target.recorded`` recorded by a read-only member command.
+TARGET_READ_ONLY_ACTIONS = frozenset({"inspected"})
 
 
 def is_read_only_action(attributes: Mapping[str, Any]) -> bool:
-    """True when the record only read something (memory or GitHub)."""
+    """True when the record only read something (memory or a work target)."""
     return (
         str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS
-        or str(attributes.get("github.action") or "") in GITHUB_READ_ONLY_ACTIONS
+        or str(attributes.get("target.action") or "") in TARGET_READ_ONLY_ACTIONS
     )
 
 
@@ -101,15 +101,15 @@ def resolve_trace_title(
     """
     records = list(records)
     candidates: tuple[Callable[[], object], ...] = (
-        lambda: attributes.get("github.title"),
+        lambda: attributes.get("target.title"),
         lambda: first_line(
             completion_summary(attributes, person_id) if completion_summary else ""
         ),
         lambda: attributes.get("memory.title"),
         lambda: _first_payload_text(records, "title"),
         lambda: target_reference_label(
-            str(attributes.get("github.kind") or ""),
-            str(attributes.get("github.label") or ""),
+            str(attributes.get("target.kind") or ""),
+            str(attributes.get("target.label") or ""),
         ),
         lambda: _trigger_label(attributes),
         lambda: _first_payload_field(records, "prompt"),
@@ -130,12 +130,12 @@ def resolve_trace_title(
 def _trigger_label(attributes: Mapping[str, Any]) -> str:
     """Build a provider-neutral label for an event-triggered session.
 
-    ``event.provider`` is only present on chat-triggered workflows, so its
+    ``chat.provider`` is only present on chat-triggered workflows, so its
     presence is what selects this label. It gives an in-progress chat session
     a meaningful title before its target or completion summary exists,
     instead of falling through to the raw agent prompt.
     """
-    provider = str(attributes.get("event.provider") or "").strip()
+    provider = str(attributes.get("chat.provider") or "").strip()
     if not provider:
         return ""
     return t("observability.trace_title.chat_trigger", provider=provider.title())

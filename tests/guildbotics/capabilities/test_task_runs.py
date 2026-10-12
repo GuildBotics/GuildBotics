@@ -386,18 +386,18 @@ def test_start_record_keeps_the_first_seen_attributes_across_attempts(tmp_path):
         "source": "event_listener",
     }
     store.start_record(
-        "run-1", **start_args, attributes={"github.title": "first", "a": "1"}
+        "run-1", **start_args, attributes={"target.title": "first", "a": "1"}
     )
     store.finish_record(
-        "run-1", status="failed", attributes={"github.title": "later", "b": "2"}
+        "run-1", status="failed", attributes={"target.title": "later", "b": "2"}
     )
     reopened = store.start_record(
-        "run-1", **start_args, attributes={"github.title": "third", "c": "3"}
+        "run-1", **start_args, attributes={"target.title": "third", "c": "3"}
     )
 
     assert reopened.source == "event_listener"
     assert reopened.attributes == {
-        "github.title": "first",
+        "target.title": "first",
         "a": "1",
         "b": "2",
         "c": "3",
@@ -461,15 +461,15 @@ def test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded(
         work_kind="demo",
         execution_mode="autonomous",
         member_id="aiko",
-        attributes={"github.title": "leaked sk-live-secret-12345 in title"},
+        attributes={"target.title": "leaked sk-live-secret-12345 in title"},
     )
     finished = store.finish_record(
-        "run-1", status="succeeded", attributes={"github.repo": "x" * 1000}
+        "run-1", status="succeeded", attributes={"target.url": "x" * 1000}
     )
 
-    assert started.attributes["github.title"] == "leaked *** in title"
+    assert started.attributes["target.title"] == "leaked *** in title"
     assert finished is not None
-    assert len(finished.attributes["github.repo"]) <= 500
+    assert len(finished.attributes["target.url"]) <= 500
     assert "sk-live-secret-12345" not in (
         tmp_path / "runs/run-1/result.json"
     ).read_text(encoding="utf-8")

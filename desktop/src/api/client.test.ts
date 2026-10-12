@@ -815,7 +815,7 @@ describe("websocket subscriptions", () => {
       span_id: "s1",
       source: "manual",
       payload: { id: 1 },
-      attributes: { "github.label": "#42" },
+      attributes: { "target.label": "#42" },
       timestamp: "2026-06-05T00:00:00Z",
     });
     socket.onmessage?.({ data: JSON.stringify(event) });

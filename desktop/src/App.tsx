@@ -2586,15 +2586,16 @@ export function recordAttributeRows(
   attributes: Record<string, unknown>,
 ): Array<[string, string]> {
   return [
-    ["event.provider", t("diagnostics.executions.attributeLabels.eventProvider")],
-    ["github.label", t("diagnostics.executions.attributeLabels.githubLabel")],
-    ["github.kind", t("diagnostics.executions.attributeLabels.githubKind")],
-    ["github.title", t("diagnostics.executions.attributeLabels.githubTitle")],
-    ["github.url", t("diagnostics.executions.attributeLabels.githubUrl")],
+    ["chat.provider", t("diagnostics.executions.attributeLabels.chatProvider")],
+    ["target.provider", t("diagnostics.executions.attributeLabels.targetProvider")],
+    ["target.label", t("diagnostics.executions.attributeLabels.targetLabel")],
+    ["target.kind", t("diagnostics.executions.attributeLabels.targetKind")],
+    ["target.title", t("diagnostics.executions.attributeLabels.targetTitle")],
+    ["target.url", t("diagnostics.executions.attributeLabels.targetUrl")],
     ["service_run_id", t("diagnostics.executions.attributeLabels.serviceRun")],
-    ["slack.channel", t("diagnostics.executions.attributeLabels.slackChannel")],
-    ["slack.thread_ts", t("diagnostics.executions.attributeLabels.slackThread")],
-    ["slack.ts", t("diagnostics.executions.attributeLabels.slackMessage")],
+    ["chat.channel", t("diagnostics.executions.attributeLabels.chatChannel")],
+    ["chat.thread", t("diagnostics.executions.attributeLabels.chatThread")],
+    ["chat.message", t("diagnostics.executions.attributeLabels.chatMessage")],
   ].flatMap(([key, label]) => {
     const value = attributes[key];
     return typeof value === "string" && value ? [[label, value]] : [];
@@ -2721,20 +2722,19 @@ export function ticketChipInfo(
   attributes: Record<string, unknown>,
 ): { label: string; key: string; value: string; url: string } | null {
   const reference =
-    typeof attributes["github.label"] === "string" ? attributes["github.label"] : "";
-  const url = typeof attributes["github.url"] === "string" ? attributes["github.url"] : "";
+    typeof attributes["target.label"] === "string" ? attributes["target.label"] : "";
+  const url = typeof attributes["target.url"] === "string" ? attributes["target.url"] : "";
   if (!reference && !url) {
     return null;
   }
-  const prefix = attributes["github.kind"] === "pull_request" ? "PR" : "";
+  const prefix = attributes["target.kind"] === "pull_request" ? "PR" : "";
   const label = [prefix, reference].filter(Boolean).join(" ");
   return url
-    ? { label, key: "github.url", value: url, url }
-    : { label, key: "github.label", value: reference, url: "" };
+    ? { label, key: "target.url", value: url, url }
+    : { label, key: "target.label", value: reference, url: "" };
 }
 
-// Turn a ticket-lookup input into an exact structured filter. Accepts a GitHub
-// issue/PR URL, "owner/repo#42", "#42" or a bare "42" — never a fuzzy match.
+// Turn a target URL or short reference into an exact structured filter.
 export function parseTicketQuery(input: string): AttrFilter | null {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -2743,22 +2743,24 @@ export function parseTicketQuery(input: string): AttrFilter | null {
   const ticketPrefixMatch = trimmed.match(/^ticket:(\d+)$/i);
   if (ticketPrefixMatch) {
     return {
-      key: "github.label",
+      key: "target.label",
       value: `#${ticketPrefixMatch[1]}`,
       label: `#${ticketPrefixMatch[1]}`,
     };
   }
-  const urlMatch = trimmed.match(/^https?:\/\/\S+\/(?:issues|pull)\/(\d+)\b/);
-  if (urlMatch) {
+  if (/^[a-z][a-z\d+.-]*:\/\/\S+$/i.test(trimmed)) {
     return {
-      key: "github.url",
-      value: trimmed.replace(/[#?].*$/, ""),
-      label: `#${urlMatch[1]}`,
+      key: "target.url",
+      value: trimmed,
+      label: trimmed,
     };
   }
   const refMatch = trimmed.match(/^(?:[\w.-]+\/[\w.-]+)?#?(\d+)$/);
   if (refMatch) {
-    return { key: "github.label", value: `#${refMatch[1]}`, label: `#${refMatch[1]}` };
+    return { key: "target.label", value: `#${refMatch[1]}`, label: `#${refMatch[1]}` };
+  }
+  if (/^(?:[A-Za-z][\w]*-\d+|!\d+)$/.test(trimmed)) {
+    return { key: "target.label", value: trimmed, label: trimmed };
   }
   return null;
 }

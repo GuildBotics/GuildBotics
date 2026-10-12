@@ -40,11 +40,11 @@ _BASE: dict[str, Any] = {
     "source": "event_listener",
     "command": "workflows/chat_conversation_workflow",
     "attributes": {
-        "slack.channel": "C1",
-        "slack.thread_id": "100.1",
-        "github.url": "https://github.com/o/r/issues/42",
-        "github.number": "42",
-        "github.kind": "issue",
+        "chat.channel": "C1",
+        "chat.thread": "100.1",
+        "target.url": "https://github.com/o/r/issues/42",
+        "target.label": "42",
+        "target.kind": "ticket",
     },
     "payload": {"command": "workflows/chat_conversation_workflow"},
 }

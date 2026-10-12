@@ -11,7 +11,7 @@ Design (see ``docs/ARCHITECTURE.md`` "Observability and Diagnostics"):
 - ``span_id`` identifies an individual operation inside a trace (an LLM or CLI
   agent call). ``call_id`` pairs a span's request/response records.
 - Grouping/continuity is expressed as ``attributes`` (``service_run_id``,
-  ``slack.*``, ``github.*``) — never by overloading ``trace_id``.
+  ``chat.*``, ``target.*``) — never by overloading ``trace_id``.
 
 ``request_id`` is intentionally not part of this model; ``trace_id`` is the
 single correlation id across the whole runtime.

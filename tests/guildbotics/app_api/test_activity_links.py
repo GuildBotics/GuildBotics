@@ -6,21 +6,22 @@ from guildbotics.app_api.activity_links import (
     links_from_attributes,
     links_from_record,
     memory_diagnostics_url,
+    source_links_from_payload,
 )
 from guildbotics.app_api.models import ActivityHistoryLink
 
 
-def test_github_link_kind_comes_from_provider_attributes_not_url_path() -> None:
+def test_target_link_kind_comes_from_provider_attributes_not_url_path() -> None:
     links = links_from_attributes(
         {
-            "github.kind": "ticket",
-            "github.label": "#8",
-            "github.url": "https://github.com/owner/repo/pull/8",
+            "target.kind": "ticket",
+            "target.label": "#8",
+            "target.url": "https://github.com/owner/repo/pull/8",
         }
     )
 
     assert [(link.kind, link.label, link.url) for link in links] == [
-        ("issue", "Ticket #8", "https://github.com/owner/repo/pull/8")
+        ("ticket", "Ticket #8", "https://github.com/owner/repo/pull/8")
     ]
 
 
@@ -28,18 +29,18 @@ def test_link_label_is_the_label_the_service_shows() -> None:
     # A local ticket's label is not GitHub's "#n"; the link shows it as is.
     links = links_from_attributes(
         {
-            "github.kind": "ticket",
-            "github.label": "T-1",
-            "github.url": "local://tickets/acme/team/demo/T-1",
+            "target.kind": "ticket",
+            "target.label": "T-1",
+            "target.url": "local://tickets/acme/team/demo/T-1",
         }
     )
 
-    assert [(link.kind, link.label) for link in links] == [("issue", "Ticket T-1")]
+    assert [(link.kind, link.label) for link in links] == [("ticket", "Ticket T-1")]
 
 
-def test_unknown_github_link_kind_is_external_and_named_by_its_url() -> None:
+def test_unknown_target_link_kind_is_external_and_named_by_its_url() -> None:
     links = links_from_attributes(
-        {"github.url": "https://github.com/owner/repo/pull/8"}
+        {"target.url": "https://github.com/owner/repo/pull/8"}
     )
 
     assert [(link.kind, link.label, link.url) for link in links] == [
@@ -87,16 +88,16 @@ def test_read_only_memory_record_yields_no_links() -> None:
     assert links == []
 
 
-def test_inspected_github_work_target_yields_no_links() -> None:
+def test_inspected_target_recorded_yields_no_links() -> None:
     # Reading a PR / issue declares the trace's work target for diagnostics
     # but is not the session's work, like a memory read.
     links = links_from_record(
         {"pull_request": {"label": "#544", "title": "Show the target"}},
         {
-            "github.action": "inspected",
-            "github.kind": "pull_request",
-            "github.label": "#544",
-            "github.url": "https://github.com/o/r/pull/544",
+            "target.action": "inspected",
+            "target.kind": "pull_request",
+            "target.label": "#544",
+            "target.url": "https://github.com/o/r/pull/544",
         },
     )
 
@@ -107,9 +108,9 @@ def test_worked_github_target_yields_its_link() -> None:
     links = links_from_record(
         {"pull_request": {"label": "#544", "title": "Show the target"}},
         {
-            "github.kind": "pull_request",
-            "github.label": "#544",
-            "github.url": "https://github.com/o/r/pull/544",
+            "target.kind": "pull_request",
+            "target.label": "#544",
+            "target.url": "https://github.com/o/r/pull/544",
         },
     )
 
@@ -126,8 +127,35 @@ def test_content_changing_memory_record_yields_links() -> None:
     )
 
     kinds = {link.kind for link in links}
-    assert "pull_request" in kinds
+    assert "external" in kinds
     assert "doc" in kinds
+
+
+@pytest.mark.parametrize(
+    "source_type", ["pull_request", "pr", "issue", "ticket", "thread"]
+)
+@pytest.mark.parametrize("title", ["", "Work record"])
+def test_memory_source_label_uses_title_or_url(source_type: str, title: str) -> None:
+    url = "local://tickets/acme/team/demo/T-1"
+    links = source_links_from_payload(
+        {"title": title, "source": [{"type": source_type, "url": url}]}
+    )
+
+    assert [(link.kind, link.label, link.url) for link in links] == [
+        ("external", title or url, url)
+    ]
+
+
+def test_multiple_memory_sources_are_labeled_by_each_url() -> None:
+    urls = ["local://tickets/acme/team/demo/T-1", "local://code/acme/team/demo/pull/3"]
+    links = source_links_from_payload(
+        {
+            "title": "Work record",
+            "source": [{"type": "ticket", "url": url} for url in urls],
+        }
+    )
+
+    assert [link.label for link in links] == urls
 
 
 def test_memory_diagnostics_url_namespaces_the_trace_filter() -> None:

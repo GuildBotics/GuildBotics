@@ -31,6 +31,7 @@ import {
   getWorkspaceLive,
 } from "../api/client";
 import type {
+  ActivityHistoryLink,
   ActivityHistoryResponse,
   CliAgentUsageResponse,
   CliAgentUsageWindow,
@@ -90,7 +91,7 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
           url: "",
         },
         {
-          kind: "issue",
+          kind: "ticket",
           label: "Issue #42",
           url: "https://github.com/owner/repo/issues/42",
         },
@@ -340,7 +341,7 @@ describe("ActivityHistoryPage", () => {
           url: "https://github.com/owner/repo/issues/43",
           links: [
             {
-              kind: "issue",
+              kind: "ticket",
               label: "Issue #43",
               url: "https://github.com/owner/repo/issues/43",
             },
@@ -1551,6 +1552,30 @@ describe("orderedActivityLinks", () => {
 });
 
 describe("buildActivityBlocks", () => {
+  it.each(["ticket", "pull_request", "commit"] as const)(
+    "prefers a %s link by kind with a local URL and an arbitrary label",
+    (kind) => {
+      const url = "local://code/acme/team/demo/opaque-item";
+      for (const reverse of [false, true]) {
+        const links: ActivityHistoryLink[] = [
+          { kind: "external", label: "PR #246", url },
+          { kind, label: "provider reference", url },
+        ];
+        if (reverse) links.reverse();
+        const blocks = buildActivityBlocks(
+          links.map((link, index) => ({
+            ...ACTIVITY_FIXTURE.sessions[0],
+            trace_id: `local-${index}`,
+            started_at: `2026-07-01T12:${index ? "55" : "31"}:00Z`,
+            ended_at: `2026-07-01T12:${index ? "58" : "34"}:00Z`,
+            links: [link],
+          })),
+        );
+        expect(blocks[0].links).toEqual([{ kind, label: "provider reference", url }]);
+      }
+    },
+  );
+
   it("rounds display ranges to enclosing hourly slots", () => {
     const blocks = buildActivityBlocks([
       {
@@ -1632,7 +1657,7 @@ describe("buildActivityBlocks", () => {
         trace_id: "second",
         started_at: "2026-07-01T12:55:00Z",
         ended_at: "2026-07-01T13:08:00Z",
-        links: [{ kind: "pull_request", label: "PR #246 note のタイトル", url }],
+        links: [{ kind: "external", label: "PR #246 note のタイトル", url }],
       },
     ]);
 
@@ -1648,7 +1673,7 @@ describe("buildActivityBlocks", () => {
         trace_id: "first",
         started_at: "2026-07-01T12:31:00Z",
         ended_at: "2026-07-01T12:34:00Z",
-        links: [{ kind: "pull_request", label: "PR #246 note のタイトル", url }],
+        links: [{ kind: "external", label: "PR #246 note のタイトル", url }],
       },
       {
         ...ACTIVITY_FIXTURE.sessions[0],

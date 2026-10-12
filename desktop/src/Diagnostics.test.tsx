@@ -383,9 +383,9 @@ describe("Diagnostics executions tab", () => {
           error_count: 0,
           span_count: 0,
           attributes: {
-            "github.kind": "ticket",
-            "github.label": "#544",
-            "github.url": "https://github.com/o/r/issues/544",
+            "target.kind": "ticket",
+            "target.label": "#544",
+            "target.url": "https://github.com/o/r/issues/544",
           },
         },
       ],
@@ -807,13 +807,13 @@ describe("Diagnostics executions tab", () => {
     const field = await screen.findByLabelText(t("diagnostics.executions.search"));
     await user.type(field, "42{Enter}");
 
-    // The list refetches scoped to the exact github.label attribute (not q).
+    // The list refetches scoped to the exact target.label attribute (not q).
     await waitFor(() =>
       expect(
         vi
           .mocked(getTraces)
           .mock.calls.some(
-            (call) => call[0]?.attrKey === "github.label" && call[0]?.attrValue === "#42",
+            (call) => call[0]?.attrKey === "target.label" && call[0]?.attrValue === "#42",
           ),
       ).toBe(true),
     );
@@ -889,7 +889,7 @@ describe("Diagnostics executions tab", () => {
         vi.mocked(getTraces).mock.calls.some((call) => {
           const params = call[0];
           return (
-            params?.attrKey === "github.label" &&
+            params?.attrKey === "target.label" &&
             params.attrValue === "#42" &&
             params.query === "timeout"
           );

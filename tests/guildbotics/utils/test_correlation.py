@@ -52,9 +52,9 @@ def test_trace_scope_sets_correlation_fields() -> None:
 
 def test_trace_scope_drops_none_attributes() -> None:
     with trace_scope(
-        "event_listener", attributes={"service_run_id": None, "slack.ts": "12.3"}
+        "event_listener", attributes={"service_run_id": None, "chat.message": "12.3"}
     ):
-        assert correlation_fields()["attributes"] == {"slack.ts": "12.3"}
+        assert correlation_fields()["attributes"] == {"chat.message": "12.3"}
 
 
 def test_span_scope_adds_span_and_call_id() -> None:
@@ -95,12 +95,12 @@ def test_trace_scope_resets_inherited_span() -> None:
 
 def test_set_attributes_merges_into_current_trace() -> None:
     with trace_scope("event_listener", trace_id="trace-1"):
-        set_attributes(**{"github.issue": "42", "ignored": None})
+        set_attributes(**{"ticket.item": "42", "ignored": None})
         attributes = correlation_fields()["attributes"]
-        assert attributes["github.issue"] == "42"
+        assert attributes["ticket.item"] == "42"
         assert "ignored" not in attributes
 
 
 def test_set_attributes_without_trace_is_noop() -> None:
-    set_attributes(**{"github.issue": "42"})
+    set_attributes(**{"ticket.item": "42"})
     assert correlation_fields()["attributes"] == {}

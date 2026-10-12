@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any, Literal, cast
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from guildbotics.app_api.activity_events import commit_entries, commit_message
 from guildbotics.app_api.models import ActivityHistoryLink
@@ -11,7 +11,7 @@ from guildbotics.observability.trace_title import (
     target_reference_label,
 )
 
-type ActivityLinkKind = Literal["doc", "issue", "pull_request", "commit", "external"]
+type ActivityLinkKind = Literal["doc", "ticket", "pull_request", "commit", "external"]
 
 
 def links_from_records(
@@ -58,23 +58,23 @@ def links_from_attributes(
     *,
     timestamp: str = "",
 ) -> list[ActivityHistoryLink]:
-    url = str(attributes.get("github.url") or "")
-    label = str(attributes.get("github.label") or "")
-    kind = str(attributes.get("github.kind") or "")
+    url = str(attributes.get("target.url") or "")
+    label = str(attributes.get("target.label") or "")
+    kind = str(attributes.get("target.kind") or "")
     if not (url or label):
         return []
-    link_kind = github_link_kind(kind)
+    link_kind = target_link_kind(kind)
     label = target_reference_label(kind, label) or url
     return [
         ActivityHistoryLink(kind=link_kind, label=label, url=url, timestamp=timestamp)
     ]
 
 
-def github_link_kind(kind: str) -> ActivityLinkKind:
+def target_link_kind(kind: str) -> ActivityLinkKind:
     if kind == "pull_request":
         return "pull_request"
     if kind == "ticket":
-        return "issue"
+        return "ticket"
     return "external"
 
 
@@ -146,33 +146,9 @@ def source_link(
     url = str(item.get("url") or "")
     if not url:
         return None
-    source_type = str(item.get("type") or "").lower()
-    kind = source_link_kind(source_type)
-    label = title or source_link_label(kind, url, source_type)
-    return ActivityHistoryLink(kind=kind, label=label, url=url, timestamp=timestamp)
-
-
-def source_link_kind(source_type: str) -> ActivityLinkKind:
-    if source_type in {"pr", "pull_request"}:
-        return "pull_request"
-    if source_type in {"ticket", "issue"}:
-        return "issue"
-    return "external"
-
-
-def source_link_label(kind: ActivityLinkKind, url: str, source_type: str) -> str:
-    number = last_url_segment(url)
-    if kind == "pull_request":
-        return f"PR #{number}" if number else "Pull request"
-    if kind == "issue":
-        return f"Issue #{number}" if number else "Issue"
-    return source_type.title() if source_type else url
-
-
-def last_url_segment(url: str) -> str:
-    path = urlparse(url).path.rstrip("/")
-    value = path.rsplit("/", 1)[-1] if path else ""
-    return value if value.isdigit() else ""
+    return ActivityHistoryLink(
+        kind="external", label=title or url, url=url, timestamp=timestamp
+    )
 
 
 def commit_links(
@@ -202,16 +178,13 @@ def record_timestamp(record: dict[str, Any] | None) -> str:
 def dedupe_links(
     links: Iterable[ActivityHistoryLink],
 ) -> list[ActivityHistoryLink]:
-    deduped: list[ActivityHistoryLink] = []
-    seen: set[tuple[str, str]] = set()
+    by_key: dict[str, ActivityHistoryLink] = {}
     for link in links:
-        # Same target (kind + url) is one link even if labels differ, e.g. a PR
-        # from github attributes ("PR #246") and the same PR referenced by a
-        # memory source (labelled with the note title). Keep the first (github)
-        # label. Fall back to the label only when there is no url to key on.
-        key = (link.kind, link.url) if link.url else (link.kind, f"label:{link.label}")
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(link)
-    return deduped
+        key = link.url or f"{link.kind}:label:{link.label}"
+        existing = by_key.get(key)
+        if existing is None or (
+            existing.kind not in {"ticket", "pull_request", "commit"}
+            and link.kind in {"ticket", "pull_request", "commit"}
+        ):
+            by_key[key] = link
+    return list(by_key.values())

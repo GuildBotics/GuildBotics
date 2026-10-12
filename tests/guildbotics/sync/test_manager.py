@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+
 import threading
 import time
 from collections.abc import Iterator
@@ -58,7 +60,7 @@ def _activity_event(event_id: str, summary: str) -> str:
             "schema_version": 1,
             "event_id": event_id,
             "occurred_at": "2026-08-10T00:00:00Z",
-            "kind": "github.push",
+            "kind": "repository.push",
             "safe_summary": summary,
         }
     )
@@ -684,7 +686,7 @@ def test_a_record_from_a_newer_build_asks_for_an_update(
         "state/workspace.json",
         dump_shared_json(
             {
-                "schema_version": 2,
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION + 1,
                 "workspace_id": WORKSPACE_ID,
                 "created_at": "2026-08-01T00:00:00Z",
             }
@@ -831,7 +833,7 @@ def test_a_local_identity_from_a_newer_build_asks_for_an_update(
         "state/workspace.json",
         dump_shared_json(
             {
-                "schema_version": 2,
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION + 1,
                 "workspace_id": WORKSPACE_ID,
                 "created_at": "2026-08-01T00:00:00Z",
             }

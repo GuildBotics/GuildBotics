@@ -108,8 +108,8 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
         command="member pr read",
         status="success",
         attributes={
-            "github.title": "first target",
-            "github.kind": "pull_request",
+            "target.title": "first target",
+            "target.kind": "pull_request",
             "interactive.workspace": "/repo",
         },
         now=datetime(2026, 7, 1, 10, 1, tzinfo=UTC),
@@ -118,7 +118,7 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
         session,
         command="member git push",
         status="failed",
-        attributes={"github.title": "second target", "github.number": "5"},
+        attributes={"target.title": "second target", "target.label": "5"},
         now=datetime(2026, 7, 1, 10, 9, tzinfo=UTC),
     )
 
@@ -140,9 +140,9 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
     assert record["started_at"] == "2026-07-01T10:00:00+00:00"
     assert record["last_seen_at"] == "2026-07-01T10:09:00+00:00"
     assert record["attributes"] == {
-        "github.title": "first target",
-        "github.kind": "pull_request",
-        "github.number": "5",
+        "target.title": "first target",
+        "target.kind": "pull_request",
+        "target.label": "5",
     }
 
 
@@ -197,13 +197,13 @@ def test_session_targets_cross_the_shared_boundary_masked_and_bounded(
         command="member pr read",
         status="success",
         attributes={
-            "github.title": "leaked sk-live-secret-12345 in title",
-            "github.repo": "x" * 1000,
+            "target.title": "leaked sk-live-secret-12345 in title",
+            "target.url": "x" * 1000,
         },
     )
 
-    assert record["attributes"]["github.title"] == "leaked *** in title"
-    assert len(record["attributes"]["github.repo"]) <= 500
+    assert record["attributes"]["target.title"] == "leaked *** in title"
+    assert len(record["attributes"]["target.url"]) <= 500
     assert "sk-live-secret-12345" not in (tmp_path / "sessions/trace-1.json").read_text(
         encoding="utf-8"
     )

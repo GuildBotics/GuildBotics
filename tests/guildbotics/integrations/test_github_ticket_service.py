@@ -202,9 +202,11 @@ async def test_default_todo_assigned_ticket_is_selected(monkeypatch):
     assert task.assignee == "aiko"
     assert task.trigger_reason == "ready_lane"
     assert task.trace_attributes() == {
-        "github.kind": "ticket",
-        "github.title": "issue 1",
-        "github.url": issue_url(1),
+        "target.provider": "github",
+        "target.label": "#1",
+        "target.kind": "ticket",
+        "target.title": "issue 1",
+        "target.url": issue_url(1),
     }
     assert github.writes == []
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from guildbotics.hub import host, relay
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 
 WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
 
@@ -66,7 +67,7 @@ def test_live_poll_forwards_opaque_lines_and_expires_old_files(
         "kind": relay.LIVE_EXPIRED_EVENT_KIND,
         "observed_at": (now - timedelta(seconds=61)).isoformat(),
         "publisher_id": publisher_id,
-        "schema_version": 1,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "workspace_id": WORKSPACE_ID,
     }
     assert not path.exists()

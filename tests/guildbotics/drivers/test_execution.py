@@ -536,7 +536,7 @@ def test_begin_and_finish_mirror_the_runs_trace_into_its_record() -> None:
         with trace_scope(
             "routine",
             trace_id="run-trace",
-            attributes={"github.url": "https://github.com/o/r/issues/1"},
+            attributes={"target.url": "https://github.com/o/r/issues/1"},
         ) as trace:
             started = coordinator.begin(
                 "event-trace", "alice", "device-1", run_id="run-trace", source="x"
@@ -544,16 +544,16 @@ def test_begin_and_finish_mirror_the_runs_trace_into_its_record() -> None:
             assert started.record is not None
             assert started.record.source == "routine"
             assert started.record.attributes == {
-                "github.url": "https://github.com/o/r/issues/1"
+                "target.url": "https://github.com/o/r/issues/1"
             }
-            trace.attributes["github.title"] = "Fix it"
-            trace.attributes["github.url"] = "https://github.com/o/r/pull/2"
+            trace.attributes["target.title"] = "Fix it"
+            trace.attributes["target.url"] = "https://github.com/o/r/pull/2"
             finished = coordinator.finish("run-trace", "succeeded", "done")
         assert finished is not None
         # What the trace learned is added; what it started with is kept.
         assert finished.attributes == {
-            "github.url": "https://github.com/o/r/issues/1",
-            "github.title": "Fix it",
+            "target.url": "https://github.com/o/r/issues/1",
+            "target.title": "Fix it",
         }
     finally:
         set_workspace_sync_port(None)

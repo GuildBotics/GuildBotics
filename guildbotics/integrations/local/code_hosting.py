@@ -506,7 +506,7 @@ class LocalCodeHostingService(CodeHostingService):
         return ""
 
     def check_push(self, repository: str) -> None:
-        check_path(self.scope, repository)
+        check_path(self.scope, repository, provider="local")
 
     def commit_url(self, repository: str, sha: str) -> str:
         return ""

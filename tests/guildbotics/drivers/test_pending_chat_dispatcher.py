@@ -501,10 +501,10 @@ async def test_selected_event_runs_under_a_trace_naming_its_thread(
     assert step == "run"
     assert trace.attributes == {
         "service_run_id": "service-1",
-        "event.provider": "slack",
-        "slack.channel": "C1",
-        "slack.thread_ts": "100.1",
-        "slack.ts": "101.1",
+        "chat.provider": "slack",
+        "chat.channel": "C1",
+        "chat.thread": "100.1",
+        "chat.message": "101.1",
         "event_id": "E1",
     }
     assert store.is_processed_event("slack", "alice", "C1", "E1")

@@ -1078,7 +1078,7 @@ function activityLinkIcon(kind: ActivityHistoryLink["kind"]): ReactNode {
   if (kind === "pull_request") {
     return <GitPullRequest size={12} />;
   }
-  if (kind === "issue") {
+  if (kind === "ticket") {
     return <CircleDot size={12} />;
   }
   return <ExternalLink size={12} />;
@@ -1088,11 +1088,11 @@ export function activityLinkKey(link: ActivityHistoryLink): string {
   return `${link.kind}:${link.label}:${link.url}`;
 }
 
-// Same target (kind + url) is one link even if the labels differ (e.g. a PR from
-// github attributes vs the same PR referenced by a memory note). Mirrors the
+// The same URL is one link even if the labels differ (e.g. a PR from
+// target attributes vs the same PR referenced by a memory note). Mirrors the
 // backend dedupe so merging sessions into a block does not resurrect duplicates.
 export function activityLinkDedupeKey(link: ActivityHistoryLink): string {
-  return link.url ? `${link.kind}:${link.url}` : `${link.kind}:label:${link.label}`;
+  return link.url || `${link.kind}:label:${link.label}`;
 }
 
 export function orderedActivityLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
@@ -1574,23 +1574,17 @@ function dedupeLinks(links: ActivityHistoryLink[]): ActivityHistoryLink[] {
       byKey.set(key, link);
       continue;
     }
-    // A canonical GitHub label (e.g. "PR #246") always wins over a
-    // memory-source label (e.g. "PR #246 <note title>") for the same target,
+    // A target link always wins over a memory-source reference to the same URL,
     // regardless of which session's link appears first when merging.
-    if (!isCanonicalGitHubLabel(existing) && isCanonicalGitHubLabel(link)) {
+    if (!isTargetLink(existing) && isTargetLink(link)) {
       byKey.set(key, link);
     }
   }
   return order.map((key) => byKey.get(key)!);
 }
 
-const CANONICAL_GITHUB_LABEL = /^(?:PR|Issue) #\d+$/;
-
-function isCanonicalGitHubLabel(link: ActivityHistoryLink): boolean {
-  if (link.kind !== "pull_request" && link.kind !== "issue") {
-    return true;
-  }
-  return CANONICAL_GITHUB_LABEL.test(link.label);
+function isTargetLink(link: ActivityHistoryLink): boolean {
+  return ["ticket", "pull_request", "commit"].includes(link.kind);
 }
 
 function floorToInterval(date: Date, minutes: number): Date {

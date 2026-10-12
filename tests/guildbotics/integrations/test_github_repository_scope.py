@@ -156,8 +156,8 @@ async def test_other_writes_are_refused_before_they_are_sent(
 
     assert sent == []
     [refusal] = refusals
-    assert refusal["event_type"] == "github.scope_refused"
-    assert refusal["payload"]["scope_owner"] == "acme"
+    assert refusal["event_type"] == "target.scope_refused"
+    assert refusal["payload"]["scope"] == "acme"
     assert refusal["payload"]["target"].startswith(f"{method} /")
 
 
@@ -275,7 +275,7 @@ async def test_a_github_app_renews_its_token_through_the_gate(
     ],
 )
 def test_check_path_admits_what_lies_directly_in_the_scope(refusals, scope, path):
-    check_path(scope, path)
+    check_path(scope, path, provider="local")
 
     assert refusals == []
 
@@ -297,11 +297,11 @@ def test_check_path_admits_what_lies_directly_in_the_scope(refusals, scope, path
 )
 def test_check_path_refuses_anything_else(refusals, scope, path):
     with pytest.raises(ServiceError, match="refused"):
-        check_path(scope, path)
+        check_path(scope, path, provider="local")
 
     [refusal] = refusals
-    assert refusal["event_type"] == "github.scope_refused"
-    assert refusal["payload"] == {"target": path, "scope_owner": scope}
+    assert refusal["event_type"] == "target.scope_refused"
+    assert refusal["payload"] == {"target": path, "scope": scope}
 
 
 def test_project_mutations_are_mutations_of_the_configured_project() -> None:

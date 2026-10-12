@@ -874,7 +874,7 @@ class ActivityHistoryMember(BaseModel):
 
 
 class ActivityHistoryLink(BaseModel):
-    kind: Literal["doc", "issue", "pull_request", "commit", "external"]
+    kind: Literal["doc", "ticket", "pull_request", "commit", "external"]
     label: str
     url: str = ""
     timestamp: str = ""

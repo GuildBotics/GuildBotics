@@ -4,10 +4,7 @@ from typing import Any
 
 from guildbotics.entities.team import Person
 from guildbotics.observability.diagnostics_events import record_correlated_event
-from guildbotics.observability.event_types import GITHUB_WORK_TARGET_EVENT_TYPE
-
-#: What a work target's kind is called in an event's type and payload.
-EVENT_SUBJECTS = {"ticket": "issue", "pull_request": "pull_request"}
+from guildbotics.observability.event_types import TARGET_RECORDED_EVENT_TYPE
 
 
 def target_record(target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -19,10 +16,11 @@ def target_record(target: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str
         "url": str(target.get("url") or ""),
     }
     attributes = {
-        "github.kind": str(target.get("kind") or ""),
-        "github.label": entry["label"],
-        "github.url": entry["url"],
-        "github.title": entry["title"],
+        "target.provider": str(target.get("provider") or ""),
+        "target.kind": str(target.get("kind") or ""),
+        "target.label": entry["label"],
+        "target.url": entry["url"],
+        "target.title": entry["title"],
     }
     return entry, attributes
 
@@ -40,25 +38,27 @@ def record_member_work_target(
     entry, attributes = target_record(target)
     _record_member_domain_event(
         member_person,
-        GITHUB_WORK_TARGET_EVENT_TYPE,
-        {EVENT_SUBJECTS.get(str(target.get("kind")), ""): entry},
-        {"github.action": "inspected" if read_only else "", **attributes},
+        TARGET_RECORDED_EVENT_TYPE,
+        {str(target["kind"]): entry},
+        {"target.action": "inspected" if read_only else "", **attributes},
     )
 
 
-def record_member_push_event(member_person: Person, payload: dict[str, Any]) -> None:
+def record_member_push_event(
+    member_person: Person, payload: dict[str, Any], *, provider: str
+) -> None:
     if not payload.get("pushed"):
         return
     branch = str(payload.get("branch") or "")
     _record_member_domain_event(
         member_person,
-        "github.push",
+        "repository.push",
         {
             "action": "push",
             "ref": f"refs/heads/{branch}" if branch else "",
             "commits": payload.get("commits", []),
         },
-        {"github.action": "push"},
+        {"target.action": "push", "target.provider": provider},
     )
 
 
@@ -98,13 +98,13 @@ def record_member_issue_comment_event(
     entry, attributes = target_record(payload["target"])
     _record_member_domain_event(
         member_person,
-        "github.issue_comment",
+        "ticket.comment",
         {
             "action": "commented",
-            "issue": entry,
+            "ticket": entry,
             "comment": {"id": payload.get("id"), "url": payload.get("url") or ""},
         },
-        {"github.action": "commented", **attributes},
+        {"target.action": "commented", **attributes},
     )
 
 
@@ -112,12 +112,12 @@ def _record_target_event(
     member_person: Person, action: str, target: dict[str, Any], **fields: Any
 ) -> None:
     entry, attributes = target_record(target)
-    subject = EVENT_SUBJECTS[str(target["kind"])]
+    subject = str(target["kind"])
     _record_member_domain_event(
         member_person,
-        f"github.{subject}",
+        f"{subject}.item",
         {"action": action, subject: {**entry, **fields}},
-        {"github.action": action, **attributes},
+        {"target.action": action, **attributes},
     )
 
 
@@ -131,6 +131,6 @@ def _record_member_domain_event(
         event_type=event_type,
         payload=payload,
         attributes=attributes,
-        default_source="github",
+        default_source=str(attributes.get("target.provider") or ""),
         person_id=member_person.person_id,
     )

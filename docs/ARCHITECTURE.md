@@ -1184,7 +1184,12 @@ classifies every secret store access and member key spelling in the package.
   `set_attributes` correlate everything that happens in one execution — a manual
   command, one scheduler cycle, one batch of unread chat messages — under a single `trace_id`,
   with spans for LLM / AI CLI tool calls and `call_id` correlation.
-  Trace attributes carry structured search keys (e.g. `github.url`, `github.number`).
+  Trace attributes carry structured search keys (e.g. `target.url`, `target.label`).
+  Work targets use `target.provider/kind/url/label/title/action`; chats use
+  `chat.provider/channel/thread/message`. Fact event types name their subject:
+  `repository.push`, `pull_request.item`, `ticket.item`, `ticket.comment`,
+  `target.recorded`, and `target.scope_refused`. Shared record schema version 2
+  carries these names; older builds reject the newer records at the sync boundary.
   Idle ticket patrols (a routine cycle whose selector finds no actionable ticket) open
   no trace and leave no records; liveness is exposed instead as a per-member patrol
   heartbeat (`member_routines`) in the scheduler's runtime status.
@@ -1212,7 +1217,7 @@ classifies every secret store access and member key spelling in the package.
   "failed once, failed forever", and an `ERROR` log no longer marks a session failed
   (logs are local; the diagnostics index still folds them for its own list).
 - **Consumption**: `app_api` reads the lifecycle records, the shared activity events,
-  the memory audit, and — from local diagnostics — only the `github.work_target` events,
+  the memory audit, and — from local diagnostics — only the `target.recorded` events,
   and converts provider payloads into provider-neutral activity
   events/links for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives _only_ there — not in
@@ -1221,9 +1226,9 @@ classifies every secret store access and member key spelling in the package.
   about the same execution: a trace's status (`trace_status.py`, which the timeline
   seeds with the lifecycle record through `TraceStatus.observe`) and its title
   (`trace_title.py`). A trace is titled by the first PR / issue recorded inside it
-  (`github.title`): the ticket selector declares it before the turn, and a chat workflow
+  (`target.title`): the ticket selector declares it before the turn, and a chat workflow
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed
-  over in the member invocation), records a `github.work_target`. A read
+  over in the member invocation), records a `target.recorded`. A read
   (`inspect`) declares the target too but, like a memory read, never becomes an
   activity link. Manual command runs (`source: manual`, from the Desktop or a local
   `guildbotics run`) are excluded from the session timeline because they fire constantly; anything they

@@ -223,7 +223,7 @@ async def test_own_pr_with_unanswered_review_thread_is_feedback_work(monkeypatch
     assert task.title == "pr 2"
     assert task.status == Task.IN_PROGRESS
     assert task.assignee == "aiko"
-    assert task.trace_attributes()["github.kind"] == "pull_request"
+    assert task.trace_attributes()["target.kind"] == "pull_request"
     assert github.writes == []
 
 

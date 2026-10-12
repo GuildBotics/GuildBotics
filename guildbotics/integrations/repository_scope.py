@@ -39,27 +39,27 @@ def in_scope(scope: str, path: str) -> bool:
     )
 
 
-def check_path(scope: str, path: str) -> None:
+def check_path(scope: str, path: str, *, provider: str) -> None:
     """Refuse a write to ``path`` unless it lies directly in ``scope``.
 
     Raises:
         ServiceError: If it does not.
     """
     if not in_scope(scope, path):
-        refuse(scope, path)
+        refuse(scope, path, provider=provider)
 
 
-def refuse(scope: str, target: str) -> None:
+def refuse(scope: str, target: str, *, provider: str) -> None:
     """Record the refused write ``target`` and refuse it.
 
     Raises:
         ServiceError: Always.
     """
     record_correlated_event(
-        event_type="github.scope_refused",
-        default_source="github",
-        attributes={"github.scope_owner": scope},
-        payload={"target": target, "scope_owner": scope},
+        event_type="target.scope_refused",
+        default_source=provider,
+        attributes={"target.provider": provider, "target.scope": scope},
+        payload={"target": target, "scope": scope},
     )
     raise ServiceError(
         f"Writes are limited to '{scope}', the scope the project is configured"

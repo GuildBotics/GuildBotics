@@ -439,12 +439,12 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
     # The dispatch is tracked work under its own trace, and the trace opens
     # with the ticket's attributes so the run record names the issue.
     assert work_ids == [trace_id]
-    assert attributes["github.title"] == "ログイン修正"
-    assert attributes["github.url"] == "https://github.com/o/r/issues/7"
+    assert attributes["target.title"] == "ログイン修正"
+    assert attributes["target.url"] == "https://github.com/o/r/issues/7"
     records = list(RunStore().records())
     assert [record.run_id for record in records] == [trace_id]
     assert records[0].source == "routine"
-    assert records[0].attributes["github.title"] == "ログイン修正"
+    assert records[0].attributes["target.title"] == "ログイン修正"
     assert records[0].work_identity == {
         "kind": "routine",
         "person_id": "alice",

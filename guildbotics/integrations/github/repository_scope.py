@@ -156,7 +156,11 @@ async def check_request(
             the configured owner.
     """
     if (request.url.scheme, request.url.netloc) != (base_url.scheme, base_url.netloc):
-        refuse(scope, f"{request.method} {request.url.scheme}://{request.url.host}")
+        refuse(
+            scope,
+            f"{request.method} {request.url.scheme}://{request.url.host}",
+            provider="github",
+        )
     if request.method in _READ_METHODS:
         return
     path = request.url.raw_path.decode("ascii").split("?", 1)[0]
@@ -175,7 +179,7 @@ async def check_request(
             and in_scope(scope, f"{segments[2]}/{segments[3]}")
         )
     if not permitted:
-        refuse(scope, f"{request.method} {path}")
+        refuse(scope, f"{request.method} {path}", provider="github")
 
 
 async def _graphql_permitted(

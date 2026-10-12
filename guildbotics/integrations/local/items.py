@@ -47,6 +47,8 @@ def new_item(number: int, title: str, body: str, author: str) -> dict[str, Any]:
 def task(ref: store.Ref, item: dict[str, Any], **fields: Any) -> Task:
     """The work ``item`` is, for the member it asks something of."""
     return Task(
+        provider="local",
+        label=ref.label,
         id=ref.url,
         url=ref.url,
         title=item["title"],

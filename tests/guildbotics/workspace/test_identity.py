@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+
 import json
 import threading
 import uuid
@@ -9,7 +11,9 @@ import pytest
 
 from guildbotics.utils import fileio, workspace_sync_port
 from guildbotics.workspace.identity import (
+    DeviceIdentity,
     DeviceRecord,
+    WorkspaceIdentity,
     ensure_device_identity,
     ensure_workspace_identity,
     list_device_records,
@@ -55,7 +59,7 @@ def test_workspace_identity_is_created_once_and_then_reused(
 
     assert first.workspace_id == second.workspace_id
     assert uuid.UUID(first.workspace_id).version == 7
-    assert first.schema_version == 1
+    assert first.schema_version == SHARED_RECORD_SCHEMA_VERSION
     assert read_workspace_identity() == first
     assert [change.paths for change in port.changes] == [("state/workspace.json",)]
 
@@ -65,7 +69,7 @@ def test_workspace_identity_is_written_as_a_shared_record(port: RecordingPort) -
 
     stored = json.loads(workspace_identity_path().read_text(encoding="utf-8"))
     assert stored == {
-        "schema_version": 1,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "workspace_id": identity.workspace_id,
         "created_at": identity.created_at,
     }
@@ -73,6 +77,89 @@ def test_workspace_identity_is_written_as_a_shared_record(port: RecordingPort) -
 
 def test_workspace_identity_is_absent_before_first_use() -> None:
     assert read_workspace_identity() is None
+
+
+def test_v1_identity_files_are_reused_without_changing_identifiers(
+    machine_state: Path, port: RecordingPort
+) -> None:
+    workspace = {
+        "schema_version": 1,
+        "workspace_id": "00000000-0000-7000-8000-000000000001",
+        "created_at": "2026-08-15T00:00:00Z",
+    }
+    device = {
+        "schema_version": 1,
+        "device_id": "00000000-0000-7000-8000-000000000002",
+        "display_name": "Existing laptop",
+        "os": "linux",
+    }
+    record = device | {
+        "joined_at": "2026-08-16T00:00:00Z",
+        "status": "retired",
+        "ssh_public_key_fingerprint": "SHA256:abc",
+    }
+    paths = [
+        workspace_identity_path(),
+        machine_state / "device.json",
+        workspace_identity_path().parent / "devices" / f"{device['device_id']}.json",
+    ]
+    for path, payload in zip(paths, [workspace, device, record], strict=True):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(workspace_sync_port.dump_shared_json(payload), encoding="utf-8")
+
+    assert read_workspace_identity().model_dump() == workspace
+    assert ensure_workspace_identity().model_dump() == workspace
+    assert read_device_identity().model_dump() == device
+    assert ensure_device_identity().model_dump() == device
+    assert [item.model_dump() for item in list_device_records()] == [record]
+    assert port.changes == []
+
+    renamed = set_device_display_name("Renamed laptop")
+    assert renamed.device_id == device["device_id"]
+    assert json.loads(paths[1].read_text(encoding="utf-8")) == device | {
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+        "display_name": "Renamed laptop",
+    }
+    published = publish_device_record()
+    assert published.model_dump() == record | {
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+        "display_name": "Renamed laptop",
+    }
+
+
+@pytest.mark.parametrize("model", [WorkspaceIdentity, DeviceIdentity, DeviceRecord])
+@pytest.mark.parametrize(
+    "version, accepted",
+    [
+        (1, True),
+        (SHARED_RECORD_SCHEMA_VERSION, True),
+        (0, False),
+        (SHARED_RECORD_SCHEMA_VERSION + 1, False),
+    ],
+)
+def test_all_identity_records_accept_supported_versions_only(
+    model, version, accepted
+) -> None:
+    payload = (
+        {
+            "workspace_id": "00000000-0000-7000-8000-000000000001",
+            "created_at": "2026-08-15T00:00:00Z",
+        }
+        if model is WorkspaceIdentity
+        else {
+            "device_id": "00000000-0000-7000-8000-000000000002",
+            "display_name": "Existing laptop",
+            "os": "linux",
+        }
+    )
+    if model is DeviceRecord:
+        payload["joined_at"] = "2026-08-16T00:00:00Z"
+    payload["schema_version"] = version
+    if accepted:
+        assert model.model_validate(payload).schema_version == version
+    else:
+        with pytest.raises(ValueError):
+            model.model_validate(payload)
 
 
 def test_device_identity_defaults_to_the_host_name(
@@ -230,7 +317,7 @@ def test_concurrent_first_use_agrees_on_one_device_id() -> None:
 )
 def test_a_device_record_pins_version_identifier_and_time(override: dict) -> None:
     payload = {
-        "schema_version": 1,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "device_id": "00000000-0000-7000-8000-000000000000",
         "display_name": "Hub",
         "os": "linux",

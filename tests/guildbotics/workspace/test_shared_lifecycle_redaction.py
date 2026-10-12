@@ -34,7 +34,7 @@ def _write_task_run(workspace: Path) -> Path:
         work_kind="demo",
         execution_mode="autonomous",
         member_id="aiko",
-        attributes={"github.title": TITLE, "github.repo": LONG},
+        attributes={"target.title": TITLE, "target.url": LONG},
     )
     return workspace / ".guildbotics/state/task-runs/run-1/result.json"
 
@@ -53,7 +53,7 @@ def _write_interactive_session(workspace: Path) -> Path:
         ),
         command="member pr read",
         status="success",
-        attributes={"github.title": TITLE, "github.repo": LONG},
+        attributes={"target.title": TITLE, "target.url": LONG},
     )
     return workspace / ".guildbotics/state/sessions/trace-1.json"
 
@@ -82,5 +82,5 @@ def test_lifecycle_writer_masks_secrets_and_bounds_text(
     text = path.read_text(encoding="utf-8")
     assert SECRET not in text
     attributes = json.loads(text)["attributes"]
-    assert attributes["github.title"] == "leaked *** in title"
-    assert len(attributes["github.repo"]) <= 500
+    assert attributes["target.title"] == "leaked *** in title"
+    assert len(attributes["target.url"]) <= 500

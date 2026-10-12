@@ -547,10 +547,10 @@ def test_pr_read_records_host_target_in_workflow_trace(monkeypatch, bind_invocat
     summary = DiagnosticsStore().get_summary("trace-parent")
     assert summary["title"] == target["title"]
     records = DiagnosticsStore().get_records("trace-parent")
-    assert [record["type"] for record in records] == ["github.work_target"]
+    assert [record["type"] for record in records] == ["target.recorded"]
     [(action, attributes)] = _work_target_records()
     assert action == "inspected"
-    assert (attributes["github.label"], attributes["github.url"]) == ("#544", url)
+    assert (attributes["target.label"], attributes["target.url"]) == ("#544", url)
     assert _domain_event_records("type") == []
 
 
@@ -722,12 +722,12 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
 
     async def inspect_pr():
         record_correlated_event(
-            event_type="github.work_target",
+            event_type="target.recorded",
             payload={},
             attributes={
-                "github.action": "inspected",
-                "github.kind": "pull_request",
-                "github.title": "利用枠の表示",
+                "target.action": "inspected",
+                "target.kind": "pull_request",
+                "target.title": "利用枠の表示",
                 "interactive.host": "codex",
             },
         )
@@ -750,9 +750,9 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     # Only the targets are shared: the session's host attributes describe
     # this machine.
     assert record["attributes"] == {
-        "github.action": "inspected",
-        "github.kind": "pull_request",
-        "github.title": "利用枠の表示",
+        "target.action": "inspected",
+        "target.kind": "pull_request",
+        "target.title": "利用枠の表示",
     }
 
 
@@ -2038,7 +2038,7 @@ def test_member_git_push_current_mode_uses_current_workspace_service(
     assert '"status": "pushed"' in result.output
     assert _domain_event_records("type", "person_id", "payload") == [
         {
-            "type": "github.push",
+            "type": "repository.push",
             "person_id": "aiko",
             "payload": {
                 "action": "push",
@@ -2206,7 +2206,7 @@ def test_member_pr_create_passes_base(monkeypatch):
     assert '"base": "ticket-driven-workflow"' in result.output
     assert _domain_event_records("type", "person_id", "payload", "attributes") == [
         {
-            "type": "github.pull_request",
+            "type": "pull_request.item",
             "person_id": "aiko",
             "payload": {
                 "action": "opened",
@@ -2218,11 +2218,11 @@ def test_member_pr_create_passes_base(monkeypatch):
                 },
             },
             "attributes": {
-                "github.action": "opened",
-                "github.kind": "pull_request",
-                "github.label": "#1",
-                "github.url": "https://github.com/owner/repo/pull/1",
-                "github.title": "PR title",
+                "target.action": "opened",
+                "target.kind": "pull_request",
+                "target.label": "#1",
+                "target.url": "https://github.com/owner/repo/pull/1",
+                "target.title": "PR title",
             },
         }
     ]
@@ -2741,7 +2741,7 @@ def test_member_issue_edit_on_a_closed_issue_records_no_close_activity(
 
     assert result.exit_code == 0
     # The ticket is the command's work target, and nothing more: no close.
-    assert [event["event_type"] for event in recorded] == ["github.work_target"]
+    assert [event["event_type"] for event in recorded] == ["target.recorded"]
 
 
 def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
@@ -3939,9 +3939,9 @@ def _pr_target(url, label="#7", title=""):
 
 def _work_target_records():
     return [
-        (record["attributes"].get("github.action", ""), record["attributes"])
+        (record["attributes"].get("target.action", ""), record["attributes"])
         for record in DiagnosticsStore().records_between(includes=lambda _: True)
-        if record.get("type") == "github.work_target"
+        if record.get("type") == "target.recorded"
     ]
 
 
@@ -3982,7 +3982,7 @@ def test_member_code_hosting_commands_declare_their_work_target(
     assert result.exit_code == 0, result.output
     [(action, attributes)] = _work_target_records()
     assert action == ("inspected" if read_only else "")
-    assert attributes["github.title"] == "Show the work target"
-    assert attributes["github.label"] == "#544"
+    assert attributes["target.title"] == "Show the work target"
+    assert attributes["target.label"] == "#544"
     # A read is diagnostics only: it never becomes shared activity.
     assert _domain_event_records("type") == []

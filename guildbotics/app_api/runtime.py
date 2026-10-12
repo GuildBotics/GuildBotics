@@ -196,7 +196,7 @@ from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
     DiagnosticsStore,
 )
-from guildbotics.observability.event_types import GITHUB_WORK_TARGET_EVENT_TYPE
+from guildbotics.observability.event_types import TARGET_RECORDED_EVENT_TYPE
 from guildbotics.observability.interactive_sessions import InteractiveSessionStore
 from guildbotics.observability.session_transcripts import (
     transcript_detail,
@@ -1681,7 +1681,7 @@ class AppRuntime:
             records.extend(
                 item
                 for item in self._diagnostics_store.records_between(includes=includes)
-                if item.get("type") == GITHUB_WORK_TARGET_EVENT_TYPE
+                if item.get("type") == TARGET_RECORDED_EVENT_TYPE
             )
         records.extend(
             MemoryAuditStore().list_events(
