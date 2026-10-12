@@ -609,6 +609,8 @@ async def test_llm_check_skipped_when_api_key_missing(
     assert fast_error.context["provider"] == "openai"
     assert fast_error.context["env_key"] == "OPENAI_API_KEY"
     assert fast_error.person_id == "alice"
+    # A missing key is a credential failure: it opens the key's alert.
+    assert fast_error.credential
     assert talk_calls == []
 
 
@@ -835,9 +837,11 @@ async def test_cli_agent_brain_of_another_kind(
 
 
 @pytest.mark.asyncio
-async def test_github_not_configured_skipped(
+async def test_a_team_without_providers_reports_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Only the providers the project names are diagnosed; one it does not
+    name reports nothing, not a skipped row."""
     _patch_talk(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
@@ -846,9 +850,12 @@ async def test_github_not_configured_skipped(
 
     response = await _run(context)
 
-    check = _by_code(response)["github_not_configured"]
-    assert check.status == "ok"
-    assert "skipped" in check.message
+    assert {check.section for check in response.checks} <= {
+        "config",
+        "members",
+        "llm",
+        "cli_agent",
+    }
 
 
 @pytest.mark.asyncio
@@ -880,6 +887,12 @@ async def test_github_enabled_project_access(
     assert checks["github_project_access"].status == "ok"
     assert checks["github_lane_mapping"].status == "ok"
     assert checks["github_agent_assignment"].status == "ok"
+    # Reading the board is what proves the member's credential.
+    assert [
+        code
+        for code, check in checks.items()
+        if check.credential and check.section == "github"
+    ] == ["github_project_access"]
     assert checks["github_project_access"].context["status_count"] == len(
         TICKET_STATUSES
     )
@@ -1070,6 +1083,7 @@ async def test_github_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     check = _by_code(response)["github_access"]
     assert check.status == "error"
+    assert check.credential
     assert check.message.endswith(t("integrations.github.response.forbidden"))
     assert check.context["error_type"] == "GitHubResponseError"
     assert not response.ok
@@ -1084,22 +1098,6 @@ def _slack_member(person_id: str, *, enabled: bool = True) -> Person:
         chat={"enabled": enabled, "channel_id": "C001", "channel_name": "general"},
     )
     return _person(person_id, is_active=True, message_channels=[channel])
-
-
-@pytest.mark.asyncio
-async def test_slack_not_configured_skipped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_talk(monkeypatch)
-    context = _StubContext(
-        team=_team([_person("alice", is_active=True)]),
-        brain=_StubBrain(_CliResult()),
-    )
-
-    response = await _run(context)
-
-    check = _by_code(response)["slack_not_configured"]
-    assert check.status == "ok"
 
 
 @pytest.mark.asyncio
@@ -1121,6 +1119,15 @@ async def test_slack_credential_present_and_channel_ok(
     assert checks["slack_bot_auth"].status == "ok"
     assert checks["slack_bot_auth"].context["bot_user_id"] == "U123"
     assert checks["slack_channel_history"].status == "ok"
+    # The checks that prove the member's tokens close its credential alert.
+    assert {
+        code
+        for code, check in checks.items()
+        if check.credential and check.section == "slack"
+    } == {
+        "slack_app_token",
+        "slack_bot_auth",
+    }
 
 
 @pytest.mark.asyncio
@@ -1145,6 +1152,7 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
 
     checks = _by_code(response)
     assert checks["slack_channel_not_joined"].status == "error"
+    assert not checks["slack_channel_not_joined"].credential
     assert checks["slack_channel_not_joined"].context["channel_id"] == "C001"
     # The generic credential-shaped failure must not fire for this.
     assert "slack_access" not in checks

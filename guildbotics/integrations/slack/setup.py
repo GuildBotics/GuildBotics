@@ -1,21 +1,29 @@
-"""Slack App semi-automatic registration used by the desktop member setup GUI.
+"""Slack's setup: the chat's items, a member's Slack account, the Slack App
+registration, and the check of the tokens a member is given.
 
 Unlike the GitHub App flow there is no callback and therefore no in-flight
 state: the deep link is built, the user creates the app in their browser, and
-comes back with two tokens to paste. What remains for this module is building
-that link and verifying the pasted tokens before the member is saved.
-
-Verification failures are returned rather than raised so the GUI can show a
-partial result (a valid bot token next to a bad app token, for example).
+comes back with two tokens to paste, which are checked before the member is
+saved. Check failures are returned rather than raised so the screen can show
+a partial result (a valid bot token next to a bad app token, for example).
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
+from guildbotics.entities.team import Person, Service, Team
+from guildbotics.integrations.provider import (
+    MemberAccount,
+    Operation,
+    ProviderSetup,
+    SetupError,
+)
 from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack.slack_chat_service import (
     SlackApiError,
@@ -23,7 +31,6 @@ from guildbotics.integrations.slack.slack_chat_service import (
     SlackUnreachableError,
     probe_app_token,
 )
-from guildbotics.setup.setup_service import SetupServiceError
 
 BOT_TOKEN_PREFIX = "xoxb-"
 APP_TOKEN_PREFIX = "xapp-"
@@ -41,6 +48,104 @@ SOURCE_STORED = "stored"
 SOURCE_NONE = "none"
 
 logger = logging.getLogger(__name__)
+
+
+class Chat(BaseModel):
+    """The Web API the chat is reached at, when it is not Slack's own."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str | None = None
+
+
+class AccountView(BaseModel):
+    """A member's stored Slack account, as the member screen shows it."""
+
+    user_id: str = ""
+    has_bot_token: bool = False
+    has_app_token: bool = False
+
+
+class SlackAccount(MemberAccount):
+    """A member's Slack account: a human's user ID, or a bot's tokens."""
+
+    user_id: str = ""
+    bot_token: str = ""
+    app_token: str = ""
+
+    def stored(
+        self, person_id: str, human: bool
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        if human:
+            return ({"slack_user_id": self.user_id} if self.user_id else {}), {}
+        values = {"SLACK_BOT_TOKEN": self.bot_token, "SLACK_APP_TOKEN": self.app_token}
+        return {}, {key: value for key, value in values.items() if value}
+
+    @classmethod
+    def view(
+        cls, account_info: Mapping[str, Any], has_secret: Callable[[str], bool]
+    ) -> AccountView:
+        return AccountView(
+            user_id=str(account_info.get("slack_user_id", "")),
+            has_bot_token=has_secret("SLACK_BOT_TOKEN"),
+            has_app_token=has_secret("SLACK_APP_TOKEN"),
+        )
+
+
+def _chat_channel(reference: str) -> dict[str, str]:
+    if app_manifest.is_channel_id(reference):
+        return {"channel_id": reference}
+    return {"channel_name": reference}
+
+
+def _base_url(team: Team) -> str | None:
+    config = team.project.get_service_config(Service.CHAT_SERVICE)
+    return str(config.get("base_url") or "") or None
+
+
+def _bot_token(person: Person) -> str:
+    return (
+        person.get_secret("SLACK_BOT_TOKEN")
+        if person.has_secret("SLACK_BOT_TOKEN")
+        else ""
+    )
+
+
+async def _avatar_url(person: Person, team: Team) -> str:
+    """A bot's own image with its token; a human's, by its user ID, with the
+    token of any member that has one."""
+    human = person.person_type == "human"
+    token = _bot_token(person) or next(
+        (_bot_token(m) for m in team.members if human and _bot_token(m)), ""
+    )
+    user_id = str(person.account_info.get("slack_user_id", ""))
+    if human and not user_id:
+        raise SetupError(
+            "avatar_account_missing", key="integrations.slack.setup.user_id_missing"
+        )
+    if not token:
+        raise SetupError(
+            "avatar_token_missing", key="integrations.slack.setup.token_missing"
+        )
+    service = SlackChatService(
+        logger, token=token, base_url=_base_url(team), record_credential_events=False
+    )
+    try:
+        return await service.get_user_avatar_url(
+            user_id or (await service.get_bot_identity()).user_id
+        )
+    except SlackApiError as exc:
+        if exc.error == "missing_scope":
+            raise SetupError(
+                "avatar_missing_scope", key="integrations.slack.setup.missing_scope"
+            ) from exc
+        raise
+    finally:
+        await service.aclose()
+
+
+class AppRegistrationStart(BaseModel):
+    app_name: str = Field(min_length=1)
 
 
 class SlackAppRegistrationInfo(BaseModel):
@@ -85,11 +190,25 @@ class SlackTokenVerification(BaseModel):
     channels: list[SlackChannelVerification] = []
 
 
-def start_registration(app_name: str) -> SlackAppRegistrationInfo:
+class TokenCheck(BaseModel):
+    """The tokens as the member form holds them; an empty one is the member's
+    stored token, which a save keeps."""
+
+    bot_token: str = ""
+    app_token: str = ""
+    #: The member being edited, if any.
+    person_id: str = ""
+    #: The channels as edited in the form, checked for the bot's membership.
+    channels: list[str] = Field(default_factory=list)
+
+
+async def start_registration(
+    request: AppRegistrationStart, team: Callable[[], Team]
+) -> SlackAppRegistrationInfo:
     """Validate the app name and build the manifest deep link."""
-    name = app_name.strip()
+    name = request.app_name.strip()
     if not name or len(name) > app_manifest.APP_NAME_MAX_LENGTH:
-        raise SetupServiceError(
+        raise SetupError(
             "invalid_slack_app_name",
             f"Slack App name must be 1-{app_manifest.APP_NAME_MAX_LENGTH} characters.",
         )
@@ -97,6 +216,37 @@ def start_registration(app_name: str) -> SlackAppRegistrationInfo:
         app_name=name,
         registration_url=app_manifest.registration_url(name),
         app_directory_url=app_manifest.app_directory_url(),
+    )
+
+
+async def check_tokens(
+    request: TokenCheck, team: Callable[[], Team]
+) -> SlackTokenVerification:
+    """Check the tokens a save of the member would leave in effect."""
+    try:
+        saved: Team | None = team()
+    except Exception:
+        saved = None
+    base_url = _base_url(saved) if saved else None
+    stored = next(
+        (
+            m
+            for m in (saved.members if saved else [])
+            if m.person_id == request.person_id
+        ),
+        None,
+    )
+    return await verify_tokens(
+        request.bot_token,
+        request.app_token,
+        stored_bot_token=_bot_token(stored) if stored else "",
+        stored_app_token=(
+            stored.get_secret("SLACK_APP_TOKEN")
+            if stored and stored.has_secret("SLACK_APP_TOKEN")
+            else ""
+        ),
+        channels=request.channels,
+        base_url=base_url,
     )
 
 
@@ -284,3 +434,18 @@ def _unreachable_error(exc: Exception) -> str:
     # exception type is reported back to the GUI.
     logger.debug("Slack token verification could not reach Slack: %s", type(exc))
     return ERROR_UNREACHABLE
+
+
+SETUP = ProviderSetup(
+    title="Slack",
+    services={Service.CHAT_SERVICE: Chat},
+    member=SlackAccount,
+    avatar_url=_avatar_url,
+    chat_channel=_chat_channel,
+    operations={
+        "app-registrations": Operation(
+            AppRegistrationStart, SlackAppRegistrationInfo, start_registration
+        ),
+        "verify-tokens": Operation(TokenCheck, SlackTokenVerification, check_tokens),
+    },
+)

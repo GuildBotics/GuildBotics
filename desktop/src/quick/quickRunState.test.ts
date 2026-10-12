@@ -96,13 +96,15 @@ describe("last command persistence", () => {
 describe("requirements", () => {
   const blocked = option({
     requirements: [
-      { kind: "github", satisfied: false, message: "" },
+      { kind: "ticket_service", satisfied: false, message: "" },
       { kind: "llm", satisfied: true, message: "" },
     ],
   });
 
   it("names only the requirements that are unmet", () => {
-    expect(unmetRequirements(blocked)).toEqual([{ kind: "github", satisfied: false, message: "" }]);
+    expect(unmetRequirements(blocked)).toEqual([
+      { kind: "ticket_service", satisfied: false, message: "" },
+    ]);
     expect(unmetRequirements(option())).toEqual([]);
     expect(unmetRequirements(undefined)).toEqual([]);
   });

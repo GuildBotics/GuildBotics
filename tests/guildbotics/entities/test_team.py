@@ -103,10 +103,6 @@ def test_person_secret_helpers(monkeypatch):
     key = "slack_bot_token"
     env_key = "U2_SLACK_BOT_TOKEN"
 
-    # Only the member's own secret keys are named
-    with pytest.raises(KeyError):
-        person.has_secret("token")
-
     # Not set
     assert person.has_secret(key) is False
     with pytest.raises(KeyError):

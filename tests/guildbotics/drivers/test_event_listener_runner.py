@@ -671,22 +671,41 @@ async def test_aclose_sources_stops_listeners_and_clears_caches():
     assert runner._last_group_log_state is None
 
 
-def test_get_status_summary_surfaces_auth_failed_connections():
-    runner, _ = _runner()
+@pytest.mark.asyncio
+async def test_get_status_summary_surfaces_auth_failed_connections(monkeypatch):
+    """The members refused, and the chat provider that refused them, which
+    the credential alert names."""
+    monkeypatch.setenv("YUKI_SLACK_APP_TOKEN", "xapp-yuki")
+    monkeypatch.setenv("AIKO_SLACK_APP_TOKEN", "xapp-aiko")
+    yuki = _member("yuki", {"channel_id": "C1"})
+    aiko = _member("aiko", {"channel_id": "C1"})
+    context = _Context(
+        Team(
+            project=Project(services={"chat_service": {"name": "slack"}}),
+            members=[yuki, aiko],
+        )
+    )
+    runner = EventListenerRunner(context)  # type: ignore[arg-type]
+    runner._connection_subscriptions = (
+        await runner._build_person_subscriptions_by_connection()
+    )
     failed, ok = _Listener(), _Listener()
     failed.failed = True
-    runner._listeners = {"failed": failed, "ok": ok}
-    yuki = Person(person_id="yuki", name="Yuki")
-    aiko = Person(person_id="aiko", name="Aiko")
-    runner._connection_subscriptions = {
-        "failed": [(yuki, {"C1": ChatBackfillPolicy()})],
-        "ok": [(aiko, {"C1": ChatBackfillPolicy()})],
+    (yuki_key,) = (
+        key
+        for key, group in runner._connection_subscriptions.items()
+        if group[0][0].person_id == "yuki"
+    )
+    runner._listeners = {
+        key: failed if key == yuki_key else ok
+        for key in runner._connection_subscriptions
     }
 
     summary = runner.get_status_summary()
 
     assert summary["events_auth_failed_count"] == 1
     assert summary["events_auth_failed_persons"] == ["yuki"]
+    assert summary["events_chat_provider"] == "slack"
 
 
 @pytest.mark.asyncio

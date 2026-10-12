@@ -19,30 +19,14 @@ from guildbotics.app_api.models import (
     SystemAlertSeverity,
     SystemAlertsResponse,
 )
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.intelligences.llm_providers import CREDENTIAL_FAILURES
 from guildbotics.observability.diagnostics_store import (
     DiagnosticsCursor,
     DiagnosticsStore,
 )
 
-_DIAGNOSTIC_CREDENTIAL_CODES = {
-    "github": {"github_access", "github_project_access"},
-    "slack": {
-        "slack_access",
-        "slack_app_token",
-        "slack_app_token_invalid",
-        "slack_bot_auth",
-    },
-    # A live call is an inference call: its span settles the key's alerts.
-    "llm": {"llm_api_key"},
-}
 _VERIFY_CREDENTIAL_CODES = {"llm_api_key": "llm"}
-_CREDENTIAL_ALERT_CODES: dict[str, SystemAlertCode] = {
-    "github": "credential_github",
-    "slack": "credential_slack",
-    "llm": "credential_llm",
-    "jev": "credential_jev",
-}
 
 _IGNORED_COMMAND_FAILURES = {
     "cancelled",
@@ -258,16 +242,15 @@ class SystemAlertService:
         checks = _checks(record)
         payload = _payload(record)
         if not str(payload.get("scope_person_id") or ""):
-            self._resolve_removed_credentials(alerts, payload, checks)
+            self._resolve_removed_credentials(alerts, payload)
         grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         for check in checks:
-            section = str(check.get("section") or "")
-            code = str(check.get("code") or "")
-            if code not in _DIAGNOSTIC_CREDENTIAL_CODES.get(section, set()):
+            if not check.get("credential"):
                 continue
+            section = str(check.get("section") or "")
             scope = (
                 _check_provider(check)
-                if section == "llm"
+                if section in KEY_SERVICES
                 else str(check.get("person_id") or "")
             )
             grouped[(section, scope)].append(check)
@@ -277,7 +260,6 @@ class SystemAlertService:
         self,
         alerts: dict[str, SystemAlert],
         payload: dict[str, Any],
-        checks: list[dict[str, Any]],
     ) -> None:
         if "active_members" in payload:
             active_members = {
@@ -293,11 +275,16 @@ class SystemAlertService:
                     and parts[2] not in active_members
                 ):
                     alerts.pop(key, None)
-        check_codes = {str(check.get("code") or "") for check in checks}
-        if "github_not_configured" in check_codes:
-            _remove_alert_prefix(alerts, "credential:github:")
-        if "slack_not_configured" in check_codes:
-            _remove_alert_prefix(alerts, "credential:slack:")
+        if "providers" in payload:
+            configured = {str(name) for name in payload.get("providers", [])}
+            for key in list(alerts):
+                parts = key.split(":", 2)
+                if (
+                    parts[0] == "credential"
+                    and len(parts) == _ALERT_ID_PARTS
+                    and parts[1] not in KEY_SERVICES | configured
+                ):
+                    alerts.pop(key, None)
 
     def _apply_verify_snapshot(
         self, alerts: dict[str, SystemAlert], record: dict[str, Any]
@@ -324,10 +311,9 @@ class SystemAlertService:
                 self._open(
                     alerts,
                     key=key,
-                    code=_CREDENTIAL_ALERT_CODES[section],
+                    **_credential(section, scope),
                     severity="critical",
                     record=record,
-                    **_credential_scope(section, scope),
                     actions=["diagnostics", "setup"],
                 )
             elif any(check.get("status") == "ok" for check in checks):
@@ -337,7 +323,7 @@ class SystemAlertService:
         self, alerts: dict[str, SystemAlert], record: dict[str, Any]
     ) -> None:
         provider = str(_payload(record).get("provider") or "")
-        if provider not in _CREDENTIAL_ALERT_CODES:
+        if provider not in PROVIDERS:
             return
         person_id = str(record.get("person_id") or "")
         trace_id = str(record.get("trace_id") or "")
@@ -348,10 +334,9 @@ class SystemAlertService:
         self._open(
             alerts,
             key=f"credential:{provider}:{person_id}",
-            code=_CREDENTIAL_ALERT_CODES[provider],
+            **_credential(provider, person_id),
             severity="critical",
             record=record,
-            person_id=person_id,
             trace_id=trace_id,
             actions=actions,
         )
@@ -388,10 +373,9 @@ class SystemAlertService:
         self._open(
             alerts,
             key=key,
-            code=_CREDENTIAL_ALERT_CODES[service],
+            **_credential(service, provider),
             severity="critical",
             record=record,
-            **_credential_scope(service, provider),
             trace_id=trace_id,
             reason=category,
             actions=["setup", "trace"] if trace_id else ["setup"],
@@ -500,12 +484,14 @@ class SystemAlertService:
                 code="scheduler_failed",
                 timestamp=scheduler.stopped_at or scheduler.started_at or "",
             )
+        chat = runtime.events.events_chat_provider
         for person_id in runtime.events.events_auth_failed_persons:
             self._open_runtime(
                 alerts,
                 dismissed,
-                key=f"credential:slack:{person_id}",
-                code="credential_slack",
+                key=f"credential:{chat}:{person_id}",
+                code="credential",
+                provider=chat,
                 timestamp=runtime.events.started_at or "",
                 person_id=person_id,
                 actions=["diagnostics", "setup"],
@@ -525,12 +511,12 @@ class SystemAlertService:
         for key in list(self._dismissed):
             if key.startswith("agent-environment:"):
                 self._dismissed.discard(key)
-        auth_failed = set(runtime.events.events_auth_failed_persons)
+        chat = f"credential:{runtime.events.events_chat_provider}:"
+        auth_failed = {
+            chat + person_id for person_id in runtime.events.events_auth_failed_persons
+        }
         for key in list(self._dismissed):
-            if (
-                key.startswith("credential:slack:")
-                and key.rsplit(":", 1)[-1] not in auth_failed
-            ):
+            if key.startswith(chat) and key not in auth_failed:
                 self._dismissed.discard(key)
         return before != self._dismissed
 
@@ -544,6 +530,7 @@ class SystemAlertService:
         timestamp: str,
         person_id: str = "",
         command: str = "",
+        provider: str = "",
         reason: str = "",
         setting: str = "",
         severity: SystemAlertSeverity = "critical",
@@ -559,6 +546,7 @@ class SystemAlertService:
             updated_at=timestamp,
             person_id=person_id,
             command=command,
+            provider=provider,
             reason=reason,
             setting=setting,
             actions=actions or ["service", "diagnostics"],
@@ -574,6 +562,7 @@ class SystemAlertService:
         record: dict[str, Any],
         person_id: str = "",
         command: str = "",
+        provider: str = "",
         trace_id: str = "",
         reason: str = "",
         actions: list[SystemAlertAction],
@@ -590,6 +579,7 @@ class SystemAlertService:
                 updated_at=timestamp,
                 person_id=person_id,
                 command=command,
+                provider=provider,
                 trace_id=trace_id,
                 reason=reason,
                 actions=actions,
@@ -628,12 +618,13 @@ def _check_provider(check: dict[str, Any]) -> str:
     return str(context.get("provider") or "") if isinstance(context, dict) else ""
 
 
-def _credential_scope(service: str, scope: str) -> dict[str, str]:
-    """Whom a credential alert names: the member for a member's own
-    credential, the provider for a workspace key."""
+def _credential(service: str, scope: str) -> dict[str, Any]:
+    """What a credential alert of ``service`` says: a workspace key's own code
+    and its provider (in ``command``), or a member's credential with the
+    provider ``service`` names."""
     if service in KEY_SERVICES:
-        return {"command": scope}
-    return {"person_id": scope}
+        return {"code": f"credential_{service}", "command": scope}
+    return {"code": "credential", "provider": service, "person_id": scope}
 
 
 def _remove_alert_prefix(alerts: dict[str, SystemAlert], prefix: str) -> None:

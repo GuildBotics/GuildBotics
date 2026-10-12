@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsResponse
+from guildbotics.app_api.models import ScenarioDiagnosticsResponse
 from guildbotics.app_api.verify import (
     resolve_default_model_provider,
 )
@@ -26,9 +26,6 @@ from guildbotics.intelligences.functions import talk_as
 from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.runtime import Context
 
-DiagnosticSection = Literal[
-    "config", "members", "llm", "cli_agent", "github", "slack", "git"
-]
 DiagnosticStatus = Literal["ok", "warning", "error"]
 
 
@@ -69,7 +66,7 @@ class ScenarioDiagnosticsService:
         context_error: Exception | None = None,
         person_id: str | None = None,
     ) -> ScenarioDiagnosticsResponse:
-        checks: list[DiagnosticCheck] = []
+        checks: list[ProviderCheck] = []
         if context_error is not None:
             checks.append(
                 self._check(
@@ -160,7 +157,7 @@ class ScenarioDiagnosticsService:
 
     async def _check_human_member(
         self, context: Context, member: Person
-    ) -> list[DiagnosticCheck]:
+    ) -> list[ProviderCheck]:
         checks = [
             self._check(
                 "members",
@@ -193,9 +190,7 @@ class ScenarioDiagnosticsService:
             )
 
         for provider in configured_providers(context.team):
-            checks.extend(
-                _check(check) for check in await provider.diagnose(context, [member])
-            )
+            checks.extend(await provider.diagnose(context, [member]))
         return checks
 
     def _target_members(self, context: Context, person_id: str | None) -> list[Person]:
@@ -211,9 +206,7 @@ class ScenarioDiagnosticsService:
             if member.is_active and member.person_type != "human"
         ]
 
-    async def _check_llm(
-        self, context: Context, member: Person
-    ) -> list[DiagnosticCheck]:
+    async def _check_llm(self, context: Context, member: Person) -> list[ProviderCheck]:
         # Short-circuit BEFORE firing a live LLM call when the provider's API
         # key is not configured. Without this gate the diagnostics journey
         # depends on external network availability and provider latency, which
@@ -233,6 +226,7 @@ class ScenarioDiagnosticsService:
                     f"{env_key} is not configured; skipping live LLM call.",
                     person_id=member.person_id,
                     context={"provider": provider, "env_key": env_key},
+                    credential=True,
                 )
             ]
         c = context.clone_for(member)
@@ -279,15 +273,15 @@ class ScenarioDiagnosticsService:
 
     async def _check_cli_agent(
         self, context: Context, members: list[Person]
-    ) -> list[DiagnosticCheck]:
-        checks: list[DiagnosticCheck] = []
+    ) -> list[ProviderCheck]:
+        checks: list[ProviderCheck] = []
         for member in members:
             checks.extend(await self._check_cli_agent_brain(context, member))
         return checks
 
     async def _check_cli_agent_brain(
         self, context: Context, member: Person
-    ) -> list[DiagnosticCheck]:
+    ) -> list[ProviderCheck]:
         """Run one read-only turn of the member's AI CLI tool.
 
         The tool runs inside the isolated agent environment, never on the
@@ -413,35 +407,15 @@ class ScenarioDiagnosticsService:
 
     async def _check_providers(
         self, context: Context, members: list[Person]
-    ) -> list[DiagnosticCheck]:
-        providers = configured_providers(context.team)
-        checks = [
-            _check(check)
-            for provider in providers
+    ) -> list[ProviderCheck]:
+        return [
+            check
+            for provider in configured_providers(context.team)
             for check in await provider.diagnose(context, members)
         ]
-        if not any(p.code_hosting_service or p.ticket_service for p in providers):
-            checks.append(
-                self._check(
-                    "github",
-                    "github_not_configured",
-                    "ok",
-                    "GitHub integration is not configured; GitHub diagnostics were skipped.",
-                )
-            )
-        if not any(p.chat_service for p in providers):
-            checks.append(
-                self._check(
-                    "slack",
-                    "slack_not_configured",
-                    "ok",
-                    "Chat is not configured; chat diagnostics were skipped.",
-                )
-            )
-        return checks
 
     def _response(
-        self, checks: list[DiagnosticCheck], active_members: list[str]
+        self, checks: list[ProviderCheck], active_members: list[str]
     ) -> ScenarioDiagnosticsResponse:
         errors = [check for check in checks if check.status == "error"]
         warnings = [check for check in checks if check.status == "warning"]
@@ -455,7 +429,7 @@ class ScenarioDiagnosticsService:
 
     def _check(
         self,
-        section: DiagnosticSection,
+        section: str,
         code: str,
         status: DiagnosticStatus,
         message: str,
@@ -463,8 +437,9 @@ class ScenarioDiagnosticsService:
         target: str = "",
         person_id: str = "",
         context: dict[str, Any] | None = None,
-    ) -> DiagnosticCheck:
-        return DiagnosticCheck(
+        credential: bool = False,
+    ) -> ProviderCheck:
+        return ProviderCheck(
             section=section,
             code=code,
             status=status,
@@ -472,6 +447,7 @@ class ScenarioDiagnosticsService:
             target=target,
             person_id=person_id,
             context=context or {},
+            credential=credential,
         )
 
     def _safe_error(self, prefix: str, exc: Exception) -> str:
@@ -500,7 +476,3 @@ class ScenarioDiagnosticsService:
         if len(text) <= limit:
             return text
         return f"{text[:limit]}..."
-
-
-def _check(check: ProviderCheck) -> DiagnosticCheck:
-    return DiagnosticCheck.model_validate(check.model_dump())

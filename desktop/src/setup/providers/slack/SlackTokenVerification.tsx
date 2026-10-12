@@ -8,7 +8,7 @@ import {
   type SlackChannelVerification,
   type SlackTokenSource,
   type SlackTokenVerifyResponse,
-} from "../api/client";
+} from "./api";
 
 // Slack error codes the GUI explains in its own words; anything else is shown
 // with the raw code so an unexpected Slack failure is still actionable.

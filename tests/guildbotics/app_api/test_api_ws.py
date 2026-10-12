@@ -43,6 +43,9 @@ class RuntimeStub:
     async def close_cli_agent_usage(self) -> None:
         return None
 
+    def saved_team(self) -> None:
+        raise AssertionError("websocket endpoints never read the team")
+
 
 def _app(event_bus: EventBus, store: DiagnosticsStore | None = None):
     return create_app(

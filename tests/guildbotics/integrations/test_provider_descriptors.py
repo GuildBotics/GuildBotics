@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import guildbotics
-from guildbotics.entities.team import Project, Team
+from guildbotics.entities.team import Project, Service, Team
 from guildbotics.integrations.factory import PROVIDERS, configured_providers
 
 PACKAGE = Path(guildbotics.__file__).parent / "integrations"
@@ -82,3 +83,95 @@ def test_a_provider_serves_a_kind_and_is_chosen_by_its_name(name):
         )
         assert configured_providers(team) == [provider]
     assert configured_providers(Team(project=Project(), members=[])) == []
+
+
+#: A member account of each provider with every field it stores filled.
+_FILLED_ACCOUNTS: dict[str, dict[str, Any]] = {
+    "github": {
+        "account_type": "github_apps",
+        "username": "octo",
+        "installation_id": 7,
+        "app_id": 3,
+        "access_token": "ghp-token",
+    },
+    "slack": {"user_id": "U1", "bot_token": "xoxb-1", "app_token": "xapp-1"},
+}
+
+
+@pytest.mark.parametrize("name", sorted(PROVIDERS))
+def test_a_provider_is_offered_by_setup_for_exactly_the_kinds_it_serves(name):
+    provider = PROVIDERS[name]
+    setup = provider.setup
+    if name == "local":
+        # The reference provider is not offered by the setup screens.
+        assert setup is None
+        return
+    assert setup is not None
+    served = {kind for kind in Service if getattr(provider, kind.value) is not None}
+    assert set(setup.services) == served
+
+
+@pytest.mark.parametrize(
+    "name", sorted(n for n, p in PROVIDERS.items() if p.setup and p.setup.member)
+)
+def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tmp_path):
+    provider = PROVIDERS[name]
+    assert provider.setup is not None and provider.setup.member is not None
+    key = tmp_path / "app.pem"
+    key.write_text("-----BEGIN KEY-----", encoding="utf-8")
+    fields = dict(_FILLED_ACCOUNTS[name])
+    if "private_key_path" in provider.setup.member.model_fields:
+        fields["private_key_path"] = key
+    account = provider.setup.member.model_validate(fields)
+
+    info, secrets = account.stored("alice", human=False)
+    human_info, human_secrets = account.stored("alice", human=True)
+
+    assert secrets and set(secrets) <= provider.secret_keys
+    assert human_secrets == {}
+    assert set(info) | set(human_info) <= provider.account_info_keys
+
+
+#: The checks of a member's credential: their failing opens the member's
+#: credential alert for the provider, their passing closes it.
+_CREDENTIAL_CHECKS = {
+    "github": {"github_access", "github_project_access"},
+    "slack": {
+        "slack_access",
+        "slack_app_token",
+        "slack_app_token_invalid",
+        "slack_bot_auth",
+    },
+}
+
+
+def _checks(name: str) -> dict[str, set[str]]:
+    """The codes of the checks the provider's package makes, by whether each
+    is flagged as of a member's credential."""
+    flagged: dict[str, set[str]] = {"credential": set(), "other": set()}
+    for path in sorted((PACKAGE / name).rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ProviderCheck"
+            ):
+                continue
+            keywords = {k.arg: k.value for k in node.keywords}
+            code = keywords.get("code")
+            assert isinstance(code, ast.Constant), ast.unparse(node)
+            credential = keywords.get("credential")
+            is_credential = isinstance(credential, ast.Constant) and bool(
+                credential.value
+            )
+            flagged["credential" if is_credential else "other"].add(code.value)
+    return flagged
+
+
+@pytest.mark.parametrize("name", sorted(PROVIDERS))
+def test_the_checks_of_a_members_credential_are_exactly_those_flagged(name):
+    checks = _checks(name)
+
+    assert checks["credential"] == _CREDENTIAL_CHECKS.get(name, set())
+    # A code is either of a credential or not, wherever it is made.
+    assert not checks["credential"] & checks["other"]

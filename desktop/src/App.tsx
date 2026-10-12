@@ -90,6 +90,7 @@ import {
   type RuntimeStatus,
   type RuntimeUnitStatus,
   type SchedulerStartRequest,
+  type ProviderOption,
   type SystemAlert,
   type TraceDetailResponse,
   type TraceRecord,
@@ -97,6 +98,7 @@ import {
   type TraceSummary,
   type TranscriptSettingsStatus,
 } from "./api/client";
+import { useServiceProviders } from "./setup/providers";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { openExternal } from "./openExternal";
 import { SetupPage } from "./setup/SetupPage";
@@ -272,6 +274,7 @@ export function App() {
 
 function SystemAlertBand() {
   const { t } = useTranslation();
+  const providers = useServiceProviders();
   const queryClient = useQueryClient();
   const alerts = useQuery({
     queryKey: ["system-alerts"],
@@ -319,7 +322,7 @@ function SystemAlertBand() {
           closeButtonLabel={t("systemAlerts.actions.dismiss")}
         >
           <Group align="center" gap="md" wrap="wrap">
-            <Text size="sm">{systemAlertMessage(t, alert)}</Text>
+            <Text size="sm">{systemAlertMessage(t, alert, providers)}</Text>
             {alert.actions.length > 0 && (
               <Group gap="xs">
                 {alert.actions.includes("diagnostics") ? (
@@ -388,10 +391,16 @@ const DEVICE_FIXES = ["runtime", "declaration", "image", "snapshot"] as const;
 const KEY_ALERTS = new Set<SystemAlert["code"]>(["credential_llm", "credential_jev"]);
 const KEY_REFUSALS = ["authentication", "credit"] as const;
 
-export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
+export function systemAlertMessage(
+  t: TFunction,
+  alert: SystemAlert,
+  providers: ProviderOption[] = [],
+) {
   const message = t(`systemAlerts.codes.${alert.code}`, {
     person: alert.person_id || t("systemAlerts.unknownMember"),
     command: alert.command || t("systemAlerts.unknownCommand"),
+    provider:
+      providers.find((provider) => provider.name === alert.provider)?.title || alert.provider,
     count: alert.occurrence_count,
     reason: alert.reason,
   });
@@ -443,13 +452,14 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
   if (KEY_ALERTS.has(alert.code)) {
     return `/setup?${new URLSearchParams({ section: "intelligence" }).toString()}`;
   }
-  if (alert.code !== "credential_github" || !alert.person_id) {
+  if (alert.code !== "credential" || !alert.person_id) {
     return "/setup";
   }
+  // The member's account with the provider whose credential failed.
   const search = new URLSearchParams({
     section: "members",
     person_id: alert.person_id,
-    tab: "github",
+    tab: alert.provider,
   });
   return `/setup?${search.toString()}`;
 }

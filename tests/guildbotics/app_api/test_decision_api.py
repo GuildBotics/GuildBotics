@@ -11,13 +11,13 @@ from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import BrainAssignment, IntelligenceConfigUpdateRequest
+from guildbotics.integrations.provider import SetupError
 from guildbotics.intelligences.brains.factory import (
     CLI_BRAIN_CLASS,
     JEV_BRAIN_CLASS,
     ConfiguredBrainFactory,
 )
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
-from guildbotics.setup.setup_service import SetupServiceError
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 HEADERS = {"X-GuildBotics-Session-Token": "test"}
@@ -82,7 +82,7 @@ def test_malformed_credential_never_echoes_its_input(configured):
 )
 def test_wrong_jev_model_is_rejected(configured, model):
     root, _ = configured
-    with pytest.raises(SetupServiceError):
+    with pytest.raises(SetupError):
         IntelligenceConfigService().update_config(
             IntelligenceConfigUpdateRequest(
                 config_dir=root, brain_mapping=[assignment(model)]
@@ -94,7 +94,7 @@ def test_wrong_jev_model_is_rejected(configured, model):
 @pytest.mark.parametrize("name", ["default", "agent", "translate"])
 def test_jev_cannot_be_assigned_to_text_commands(configured, name):
     root, _ = configured
-    with pytest.raises(SetupServiceError, match="only supported for chat_decision"):
+    with pytest.raises(SetupError, match="only supported for chat_decision"):
         IntelligenceConfigService().update_config(
             IntelligenceConfigUpdateRequest(
                 config_dir=root,
@@ -130,7 +130,7 @@ def test_member_rejects_cli_override_and_keeps_inherited_assignment(configured):
     assert isinstance(selected(), JevBrain)
     assert selected().model == "jev-latest"
     assert not (root / "intelligences/decision.yml").exists()
-    with pytest.raises(SetupServiceError, match="not supported for chat_decision"):
+    with pytest.raises(SetupError, match="not supported for chat_decision"):
         service.update_config(
             IntelligenceConfigUpdateRequest(
                 config_dir=root,
@@ -154,7 +154,7 @@ def test_member_rejects_cli_override_and_keeps_inherited_assignment(configured):
 def test_cli_assignment_cannot_be_saved_for_chat_decision(configured, tool):
     root, _ = configured
     service = IntelligenceConfigService()
-    with pytest.raises(SetupServiceError, match="not supported for chat_decision"):
+    with pytest.raises(SetupError, match="not supported for chat_decision"):
         service.update_config(
             IntelligenceConfigUpdateRequest(
                 config_dir=root,

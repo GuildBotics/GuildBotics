@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import contextlib
-import re
 import shutil
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote
 
-import requests  # type: ignore
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from yaml import YAMLError
 
+from guildbotics.entities.team import Service
 from guildbotics.environment.contract import (
     AccessContractError,
     validate_workspace_location,
 )
+from guildbotics.integrations.factory import PROVIDERS
+from guildbotics.integrations.provider import MemberAccount, SetupError
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
@@ -32,7 +33,7 @@ from guildbotics.utils.person_id import (
     is_valid_person_id,
     iter_member_config_directories,
     person_config_directory,
-    person_secret_env_keys,
+    person_secret_prefix,
     stored_person_config_directory,
     validate_member_directory_name,
     validate_person_id,
@@ -48,43 +49,20 @@ from guildbotics.utils.workspace_state import register_workspace
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
 SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
-GITHUB_URL = "https://github.com/"
-GITHUB_APPS_URL_MIN_PARTS = 8
 CRON_FIELD_COUNT = 5
-HTTP_OK = 200
-GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
-SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CGD][A-Z0-9]{8,}$")
 CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
-# Default GitHub Projects status names used when no custom lane mapping is set.
-DEFAULT_LANE_READY = "Todo"
-DEFAULT_LANE_WORKING = "In Progress"
-DEFAULT_LANE_DONE = "Done"
+#: The secrets a member may hold with any provider, by member-relative name.
+MEMBER_SECRET_NAMES = frozenset().union(
+    *(provider.secret_keys for provider in PROVIDERS.values())
+)
 
 
-def _to_int_or_none(value: object) -> int | None:
-    if value is None or str(value).strip() == "":
-        return None
-    try:
-        return int(str(value))
-    except ValueError:
-        return None
-
-
-class SetupServiceError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-def _target_env_keys(
-    members: Path, person_id: str, *, exclude: str | None = None
-) -> dict[str, str]:
+def _target_prefix(members: Path, person_id: str, *, exclude: str | None = None) -> str:
     """Reject a proposed ID before touching credentials or member files."""
     try:
-        return person_secret_env_keys(members, person_id, exclude=exclude)
+        return person_secret_prefix(members, person_id, exclude=exclude)
     except PersonEnvPrefixConflictError as conflict:
-        raise SetupServiceError(
+        raise SetupError(
             "person_env_prefix_conflict",
             t(
                 "member_config.target_prefix_conflict",
@@ -99,91 +77,84 @@ class _OwnedSecrets:
     """A stored member's own secret keys, and the store to touch them in."""
 
     store: KeyringSecretStore | None
-    keys: dict[str, str]
+    prefix: str
 
-    def get(self, suffix: str) -> str:
-        return (self.store.get(self.keys[suffix]) or "") if self.store else ""
+    def has(self, name: str) -> bool:
+        return bool(self.store and self.store.get(self.prefix + name))
+
+    def keys(self) -> dict[str, str]:
+        """The member's keys, by member-relative name."""
+        if self.store is None:
+            return {}
+        return {name: self.prefix + name for name in sorted(MEMBER_SECRET_NAMES)}
 
 
 def _owned_secrets(config_dir: Path, person_id: str) -> _OwnedSecrets:
     """No store and no keys while the keys are shared: they are nobody's own."""
     try:
-        keys = person_secret_env_keys(config_dir / "team/members", person_id)
+        prefix = person_secret_prefix(config_dir / "team/members", person_id)
     except PersonEnvPrefixConflictError:
-        return _OwnedSecrets(None, {})
-    return _OwnedSecrets(resolve_secret_store(config_dir), keys)
+        return _OwnedSecrets(None, "")
+    return _OwnedSecrets(resolve_secret_store(config_dir), prefix)
 
 
-class GitHubUserReference(BaseModel):
-    person_id: str
-    github_username: str
-    github_user_id: int
-    git_email: str
+def _service_config(kind: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    """``project.services`` holds a kind as the name of the provider serving
+    it, and the provider's own items, as its setup reads them."""
+    service = Service(kind)
+    provider = PROVIDERS.get(str(item.get("name", "")).lower())
+    if provider is None or getattr(provider, service.value) is None:
+        raise ValueError(f"'{item.get('name', '')}' provides no {kind}")
+    items = {key: value for key, value in item.items() if key != "name"}
+    model = provider.setup.services.get(service) if provider.setup else None
+    if model is not None:
+        try:
+            items = model.model_validate(items).model_dump(exclude_none=True)
+        except ValidationError as exc:
+            raise ValueError(f"{kind}: {exc}") from exc
+    return {"name": provider.name, **items}
 
 
-class LaneMapInput(BaseModel):
-    """Mapping of workflow lanes to GitHub Project Status option names.
-
-    Blank values fall back to the GitHub Projects defaults (the persistence
-    layer strips empty strings, so a lane name cannot be stored empty). If the
-    resulting working lane does not exist on the board, the workflow simply
-    does not move tickets on start; runtime/diagnostics surface that as a
-    warning rather than an error. ``ready`` and ``done`` must differ.
-    """
-
-    ready: str = DEFAULT_LANE_READY
-    working: str = DEFAULT_LANE_WORKING
-    done: str = DEFAULT_LANE_DONE
-
-    @field_validator("ready", "working", "done")
-    @classmethod
-    def _strip(cls, value: str) -> str:
-        return value.strip()
-
-    @model_validator(mode="after")
-    def _apply_defaults(self) -> LaneMapInput:
-        if not self.ready:
-            self.ready = DEFAULT_LANE_READY
-        if not self.working:
-            self.working = DEFAULT_LANE_WORKING
-        if not self.done:
-            self.done = DEFAULT_LANE_DONE
-        if self.ready == self.done:
-            raise ValueError("ready and done lanes must be different")
-        return self
-
-    def to_config(self) -> dict[str, str]:
-        """Serialize to the ``lane_map`` mapping stored in project.yml."""
-        return {"ready": self.ready, "working": self.working, "done": self.done}
-
-    @classmethod
-    def from_config(cls, raw: object) -> LaneMapInput:
-        """Build from a stored ``lane_map`` mapping, tolerating missing keys."""
-        if not isinstance(raw, dict):
-            return cls()
-        values: dict[str, str] = {}
-        for key in ("ready", "working", "done"):
-            if key in raw and raw[key] is not None:
-                values[key] = str(raw[key])
-        return cls(**values)
+def _member_account(name: str, form: object) -> MemberAccount:
+    provider = PROVIDERS.get(name)
+    if provider is None or provider.setup is None or provider.setup.member is None:
+        raise ValueError(f"'{name}' has no member account")
+    try:
+        return provider.setup.member.model_validate(form)
+    except ValidationError as exc:
+        raise ValueError(f"{name}: {exc}") from exc
 
 
-class GitHubProjectInput(BaseModel):
-    """GitHub Project identity fields shared by project setup / update inputs."""
-
-    owner: str = ""
-    project_id: str = ""
-    github_project_url: str = ""
-    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
+def _channel(reference: str) -> str:
+    """A chat channel as the member screen names it, without the ``#``."""
+    return reference.strip().lstrip("#")
 
 
-class ProjectSetupInput(GitHubProjectInput):
+def _project_services(config_dir: Path) -> dict[str, Any]:
+    project_file = _project_config_file(config_dir)
+    data = load_yaml_file(project_file) if project_file.exists() else {}
+    return _config_mapping(_config_mapping(data).get("services"))
+
+
+def _chat_channel(config_dir: Path) -> Callable[[str], dict[str, str]]:
+    """How the project's chat names a channel the member screen names."""
+    chat = _config_mapping(_project_services(config_dir).get("chat_service"))
+    provider = PROVIDERS.get(str(chat.get("name", "")).lower())
+    setup = provider.setup if provider else None
+    if setup and setup.chat_channel:
+        return setup.chat_channel
+    return lambda reference: {"channel_name": reference}
+
+
+class ProjectSetupInput(BaseModel):
     config_dir: Path
     language: str
     description: str = ""
     llm_api_type: str = ""
     cli_agent: str = ""
     provider_api_keys: dict[str, str] = Field(default_factory=dict)
+    #: Each kind of service the project uses: the provider's name and items.
+    services: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("language")
     @classmethod
@@ -192,19 +163,12 @@ class ProjectSetupInput(GitHubProjectInput):
             raise ValueError("language must be one of: en, ja")
         return value
 
-    @model_validator(mode="after")
-    def validate_github_fields(self) -> ProjectSetupInput:
-        github_fields = [
-            self.owner,
-            self.project_id,
-            self.github_project_url,
-        ]
-        if any(github_fields) and not all(github_fields):
-            raise ValueError(
-                "owner, project_id and github_project_url "
-                "are required when GitHub integration is enabled"
-            )
-        return self
+    @field_validator("services")
+    @classmethod
+    def validate_services(
+        cls, value: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        return {kind: _service_config(kind, item) for kind, item in value.items()}
 
 
 class CreatedFile(BaseModel):
@@ -222,41 +186,8 @@ class ProjectConfigSnapshot(BaseModel):
     description: str = ""
     llm_api_type: str = ""
     cli_agent: str = ""
-    github_enabled: bool
-    github_project_url: str = ""
-    lane_map: LaneMapInput = Field(default_factory=LaneMapInput)
+    services: dict[str, Any] = Field(default_factory=dict)
     provider_api_keys: dict[str, bool] = Field(default_factory=dict)
-
-
-class ProjectUpdateInput(GitHubProjectInput):
-    config_dir: Path
-    language: str
-    description: str = ""
-    llm_api_type: str = ""
-    cli_agent: str = ""
-    github_enabled: bool = False
-    provider_api_keys: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("language")
-    @classmethod
-    def validate_language(cls, value: str) -> str:
-        if value not in {"en", "ja"}:
-            raise ValueError("language must be one of: en, ja")
-        return value
-
-    @model_validator(mode="after")
-    def validate_github_fields(self) -> ProjectUpdateInput:
-        github_fields = [
-            self.owner,
-            self.project_id,
-            self.github_project_url,
-        ]
-        if self.github_enabled and not all(github_fields):
-            raise ValueError(
-                "owner, project_id and github_project_url "
-                "are required when GitHub integration is enabled"
-            )
-        return self
 
 
 class PersonTaskScheduleInput(BaseModel):
@@ -298,28 +229,18 @@ def _read_task_schedules(raw_schedules: object) -> list[PersonTaskScheduleInput]
 class PersonSetupInput(BaseModel):
     config_dir: Path
     person_type: str
-    github_account_type: str = ""
     person_id: str
     person_name: str
     is_active: bool
-    github_username: str
-    git_email: str
+    git_email: str = ""
     roles: list[str] = Field(default_factory=list)
     speaking_style: str = ""
     relationships: str = ""
     character: dict[str, Any] = Field(default_factory=dict)
-    github_installation_id: int | None = None
-    github_app_id: int | None = None
-    github_private_key_path: Path | None = None
-    # A finished GitHub App registration whose key and IDs this save stores;
-    # the API layer resolves it, the PEM never travels through the screen.
-    github_app_registration_id: str = ""
-    github_access_token: str = ""
-    slack_user_id: str = ""
-    slack_bot_token: str = ""
-    slack_app_token: str = ""
-    slack_channels: list[str] = Field(default_factory=list)
-    slack_channel_participation: dict[str, str] = Field(default_factory=dict)
+    #: The member's account with each provider, by the provider's name.
+    accounts: dict[str, Any] = Field(default_factory=dict)
+    chat_channels: list[str] = Field(default_factory=list)
+    chat_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
 
@@ -331,6 +252,21 @@ class PersonSetupInput(BaseModel):
         if not value:
             raise ValueError("person_name is required")
         return value
+
+    @field_validator("chat_channels")
+    @classmethod
+    def validate_chat_channels(cls, value: list[str]) -> list[str]:
+        return [_channel(channel) for channel in value if _channel(channel)]
+
+    @field_validator("chat_channel_participation")
+    @classmethod
+    def validate_participation(cls, value: dict[str, str]) -> dict[str, str]:
+        return {_channel(channel): policy for channel, policy in value.items()}
+
+    @field_validator("accounts")
+    @classmethod
+    def validate_accounts(cls, value: dict[str, Any]) -> dict[str, MemberAccount]:
+        return {name: _member_account(name, form) for name, form in value.items()}
 
 
 class PersonSetupResult(BaseModel):
@@ -349,29 +285,20 @@ class PersonConfigSnapshot(BaseModel):
     person_id: str
     person_name: str
     person_type: str
-    github_account_type: str = ""
     is_active: bool
-    github_username: str
     git_email: str
     roles: list[str] = Field(default_factory=list)
     speaking_style: str = ""
     relationships: str = ""
     character: dict[str, Any] = Field(default_factory=dict)
-    github_installation_id: int | None = None
-    github_app_id: int | None = None
-    has_github_installation_id: bool = False
-    has_github_app_id: bool = False
-    has_github_private_key: bool = False
-    has_github_access_token: bool = False
-    slack_user_id: str = ""
-    has_slack_bot_token: bool = False
-    has_slack_app_token: bool = False
-    # Form field -> the environment key that member's value is stored under.
-    # The naming belongs to the backend, so the screen that shows a value's
-    # synchronization state asks for the name rather than rebuilding it.
+    #: The member's account with each provider, as its setup shows it.
+    accounts: dict[str, Any] = Field(default_factory=dict)
+    # Member-relative secret name -> the key that member's value is stored
+    # under. The naming belongs to the backend, so the screen that shows a
+    # value's synchronization state asks for the name rather than rebuilding it.
     secret_env_keys: dict[str, str] = Field(default_factory=dict)
-    slack_channels: list[str] = Field(default_factory=list)
-    slack_channel_participation: dict[str, str] = Field(default_factory=dict)
+    chat_channels: list[str] = Field(default_factory=list)
+    chat_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
     avatar_timestamp: int = 0
@@ -421,7 +348,7 @@ def stored_person_config_dir(config_dir: Path, name: str) -> Path:
     path = config_dir / stored_person_config_directory(name)
     members = config_dir / "team/members"
     if not any(child.name == name for child in iter_member_config_directories(members)):
-        raise SetupServiceError("person_not_found", "Member config was not found.")
+        raise SetupError("person_not_found", "Member config was not found.")
     return path
 
 
@@ -519,9 +446,7 @@ class SimpleProjectSetupService:
     def read_project_config(self, *, config_dir: Path) -> ProjectConfigSnapshot:
         project_file = _project_config_file(config_dir)
         if not project_file.exists():
-            raise SetupServiceError(
-                "project_not_found", "Project config was not found."
-            )
+            raise SetupError("project_not_found", "Project config was not found.")
         project_data = cast(dict, load_yaml_file(project_file))
 
         model_mapping = self._load_mapping(
@@ -532,14 +457,6 @@ class SimpleProjectSetupService:
             config_dir / "intelligences/cli_agent_mapping.yml",
             get_template_path() / "intelligences/cli_agent_mapping.yml",
         )
-
-        services = project_data.get("services", {})
-        tickets = services.get("ticket_service", {}) if services else {}
-        owner = str(tickets.get("owner", ""))
-        project_id = str(tickets.get("project_id", ""))
-        github_project_url = str(tickets.get("url", ""))
-        github_enabled = bool(owner and project_id and github_project_url)
-        lane_map = LaneMapInput.from_config(tickets.get("lane_map"))
 
         from guildbotics.intelligences.llm_providers import provider_env_keys
 
@@ -554,9 +471,12 @@ class SimpleProjectSetupService:
             description=str(project_data.get("description", "")),
             llm_api_type=self._infer_llm_api_type(model_mapping),
             cli_agent=self._infer_cli_agent(cli_mapping),
-            github_enabled=github_enabled,
-            github_project_url=github_project_url,
-            lane_map=lane_map,
+            # A provider's name, as the runtime reads it, is case-insensitive.
+            services={
+                kind: {**item, "name": str(item.get("name", "")).lower()}
+                for kind, item in _config_mapping(project_data.get("services")).items()
+                if isinstance(item, dict)
+            },
             provider_api_keys=provider_api_keys,
         )
 
@@ -574,22 +494,20 @@ class SimpleProjectSetupService:
             ProjectSetupResult: The files touched by the update.
 
         Raises:
-            SetupServiceError: If the ID is malformed, has no configuration, or
+            SetupError: If the ID is malformed, has no configuration, or
                 names a member that cannot execute commands.
         """
         if person_id:
             try:
                 validate_person_id(person_id)
             except ValueError as exc:
-                raise SetupServiceError("invalid_person_id", str(exc)) from exc
+                raise SetupError("invalid_person_id", str(exc)) from exc
             person_file = _person_config_file(config_dir, person_id)
             if not person_file.exists():
-                raise SetupServiceError(
-                    "person_not_found", "Member config was not found."
-                )
+                raise SetupError("person_not_found", "Member config was not found.")
             person_data = cast(dict, load_yaml_file(person_file))
             if str(person_data.get("person_type", "")) == "human":
-                raise SetupServiceError(
+                raise SetupError(
                     "person_not_executable",
                     "A human member cannot be the default command executor.",
                 )
@@ -607,7 +525,7 @@ class SimpleProjectSetupService:
                     validate_workspace_location(config.config_dir.parent.parent)
                 )
             except AccessContractError as exc:
-                raise SetupServiceError("invalid_workspace_location", str(exc)) from exc
+                raise SetupError("invalid_workspace_location", str(exc)) from exc
         files: list[CreatedFile] = []
 
         from guildbotics.utils.safe_paths import inspect_host_path
@@ -660,7 +578,7 @@ class SimpleProjectSetupService:
         return ProjectSetupResult(files=files)
 
     def _store_provider_api_keys(
-        self, config: ProjectSetupInput | ProjectUpdateInput, store: SecretStore
+        self, config: ProjectSetupInput, store: SecretStore
     ) -> None:
         """Store non-empty provider API keys in the OS secret store."""
         from guildbotics.intelligences.llm_providers import provider_env_keys
@@ -699,7 +617,7 @@ class SimpleProjectSetupService:
         return files
 
     @shared_write_operation
-    def update_project(self, config: ProjectUpdateInput) -> ProjectSetupResult:
+    def update_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
         project_config_file = _project_config_file(config.config_dir)
         if project_config_file.exists():
@@ -712,36 +630,10 @@ class SimpleProjectSetupService:
         else:
             project_data.pop("description", None)
 
-        services = project_data.get("services", {})
-        if not isinstance(services, dict):
-            services = {}
-
-        if config.github_enabled:
-            services["ticket_service"] = {
-                "name": "GitHub",
-                "owner": config.owner,
-                "project_id": str(config.project_id),
-                "url": config.github_project_url,
-                "lane_map": config.lane_map.to_config(),
-            }
-            services["code_hosting_service"] = {
-                "name": "GitHub",
-                "owner": config.owner,
-            }
-        else:
-            services.pop("ticket_service", None)
-            services.pop("code_hosting_service", None)
-        # Slack is the one hosted chat these screens set up.
-        services.setdefault("chat_service", {"name": "slack"})
-
-        if services:
-            project_data["services"] = services
+        if config.services:
+            project_data["services"] = config.services
         else:
             project_data.pop("services", None)
-
-        # ``repositories`` is no longer part of the schema; drop any stale entry
-        # left by older configurations.
-        project_data.pop("repositories", None)
 
         project_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(project_config_file, project_data)
@@ -795,23 +687,8 @@ class SimpleProjectSetupService:
         project: dict = {"language": config.language}
         if config.description:
             project["description"] = config.description
-
-        # Slack is the one hosted chat these screens set up.
-        project["services"] = {"chat_service": {"name": "slack"}}
-        if config.github_project_url:
-            project["services"] |= {
-                "ticket_service": {
-                    "name": "GitHub",
-                    "owner": config.owner,
-                    "project_id": str(config.project_id),
-                    "url": config.github_project_url,
-                    "lane_map": config.lane_map.to_config(),
-                },
-                "code_hosting_service": {
-                    "name": "GitHub",
-                    "owner": config.owner,
-                },
-            }
+        if config.services:
+            project["services"] = config.services
         return project
 
     def _load_mapping(self, file_path: Path, template_path: Path) -> dict:
@@ -869,17 +746,6 @@ class SimplePersonSetupService:
     take the lock for that workspace itself.
     """
 
-    def read_slack_tokens(self, *, config_dir: Path, person_id: str) -> tuple[str, str]:
-        """Return the member's stored Slack bot and app tokens.
-
-        Resolved the same way as ``has_slack_bot_token`` in the member
-        snapshot, so a token the GUI reports as saved is the token returned
-        here. Missing members simply have no secrets and yield empty strings.
-        """
-        validate_member_directory_name(person_id)
-        owned = _owned_secrets(config_dir, person_id)
-        return owned.get("SLACK_BOT_TOKEN"), owned.get("SLACK_APP_TOKEN")
-
     def list_person_configs(self, *, config_dir: Path) -> list[PersonConfigSummary]:
         """Read the member list without requiring a project config or secrets."""
         members_dir = config_dir / "team/members"
@@ -911,14 +777,6 @@ class SimplePersonSetupService:
         person_data = _read_member_form(person_file)
         account_info = _config_mapping(person_data.get("account_info"))
         profile = _config_mapping(person_data.get("profile"))
-        person_type = str(person_data.get("person_type", ""))
-        github_account_type = str(account_info.get("github_account_type", ""))
-        if not github_account_type and person_type in {
-            "human",
-            "machine_user",
-            "github_apps",
-        }:
-            github_account_type = person_type
         roles = list(_config_mapping(profile.get("roles")))
         character_data = _config_mapping(profile.get("character"))
         routine_commands = person_data.get("routine_commands")
@@ -943,6 +801,11 @@ class SimplePersonSetupService:
                 channel_participation[channel_name] = _chat_participation(participation)
 
         owned = _owned_secrets(config_dir, person_id)
+        accounts = {
+            provider.name: provider.setup.member.view(account_info, owned.has)
+            for provider in PROVIDERS.values()
+            if provider.setup and provider.setup.member
+        }
         avatar_timestamp = 0
         from guildbotics.utils.avatar import find_avatar_file
 
@@ -958,29 +821,17 @@ class SimplePersonSetupService:
         return PersonConfigSnapshot(
             person_id=person_id,
             person_name=str(person_data.get("name", "")),
-            person_type=person_type,
-            github_account_type=github_account_type,
+            person_type=str(person_data.get("person_type", "")),
             is_active=bool(person_data.get("is_active", False)),
-            github_username=str(account_info.get("github_username", "")),
             git_email=str(account_info.get("git_email", "")),
             roles=roles,
             speaking_style=str(person_data.get("speaking_style", "")),
             relationships=str(person_data.get("relationships", "")),
             character=character_data,
-            github_installation_id=_to_int_or_none(
-                account_info.get("github_installation_id")
-            ),
-            github_app_id=_to_int_or_none(account_info.get("github_app_id")),
-            has_github_installation_id=bool(account_info.get("github_installation_id")),
-            has_github_app_id=bool(account_info.get("github_app_id")),
-            has_github_private_key=bool(owned.get("GITHUB_PRIVATE_KEY")),
-            has_github_access_token=bool(owned.get("GITHUB_ACCESS_TOKEN")),
-            slack_user_id=str(account_info.get("slack_user_id", "")),
-            has_slack_bot_token=bool(owned.get("SLACK_BOT_TOKEN")),
-            has_slack_app_token=bool(owned.get("SLACK_APP_TOKEN")),
-            secret_env_keys={suffix.lower(): key for suffix, key in owned.keys.items()},
-            slack_channels=channels,
-            slack_channel_participation=channel_participation,
+            accounts={name: view.model_dump() for name, view in accounts.items()},
+            secret_env_keys=owned.keys(),
+            chat_channels=channels,
+            chat_channel_participation=channel_participation,
             routine_commands=[
                 str(command).strip()
                 for command in (
@@ -992,140 +843,69 @@ class SimplePersonSetupService:
             avatar_timestamp=avatar_timestamp,
         )
 
-    def parse_github_apps_url(self, url: str) -> str:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_APPS_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[3] != "organizations"
-            or url_parts[5] != "settings"
-            or url_parts[6] != "apps"
-            or url_parts[7] == ""
-        ):
-            raise SetupServiceError(
-                "invalid_github_apps_url", "Invalid GitHub Apps URL."
-            )
-        return url_parts[7]
-
-    def resolve_github_user(
-        self, name: str, *, is_github_apps: bool = False
-    ) -> GitHubUserReference:
-        if name == "":
-            raise SetupServiceError(
-                "invalid_github_username", "Invalid GitHub username."
-            )
-
-        if is_github_apps:
-            person_id = name
-            github_username = f"{name}[bot]"
-            api_username = quote(github_username)
-        else:
-            person_id = name.split("@", maxsplit=1)[0]
-            github_username = person_id
-            api_username = person_id
-
-        try:
-            response = requests.get(
-                f"https://api.github.com/users/{api_username}",
-                timeout=GITHUB_USER_LOOKUP_TIMEOUT_SECONDS,
-            )
-            if response.status_code != HTTP_OK:
-                raise SetupServiceError(
-                    "invalid_github_username", "Invalid GitHub username."
-                )
-            data = response.json()
-            github_user_id = data.get("id", 0)
-        except SetupServiceError:
-            raise
-        except Exception as exc:
-            raise SetupServiceError(
-                "invalid_github_username", "Invalid GitHub username."
-            ) from exc
-
-        return GitHubUserReference(
-            person_id=person_id,
-            github_username=github_username,
-            github_user_id=github_user_id,
-            git_email=f"{github_user_id}+{github_username}@users.noreply.github.com",
-        )
-
     @shared_write_operation
-    def write_person(
-        self, config: PersonSetupInput, *, github_private_key: str = ""
-    ) -> PersonSetupResult:
-        """Store the member's secrets, then write its config.
-
-        Args:
-            config (PersonSetupInput): The member to add.
-            github_private_key (str): A GitHub App PEM held in memory, stored
-                instead of reading ``config.github_private_key_path``.
-        """
+    def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
+        """Store the member's secrets, then write its config."""
         # SecretStore first, as in update_person: a store failure leaves no
         # member config claiming credentials it does not have.
-        keys = _target_env_keys(config.config_dir / "team/members", config.person_id)
+        prefix = _target_prefix(config.config_dir / "team/members", config.person_id)
+        account_info, secrets = _stored_accounts(config, config.person_id)
         store = resolve_secret_store(config.config_dir)
-        secrets = self.build_person_secrets(config, keys, github_private_key)
-        for key, value in secrets.items():
-            store.set(key, value)
+        for name, value in secrets.items():
+            store.set(prefix + name, value)
 
         person_config_file = _person_config_file(config.config_dir, config.person_id)
         person_config_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(
             person_config_file,
-            self.build_person_config(config, include_initial_defaults=True),
+            self.build_person_config(
+                config, account_info, include_initial_defaults=True
+            ),
         )
+        _saved(config)
         files = [CreatedFile(path=person_config_file, action="create")]
         if secrets:
             files.append(CreatedFile(path=store.location, action="update"))
         return PersonSetupResult(files=files)
 
     @shared_write_operation
-    def update_person(
-        self, config: PersonUpdateInput, *, github_private_key: str = ""
-    ) -> PersonSetupResult:
-        """Move and update the member's secrets, then its config.
-
-        Args:
-            config (PersonUpdateInput): The member as edited.
-            github_private_key (str): A GitHub App PEM held in memory, stored
-                instead of reading ``config.github_private_key_path``.
-        """
+    def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
+        """Move and update the member's secrets, then its config."""
         files: list[CreatedFile] = []
         original_person_file = (
             stored_person_config_dir(config.config_dir, config.original_person_id)
             / "person.yml"
         )
         if not original_person_file.exists():
-            raise SetupServiceError("person_not_found", "Member config was not found.")
+            raise SetupError("person_not_found", "Member config was not found.")
 
         old_person_dir = original_person_file.parent
         new_person_dir = _person_config_dir(config.config_dir, config.person_id)
-        new_keys = _target_env_keys(
+        new_prefix = _target_prefix(
             config.config_dir / "team/members",
             config.person_id,
             exclude=config.original_person_id,
         )
         if new_person_dir.exists() and not old_person_dir.samefile(new_person_dir):
-            raise SetupServiceError("person_id_conflict", "Member ID already exists.")
+            raise SetupError("person_id_conflict", "Member ID already exists.")
 
         # SecretStore first: shared key metadata moves independently of local
         # value freshness, and a store failure leaves the member config
         # untouched so the same update can be retried. The values are read
         # before any key moves, so an unreadable key file changes nothing.
-        pending_secrets = self.build_person_secrets(
-            config, new_keys, github_private_key
-        )
+        account_info, secrets = _stored_accounts(config, config.original_person_id)
+        pending_secrets = {new_prefix + name: value for name, value in secrets.items()}
         # An ambiguous source owns no keys. Repair only its config; explicitly
         # supplied secrets use the unique target.
         old = _owned_secrets(config.config_dir, config.original_person_id)
         if old.store or pending_secrets:
             store = old.store or resolve_secret_store(config.config_dir)
             renamed = False
-            if old.keys and old.keys != new_keys:
+            if old.store and old.prefix != new_prefix:
                 indexed = set(store.keys())
-                for suffix, old_key in old.keys.items():
+                for name, old_key in old.keys().items():
                     if old_key in indexed:
-                        store.rename(old_key, new_keys[suffix])
+                        store.rename(old_key, new_prefix + name)
                         renamed = True
             for key, value in pending_secrets.items():
                 store.set(key, value)
@@ -1142,7 +922,8 @@ class SimplePersonSetupService:
 
         person_file = new_person_dir / "person.yml"
         person_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(person_file, self.build_person_config(config))
+        save_yaml_file(person_file, self.build_person_config(config, account_info))
+        _saved(config)
         files.append(CreatedFile(path=person_file, action="update"))
 
         return PersonSetupResult(files=files)
@@ -1158,7 +939,9 @@ class SimplePersonSetupService:
         # the member config intact so the deletion can be retried.
         owned = _owned_secrets(config_dir, person_id)
         if owned.store:
-            indexed = sorted(set(owned.keys.values()).intersection(owned.store.keys()))
+            indexed = sorted(
+                set(owned.keys().values()).intersection(owned.store.keys())
+            )
             for key in indexed:
                 owned.store.delete(key)
             if indexed:
@@ -1170,8 +953,13 @@ class SimplePersonSetupService:
         return PersonSetupResult(files=files)
 
     def build_person_config(
-        self, config: PersonSetupInput, *, include_initial_defaults: bool = False
+        self,
+        config: PersonSetupInput,
+        account_info: Mapping[str, str],
+        *,
+        include_initial_defaults: bool = False,
     ) -> dict:
+        """The member's config, with the ``account_info`` its accounts store."""
         is_human = config.person_type == "human"
         role_overrides: dict[str, dict[str, str]] = {
             role.rstrip(":"): {} for role in config.roles
@@ -1187,45 +975,26 @@ class SimplePersonSetupService:
             "is_active": False if is_human else config.is_active,
             "person_type": config.person_type,
             "account_info": {
-                "github_account_type": "human"
-                if is_human
-                else config.github_account_type,
-                "github_username": config.github_username,
                 "git_user": config.person_name,
                 "git_email": config.git_email,
-                "slack_user_id": config.slack_user_id,
-                **(
-                    {"github_app_id": str(config.github_app_id)}
-                    if config.github_app_id is not None
-                    else {}
-                ),
-                **(
-                    {"github_installation_id": str(config.github_installation_id)}
-                    if config.github_installation_id is not None
-                    else {}
-                ),
+                **account_info,
             },
             "profile": profile,
             "speaking_style": "" if is_human else config.speaking_style,
             "relationships": "" if is_human else config.relationships,
         }
-        if config.slack_channels and not is_human:
-            slack_channel_participation = {
-                _normalize_slack_channel_ref(channel): _chat_participation(
-                    participation
-                )
-                for channel, participation in config.slack_channel_participation.items()
-            }
+        if config.chat_channels and not is_human:
+            chat_channel = _chat_channel(config.config_dir)
             person_config["message_channels"] = [
-                self._build_slack_message_channel(
+                _message_channel(
+                    chat_channel(channel),
                     channel,
                     person_id=config.person_id,
-                    participation=slack_channel_participation.get(
-                        _normalize_slack_channel_ref(channel), "strict"
+                    participation=_chat_participation(
+                        config.chat_channel_participation.get(channel)
                     ),
                 )
-                for channel in config.slack_channels
-                if channel
+                for channel in config.chat_channels
             ]
         routine_commands = (
             []
@@ -1239,7 +1008,8 @@ class SimplePersonSetupService:
         if (
             include_initial_defaults
             and not routine_commands
-            and self._should_seed_default_routine(config)
+            and not is_human
+            and Service.TICKET_SERVICE.value in _project_services(config.config_dir)
         ):
             routine_commands = [TICKET_WORKFLOW_COMMAND]
         if routine_commands:
@@ -1257,83 +1027,43 @@ class SimplePersonSetupService:
             person_config["task_schedules"] = task_schedules
         return person_config
 
-    @staticmethod
-    def _should_seed_default_routine(config: PersonSetupInput) -> bool:
-        if config.person_type == "human":
-            return False
-        github_account_type = (config.github_account_type or config.person_type).strip()
-        if github_account_type in {"", "none", "human"}:
-            return bool(config.github_username.strip())
-        return github_account_type in {"machine_user", "github_apps"}
 
-    def _build_slack_message_channel(
-        self, channel: str, *, person_id: str, participation: str = "strict"
-    ) -> dict[str, Any]:
-        channel_ref = channel.strip().lstrip("#")
-        chat: dict[str, Any] = {
-            "enabled": True,
-            "participation": _chat_participation(participation),
-        }
-        channel_info: dict[str, Any] = {}
-        if SLACK_CHANNEL_ID_PATTERN.fullmatch(channel_ref):
-            chat["channel_id"] = channel_ref
-            channel_info["channel_id"] = channel_ref
-        else:
-            chat["channel_name"] = channel_ref
-        return {
-            "name": channel_ref,
-            "used_as": ["internal_communication"],
-            "used_by": [person_id],
-            "channel_info": channel_info,
-            "chat": chat,
-        }
+def _stored_accounts(
+    config: PersonSetupInput, saved_person_id: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The ``account_info`` entries and the secrets, by member-relative name,
+    the member's accounts store; what was set up for the member (an app
+    registration, for one) was set up under its saved ID.
 
-    def build_person_secrets(
-        self,
-        config: PersonSetupInput,
-        keys: dict[str, str],
-        github_private_key: str = "",
-    ) -> dict[str, str]:
-        """Return the secret values a member save stores in the secret store.
-
-        The GitHub App PEM is ``github_private_key`` when given, else the
-        content of ``config.github_private_key_path``. Runtime prefers the
-        stored content over a key file, so a user-supplied file is only read.
-
-        Raises:
-            SetupServiceError: The named key file cannot be read; saving the
-                member without its key would report a success it is not.
-        """
-        if config.person_type == "human":
-            return {}
-        values = {
-            "GITHUB_ACCESS_TOKEN": config.github_access_token,
-            "GITHUB_PRIVATE_KEY": github_private_key
-            or self._read_private_key_file(config),
-            "SLACK_BOT_TOKEN": config.slack_bot_token,
-            "SLACK_APP_TOKEN": config.slack_app_token,
-        }
-        return {keys[suffix]: value for suffix, value in values.items() if value}
-
-    @staticmethod
-    def _read_private_key_file(config: PersonSetupInput) -> str:
-        if not config.github_private_key_path:
-            return ""
-        try:
-            return (
-                Path(config.github_private_key_path)
-                .expanduser()
-                .read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeDecodeError) as exc:
-            raise SetupServiceError(
-                "github_private_key_unreadable",
-                "GitHub App private key file could not be read.",
-            ) from exc
+    Raises:
+        SetupError: If an account cannot be stored as the form names it.
+    """
+    account_info: dict[str, str] = {}
+    secrets: dict[str, str] = {}
+    for account in config.accounts.values():
+        info, values = account.stored(saved_person_id, config.person_type == "human")
+        account_info |= info
+        secrets |= values
+    return account_info, secrets
 
 
-def _normalize_slack_channel_ref(channel: str) -> str:
-    return channel.strip().lstrip("#")
+def _saved(config: PersonSetupInput) -> None:
+    for account in config.accounts.values():
+        account.saved()
+
+
+def _message_channel(
+    chat: dict[str, str], name: str, *, person_id: str, participation: str
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "used_as": ["internal_communication"],
+        "used_by": [person_id],
+        "channel_info": (
+            {"channel_id": chat["channel_id"]} if "channel_id" in chat else {}
+        ),
+        "chat": {"enabled": True, "participation": participation, **chat},
+    }
 
 
 def _chat_participation(value: object) -> str:

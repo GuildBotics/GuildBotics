@@ -1,0 +1,4 @@
+ja:
+  user_id_missing: "このメンバーには Slack ユーザー ID が設定されていません。"
+  token_missing: "このワークスペースには Slack Bot Token が設定されていません。"
+  missing_scope: "Slack Bot Token に 'users:read' スコープがありません。OAuth & Permissions で追加して、アプリを再インストールしてください。"

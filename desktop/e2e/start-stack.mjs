@@ -453,6 +453,13 @@ async function seedWorkspace() {
     llm_api_type: "openai",
     cli_agent: "codex",
     openai_api_key: seedWithoutLlmKey ? "" : "sk-e2e-test-key",
+    // The reference provider keeps every kind of service in the workspace, so
+    // nothing reaches a hosted service.
+    services: {
+      code_hosting_service: { name: "local", owner: "acme" },
+      ticket_service: { name: "local", owner: "acme" },
+      chat_service: { name: "local" },
+    },
   });
   await postJson("/config/members", {
     config_dir: configDir,
@@ -460,7 +467,6 @@ async function seedWorkspace() {
     person_id: seededMemberId,
     person_name: "Local Agent",
     is_active: true,
-    github_username: "",
     git_email: "",
     roles: ["architect"],
     speaking_style: "concise",

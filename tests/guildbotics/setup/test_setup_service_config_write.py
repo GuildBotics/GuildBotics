@@ -5,10 +5,8 @@ write behaviours that the existing suite did not yet exercise:
 
 - project init file set across workspace / home / custom config locations
 - secret blank-update must not clear an existing secret (same-id update)
-- GitHub disabled -> enabled -> disabled project diff
-- repo access https / ssh round trip
 - member add / update / delete secret-key add / update / remove
-- member-id rename moves directory + secret keys + slack channel mapping
+- member-id rename moves directory + secret keys + chat channel mapping
 - ``task_schedules`` / ``routine_commands`` YAML round trip
 - character / relationships / speaking_style round trip
 
@@ -22,11 +20,9 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.setup.setup_service import (
-    LaneMapInput,
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,
-    ProjectUpdateInput,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
@@ -34,7 +30,6 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_markdown_with_frontmatter,
     load_yaml_file,
-    save_yaml_file,
 )
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.text_utils import replace_placeholders
@@ -67,9 +62,13 @@ def _project_input(config_dir: Path, **overrides) -> ProjectSetupInput:
 def _github_project_input(config_dir: Path, **overrides) -> ProjectSetupInput:
     return _project_input(
         config_dir,
-        owner="GuildBotics",
-        project_id="1",
-        github_project_url="https://github.com/orgs/GuildBotics/projects/1",
+        services={
+            "code_hosting_service": {"name": "github", "owner": "GuildBotics"},
+            "ticket_service": {
+                "name": "github",
+                "url": "https://github.com/orgs/GuildBotics/projects/1",
+            },
+        },
         **overrides,
     )
 
@@ -81,13 +80,30 @@ def _person_input(config_dir: Path, **overrides) -> PersonSetupInput:
         "person_id": "alice",
         "person_name": "Alice",
         "is_active": True,
-        "github_username": "alice",
         "git_email": "1+alice@users.noreply.github.com",
         "roles": ["architect"],
         "speaking_style": "style-a",
     }
     payload.update(overrides)
     return PersonSetupInput(**payload)
+
+
+def _tokens(github: str = "", slack_bot: str = "") -> dict:
+    return {
+        "github": {
+            "account_type": "machine_user",
+            "username": "alice",
+            "access_token": github,
+        },
+        "slack": {"bot_token": slack_bot},
+    }
+
+
+def _update_input(config_dir: Path, original: str, **overrides) -> PersonUpdateInput:
+    return PersonUpdateInput(
+        **_person_input(config_dir, **overrides).model_dump(),
+        original_person_id=original,
+    )
 
 
 def _secrets(config_dir: Path) -> dict[str, str]:
@@ -216,86 +232,12 @@ def test_write_project_empty_intelligence_selection_keeps_template_defaults(
 
 
 # --------------------------------------------------------------------------- #
-# GitHub disabled -> enabled -> disabled diff + repo access https / ssh
+# intelligence defaults on update
 # --------------------------------------------------------------------------- #
 
 
 def _seed_project(config_dir: Path) -> None:
     SimpleProjectSetupService().write_project(_project_input(config_dir))
-
-
-def test_update_project_github_disabled_enabled_disabled_diff(
-    tmp_path: Path,
-) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-    service = SimpleProjectSetupService()
-    project_file = config_dir / "team/project.yml"
-
-    base = {
-        "config_dir": config_dir,
-        "language": "en",
-        "llm_api_type": "openai",
-        "cli_agent": "codex",
-    }
-
-    # Initially disabled: no GitHub services present.
-    service.update_project(ProjectUpdateInput(**base, github_enabled=False))
-    disabled = load_yaml_file(project_file)
-    assert disabled["services"] == {"chat_service": {"name": "slack"}}
-    assert "repositories" not in disabled
-
-    # Enabled: ticket_service + code_hosting_service added (no repository entry;
-    # the repository is derived from each issue at runtime).
-    service.update_project(
-        ProjectUpdateInput(
-            **base,
-            github_enabled=True,
-            owner="GuildBotics",
-            project_id="42",
-            github_project_url="https://github.com/orgs/GuildBotics/projects/42",
-        )
-    )
-    enabled = load_yaml_file(project_file)
-    services = enabled["services"]
-    assert services["ticket_service"]["owner"] == "GuildBotics"
-    assert services["ticket_service"]["project_id"] == "42"
-    assert services["ticket_service"]["url"].endswith("/projects/42")
-    assert services["code_hosting_service"]["owner"] == "GuildBotics"
-    assert "repositories" not in enabled
-
-    # Disabled again: GitHub services removed.
-    service.update_project(ProjectUpdateInput(**base, github_enabled=False))
-    re_disabled = load_yaml_file(project_file)
-    assert re_disabled["services"] == {"chat_service": {"name": "slack"}}
-    assert "repositories" not in re_disabled
-
-
-def test_update_project_enables_github_from_project_url(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-    service = SimpleProjectSetupService()
-
-    service.update_project(
-        ProjectUpdateInput(
-            config_dir=config_dir,
-            language="en",
-            llm_api_type="openai",
-            cli_agent="codex",
-            github_enabled=True,
-            owner="GuildBotics",
-            project_id="1",
-            github_project_url="https://github.com/orgs/GuildBotics/projects/1",
-        )
-    )
-
-    stored = load_yaml_file(config_dir / "team/project.yml")
-    code_hosting = stored["services"]["code_hosting_service"]
-    assert code_hosting["owner"] == "GuildBotics"
-    # Clone access is always HTTPS now, so no repo_base_url is persisted.
-    assert "repo_base_url" not in code_hosting
-    snapshot = service.read_project_config(config_dir=config_dir)
-    assert snapshot.github_enabled is True
 
 
 def test_update_project_empty_intelligence_selection_preserves_existing_defaults(
@@ -312,12 +254,11 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
     )
 
     SimpleProjectSetupService().update_project(
-        ProjectUpdateInput(
+        ProjectSetupInput(
             config_dir=config_dir,
             language="en",
             llm_api_type="",
             cli_agent="",
-            github_enabled=False,
         )
     )
 
@@ -328,7 +269,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
 
 
 # --------------------------------------------------------------------------- #
-# lane_map: persist, defaults, custom values, round-trip, github-disabled
+# GitHub services: lane_map defaults and the chat's own items
 # --------------------------------------------------------------------------- #
 
 
@@ -344,97 +285,23 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
     }
 
 
-def test_write_project_persists_custom_lane_map(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    SimpleProjectSetupService().write_project(
-        _github_project_input(
-            config_dir,
-            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
-        )
-    )
-
-    stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["ticket_service"]["lane_map"] == {
-        "ready": "Ready",
-        "working": "Doing",
-        "done": "Shipped",
-    }
-
-
-def test_blank_working_lane_falls_back_to_default(tmp_path: Path) -> None:
-    # The YAML layer strips empty strings, so a blank working lane cannot be
-    # persisted; it falls back to the default "In Progress".
-    config_dir = tmp_path / "config"
-    SimpleProjectSetupService().write_project(
-        _github_project_input(
-            config_dir,
-            lane_map=LaneMapInput(ready="Todo", working="", done="Done"),
-        )
-    )
-
-    stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["ticket_service"]["lane_map"]["working"] == "In Progress"
-
-
-def test_lane_map_rejects_identical_ready_and_done() -> None:
-    with pytest.raises(ValueError):
-        LaneMapInput(ready="Same", done="Same")
-
-
-def test_read_project_config_round_trips_lane_map(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    service = SimpleProjectSetupService()
-    service.write_project(
-        _github_project_input(
-            config_dir,
-            lane_map=LaneMapInput(ready="Ready", working="Doing", done="Shipped"),
-        )
-    )
-
-    snapshot = service.read_project_config(config_dir=config_dir)
-    assert snapshot.lane_map.ready == "Ready"
-    assert snapshot.lane_map.working == "Doing"
-    assert snapshot.lane_map.done == "Shipped"
-
-
-def test_update_project_github_disabled_writes_no_lane_map(tmp_path: Path) -> None:
+def test_update_project_writes_the_chat_items_it_is_given(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
+
     SimpleProjectSetupService().update_project(
-        ProjectUpdateInput(
-            config_dir=config_dir,
-            language="en",
-            llm_api_type="openai",
-            cli_agent="codex",
-            github_enabled=False,
+        _project_input(
+            config_dir,
+            services={
+                "chat_service": {
+                    "name": "slack",
+                    "base_url": "https://proxy.example/api",
+                }
+            },
         )
     )
 
-    stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"] == {"chat_service": {"name": "slack"}}
-
-
-def test_update_project_keeps_the_chat_service_it_finds(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-    project_file = config_dir / "team/project.yml"
-    stored = load_yaml_file(project_file)
-    stored["services"] = {
-        "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
-    }
-    save_yaml_file(project_file, stored)
-
-    SimpleProjectSetupService().update_project(
-        ProjectUpdateInput(
-            config_dir=config_dir,
-            language="en",
-            llm_api_type="openai",
-            cli_agent="codex",
-            github_enabled=False,
-        )
-    )
-
-    assert load_yaml_file(project_file)["services"] == {
+    assert load_yaml_file(config_dir / "team/project.yml")["services"] == {
         "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
     }
 
@@ -451,29 +318,19 @@ def test_update_person_blank_secret_keeps_existing_value_same_id(
     service = SimplePersonSetupService()
 
     service.write_person(
-        _person_input(
-            config_dir,
-            github_access_token="github-token",
-            slack_bot_token="xoxb-token",
-        )
+        _person_input(config_dir, accounts=_tokens("github-token", "xoxb-token"))
     )
     assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
 
     # Update with blank secrets and an unrelated profile change.
     service.update_person(
-        PersonUpdateInput(
-            config_dir=config_dir,
-            original_person_id="alice",
-            person_type="machine_user",
-            person_id="alice",
+        _update_input(
+            config_dir,
+            "alice",
             person_name="Alice Updated",
-            is_active=True,
-            github_username="alice",
-            git_email="1+alice@users.noreply.github.com",
             roles=["reviewer"],
             speaking_style="style-b",
-            github_access_token="",
-            slack_bot_token="",
+            accounts=_tokens(),
         )
     )
 
@@ -492,29 +349,12 @@ def test_member_crud_adds_updates_and_removes_env_keys(tmp_path: Path) -> None:
     service = SimplePersonSetupService()
 
     # add (append): env key created.
-    service.write_person(
-        _person_input(
-            config_dir,
-            github_access_token="token-v1",
-        )
-    )
+    service.write_person(_person_input(config_dir, accounts=_tokens("token-v1")))
     assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v1"
 
     # update (same id): env key value replaced.
     service.update_person(
-        PersonUpdateInput(
-            config_dir=config_dir,
-            original_person_id="alice",
-            person_type="machine_user",
-            person_id="alice",
-            person_name="Alice",
-            is_active=True,
-            github_username="alice",
-            git_email="1+alice@users.noreply.github.com",
-            roles=["architect"],
-            speaking_style="style-a",
-            github_access_token="token-v2",
-        )
+        _update_input(config_dir, "alice", accounts=_tokens("token-v2"))
     )
     env_values = _secrets(config_dir)
     assert env_values["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v2"
@@ -612,7 +452,6 @@ def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
             person_id="hana",
             person_type="human",
             person_name="Hana",
-            github_username="hana",
             git_email="3+hana@users.noreply.github.com",
         )
     )
@@ -637,20 +476,7 @@ def test_default_person_follows_member_rename(tmp_path: Path) -> None:
         config_dir=config_dir, person_id="old-id"
     )
 
-    service.update_person(
-        PersonUpdateInput(
-            config_dir=config_dir,
-            original_person_id="old-id",
-            person_type="machine_user",
-            person_id="new-id",
-            person_name="Alice",
-            is_active=True,
-            github_username="new-id",
-            git_email="1+new-id@users.noreply.github.com",
-            roles=["architect"],
-            speaking_style="style-a",
-        )
-    )
+    service.update_person(_update_input(config_dir, "old-id", person_id="new-id"))
 
     assert _default_person_id(config_dir) == "new-id"
 
@@ -664,7 +490,6 @@ def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) ->
         _person_input(
             config_dir,
             person_id="bob",
-            github_username="bob",
             git_email="2+bob@users.noreply.github.com",
         )
     )
@@ -680,11 +505,11 @@ def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) ->
 
 
 # --------------------------------------------------------------------------- #
-# member id rename: directory / env key / slack mapping are moved
+# member id rename: directory / env key / chat channel mapping are moved
 # --------------------------------------------------------------------------- #
 
 
-def test_member_rename_moves_directory_env_keys_and_slack_mapping(
+def test_member_rename_moves_directory_env_keys_and_channel_mapping(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
@@ -694,10 +519,8 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
         _person_input(
             config_dir,
             person_id="old-id",
-            github_username="old-id",
-            github_access_token="token-keep",
-            slack_bot_token="xoxb-keep",
-            slack_channels=["general"],
+            accounts=_tokens("token-keep", "xoxb-keep"),
+            chat_channels=["general"],
         )
     )
     old_dir = config_dir / "team/members/old-id"
@@ -706,19 +529,13 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
     assert old_person["message_channels"][0]["used_by"] == ["old-id"]
 
     service.update_person(
-        PersonUpdateInput(
-            config_dir=config_dir,
-            original_person_id="old-id",
-            person_type="machine_user",
+        _update_input(
+            config_dir,
+            "old-id",
             person_id="new-id",
-            person_name="Alice",
-            is_active=True,
-            github_username="new-id",
-            git_email="1+new-id@users.noreply.github.com",
-            roles=["architect"],
-            speaking_style="style-a",
             # Blank secrets so we verify the rename PRESERVES existing values.
-            slack_channels=["general"],
+            accounts=_tokens(),
+            chat_channels=["general"],
         )
     )
 
@@ -728,7 +545,7 @@ def test_member_rename_moves_directory_env_keys_and_slack_mapping(
 
     new_person = load_yaml_file(new_dir / "person.yml")
     assert new_person["person_id"] == "new-id"
-    # Slack channel ownership mapping follows the new id.
+    # Channel ownership mapping follows the new id.
     assert new_person["message_channels"][0]["used_by"] == ["new-id"]
 
     env_values = _secrets(config_dir)
@@ -747,26 +564,12 @@ def test_member_rename_into_existing_id_is_rejected(tmp_path: Path) -> None:
         _person_input(
             config_dir,
             person_id="bob",
-            github_username="bob",
             git_email="2+bob@users.noreply.github.com",
         )
     )
 
     with pytest.raises(Exception) as exc_info:
-        service.update_person(
-            PersonUpdateInput(
-                config_dir=config_dir,
-                original_person_id="alice",
-                person_type="machine_user",
-                person_id="bob",
-                person_name="Alice",
-                is_active=True,
-                github_username="alice",
-                git_email="1+alice@users.noreply.github.com",
-                roles=["architect"],
-                speaking_style="style-a",
-            )
-        )
+        service.update_person(_update_input(config_dir, "alice", person_id="bob"))
     assert getattr(exc_info.value, "code", "") == "person_id_conflict"
     # Both members remain intact.
     assert (config_dir / "team/members/alice/person.yml").exists()

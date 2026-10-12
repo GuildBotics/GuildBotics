@@ -174,8 +174,7 @@ function projectConfig(overrides: Record<string, unknown> = {}) {
     description: "Demo project",
     llm_api_type: "openai",
     cli_agent: "codex",
-    github_enabled: false,
-    github_project_url: "",
+    services: {},
     provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
   };
@@ -286,9 +285,6 @@ function serviceServer(): MockServer {
   return new MockServer()
     .json("GET", "/config/status", configStatus())
     .json("GET", "/team", team())
-    .json("GET", "/scheduler/routines", {
-      routines: [{ command: "workflows/ticket_driven_workflow", requires_github: false }],
-    })
     .json("GET", "/scheduler/status", runtimeStatus())
     .json("GET", "/config/project", projectConfig())
     .json("GET", "/commands/options", { options: [] })
@@ -483,6 +479,15 @@ describe("Setup integration (real client + mock server)", () => {
         },
       }))
       .json("GET", "/config/project", projectConfig())
+      .json("GET", "/config/providers", [
+        {
+          name: "github",
+          title: "GitHub",
+          kinds: ["code_hosting_service", "ticket_service"],
+          avatar: true,
+        },
+        { name: "slack", title: "Slack", kinds: ["chat_service"], avatar: true },
+      ])
       .json("GET", "/commands/options", { options: [] })
       .json("GET", "/commands/routine-options", { options: [] })
       .json("GET", "/intelligences/agent-environment", {
@@ -540,9 +545,17 @@ describe("Setup integration (real client + mock server)", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    // The GitHub use/don't decision now lives in the Project section.
-    await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
-    await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
+    // Each kind of service starts unused; the chat is taken by Slack.
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    for (const kind of ["code_hosting_service", "ticket_service"] as const) {
+      expect(
+        await screen.findByRole("combobox", { name: t(`setup.integrations.kinds.${kind}`) }),
+      ).toHaveValue(t("setup.integrations.none"));
+    }
+    await user.click(
+      screen.getByRole("combobox", { name: t("setup.integrations.kinds.chat_service") }),
+    );
+    await user.click(await screen.findByRole("option", { name: "Slack" }));
     await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
@@ -567,9 +580,14 @@ describe("Setup integration (real client + mock server)", () => {
       person_id: "alice",
       person_name: "Alice",
       person_type: "agent",
-      github_account_type: "",
       is_active: true,
       roles: ["product"],
+      git_email: "",
+      accounts: {
+        github: { account_type: "", username: "" },
+        slack: { bot_token: "", app_token: "" },
+      },
+      chat_channels: [],
       config_dir: "/workspace/.guildbotics/config",
     });
 
@@ -584,8 +602,7 @@ describe("Setup integration (real client + mock server)", () => {
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
-      owner: "",
-      github_project_url: "",
+      services: { chat_service: { name: "slack" } },
       provider_api_keys: { openai: "sk-test" },
     });
 

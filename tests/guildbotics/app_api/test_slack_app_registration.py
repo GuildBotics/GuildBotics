@@ -1,5 +1,11 @@
+"""The Slack App registration and the token check, as the member screen
+reaches them through the App API."""
+
+from __future__ import annotations
+
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -7,87 +13,81 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.models import ConfigStatus
 from guildbotics.integrations.slack import app_manifest
-from guildbotics.setup import slack_app
-from guildbotics.setup.setup_service import SimplePersonSetupService
+from guildbotics.integrations.slack import setup as slack_setup
+from tests.guildbotics.app_api.provider_doubles import (
+    AUTH_HEADERS,
+    answer,
+    route_web,
+    saved_workspace,
+    write_member,
+)
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE = 422
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 BOT_TOKEN = "xoxb-secret-bot-token"
 APP_TOKEN = "xapp-secret-app-token"
-
-
-class RuntimeStub:
-    def __init__(self, tmp_path: Path) -> None:
-        self.config_status = ConfigStatus(
-            cwd=tmp_path,
-            workspace=tmp_path,
-            config_dir=tmp_path / ".guildbotics/config",
-            project_file=tmp_path / ".guildbotics/config/team/project.yml",
-            project_file_exists=False,
-            storage_dir=tmp_path,
-        )
-
-    def get_config_status(self) -> ConfigStatus:
-        return self.config_status
+REGISTRATIONS = "/config/providers/slack/app-registrations"
+VERIFY = "/config/providers/slack/verify-tokens"
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
-    return TestClient(
-        create_app(session_token="secret", runtime=RuntimeStub(tmp_path))  # type: ignore[arg-type]
-    )
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
 
 
 @pytest.fixture
-def slack_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/auth.test"):
-            return httpx.Response(
-                200,
-                json={
+def client(workspace: Path) -> Iterator[TestClient]:
+    with saved_workspace(workspace, {"chat_service": {"name": "slack"}}) as client:
+        yield client
+
+
+@pytest.fixture
+def slack(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """The project's Slack, accepting any token."""
+    return route_web(
+        monkeypatch,
+        {
+            "slack.com/api/auth.test": answer(
+                {
                     "ok": True,
                     "user_id": "U0BOT",
                     "user": "alice-bot",
                     "team": "GuildBotics HQ",
-                },
-            )
-        return httpx.Response(200, json={"ok": True, "url": "wss://example.invalid"})
-
-    _patch_transport(monkeypatch, httpx.MockTransport(handler))
-
-
-def _patch_transport(
-    monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
-) -> None:
-    original = slack_app.verify_tokens
-
-    async def verify(bot_token: str, app_token: str, **kwargs):
-        kwargs["transport"] = transport
-        return await original(bot_token, app_token, **kwargs)
-
-    monkeypatch.setattr(slack_app, "verify_tokens", verify)
-
-
-def test_start_requires_session_token(client: TestClient) -> None:
-    response = client.post(
-        "/config/members/slack-app/registrations", json={"app_name": "alice"}
+                }
+            ),
+            "slack.com/api/conversations.list": answer({"ok": True, "channels": []}),
+            "slack.com/api/apps.connections.open": answer(
+                {"ok": True, "url": "wss://example.invalid"}
+            ),
+        },
     )
+
+
+def _tokens(requests: list[httpx.Request]) -> dict[str, str]:
+    return {
+        request.url.path.rsplit("/", 1)[-1]: request.headers["Authorization"]
+        for request in requests
+    }
+
+
+@pytest.mark.parametrize("path", [REGISTRATIONS, VERIFY])
+def test_the_screens_requests_need_the_session_token(
+    client: TestClient, path: str
+) -> None:
+    response = client.post(path, json={"app_name": "alice"})
 
     assert response.status_code == HTTP_UNAUTHORIZED
 
 
 def test_start_returns_the_manifest_deep_link(client: TestClient) -> None:
     response = client.post(
-        "/config/members/slack-app/registrations",
-        json={"app_name": "Alice Bot"},
-        headers=AUTH_HEADERS,
+        REGISTRATIONS, json={"app_name": "Alice Bot"}, headers=AUTH_HEADERS
     )
 
     assert response.status_code == HTTP_OK
@@ -101,40 +101,29 @@ def test_start_returns_the_manifest_deep_link(client: TestClient) -> None:
     )
 
 
-def test_start_rejects_a_too_long_app_name(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("app_name", "status_code", "code"),
+    [
+        ("x" * 36, HTTP_BAD_REQUEST, "invalid_slack_app_name"),
+        ("", HTTP_UNPROCESSABLE, "validation_error"),
+    ],
+)
+def test_start_refuses_an_app_name_slack_cannot_take(
+    client: TestClient, app_name: str, status_code: int, code: str
+) -> None:
     response = client.post(
-        "/config/members/slack-app/registrations",
-        json={"app_name": "x" * 36},
-        headers=AUTH_HEADERS,
+        REGISTRATIONS, json={"app_name": app_name}, headers=AUTH_HEADERS
     )
 
-    assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["code"] == "invalid_slack_app_name"
+    assert response.status_code == status_code
+    assert response.json()["code"] == code
 
 
-def test_start_rejects_an_empty_app_name(client: TestClient) -> None:
+def test_verify_reports_bot_identity_and_workspace(
+    client: TestClient, slack: list[httpx.Request]
+) -> None:
     response = client.post(
-        "/config/members/slack-app/registrations",
-        json={"app_name": ""},
-        headers=AUTH_HEADERS,
-    )
-
-    assert response.status_code == HTTP_UNPROCESSABLE
-
-
-def test_verify_requires_session_token(client: TestClient) -> None:
-    response = client.post(
-        "/config/members/slack-app/verify",
-        json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
-    )
-
-    assert response.status_code == HTTP_UNAUTHORIZED
-
-
-@pytest.mark.usefixtures("slack_ok")
-def test_verify_reports_bot_identity_and_workspace(client: TestClient) -> None:
-    response = client.post(
-        "/config/members/slack-app/verify",
+        VERIFY,
         json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
         headers=AUTH_HEADERS,
     )
@@ -146,27 +135,82 @@ def test_verify_reports_bot_identity_and_workspace(client: TestClient) -> None:
         "bot_display_name": "alice-bot",
         "workspace": "GuildBotics HQ",
         "bot_error": "",
-        "bot_source": slack_app.SOURCE_INPUT,
+        "bot_source": slack_setup.SOURCE_INPUT,
         "scopes_ok": True,
         "scope_error": "",
         "scope_needed": "",
         "app_token_ok": True,
         "app_token_error": "",
-        "app_token_source": slack_app.SOURCE_INPUT,
+        "app_token_source": slack_setup.SOURCE_INPUT,
         "channels": [],
     }
+    # Each token is checked by its own method.
+    assert _tokens(slack) == {
+        "auth.test": f"Bearer {BOT_TOKEN}",
+        "conversations.list": f"Bearer {BOT_TOKEN}",
+        "apps.connections.open": f"Bearer {APP_TOKEN}",
+    }
+
+
+def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
+    client: TestClient, workspace: Path, slack: list[httpx.Request]
+) -> None:
+    """Empty fields mean "keep the stored token", so they are not missing."""
+    write_member(
+        workspace,
+        "alice",
+        "person_type: agent\n",
+        SLACK_BOT_TOKEN="xoxb-stored",
+        SLACK_APP_TOKEN="xapp-stored",
+    )
+
+    response = client.post(
+        VERIFY,
+        json={"bot_token": "", "app_token": "", "person_id": "alice"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == HTTP_OK
+    body = response.json()
+    assert body["bot_ok"] is True
+    assert body["app_token_ok"] is True
+    assert body["bot_source"] == slack_setup.SOURCE_STORED
+    assert body["app_token_source"] == slack_setup.SOURCE_STORED
+    assert _tokens(slack)["auth.test"] == "Bearer xoxb-stored"
+    assert _tokens(slack)["apps.connections.open"] == "Bearer xapp-stored"
+    assert "xoxb-stored" not in response.text
+
+
+@pytest.mark.parametrize("person_id", ["", "bob"], ids=["new-member", "unknown"])
+def test_verify_without_stored_tokens_reports_them_missing_without_calling_slack(
+    client: TestClient, workspace: Path, slack: list[httpx.Request], person_id: str
+) -> None:
+    write_member(workspace, "alice", "person_type: agent\n", SLACK_BOT_TOKEN="xoxb-a")
+
+    response = client.post(VERIFY, json={"person_id": person_id}, headers=AUTH_HEADERS)
+
+    body = response.json()
+    assert body["bot_error"] == slack_setup.ERROR_MISSING
+    assert body["app_token_error"] == slack_setup.ERROR_MISSING
+    assert body["bot_source"] == slack_setup.SOURCE_NONE
+    assert body["app_token_source"] == slack_setup.SOURCE_NONE
+    assert slack == []
 
 
 def test_verify_reports_slack_error_codes(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": False, "error": "invalid_auth"})
-
-    _patch_transport(monkeypatch, httpx.MockTransport(handler))
+    refused = answer({"ok": False, "error": "invalid_auth"})
+    route_web(
+        monkeypatch,
+        {
+            "slack.com/api/auth.test": refused,
+            "slack.com/api/apps.connections.open": refused,
+        },
+    )
 
     response = client.post(
-        "/config/members/slack-app/verify",
+        VERIFY,
         json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
         headers=AUTH_HEADERS,
     )
@@ -178,73 +222,13 @@ def test_verify_reports_slack_error_codes(
     assert body["app_token_error"] == "invalid_auth"
 
 
-def test_verify_defaults_missing_tokens_to_a_missing_result(client: TestClient) -> None:
-    response = client.post(
-        "/config/members/slack-app/verify", json={}, headers=AUTH_HEADERS
-    )
-
-    body = response.json()
-    assert body["bot_error"] == slack_app.ERROR_MISSING
-    assert body["app_token_error"] == slack_app.ERROR_MISSING
-    assert body["bot_source"] == slack_app.SOURCE_NONE
-    assert body["app_token_source"] == slack_app.SOURCE_NONE
-
-
-@pytest.mark.usefixtures("slack_ok")
-@pytest.mark.parametrize(
-    "person_id", ["alice", "Alice", "alice.bak", "alice backup", "あいこ"]
-)
-def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, person_id: str
-) -> None:
-    """Empty fields mean "keep the stored token", so they are not missing."""
-    seen: dict = {}
-
-    def read_slack_tokens(self, *, config_dir, person_id):
-        seen["person_id"] = person_id
-        return (BOT_TOKEN, APP_TOKEN)
-
-    monkeypatch.setattr(
-        SimplePersonSetupService, "read_slack_tokens", read_slack_tokens
-    )
-
-    response = client.post(
-        "/config/members/slack-app/verify",
-        json={"bot_token": "", "app_token": "", "person_id": person_id},
-        headers=AUTH_HEADERS,
-    )
-
-    assert response.status_code == HTTP_OK
-    assert seen["person_id"] == person_id
-    body = response.json()
-    assert body["bot_ok"] is True
-    assert body["app_token_ok"] is True
-    assert body["bot_source"] == slack_app.SOURCE_STORED
-    assert body["app_token_source"] == slack_app.SOURCE_STORED
-
-
-def test_verify_does_not_read_stored_tokens_without_a_member(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fail(*args, **kwargs):  # pragma: no cover
-        raise AssertionError("no member is being edited")
-
-    monkeypatch.setattr(SimplePersonSetupService, "read_slack_tokens", fail)
-
-    response = client.post(
-        "/config/members/slack-app/verify", json={}, headers=AUTH_HEADERS
-    )
-
-    assert response.json()["bot_error"] == slack_app.ERROR_MISSING
-
-
-@pytest.mark.usefixtures("slack_ok")
+@pytest.mark.usefixtures("slack")
 def test_verify_never_echoes_or_logs_the_tokens(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.DEBUG):
         response = client.post(
-            "/config/members/slack-app/verify",
+            VERIFY,
             json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
             headers=AUTH_HEADERS,
         )

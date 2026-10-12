@@ -44,10 +44,10 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "path",
     ): "bounded: one alert or one size-limited page with an explicit continuation token",
     (
-        "guildbotics/app_api/avatar.py",
-        "get_github_avatar_url",
+        "guildbotics/integrations/github/setup.py",
+        "_get_user",
         "client.get",
-        "f'https://api.github.com/users/{github_username}'",
+        "f'{_API}/users/{quote(username)}'",
     ): "single_resource: one GitHub username identifies one user",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
@@ -122,12 +122,6 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "get_page",
         "endpoint",
     ): "paginated: this is the shared page request for every REST collection",
-    (
-        "guildbotics/setup/setup_service.py",
-        "resolve_github_user",
-        "requests.get",
-        "f'https://api.github.com/users/{api_username}'",
-    ): "single_resource: one GitHub username identifies one user",
 }
 
 

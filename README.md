@@ -91,9 +91,8 @@ Launching the desktop app opens **Project** setup, where you configure:
 - The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
 - The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside the exchange folder `~/Documents/GuildBotics`
 - The project description
-- Whether to use GitHub integration
 
-**Integrating with GitHub or Slack requires preparation on the service side before you start configuring.** Both integrations are optional and can be enabled later from the **Setup** screen. If you just want to see GuildBotics run, answer "Do not use GitHub" and move on.
+**Integrating with GitHub or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
 
 - **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
@@ -112,8 +111,8 @@ After project setup, configure the following in the desktop app:
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
 - **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
-- **GitHub**: task board settings (only when you use GitHub; the GitHub Project URL itself is entered in the **Project** section). Configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field
-- **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, GitHub, Slack, and Git. It does not update GitHub or Slack data
+- **Integrations**: choose the service for code hosting, tickets, and chat (each is optional) and configure the chosen one. For GitHub tickets, enter the GitHub Project URL, configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field. A member's account with a chosen service is set on that service's tab of the member
+- **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
 
 ### Quick Start
 
@@ -285,7 +284,7 @@ Press **Validate settings** under **Setup → Verification** in the desktop app 
 - By default `Todo` is ready, `In Progress` is working, and `Done` is done. A standard board needs no configuration
 - Statuses **between** ready and done (for example `In Review`) are automatically treated as working
 - Statuses **before** ready (for example `Backlog`) and **at or after** done (for example `Icebox`) are ignored. Intermediate or holding lanes can be added just by ordering the board columns
-- If you use your own status names, map them under **Setup → GitHub** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
+- If you use your own status names, map them under **Setup → Integrations** → **Tickets** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
 
 ### Start the Service and Ask for Work
 
@@ -293,7 +292,7 @@ Open the **Service** screen in the desktop app and press **Run**. A worker start
 
 The screen has three execution sources, each toggled individually with **Include in service run** (only while the service is stopped).
 
-- **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. A new member with a GitHub account gets the ticket-driven workflow as its default; a member without one starts with no patrol commands, so pick them under **Setup → Members → Patrol**
+- **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
@@ -341,6 +340,8 @@ A member watches the Slack channels you configure and handles the requests it re
 How it behaves in Slack (reply with a message / only add a reaction / do nothing / ask a clarifying question / report why it is blocked) is decided by the member (the AI CLI tool) from the message content, its own role and profile, and the per-channel participation policy. It does not force a reply into small talk or into conversations where its role adds nothing.
 
 Two things need to be configured:
+
+First choose Slack under **Setup → Integrations → Chat** in the desktop app; the members then have a Slack tab.
 
 1. **Create a Slack App**: under **Setup → Members → Slack** in the desktop app, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
 2. **Register it with the member**: on the same Slack tab, configure the following

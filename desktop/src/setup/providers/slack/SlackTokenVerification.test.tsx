@@ -2,14 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { verifySlackTokens, type SlackTokenVerifyResponse } from "../api/client";
-import i18n from "../i18n";
-import "../i18n";
+import i18n from "../../../i18n";
+import "../../../i18n";
+import { TestMantineProvider } from "../../../test/TestMantineProvider";
+import { verifySlackTokens, type SlackTokenVerifyResponse } from "./api";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
-import { TestMantineProvider } from "../test/TestMantineProvider";
 
-vi.mock("../api/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/client")>();
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
   return { ...actual, verifySlackTokens: vi.fn() };
 });
 

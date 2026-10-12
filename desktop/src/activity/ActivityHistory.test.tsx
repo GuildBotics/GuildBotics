@@ -152,6 +152,7 @@ function runtimeUnitStatus(): RuntimeUnitStatus {
     events_drained_count: null,
     events_auth_failed_count: null,
     events_auth_failed_persons: [],
+    events_chat_provider: "",
     member_routines: [],
   };
 }

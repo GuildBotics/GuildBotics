@@ -118,6 +118,8 @@ export type RuntimeUnitStatus = {
   events_drained_count: number | null;
   events_auth_failed_count: number | null;
   events_auth_failed_persons: string[];
+  /** The provider of the listened chat, whose credentials failed. */
+  events_chat_provider: string;
   member_routines: RuntimeMemberRoutine[];
 };
 
@@ -206,7 +208,8 @@ export type VerifyResponse = {
 };
 
 export type DiagnosticCheck = {
-  section: "config" | "members" | "llm" | "cli_agent" | "github" | "slack" | "git";
+  /** A neutral section (config, members, llm, cli_agent, git) or a provider's name. */
+  section: string;
   code: string;
   status: "ok" | "warning" | "error";
   message: string;
@@ -226,8 +229,7 @@ export type ScenarioDiagnosticsResponse = {
 export type SystemAlert = {
   id: string;
   code:
-    | "credential_github"
-    | "credential_slack"
+    | "credential"
     | "credential_llm"
     | "credential_jev"
     | "command_failed"
@@ -245,6 +247,8 @@ export type SystemAlert = {
   person_id: string;
   command: string;
   trace_id: string;
+  /** The provider a ``credential`` alert is of. */
+  provider: string;
   // What the alert is about when the code alone does not say.
   reason?: string;
   // Which setting to open for it, when the code alone does not say.
@@ -514,7 +518,13 @@ export type CommandArgumentOption = {
 };
 
 export type CommandRequirement = {
-  kind: "environment" | "github" | "slack" | "cli_agent" | "llm";
+  kind:
+    | "environment"
+    | "cli_agent"
+    | "llm"
+    | "code_hosting_service"
+    | "ticket_service"
+    | "chat_service";
   satisfied: boolean;
   message: string;
 };
@@ -641,46 +651,37 @@ export type CommandFileExecutionStatus = {
   blocking_context: Record<string, string>;
 };
 
-export type LaneMap = {
-  ready: string;
-  working: string;
-  done: string;
-};
+/** A kind of service a project uses, each served by a provider. */
+export type ServiceKind = "code_hosting_service" | "ticket_service" | "chat_service";
 
-export type ProjectStatusOptions = {
-  available: boolean;
-  statuses: string[];
-};
+export const SERVICE_KINDS: ServiceKind[] = [
+  "code_hosting_service",
+  "ticket_service",
+  "chat_service",
+];
 
-export type AgentFieldOption = {
+/** A kind as `project.services` holds it: the provider's name and its own items. */
+export type ServiceSelection = { name: string } & Record<string, unknown>;
+
+export type ProjectServices = Partial<Record<ServiceKind, ServiceSelection>>;
+
+/** A provider the setup screens offer. */
+export type ProviderOption = {
   name: string;
-  description: string;
-};
-
-export type AgentFieldState = {
-  available: boolean;
-  exists: boolean;
-  options: AgentFieldOption[];
-  missing: AgentFieldOption[];
-};
-
-export type ProjectStatusOptionsRequest = {
-  owner: string;
-  project_id: string;
-  github_project_url: string;
+  title: string;
+  kinds: ServiceKind[];
+  /** Whether a member's avatar can be imported from it. */
+  avatar: boolean;
 };
 
 export type ProjectSetupRequest = {
   config_dir: string;
   language: "en" | "ja";
   description?: string;
-  owner?: string;
-  project_id?: string;
-  github_project_url?: string;
-  lane_map?: LaneMap;
   llm_api_type: string;
   cli_agent: string;
   provider_api_keys?: Record<string, string>;
+  services: ProjectServices;
 };
 
 export type ProjectConfig = {
@@ -691,165 +692,57 @@ export type ProjectConfig = {
   description: string;
   llm_api_type: string;
   cli_agent: string;
-  github_enabled: boolean;
-  github_project_url: string;
-  lane_map: LaneMap;
+  services: ProjectServices;
   provider_api_keys: Record<string, boolean>;
 };
 
-export type ProjectConfigUpdateRequest = {
-  config_dir: string;
+export type ProjectConfigUpdateRequest = ProjectSetupRequest & {
   expected_revisions?: ConfigRevisions;
-  language: "en" | "ja";
-  description?: string;
-  llm_api_type: string;
-  cli_agent: string;
-  github_enabled: boolean;
-  owner?: string;
-  project_id?: string;
-  github_project_url?: string;
-  lane_map?: LaneMap;
-  provider_api_keys?: Record<string, string>;
 };
 
 export type MemberPersonType = "human" | "agent";
-export type MemberGitHubAccountType = "" | "human" | "machine_user" | "github_apps";
 export type ChatParticipationPolicy = "strict" | "social" | "muted";
 
 type MemberWriteRequestBase = {
   config_dir: string;
   person_type: MemberPersonType;
-  github_account_type: MemberGitHubAccountType;
   person_id: string;
   person_name: string;
   is_active: boolean;
-  github_username: string;
   git_email: string;
   roles?: string[];
   speaking_style?: string;
   relationships?: string;
   character?: Record<string, unknown>;
-  github_installation_id?: number;
-  github_app_id?: number;
-  github_private_key_path?: string;
-  github_app_registration_id?: string;
-  github_access_token?: string;
-  slack_user_id?: string;
-  slack_bot_token?: string;
-  slack_app_token?: string;
-  slack_channels?: string[];
-  slack_channel_participation?: Record<string, ChatParticipationPolicy>;
+  /** The member's account with each provider, by the provider's name. */
+  accounts?: Record<string, Record<string, unknown>>;
+  chat_channels?: string[];
+  chat_channel_participation?: Record<string, ChatParticipationPolicy>;
   routine_commands?: string[];
   task_schedules?: MemberTaskSchedule[];
 };
 
 export type MemberSetupRequest = MemberWriteRequestBase;
 
-export type MemberResolveRequest = {
-  person_type: "human" | "machine_user" | "github_apps";
-  identity: string;
-};
-
-export type MemberResolveResponse = {
-  person_id: string;
-  github_username: string;
-  github_user_id: number;
-  git_email: string;
-};
-
-export type GitHubAppRegistrationStartRequest = {
-  app_name: string;
-  person_id: string;
-  organization?: string;
-};
-
-export type GitHubAppRegistrationStatus = {
-  state: string;
-  status: "pending" | "converted" | "installed";
-  app_name: string;
-  person_id: string;
-  start_url: string;
-  slug: string;
-  app_id: number | null;
-  html_url: string;
-  github_username: string;
-  git_email: string;
-  installation_id: number | null;
-  installation_page_url: string;
-  installation_check_error: string;
-};
-
-export type SlackAppRegistrationStartRequest = {
-  app_name: string;
-};
-
-export type SlackAppRegistrationStatus = {
-  app_name: string;
-  registration_url: string;
-  app_directory_url: string;
-};
-
-export type SlackTokenVerifyRequest = {
-  bot_token: string;
-  app_token: string;
-  person_id?: string;
-  channels?: string[];
-};
-
-export type SlackChannelVerification = {
-  channel: string;
-  ok: boolean;
-  error: string;
-};
-
-// Which token was actually checked: the one typed in, the one already saved
-// for the member (an empty field keeps it), or neither.
-export type SlackTokenSource = "input" | "stored" | "none";
-
-export type SlackTokenVerifyResponse = {
-  bot_ok: boolean;
-  bot_user_id: string;
-  bot_display_name: string;
-  workspace: string;
-  bot_error: string;
-  bot_source: SlackTokenSource;
-  scopes_ok: boolean;
-  scope_error: string;
-  scope_needed: string;
-  app_token_ok: boolean;
-  app_token_error: string;
-  app_token_source: SlackTokenSource;
-  channels: SlackChannelVerification[];
-};
-
 export type MemberConfig = {
   revisions: ConfigRevisions;
   person_id: string;
   person_name: string;
   person_type: MemberPersonType | "";
-  github_account_type: MemberGitHubAccountType;
   is_active: boolean;
-  github_username: string;
   git_email: string;
   roles: string[];
   speaking_style: string;
   relationships: string;
   character: Record<string, unknown>;
-  github_installation_id: number | null;
-  github_app_id: number | null;
-  has_github_installation_id: boolean;
-  has_github_app_id: boolean;
-  has_github_private_key: boolean;
-  has_github_access_token: boolean;
-  slack_user_id?: string;
-  has_slack_bot_token: boolean;
-  has_slack_app_token: boolean;
-  // Form field -> the environment key that value is stored under, so the
-  // synchronization state of a credential can be looked up without this side
-  // reconstructing the backend's naming.
+  /** The member's stored account with each provider, as its setup shows it. */
+  accounts: Record<string, Record<string, unknown>>;
+  // Member-relative secret name -> the environment key that value is stored
+  // under, so the synchronization state of a credential can be looked up
+  // without this side reconstructing the backend's naming.
   secret_env_keys?: Record<string, string>;
-  slack_channels: string[];
-  slack_channel_participation: Record<string, ChatParticipationPolicy>;
+  chat_channels: string[];
+  chat_channel_participation: Record<string, ChatParticipationPolicy>;
   routine_commands: string[];
   task_schedules: MemberTaskSchedule[];
   avatar_timestamp?: number;
@@ -1943,22 +1836,17 @@ export async function getProjectConfig(): Promise<ProjectConfig> {
   return request("/config/project");
 }
 
-export async function getProjectStatusOptions(
-  body: ProjectStatusOptionsRequest,
-): Promise<ProjectStatusOptions> {
-  return request("/config/project/status-options", { method: "POST", body });
+export async function getProviders(): Promise<ProviderOption[]> {
+  return request("/config/providers");
 }
 
-export async function getAgentFieldState(
-  body: ProjectStatusOptionsRequest,
-): Promise<AgentFieldState> {
-  return request("/config/project/agent-field", { method: "POST", body });
-}
-
-export async function ensureAgentField(
-  body: ProjectStatusOptionsRequest,
-): Promise<AgentFieldState> {
-  return request("/config/project/agent-field/ensure", { method: "POST", body });
+/** Ask a provider's setup for one of its operations. */
+export async function providerOperation<T>(
+  provider: string,
+  operation: string,
+  body: unknown,
+): Promise<T> {
+  return request(`/config/providers/${provider}/${operation}`, { method: "POST", body });
 }
 
 export async function updateProjectConfig(
@@ -1976,39 +1864,6 @@ export async function updateDefaultPerson(personId: string): Promise<ConfigWrite
 
 export async function addMemberConfig(body: MemberSetupRequest): Promise<ConfigWriteResponse> {
   return request("/config/members", { method: "POST", body });
-}
-
-export async function resolveMemberIdentity(
-  body: MemberResolveRequest,
-): Promise<MemberResolveResponse> {
-  return request("/config/members/resolve", { method: "POST", body });
-}
-
-export async function startGitHubAppRegistration(
-  body: GitHubAppRegistrationStartRequest,
-): Promise<GitHubAppRegistrationStatus> {
-  return request("/config/members/github-app/registrations", {
-    method: "POST",
-    body: { ...body, callback_base_url: connected().base },
-  });
-}
-
-export async function getGitHubAppRegistration(
-  state: string,
-): Promise<GitHubAppRegistrationStatus> {
-  return request(`/config/members/github-app/registrations/${encodeURIComponent(state)}`);
-}
-
-export async function startSlackAppRegistration(
-  body: SlackAppRegistrationStartRequest,
-): Promise<SlackAppRegistrationStatus> {
-  return request("/config/members/slack-app/registrations", { method: "POST", body });
-}
-
-export async function verifySlackTokens(
-  body: SlackTokenVerifyRequest,
-): Promise<SlackTokenVerifyResponse> {
-  return request("/config/members/slack-app/verify", { method: "POST", body });
 }
 
 export async function getMemberConfig(personId: string): Promise<MemberConfig> {
@@ -2064,16 +1919,14 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
   return response.json();
 }
 
-export async function importAvatarFromGithub(personId: string): Promise<AvatarMutationResponse> {
-  return request(`/config/members/${encodeURIComponent(personId)}/avatar/github`, {
-    method: "POST",
-  });
-}
-
-export async function importAvatarFromSlack(personId: string): Promise<AvatarMutationResponse> {
-  return request(`/config/members/${encodeURIComponent(personId)}/avatar/slack`, {
-    method: "POST",
-  });
+export async function importAvatarFromProvider(
+  personId: string,
+  provider: string,
+): Promise<AvatarMutationResponse> {
+  return request(
+    `/config/members/${encodeURIComponent(personId)}/avatar/${encodeURIComponent(provider)}`,
+    { method: "POST" },
+  );
 }
 
 const TOKEN_SUBPROTOCOL = "guildbotics.session";

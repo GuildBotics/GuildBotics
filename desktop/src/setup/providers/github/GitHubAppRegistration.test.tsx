@@ -3,35 +3,31 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ApiRequestError,
-  getGitHubAppRegistration,
-  startGitHubAppRegistration,
-  type GitHubAppRegistrationStatus,
-} from "../api/client";
-import i18n from "../i18n";
-import "../i18n";
-import { openExternal } from "../openExternal";
+import { ApiRequestError } from "../../../api/client";
+import i18n from "../../../i18n";
+import "../../../i18n";
+import { openExternal } from "../../../openExternal";
+import { TestMantineProvider } from "../../../test/TestMantineProvider";
+import { getAppRegistration, startAppRegistration, type AppRegistrationStatus } from "./api";
 import {
   GitHubAppRegistrationPanel,
   githubAppSaveFailure,
   type GitHubAppSaveOutcome,
 } from "./GitHubAppRegistration";
-import { TestMantineProvider } from "../test/TestMantineProvider";
 
-vi.mock("../api/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/client")>();
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
   return {
     ...actual,
-    startGitHubAppRegistration: vi.fn(),
-    getGitHubAppRegistration: vi.fn(),
+    startAppRegistration: vi.fn(),
+    getAppRegistration: vi.fn(),
   };
 });
-vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
+vi.mock("../../../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 const t = i18n.getFixedT("en");
 
-const pendingRegistration: GitHubAppRegistrationStatus = {
+const pendingRegistration: AppRegistrationStatus = {
   state: "state-1",
   status: "pending",
   app_name: "my-bot",
@@ -40,26 +36,26 @@ const pendingRegistration: GitHubAppRegistrationStatus = {
   slug: "",
   app_id: null,
   html_url: "",
-  github_username: "",
+  username: "",
   git_email: "",
   installation_id: null,
   installation_page_url: "",
   installation_check_error: "",
 };
 
-const convertedRegistration: GitHubAppRegistrationStatus = {
+const convertedRegistration: AppRegistrationStatus = {
   ...pendingRegistration,
   start_url: "",
   status: "converted",
   slug: "my-bot",
   app_id: 1978826,
   html_url: "https://github.com/apps/my-bot",
-  github_username: "my-bot[bot]",
+  username: "my-bot[bot]",
   git_email: "233270845+my-bot[bot]@users.noreply.github.com",
   installation_page_url: "https://github.com/apps/my-bot/installations/new",
 };
 
-const installedRegistration: GitHubAppRegistrationStatus = {
+const installedRegistration: AppRegistrationStatus = {
   ...convertedRegistration,
   status: "installed",
   installation_id: 86632391,
@@ -68,7 +64,7 @@ const installedRegistration: GitHubAppRegistrationStatus = {
 type PanelProps = Omit<
   ComponentProps<typeof GitHubAppRegistrationPanel>,
   "registration" | "onRegistrationChange"
-> & { initialRegistration?: GitHubAppRegistrationStatus | null };
+> & { initialRegistration?: AppRegistrationStatus | null };
 
 /** Holds the registration the way the member form does. */
 function Harness({ initialRegistration = null, ...props }: PanelProps) {
@@ -130,8 +126,8 @@ function renderSwitchablePanel() {
 }
 
 beforeEach(() => {
-  vi.mocked(startGitHubAppRegistration).mockReset().mockResolvedValue(pendingRegistration);
-  vi.mocked(getGitHubAppRegistration).mockReset().mockResolvedValue(pendingRegistration);
+  vi.mocked(startAppRegistration).mockReset().mockResolvedValue(pendingRegistration);
+  vi.mocked(getAppRegistration).mockReset().mockResolvedValue(pendingRegistration);
   vi.mocked(openExternal).mockClear();
 });
 
@@ -153,7 +149,7 @@ describe("GitHubAppRegistrationPanel", () => {
     // GitHub App names are globally unique, so the suggested name qualifies
     // the member ID with the organization.
     await waitFor(() =>
-      expect(startGitHubAppRegistration).toHaveBeenCalledWith({
+      expect(startAppRegistration).toHaveBeenCalledWith({
         app_name: "my-bot-acme",
         person_id: "my-bot",
         organization: "acme",
@@ -170,9 +166,9 @@ describe("GitHubAppRegistrationPanel", () => {
     await user.click(
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     );
-    await waitFor(() => expect(startGitHubAppRegistration).toHaveBeenCalled());
+    await waitFor(() => expect(startAppRegistration).toHaveBeenCalled());
 
-    vi.mocked(getGitHubAppRegistration).mockResolvedValue(convertedRegistration);
+    vi.mocked(getAppRegistration).mockResolvedValue(convertedRegistration);
     await waitFor(() =>
       expect(onApplied).toHaveBeenCalledWith({
         githubUsername: "my-bot[bot]",
@@ -183,7 +179,7 @@ describe("GitHubAppRegistrationPanel", () => {
       screen.getByText(t("setup.members.githubAppRegistration.converted", { slug: "my-bot" })),
     ).toBeInTheDocument();
 
-    vi.mocked(getGitHubAppRegistration).mockResolvedValue(installedRegistration);
+    vi.mocked(getAppRegistration).mockResolvedValue(installedRegistration);
     expect(
       await screen.findByText(t("setup.members.githubAppRegistration.installed")),
     ).toBeInTheDocument();
@@ -209,7 +205,7 @@ describe("GitHubAppRegistrationPanel", () => {
     );
 
     await waitFor(() =>
-      expect(startGitHubAppRegistration).toHaveBeenCalledWith({
+      expect(startAppRegistration).toHaveBeenCalledWith({
         app_name: "my-bot",
         person_id: "my-bot",
         organization: "",
@@ -240,7 +236,7 @@ describe("GitHubAppRegistrationPanel", () => {
     );
 
     await waitFor(() =>
-      expect(startGitHubAppRegistration).toHaveBeenCalledWith({
+      expect(startAppRegistration).toHaveBeenCalledWith({
         app_name: "custom-name",
         person_id: "my-bot",
         organization: "acme-2",
@@ -268,7 +264,7 @@ describe("GitHubAppRegistrationPanel", () => {
 
   it("shows no failure of a start the form has moved on from", async () => {
     let fail: (error: Error) => void = () => {};
-    vi.mocked(startGitHubAppRegistration).mockReturnValue(
+    vi.mocked(startAppRegistration).mockReturnValue(
       new Promise((_, reject) => {
         fail = reject;
       }),
@@ -298,7 +294,7 @@ describe("GitHubAppRegistrationPanel", () => {
     ).toBeDisabled();
   });
 
-  it.each<[GitHubAppSaveOutcome | null, GitHubAppRegistrationStatus | null, string | null]>([
+  it.each<[GitHubAppSaveOutcome | null, AppRegistrationStatus | null, string | null]>([
     [null, installedRegistration, "setup.members.githubAppRegistration.installed"],
     ["failed", installedRegistration, "setup.members.githubAppRegistration.saveFailed"],
     ["saved", null, "setup.members.githubAppRegistration.saved"],
@@ -312,7 +308,7 @@ describe("GitHubAppRegistrationPanel", () => {
   it("does not show the last save outcome beside a later registration's failure", async () => {
     const user = userEvent.setup();
     renderPanel(vi.fn(), "", { saveOutcome: "saved" });
-    vi.mocked(getGitHubAppRegistration).mockRejectedValue(
+    vi.mocked(getAppRegistration).mockRejectedValue(
       new ApiRequestError({ code: "github_app_registration_not_found", message: "", context: {} }),
     );
 
@@ -380,7 +376,7 @@ describe("GitHubAppRegistrationPanel", () => {
     expect(
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     ).toBeDisabled();
-    expect(startGitHubAppRegistration).not.toHaveBeenCalled();
+    expect(startAppRegistration).not.toHaveBeenCalled();
   });
 
   it("keeps an emptied app name empty instead of falling back to the member ID", async () => {
@@ -394,11 +390,11 @@ describe("GitHubAppRegistrationPanel", () => {
     expect(
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     ).toBeDisabled();
-    expect(startGitHubAppRegistration).not.toHaveBeenCalled();
+    expect(startAppRegistration).not.toHaveBeenCalled();
   });
 
   it("shows the backend error when starting fails", async () => {
-    vi.mocked(startGitHubAppRegistration).mockRejectedValue(
+    vi.mocked(startAppRegistration).mockRejectedValue(
       new Error("GitHub App name must be 1-34 characters."),
     );
     const user = userEvent.setup();
@@ -413,7 +409,7 @@ describe("GitHubAppRegistrationPanel", () => {
   });
 
   it("translates known registration error codes", async () => {
-    vi.mocked(startGitHubAppRegistration).mockRejectedValue(
+    vi.mocked(startAppRegistration).mockRejectedValue(
       new ApiRequestError({
         code: "invalid_github_app_name",
         message: "GitHub App name must be 1-34 characters.",
@@ -439,9 +435,9 @@ describe("GitHubAppRegistrationPanel", () => {
     await user.click(
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     );
-    await waitFor(() => expect(startGitHubAppRegistration).toHaveBeenCalled());
+    await waitFor(() => expect(startAppRegistration).toHaveBeenCalled());
 
-    vi.mocked(getGitHubAppRegistration).mockRejectedValue(
+    vi.mocked(getAppRegistration).mockRejectedValue(
       new ApiRequestError({
         code: "github_app_registration_not_found",
         message: "GitHub App registration was not found or has expired.",
@@ -461,9 +457,9 @@ describe("GitHubAppRegistrationPanel", () => {
     await user.click(
       screen.getByRole("button", { name: t("setup.members.githubAppRegistration.register") }),
     );
-    await waitFor(() => expect(startGitHubAppRegistration).toHaveBeenCalled());
+    await waitFor(() => expect(startAppRegistration).toHaveBeenCalled());
 
-    vi.mocked(getGitHubAppRegistration).mockResolvedValue({
+    vi.mocked(getAppRegistration).mockResolvedValue({
       ...convertedRegistration,
       installation_check_error: "boom",
     });

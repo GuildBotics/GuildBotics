@@ -1,22 +1,35 @@
-from pathlib import Path
+"""The GitHub App registration, as the setup screens and the browser drive it
+through the App API: the screen starts it and polls it with the session
+token, the browser opens its pages without one, and the member save takes the
+app's IDs and key from it."""
 
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable, Iterator
+from functools import cache
+from html import unescape
+from pathlib import Path
+from typing import Any
+
+import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.integrations.github.app_manifest import (
-    AppInstallation,
-    AppManifestConversion,
-)
-from guildbotics.setup import github_app
-from guildbotics.setup.setup_service import (
-    GitHubUserReference,
-    SimplePersonSetupService,
-)
+from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import KeyringSecretStore
+from tests.guildbotics.app_api.provider_doubles import (
+    AUTH_HEADERS,
+    answer,
+    route_web,
+)
 
 HTTP_OK = 200
 HTTP_FOUND = 302
@@ -24,10 +37,22 @@ HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
 HTTP_SERVER_ERROR = 500
-PEM = "-----BEGIN RSA PRIVATE KEY-----\nkey\n"
-
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 CALLBACK_BASE = "http://testserver"
+APP_ID = 1978826
+INSTALLATION_ID = 86632391
+BOT_USER_ID = 233270845
+PAGES = "/providers/github/pages"
+
+
+@cache
+def _pem() -> str:
+    """A real key: the installation check signs a JWT with it."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ).decode()
 
 
 class RuntimeStub:
@@ -44,48 +69,63 @@ class RuntimeStub:
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
 
+    def stop_scheduler(self, *, force: bool = False) -> None:
+        pass
+
+    async def close_cli_agent_usage(self) -> None:
+        pass
+
+    def saved_team(self) -> None:
+        raise AssertionError("the registration reads no team")
+
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    async def fake_convert(code: str, *, transport=None) -> AppManifestConversion:
-        assert code == "tmp-code"
-        return AppManifestConversion(
-            app_id=1978826,
-            slug="my-bot",
-            html_url="https://github.com/apps/my-bot",
-            pem=PEM,
-        )
-
-    async def fake_list(app_id: str, pem: bytes, *, transport=None):
-        return [AppInstallation(installation_id=86632391, account_login="acme")]
-
-    monkeypatch.setattr(github_app.app_manifest, "convert_manifest_code", fake_convert)
-    monkeypatch.setattr(github_app.app_manifest, "list_app_installations", fake_list)
-    monkeypatch.setattr(
-        SimplePersonSetupService,
-        "resolve_github_user",
-        lambda self, name, *, is_github_apps=False: GitHubUserReference(
-            person_id=name,
-            github_username=f"{name}[bot]",
-            github_user_id=233270845,
-            git_email=f"233270845+{name}[bot]@users.noreply.github.com",
-        ),
+def github(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """GitHub: the manifest code converts, the app is installed once, and its
+    bot user exists."""
+    # Registrations live in the process; each test starts with none.
+    monkeypatch.setattr(github_setup._registrations, "_registrations", {})
+    return route_web(
+        monkeypatch,
+        {
+            "api.github.com/app-manifests/tmp-code/conversions": answer(
+                {
+                    "id": APP_ID,
+                    "slug": "my-bot",
+                    "html_url": "https://github.com/apps/my-bot",
+                    "pem": _pem(),
+                    "owner": {"login": "acme"},
+                },
+                status_code=201,
+            ),
+            "api.github.com/app/installations": answer(
+                [{"id": INSTALLATION_ID, "account": {"login": "acme"}}]
+            ),
+            "api.github.com/users/my-bot[bot]": answer(
+                {"id": BOT_USER_ID, "login": "my-bot[bot]"}
+            ),
+        },
     )
+
+
+@pytest.fixture
+def client(tmp_path: Path, github: list[httpx.Request]) -> Iterator[TestClient]:
     team_dir = tmp_path / ".guildbotics/config/team"
     team_dir.mkdir(parents=True)
     (team_dir / "project.yml").write_text("language: en\n")
-    return TestClient(
+    with TestClient(
         create_app(session_token="secret", runtime=RuntimeStub(tmp_path)),  # type: ignore[arg-type]
         raise_server_exceptions=False,
-    )
+    ) as client:
+        yield client
 
 
-def _start_registration(client: TestClient) -> dict:
+def _start(client: TestClient, person_id: str = "alice") -> dict[str, Any]:
     response = client.post(
-        "/config/members/github-app/registrations",
+        "/config/providers/github/app-registrations",
         json={
             "app_name": "my-bot",
-            "person_id": "alice",
+            "person_id": person_id,
             "organization": "",
             "callback_base_url": CALLBACK_BASE,
         },
@@ -95,30 +135,102 @@ def _start_registration(client: TestClient) -> dict:
     return response.json()
 
 
-def test_start_requires_session_token(client: TestClient) -> None:
-    response = client.post(
-        "/config/members/github-app/registrations",
-        json={
-            "app_name": "my-bot",
-            "person_id": "alice",
-            "callback_base_url": CALLBACK_BASE,
-        },
+def _status(client: TestClient, state: str) -> httpx.Response:
+    return client.post(
+        "/config/providers/github/app-registration",
+        json={"state": state},
+        headers=AUTH_HEADERS,
     )
+
+
+def _callback(client: TestClient, state: str) -> httpx.Response:
+    return client.get(
+        f"{PAGES}/app-callback",
+        params={"code": "tmp-code", "state": state},
+        follow_redirects=False,
+    )
+
+
+def _installed(client: TestClient, person_id: str = "alice") -> str:
+    state = _start(client, person_id)["state"]
+    _callback(client, state)
+    assert _status(client, state).json()["status"] == "installed"
+    return state
+
+
+def test_the_registration_from_start_to_installation(
+    client: TestClient, github: list[httpx.Request]
+) -> None:
+    started = _start(client)
+    state = started["state"]
+    assert started["status"] == "pending"
+    assert started["start_url"] == f"{CALLBACK_BASE}{PAGES}/app-manifest?state={state}"
+
+    # The browser opens the start URL, which carries no session token, and
+    # the page posts the manifest to github.com at once.
+    manifest_page = client.get(started["start_url"].removeprefix(CALLBACK_BASE))
+    assert manifest_page.status_code == HTTP_OK
+    action = re.search(r'action="([^"]+)"', manifest_page.text)
+    assert action is not None
+    assert unescape(action.group(1)) == (
+        f"https://github.com/settings/apps/new?state={state}"
+    )
+    value = re.search(r'name="manifest" value="([^"]+)"', manifest_page.text)
+    assert value is not None
+    manifest = json.loads(unescape(value.group(1)))
+    assert manifest["name"] == "my-bot"
+    assert manifest["redirect_url"] == f"{CALLBACK_BASE}{PAGES}/app-callback"
+
+    # GitHub sends the browser back with a one-time code, converted here; the
+    # browser goes on to install the app.
+    callback = _callback(client, state)
+    assert callback.status_code == HTTP_FOUND
+    assert callback.headers["location"] == (
+        "https://github.com/apps/my-bot/installations/new"
+    )
+
+    status = _status(client, state)
+    assert status.status_code == HTTP_OK
+    assert status.json() == {
+        "state": state,
+        "status": "installed",
+        "app_name": "my-bot",
+        "person_id": "alice",
+        "slug": "my-bot",
+        "app_id": APP_ID,
+        "html_url": "https://github.com/apps/my-bot",
+        "username": "my-bot[bot]",
+        "git_email": f"{BOT_USER_ID}+my-bot[bot]@users.noreply.github.com",
+        "installation_id": INSTALLATION_ID,
+        "installation_check_error": "",
+        "start_url": started["start_url"],
+        "installation_page_url": "https://github.com/apps/my-bot/installations/new",
+    }
+    # The key stays in the Local API; the screen gets nothing to read it by.
+    assert "PRIVATE KEY" not in status.text
+    # The installations were listed as the app itself.
+    listing = next(r for r in github if r.url.path == "/app/installations")
+    assert listing.headers["Authorization"].startswith("Bearer ey")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/config/providers/github/app-registrations",
+        "/config/providers/github/app-registration",
+    ],
+)
+def test_the_screens_requests_need_the_session_token(
+    client: TestClient, path: str
+) -> None:
+    response = client.post(path, json={"state": "x"})
+
     assert response.status_code == HTTP_UNAUTHORIZED
 
 
-def test_start_returns_state_and_start_url(client: TestClient) -> None:
-    started = _start_registration(client)
-    state = started["state"]
-    assert started["status"] == "pending"
-    assert started["start_url"] == (
-        f"{CALLBACK_BASE}/github-app/registrations/{state}/start"
-    )
-
-
-def test_start_rejects_invalid_app_name(client: TestClient) -> None:
+def test_start_refuses_an_invalid_app_name(client: TestClient) -> None:
     response = client.post(
-        "/config/members/github-app/registrations",
+        "/config/providers/github/app-registrations",
         json={
             "app_name": "x" * 35,
             "person_id": "alice",
@@ -126,126 +238,72 @@ def test_start_rejects_invalid_app_name(client: TestClient) -> None:
         },
         headers=AUTH_HEADERS,
     )
+
     assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["code"] == "invalid_github_app_name"
-
-
-def test_status_unknown_registration_returns_404(client: TestClient) -> None:
-    response = client.get(
-        "/config/members/github-app/registrations/missing", headers=AUTH_HEADERS
-    )
-    assert response.status_code == HTTP_NOT_FOUND
-
-
-def test_start_page_posts_manifest_to_github(client: TestClient) -> None:
-    started = _start_registration(client)
-    response = client.get(f"/github-app/registrations/{started['state']}/start")
-    assert response.status_code == HTTP_OK
-    body = response.text
-    assert (
-        f'action="https://github.com/settings/apps/new?state={started["state"]}"'
-        in body
-    )
-    assert 'name="manifest"' in body
-    assert "my-bot" in body
-
-
-def test_start_page_unknown_state_shows_error(client: TestClient) -> None:
-    response = client.get("/github-app/registrations/missing/start")
-    assert response.status_code == HTTP_BAD_REQUEST
-
-
-def test_callback_converts_and_redirects_to_install_page(
-    client: TestClient,
-) -> None:
-    started = _start_registration(client)
-    response = client.get(
-        "/github-app/registrations/callback",
-        params={"code": "tmp-code", "state": started["state"]},
-        follow_redirects=False,
-    )
-    assert response.status_code == HTTP_FOUND
-    assert (
-        response.headers["location"]
-        == "https://github.com/apps/my-bot/installations/new"
-    )
-
-
-def test_callback_without_code_shows_error(client: TestClient) -> None:
-    response = client.get(
-        "/github-app/registrations/callback", params={"state": "whatever"}
-    )
-    assert response.status_code == HTTP_BAD_REQUEST
-
-
-def test_status_reports_credentials_and_detected_installation(
-    client: TestClient, tmp_path: Path
-) -> None:
-    started = _start_registration(client)
-    client.get(
-        "/github-app/registrations/callback",
-        params={"code": "tmp-code", "state": started["state"]},
-        follow_redirects=False,
-    )
-    response = client.get(
-        f"/config/members/github-app/registrations/{started['state']}",
-        headers=AUTH_HEADERS,
-    )
-    assert response.status_code == HTTP_OK
-    status = response.json()
-    assert status["status"] == "installed"
-    assert status["slug"] == "my-bot"
-    assert status["app_id"] == 1978826
-    assert status["github_username"] == "my-bot[bot]"
-    assert status["git_email"] == "233270845+my-bot[bot]@users.noreply.github.com"
-    assert status["installation_id"] == 86632391
-    assert status["installation_page_url"] == (
-        "https://github.com/apps/my-bot/installations/new"
-    )
-    assert status["person_id"] == "alice"
-    # The key stays in the Local API; the screen gets nothing to read it by.
-    assert PEM not in response.text
-    assert "private_key" not in response.text
-
-
-def _installed_registration(client: TestClient) -> str:
-    started = _start_registration(client)
-    client.get(
-        "/github-app/registrations/callback",
-        params={"code": "tmp-code", "state": started["state"]},
-        follow_redirects=False,
-    )
-    client.get(
-        f"/config/members/github-app/registrations/{started['state']}",
-        headers=AUTH_HEADERS,
-    )
-    return started["state"]
-
-
-def _member(tmp_path: Path, **overrides) -> dict:
-    return {
-        "config_dir": str(tmp_path / ".guildbotics/config"),
-        "person_type": "github_apps",
-        "github_account_type": "github_apps",
-        "person_id": "alice",
-        "person_name": "Alice",
-        "is_active": True,
-        "github_username": "my-bot[bot]",
-        "git_email": "233270845+my-bot[bot]@users.noreply.github.com",
-        **overrides,
+    assert response.json() == {
+        "code": "invalid_github_app_name",
+        "message": "GitHub App name must be 1-34 characters.",
+        "context": {},
     }
 
 
-def _add(client: TestClient, tmp_path: Path, **overrides):
+def test_status_of_an_unknown_registration_is_not_found(client: TestClient) -> None:
+    response = _status(client, "missing")
+
+    assert response.status_code == HTTP_NOT_FOUND
+    assert response.json()["code"] == "github_app_registration_not_found"
+
+
+@pytest.mark.parametrize(
+    ("page", "params"),
+    [
+        ("app-manifest", {"state": "missing"}),
+        ("app-callback", {"state": "missing", "code": "tmp-code"}),
+        ("app-callback", {"state": "whatever"}),
+    ],
+    ids=["manifest-unknown", "callback-unknown", "callback-without-code"],
+)
+def test_a_page_that_cannot_go_on_tells_the_user_to_retry_from_the_app(
+    client: TestClient, github: list[httpx.Request], page: str, params: dict
+) -> None:
+    response = client.get(f"{PAGES}/{page}", params=params)
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.headers["content-type"].startswith("text/html")
+    assert github == []
+
+
+# --- the member save ------------------------------------------------------
+
+
+def _member(tmp_path: Path, **account: Any) -> dict[str, Any]:
+    return {
+        "config_dir": str(tmp_path / ".guildbotics/config"),
+        "person_type": "agent",
+        "person_id": "alice",
+        "person_name": "Alice",
+        "is_active": True,
+        "git_email": f"{BOT_USER_ID}+my-bot[bot]@users.noreply.github.com",
+        "accounts": {
+            "github": {
+                "account_type": "github_apps",
+                "username": "my-bot[bot]",
+                **account,
+            }
+        },
+    }
+
+
+def _add(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
     return client.post(
-        "/config/members", json=_member(tmp_path, **overrides), headers=AUTH_HEADERS
+        "/config/members", json=_member(tmp_path, **account), headers=AUTH_HEADERS
     )
 
 
-def _update(client: TestClient, tmp_path: Path, **overrides):
+def _update(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
     return client.put(
         "/config/members/alice",
-        json=_member(tmp_path, original_person_id="alice", **overrides),
+        json={**_member(tmp_path, **account), "original_person_id": "alice"},
         headers=AUTH_HEADERS,
     )
 
@@ -260,68 +318,93 @@ def _stored_key(tmp_path: Path) -> str | None:
     )
 
 
-@pytest.mark.parametrize("save", [_add, _update])
+Save = Callable[..., httpx.Response]
+
+
+@pytest.mark.parametrize("save", [_add, _update], ids=["add", "update"])
 def test_member_save_stores_the_registered_key_and_ids(
-    client: TestClient, tmp_path: Path, save
+    client: TestClient, tmp_path: Path, save: Save
 ) -> None:
     if save is _update:
-        assert _add(client, tmp_path, person_type="", github_account_type="").is_success
-    registration = _installed_registration(client)
+        assert _add(client, tmp_path, account_type="").status_code == HTTP_OK
+    registration = _installed(client)
+    other_key = tmp_path / "other.pem"
+    other_key.write_text("not the registered key")
 
-    # What the screen sends for the app cannot pair with the registration's key.
+    # What the form says of the app cannot pair with the registration's key.
     response = save(
         client,
         tmp_path,
-        github_app_registration_id=registration,
-        github_app_id=1,
-        github_installation_id=2,
-        github_private_key_path=str(tmp_path / "other.pem"),
+        app_registration_id=registration,
+        app_id=1,
+        installation_id=2,
+        private_key_path=str(other_key),
     )
 
     assert response.status_code == HTTP_OK
-    assert _stored_key(tmp_path) == PEM
-    account = load_yaml_file(_person_file(tmp_path))["account_info"]
-    assert account["github_app_id"] == "1978826"
-    assert account["github_installation_id"] == "86632391"
+    assert _stored_key(tmp_path) == _pem()
+    assert load_yaml_file(_person_file(tmp_path))["account_info"] == {
+        "git_user": "Alice",
+        "git_email": f"{BOT_USER_ID}+my-bot[bot]@users.noreply.github.com",
+        "github_account_type": "github_apps",
+        "github_username": "my-bot[bot]",
+        "github_app_id": str(APP_ID),
+        "github_installation_id": str(INSTALLATION_ID),
+    }
+    # The key never reaches the config, and the screen reads only that it is held.
+    assert _pem() not in _person_file(tmp_path).read_text()
+    view = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    assert view["accounts"]["github"]["has_private_key"] is True
     # A saved registration is gone: naming it again stores nothing.
-    again = save(client, tmp_path, github_app_registration_id=registration)
+    again = save(client, tmp_path, app_registration_id=registration)
     assert again.status_code == HTTP_BAD_REQUEST
     assert again.json()["code"] == "github_app_registration_not_found"
+    assert _status(client, registration).status_code == HTTP_NOT_FOUND
 
 
-@pytest.mark.parametrize("save", [_add, _update])
+def _missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
+    return "missing"
+
+
+def _pending(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
+    return _start(client)["state"]
+
+
+def _expired(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
+    state = _installed(client)
+    monkeypatch.setattr(github_setup, "_REGISTRATION_TTL_SECONDS", -1)
+    return state
+
+
+def _for_bob(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
+    return _installed(client, person_id="bob")
+
+
+@pytest.mark.parametrize("save", [_add, _update], ids=["add", "update"])
 @pytest.mark.parametrize(
-    ("prepare", "code"),
+    ("registration", "code"),
     [
-        (lambda client, monkeypatch: "missing", "github_app_registration_not_found"),
-        (
-            lambda client, monkeypatch: _start_registration(client)["state"],
-            "github_app_registration_incomplete",
-        ),
-        (
-            lambda client, monkeypatch: (
-                _installed_registration(client),
-                monkeypatch.setattr(github_app, "REGISTRATION_TTL_SECONDS", -1),
-            )[0],
-            "github_app_registration_not_found",
-        ),
+        (_missing, "github_app_registration_not_found"),
+        (_pending, "github_app_registration_incomplete"),
+        (_expired, "github_app_registration_not_found"),
+        (_for_bob, "github_app_registration_member_mismatch"),
     ],
-    ids=["missing", "incomplete", "expired"],
+    ids=["missing", "incomplete", "expired", "another-member"],
 )
 def test_member_save_refuses_a_registration_it_cannot_use_before_writing(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    save,
-    prepare,
+    save: Save,
+    registration: Callable[[TestClient, pytest.MonkeyPatch], str],
     code: str,
 ) -> None:
     if save is _update:
-        assert _add(client, tmp_path, person_type="", github_account_type="").is_success
+        assert _add(client, tmp_path, account_type="").status_code == HTTP_OK
     before = _person_file(tmp_path).read_bytes() if save is _update else None
 
     response = save(
-        client, tmp_path, github_app_registration_id=prepare(client, monkeypatch)
+        client, tmp_path, app_registration_id=registration(client, monkeypatch)
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
@@ -333,38 +416,47 @@ def test_member_save_refuses_a_registration_it_cannot_use_before_writing(
         assert _person_file(tmp_path).read_bytes() == before
 
 
-def test_member_save_refuses_a_registration_for_another_member(
-    client: TestClient, tmp_path: Path
-) -> None:
-    registration = _installed_registration(client)
-
-    response = _add(
-        client,
-        tmp_path,
-        person_id="bob",
-        person_name="Bob",
-        github_app_registration_id=registration,
-    )
-
-    assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["code"] == "github_app_registration_member_mismatch"
-    assert not (tmp_path / ".guildbotics/config/team/members/bob").exists()
-
-
 def test_member_save_retries_a_registration_after_the_keychain_failed(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registration = _installed_registration(client)
+    registration = _installed(client)
 
-    def locked(self, key, value):
+    def locked(self: KeyringSecretStore, key: str, value: str) -> None:
         raise SecretStoreError("keychain is locked")
 
     with monkeypatch.context() as patch:
         patch.setattr(KeyringSecretStore, "set", locked)
-        failed = _add(client, tmp_path, github_app_registration_id=registration)
+        failed = _add(client, tmp_path, app_registration_id=registration)
     assert failed.status_code == HTTP_SERVER_ERROR
     assert not _person_file(tmp_path).exists()
 
-    retried = _add(client, tmp_path, github_app_registration_id=registration)
+    retried = _add(client, tmp_path, app_registration_id=registration)
     assert retried.status_code == HTTP_OK
-    assert _stored_key(tmp_path) == PEM
+    assert _stored_key(tmp_path) == _pem()
+
+
+def test_a_registration_survives_renaming_the_member_in_the_same_save(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # The screen starts a registration for the member as saved; renaming the
+    # member in the save that stores it is still that member.
+    assert _add(client, tmp_path, account_type="").status_code == HTTP_OK
+    registration = _installed(client)
+
+    response = client.put(
+        "/config/members/alice",
+        json={
+            **_member(tmp_path, app_registration_id=registration),
+            "person_id": "alice-bot",
+            "original_person_id": "alice",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == HTTP_OK
+    assert (
+        KeyringSecretStore(tmp_path / ".guildbotics/config").get(
+            "ALICE_BOT_GITHUB_PRIVATE_KEY"
+        )
+        == _pem()
+    )

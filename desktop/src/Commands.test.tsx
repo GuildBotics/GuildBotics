@@ -853,7 +853,7 @@ describe("Command editor screen", () => {
         blocking_code: "command_requirement_missing",
         requirements: [
           { kind: "cli_agent", satisfied: false, message: reason },
-          { kind: "slack", satisfied: false, message: "" },
+          { kind: "chat_service", satisfied: false, message: "" },
           { kind: "llm", satisfied: true, message: "" },
         ],
       }),
@@ -872,7 +872,7 @@ describe("Command editor screen", () => {
         }),
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(t("commands.requirements.slack"))).toBeInTheDocument();
+    expect(screen.getByText(t("commands.requirements.chat_service"))).toBeInTheDocument();
     expect(screen.queryByText(t("commands.requirements.llm"))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
   });

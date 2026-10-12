@@ -156,6 +156,7 @@ class EventListenerRunner:
             "events_backfilled_count": self._events_backfilled_count,
             "events_auth_failed_count": auth_failed_count,
             "events_auth_failed_persons": sorted(set(auth_failed_persons)),
+            "events_chat_provider": self._service,
         }
 
     def _thread_main(self) -> None:

@@ -180,6 +180,10 @@ def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
     client, bus, runtime, store = _runtime_app(tmp_path)
 
     class _Context:
+        team = Team(
+            project=Project(services={"chat_service": {"name": "slack"}}), members=[]
+        )
+
         async def aclose(self) -> None:
             return None
 
@@ -221,9 +225,11 @@ def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
     assert [record.get("message") for record in records if record["kind"] == "log"] == [
         "scenario diagnostics log"
     ]
-    assert [record.get("type") for record in records if record["kind"] == "event"] == [
-        "diagnostics.completed"
-    ]
+    events = [record for record in records if record["kind"] == "event"]
+    assert [record.get("type") for record in events] == ["diagnostics.completed"]
+    # The configured providers travel with the outcome, so that the alerts of
+    # a provider no longer used can close.
+    assert events[0]["payload"]["providers"] == ["slack"]
 
 
 def test_traces_endpoint_filters_by_exact_attribute(tmp_path: Path) -> None:

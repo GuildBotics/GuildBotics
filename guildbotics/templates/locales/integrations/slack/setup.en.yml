@@ -1,0 +1,4 @@
+en:
+  user_id_missing: "Slack user ID is not configured for this member."
+  token_missing: "Slack Bot Token is not configured in this workspace."
+  missing_scope: "Slack Bot Token is missing the 'users:read' scope. Add it under OAuth & Permissions and reinstall the app."

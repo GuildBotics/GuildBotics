@@ -3,12 +3,9 @@ import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  ApiRequestError,
-  startSlackAppRegistration,
-  type SlackAppRegistrationStatus,
-} from "../api/client";
-import { openExternal } from "../openExternal";
+import { ApiRequestError } from "../../../api/client";
+import { openExternal } from "../../../openExternal";
+import { startSlackAppRegistration, type SlackAppRegistrationStatus } from "./api";
 
 // Slack applies the manifest's scopes to the app, but the bot token it hands
 // out on the confirmation screen is issued without them (verified on a freshly

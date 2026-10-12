@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
-import os
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, cast
 
-import httpx
 from fastapi import (
     Depends,
     FastAPI,
@@ -26,7 +25,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -54,7 +58,6 @@ from guildbotics.app_api.intelligences import (
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentEnvironmentStatusResponse,
-    AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
     CliAgentLastTurn,
@@ -82,8 +85,6 @@ from guildbotics.app_api.models import (
     DeviceRenameRequest,
     DeviceSshKey,
     EnvironmentImagesResponse,
-    GitHubAppRegistrationStartRequest,
-    GitHubAppRegistrationStatus,
     GrantEvaluation,
     GrantScope,
     HealthResponse,
@@ -99,13 +100,10 @@ from guildbotics.app_api.models import (
     LocalApiProofRequest,
     LocalApiProofResponse,
     MemberDeleteRequest,
-    MemberResolveRequest,
-    MemberResolveResponse,
     MemoryEventsResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
-    ProjectStatusOptionsRequest,
-    ProjectStatusOptionsResponse,
+    ProviderOption,
     RoleOption,
     RoleOptionsResponse,
     RoutineCommandOptionsResponse,
@@ -119,8 +117,6 @@ from guildbotics.app_api.models import (
     SecretTransferResponse,
     ServiceKeepAwake,
     ShutdownResponse,
-    SlackAppRegistrationStartRequest,
-    SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
     SystemAlertsResponse,
     TeamSummary,
@@ -145,14 +141,12 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
+from guildbotics.entities.team import Service, Team
 from guildbotics.environment.spec import guest_path
+from guildbotics.integrations.factory import PROVIDERS
+from guildbotics.integrations.provider import Operation, Page, SetupError, page_path
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.setup import slack_app
-from guildbotics.setup.github_app import (
-    GitHubAppRegistration,
-    GitHubAppRegistrationService,
-)
 from guildbotics.setup.setup_service import (
     PROJECT_CONFIG_PATHS,
     PersonConfigSnapshot,
@@ -162,19 +156,12 @@ from guildbotics.setup.setup_service import (
     ProjectConfigSnapshot,
     ProjectSetupInput,
     ProjectSetupResult,
-    ProjectUpdateInput,
-    SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
     person_config_paths,
     stored_person_config_dir,
     stored_person_config_paths,
 )
-from guildbotics.setup.slack_app import (
-    SlackAppRegistrationInfo,
-    SlackTokenVerification,
-)
-from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     get_template_path,
@@ -191,8 +178,6 @@ from guildbotics.utils.person_id import (
     MemberConfigError,
     MemberDirectoryName,
     PersonId,
-    ambiguous_person_env_keys,
-    person_secret_env_keys,
 )
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
@@ -372,6 +357,12 @@ def create_app(
             exc.code,
             exc.localized(_request_language(request)),
             exc.context,
+        )
+
+    @app.exception_handler(SetupError)
+    async def setup_error_handler(request: Request, exc: SetupError) -> JSONResponse:
+        return _error_response(
+            exc.status_code, exc.code, exc.localized(_request_language(request)), {}
         )
 
     @app.exception_handler(SharedWriteBusyError)
@@ -1311,13 +1302,10 @@ def create_app(
         revisions = config_repository(config_dir).tree_revisions(
             intelligence_config_dir(person_id)
         )
-        try:
-            response = IntelligenceConfigService().read_config(
-                config_dir=config_dir,
-                person_id=person_id,
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        response = IntelligenceConfigService().read_config(
+            config_dir=config_dir,
+            person_id=person_id,
+        )
         return response.model_copy(update={"revisions": revisions})
 
     @app.put(
@@ -1330,17 +1318,12 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         scope = intelligence_config_dir(request.person_id)
-        try:
-            receipt = apply_config_write(
-                request.config_dir,
-                lambda: IntelligenceConfigService().update_config(request),
-                expected=request.expected_revisions,
-                report=lambda: config_repository(request.config_dir).tree_revisions(
-                    scope
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        receipt = apply_config_write(
+            request.config_dir,
+            lambda: IntelligenceConfigService().update_config(request),
+            expected=request.expected_revisions,
+            report=lambda: config_repository(request.config_dir).tree_revisions(scope),
+        )
         return ConfigWriteResponse(
             intelligence={
                 "files": [file.model_dump() for file in receipt.result.files]
@@ -1360,16 +1343,13 @@ def create_app(
         # Nothing to compare against on a first setup, but the workspace may
         # already be synchronized -- taking a copy from a hub creates one, and
         # its queue is running while this writes.
-        try:
-            receipt = apply_config_write(
-                request.config_dir,
-                lambda: SimpleProjectSetupService().write_project(request),
-                report=lambda: config_repository(request.config_dir).revisions(
-                    PROJECT_CONFIG_PATHS
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        receipt = apply_config_write(
+            request.config_dir,
+            lambda: SimpleProjectSetupService().write_project(request),
+            report=lambda: config_repository(request.config_dir).revisions(
+                PROJECT_CONFIG_PATHS
+            ),
+        )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.get(
@@ -1390,50 +1370,14 @@ def create_app(
         # later would describe a state that never existed, and a save composed
         # against it would slip past the very check it feeds.
         revisions = config_repository(config_dir).revisions(PROJECT_CONFIG_PATHS)
-        try:
-            snapshot: ProjectConfigSnapshot = (
-                SimpleProjectSetupService().read_project_config(
-                    config_dir=config_dir,
-                )
+        snapshot: ProjectConfigSnapshot = (
+            SimpleProjectSetupService().read_project_config(
+                config_dir=config_dir,
             )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        )
         return ProjectConfigResponse.model_validate(
             snapshot.model_dump() | {"revisions": revisions}
         )
-
-    @app.post(
-        "/config/project/status-options",
-        response_model=ProjectStatusOptionsResponse,
-        responses=error_responses,
-    )
-    async def config_project_status_options(
-        request: ProjectStatusOptionsRequest,
-        _: None = Depends(require_token),
-    ) -> ProjectStatusOptionsResponse:
-        return await app_runtime.fetch_project_status_options(request)
-
-    @app.post(
-        "/config/project/agent-field",
-        response_model=AgentFieldStateResponse,
-        responses=error_responses,
-    )
-    async def config_project_agent_field(
-        request: ProjectStatusOptionsRequest,
-        _: None = Depends(require_token),
-    ) -> AgentFieldStateResponse:
-        return await app_runtime.fetch_agent_field_state(request)
-
-    @app.post(
-        "/config/project/agent-field/ensure",
-        response_model=AgentFieldStateResponse,
-        responses=error_responses,
-    )
-    async def config_project_agent_field_ensure(
-        request: ProjectStatusOptionsRequest,
-        _: None = Depends(require_token),
-    ) -> AgentFieldStateResponse:
-        return await app_runtime.ensure_agent_field(request)
 
     @app.put(
         "/config/project",
@@ -1444,19 +1388,14 @@ def create_app(
         request: ProjectConfigUpdateRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
-        try:
-            receipt = apply_config_write(
-                request.config_dir,
-                lambda: SimpleProjectSetupService().update_project(
-                    ProjectUpdateInput.model_validate(request.model_dump())
-                ),
-                expected=request.expected_revisions,
-                report=lambda: config_repository(request.config_dir).revisions(
-                    PROJECT_CONFIG_PATHS
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        receipt = apply_config_write(
+            request.config_dir,
+            lambda: SimpleProjectSetupService().update_project(request),
+            expected=request.expected_revisions,
+            report=lambda: config_repository(request.config_dir).revisions(
+                PROJECT_CONFIG_PATHS
+            ),
+        )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.put(
@@ -1469,43 +1408,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
-        try:
-            receipt = apply_config_write(
-                config_dir,
-                lambda: SimpleProjectSetupService().set_default_person(
-                    config_dir=config_dir,
-                    person_id=request.person_id,
-                ),
-                report=lambda: config_repository(config_dir).revisions(
-                    PROJECT_CONFIG_PATHS
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-        return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
-
-    github_app_registrations = GitHubAppRegistrationService()
-
-    def claim_github_app[Member: PersonSetupInput](
-        member: Member, owner: str
-    ) -> tuple[Member, str]:
-        """The member with its registered app's IDs, and the app's PEM.
-
-        Nothing else may pair with a registration's key: the IDs and the key
-        come from the registration, whatever the screen sent for them.
-        """
-        if not member.github_app_registration_id:
-            return member, ""
-        registration = github_app_registrations.claim(
-            member.github_app_registration_id, owner
+        receipt = apply_config_write(
+            config_dir,
+            lambda: SimpleProjectSetupService().set_default_person(
+                config_dir=config_dir,
+                person_id=request.person_id,
+            ),
+            report=lambda: config_repository(config_dir).revisions(
+                PROJECT_CONFIG_PATHS
+            ),
         )
-        return member.model_copy(
-            update={
-                "github_app_id": registration.app_id,
-                "github_installation_id": registration.installation_id,
-                "github_private_key_path": None,
-            }
-        ), registration.pem
+        return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.post(
         "/config/members",
@@ -1516,27 +1429,17 @@ def create_app(
         request: PersonSetupInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
-        try:
-            payload = request.model_dump()
-            status = app_runtime.get_config_status()
-            if status.config_dir is not None:
-                payload["config_dir"] = status.config_dir
-            member, pem = claim_github_app(
-                PersonSetupInput.model_validate(payload), request.person_id
-            )
-
-            receipt = apply_config_write(
-                member.config_dir,
-                lambda: SimplePersonSetupService().write_person(
-                    member, github_private_key=pem
-                ),
-                report=lambda: config_repository(member.config_dir).revisions(
-                    person_config_paths(member.person_id)
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-        github_app_registrations.discard(member.github_app_registration_id)
+        status = app_runtime.get_config_status()
+        member = request.model_copy(
+            update={"config_dir": status.config_dir or request.config_dir}
+        )
+        receipt = apply_config_write(
+            member.config_dir,
+            lambda: SimplePersonSetupService().write_person(member),
+            report=lambda: config_repository(member.config_dir).revisions(
+                person_config_paths(member.person_id)
+            ),
+        )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.get(
@@ -1549,19 +1452,14 @@ def create_app(
         _: None = Depends(require_token),
     ) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
-        try:
-            stored_person_config_dir(config_dir, person_id)
-            revisions = config_repository(config_dir).revisions(
-                stored_person_config_paths(person_id)
-            )
-            snapshot: PersonConfigSnapshot = (
-                SimplePersonSetupService().read_person_config(
-                    config_dir=config_dir,
-                    person_id=person_id,
-                )
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        stored_person_config_dir(config_dir, person_id)
+        revisions = config_repository(config_dir).revisions(
+            stored_person_config_paths(person_id)
+        )
+        snapshot: PersonConfigSnapshot = SimplePersonSetupService().read_person_config(
+            config_dir=config_dir,
+            person_id=person_id,
+        )
         return snapshot.model_copy(update={"revisions": revisions})
 
     @app.put(
@@ -1574,35 +1472,24 @@ def create_app(
         request: PersonUpdateInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
-        try:
-            payload = request.model_dump()
-            if payload.get("original_person_id") != person_id:
-                raise AppApiError(
-                    "person_id_mismatch",
-                    status_code=400,
-                )
-            config_dir = _resolve_member_config_dir(app_runtime)
-            payload["config_dir"] = config_dir
-            member, pem = claim_github_app(
-                PersonUpdateInput.model_validate(payload), person_id
+        if request.original_person_id != person_id:
+            raise AppApiError(
+                "person_id_mismatch",
+                status_code=400,
             )
-
-            receipt = apply_config_write(
-                config_dir,
-                lambda: SimplePersonSetupService().update_person(
-                    member, github_private_key=pem
-                ),
-                expected=request.expected_revisions,
-                # The member may have been renamed, so the paths that matter
-                # now are the new ones, not the ones the request was composed
-                # against.
-                report=lambda: config_repository(config_dir).revisions(
-                    person_config_paths(request.person_id)
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-        github_app_registrations.discard(member.github_app_registration_id)
+        config_dir = _resolve_member_config_dir(app_runtime)
+        member = request.model_copy(update={"config_dir": config_dir})
+        receipt = apply_config_write(
+            config_dir,
+            lambda: SimplePersonSetupService().update_person(member),
+            expected=request.expected_revisions,
+            # The member may have been renamed, so the paths that matter
+            # now are the new ones, not the ones the request was composed
+            # against.
+            report=lambda: config_repository(config_dir).revisions(
+                person_config_paths(request.person_id)
+            ),
+        )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.delete(
@@ -1616,162 +1503,59 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
-        try:
-            receipt = apply_config_write(
-                config_dir,
-                lambda: SimplePersonSetupService().delete_person(
-                    config_dir=config_dir,
-                    person_id=person_id,
-                ),
-                report=lambda: config_repository(config_dir).revisions(
-                    stored_person_config_paths(person_id)
-                ),
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
+        receipt = apply_config_write(
+            config_dir,
+            lambda: SimplePersonSetupService().delete_person(
+                config_dir=config_dir,
+                person_id=person_id,
+            ),
+            report=lambda: config_repository(config_dir).revisions(
+                stored_person_config_paths(person_id)
+            ),
+        )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
-    @app.post(
-        "/config/members/resolve",
-        response_model=MemberResolveResponse,
-        responses=error_responses,
-    )
-    def config_members_resolve(
-        request: MemberResolveRequest,
-        _: None = Depends(require_token),
-    ) -> MemberResolveResponse:
-        service = SimplePersonSetupService()
-        try:
-            if request.person_type == "github_apps":
-                app_name = service.parse_github_apps_url(request.identity)
-                reference = service.resolve_github_user(app_name, is_github_apps=True)
-            else:
-                reference = service.resolve_github_user(request.identity)
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-        return MemberResolveResponse.model_validate(reference.model_dump())
-
-    @app.post(
-        "/config/members/github-app/registrations",
-        response_model=GitHubAppRegistrationStatus,
-        responses=error_responses,
-    )
-    def github_app_registration_start(
-        request: GitHubAppRegistrationStartRequest,
-        _: None = Depends(require_token),
-    ) -> GitHubAppRegistrationStatus:
-        base = request.callback_base_url.rstrip("/")
-        try:
-            registration = github_app_registrations.start(
-                app_name=request.app_name,
-                person_id=request.person_id,
-                organization=request.organization,
-                callback_url=f"{base}/github-app/registrations/callback",
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-        return _github_app_registration_status(
-            registration,
-            start_url=f"{base}/github-app/registrations/{registration.state}/start",
-        )
-
     @app.get(
-        "/config/members/github-app/registrations/{state}",
-        response_model=GitHubAppRegistrationStatus,
+        "/config/providers",
+        response_model=list[ProviderOption],
         responses=error_responses,
     )
-    async def github_app_registration_status(
-        state: str,
-        _: None = Depends(require_token),
-    ) -> GitHubAppRegistrationStatus:
-        try:
-            registration = await github_app_registrations.check_installation(state)
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message, status_code=404) from exc
-        return _github_app_registration_status(registration)
-
-    # The two routes below are opened as top-level browser navigations by
-    # github.com and the external browser, which cannot send the session
-    # token; the unguessable registration state in the URL is the credential
-    # (valid until the registration expires, so reloads and retries work).
-    @app.get("/github-app/registrations/{state}/start", include_in_schema=False)
-    def github_app_registration_start_page(state: str) -> Response:
-        from guildbotics.app_api.github_app_registration import (
-            manifest_post_page,
-            registration_error_page,
-        )
-
-        try:
-            submission_url, manifest_json = github_app_registrations.manifest_form(
-                state
+    def config_providers(_: None = Depends(require_token)) -> list[ProviderOption]:
+        return [
+            ProviderOption(
+                name=provider.name,
+                title=provider.setup.title,
+                kinds=[
+                    service.value
+                    for service in Service
+                    if getattr(provider, service.value) is not None
+                ],
+                avatar=provider.setup.avatar_url is not None,
             )
-        except SetupServiceError as exc:
-            return registration_error_page(exc.message)
-        return manifest_post_page(submission_url, manifest_json)
+            for provider in PROVIDERS.values()
+            if provider.setup is not None
+        ]
 
-    @app.get("/github-app/registrations/callback", include_in_schema=False)
-    async def github_app_registration_callback(
-        code: str = "", state: str = ""
-    ) -> Response:
-        from guildbotics.app_api.github_app_registration import (
-            missing_code_error_page,
-            registration_error_page,
-        )
-
-        if not code:
-            return missing_code_error_page()
-        try:
-            registration = await github_app_registrations.complete(state, code)
-        except SetupServiceError as exc:
-            return registration_error_page(exc.message)
-        except httpx.HTTPError as exc:
-            logger.exception("GitHub App manifest conversion failed")
-            return registration_error_page(str(exc))
-        return RedirectResponse(registration.installation_page_url, status_code=302)
-
-    # Slack has no manifest callback (its OAuth redirect rejects localhost and
-    # app-level tokens have no creation API), so the desktop only needs the
-    # deep link plus a way to check the two tokens the user pastes back.
-    @app.post(
-        "/config/members/slack-app/registrations",
-        response_model=SlackAppRegistrationInfo,
-        responses=error_responses,
-    )
-    def slack_app_registration_start(
-        request: SlackAppRegistrationStartRequest,
-        _: None = Depends(require_token),
-    ) -> SlackAppRegistrationInfo:
-        try:
-            return slack_app.start_registration(request.app_name)
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-
-    @app.post(
-        "/config/members/slack-app/verify",
-        response_model=SlackTokenVerification,
-        responses=error_responses,
-    )
-    async def slack_app_token_verify(
-        request: SlackTokenVerifyRequest,
-        _: None = Depends(require_token),
-    ) -> SlackTokenVerification:
-        stored_bot_token = ""
-        stored_app_token = ""
-        config_dir = app_runtime.get_config_status().config_dir
-        if request.person_id and config_dir is not None:
-            stored_bot_token, stored_app_token = (
-                SimplePersonSetupService().read_slack_tokens(
-                    config_dir=config_dir,
-                    person_id=request.person_id,
-                )
+    for provider in PROVIDERS.values():
+        setup = provider.setup
+        for name, operation in (setup.operations if setup else {}).items():
+            app.add_api_route(
+                f"/config/providers/{provider.name}/{name}",
+                _operation_endpoint(operation, require_token, app_runtime.saved_team),
+                methods=["POST"],
+                response_model=operation.response,
+                responses=error_responses,
             )
-        return await slack_app.verify_tokens(
-            request.bot_token,
-            request.app_token,
-            stored_bot_token=stored_bot_token,
-            stored_app_token=stored_app_token,
-            channels=request.channels,
-        )
+        # A page is opened by a browser, which cannot send the session token;
+        # what the page acts on names itself in the query (the unguessable
+        # state of a registration, for one).
+        for name, page in (setup.pages if setup else {}).items():
+            app.add_api_route(
+                page_path(provider.name, name),
+                _page_endpoint(page),
+                methods=["GET"],
+                include_in_schema=False,
+            )
 
     @app.get(
         "/config/members/{person_id}/avatar",
@@ -1836,123 +1620,41 @@ def create_app(
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.post(
-        "/config/members/{person_id}/avatar/github",
+        "/config/members/{person_id}/avatar/{provider}",
         response_model=AvatarMutationResponse,
         responses=error_responses,
     )
-    async def config_member_avatar_github(
+    async def config_member_avatar_import(
         person_id: PersonId,
+        provider: str,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
-        try:
-            member_config = SimplePersonSetupService().read_person_config(
-                config_dir=config_dir,
-                person_id=person_id,
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-
-        github_username = member_config.github_username
-        if not github_username:
+        setup = PROVIDERS[provider].setup if provider in PROVIDERS else None
+        if setup is None or setup.avatar_url is None:
+            raise AppApiError("avatar_provider_unknown", status_code=404)
+        team = app_runtime.saved_team()
+        person = next((m for m in team.members if m.person_id == person_id), None)
+        if person is None:
             raise AppApiError(
-                "github_username_missing",
-                status_code=400,
+                "person_not_found",
+                "person_not_found.plain",
+                params={"person": person_id},
             )
-
-        from guildbotics.app_api.avatar import get_github_avatar_url
-
         try:
-            avatar_url = await get_github_avatar_url(github_username)
+            avatar_url = await setup.avatar_url(person, team)
             dest_path = await _store_downloaded_avatar(
                 config_dir, person_id, avatar_url
             )
-        except (AppApiError, SharedWriteBusyError):
+        except (AppApiError, SetupError, SharedWriteBusyError):
             raise
         except Exception as exc:
-            logger.exception("Failed to import avatar from GitHub for %s", person_id)
+            logger.exception(
+                "Failed to import avatar from %s for %s", provider, person_id
+            )
             raise AppApiError(
                 "avatar_import_failed",
-                "avatar_import_failed.github",
-                status_code=500,
-            ) from exc
-        return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
-
-    @app.post(
-        "/config/members/{person_id}/avatar/slack",
-        response_model=AvatarMutationResponse,
-        responses=error_responses,
-    )
-    async def config_member_avatar_slack(
-        person_id: PersonId,
-        _: None = Depends(require_token),
-    ) -> AvatarMutationResponse:
-        config_dir = _resolve_member_config_dir(app_runtime)
-        try:
-            member_config = SimplePersonSetupService().read_person_config(
-                config_dir=config_dir,
-                person_id=person_id,
-            )
-        except SetupServiceError as exc:
-            raise AppApiError(exc.code, reason=exc.message) from exc
-
-        slack_user_id = member_config.slack_user_id
-        is_human = member_config.person_type == "human"
-        if is_human and not slack_user_id:
-            raise AppApiError(
-                "slack_user_id_missing",
-                status_code=400,
-            )
-
-        # Real environment variables win over keychain values, and keys they
-        # already provide are not fetched from the keychain at all.
-        members = config_dir / "team/members"
-        person_key = person_secret_env_keys(members, person_id)["SLACK_BOT_TOKEN"]
-        ambiguous_keys = ambiguous_person_env_keys(members)
-        all_env = {
-            **read_workspace_secrets(skip=frozenset(os.environ)),
-            **{
-                key: value
-                for key, value in os.environ.items()
-                if key not in ambiguous_keys
-            },
-        }
-        slack_bot_token = all_env.get(person_key)
-
-        if not slack_bot_token:
-            slack_bot_token = all_env.get("SLACK_BOT_TOKEN")
-
-        if not slack_bot_token:
-            for key, val in all_env.items():
-                if key.endswith("_SLACK_BOT_TOKEN") and val:
-                    slack_bot_token = val
-                    break
-
-        if not slack_bot_token:
-            raise AppApiError(
-                "slack_token_missing",
-                status_code=400,
-            )
-
-        from guildbotics.app_api.avatar import get_slack_avatar_url
-
-        try:
-            avatar_url = await get_slack_avatar_url(slack_user_id, slack_bot_token)
-            dest_path = await _store_downloaded_avatar(
-                config_dir, person_id, avatar_url
-            )
-        except (AppApiError, SharedWriteBusyError):
-            raise
-        except Exception as exc:
-            if "missing_scope" in str(exc):
-                raise AppApiError(
-                    "slack_missing_scope",
-                    status_code=400,
-                ) from exc
-            logger.exception("Failed to import avatar from Slack for %s", person_id)
-            raise AppApiError(
-                "avatar_import_failed",
-                "avatar_import_failed.slack",
+                params={"provider": setup.title},
                 status_code=500,
             ) from exc
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
@@ -2012,10 +1714,46 @@ def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
     return None
 
 
-def _github_app_registration_status(
-    registration: GitHubAppRegistration, start_url: str = ""
-) -> GitHubAppRegistrationStatus:
-    return GitHubAppRegistrationStatus(start_url=start_url, **registration.info_dump())
+def _operation_endpoint(
+    operation: Operation,
+    require_token: Callable[..., None],
+    team: Callable[[], Team],
+) -> Callable[..., Awaitable[BaseModel]]:
+    """An endpoint answering ``operation``, typed by its request and response
+    so that they are what the API's schema says."""
+
+    async def endpoint(request: BaseModel, _: None = None) -> BaseModel:
+        return await operation.run(request, team)
+
+    endpoint.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [
+            inspect.Parameter(
+                "request",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=operation.request,
+            ),
+            inspect.Parameter(
+                "_",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(require_token),
+                annotation=None,
+            ),
+        ],
+        return_annotation=operation.response,
+    )
+    return endpoint
+
+
+def _page_endpoint(
+    page: Callable[[Mapping[str, str]], Awaitable[Page]],
+) -> Callable[[Request], Awaitable[Response]]:
+    async def endpoint(request: Request) -> Response:
+        shown = await page(request.query_params)
+        if shown.redirect:
+            return RedirectResponse(shown.redirect, status_code=302)
+        return HTMLResponse(shown.html, status_code=shown.status_code)
+
+    return endpoint
 
 
 class _UnhandledErrorMiddleware:

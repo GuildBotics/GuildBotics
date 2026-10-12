@@ -27,10 +27,7 @@ from guildbotics.app_api.models import (
     RuntimeUnitStatus,
     SchedulerStartRequest,
 )
-from guildbotics.setup.setup_service import (
-    PersonTaskScheduleInput,
-    ProjectUpdateInput,
-)
+from guildbotics.setup.setup_service import PersonTaskScheduleInput
 
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
@@ -56,18 +53,6 @@ def test_command_authoring_create_rejects_existing_draft_fields() -> None:
             message="Create it.",
             content="source",
         )
-
-
-def _project_update_kwargs(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "config_dir": Path("/cfg"),
-        "language": "en",
-        "llm_api_type": "openai",
-        "cli_agent": "codex",
-        "github_enabled": False,
-    }
-    base.update(overrides)
-    return base
 
 
 # --- PersonTaskScheduleInput (five-field cron / blank handling) -------------
@@ -211,9 +196,9 @@ def test_project_config_update_request_provider_api_keys_default_empty() -> None
         language="en",
         llm_api_type="openai",
         cli_agent="codex",
-        github_enabled=False,
     )
     assert request.provider_api_keys == {}
+    assert request.services == {}
 
 
 def test_project_config_update_request_keeps_provider_api_keys() -> None:
@@ -222,26 +207,13 @@ def test_project_config_update_request_keeps_provider_api_keys() -> None:
         language="en",
         llm_api_type="openai",
         cli_agent="codex",
-        github_enabled=False,
         provider_api_keys={"openai": "token", "gemini": ""},
     )
     assert request.provider_api_keys == {"openai": "token", "gemini": ""}
 
 
-def test_project_update_input_provider_api_keys_default_empty() -> None:
-    request = ProjectUpdateInput(**_project_update_kwargs())
-    assert request.provider_api_keys == {}
-
-
-def test_project_update_input_keeps_provider_api_keys() -> None:
-    request = ProjectUpdateInput(
-        **_project_update_kwargs(provider_api_keys={"anthropic": "", "openai": "token"})
-    )
-    assert request.provider_api_keys == {"anthropic": "", "openai": "token"}
-
-
-def test_project_update_input_serializes_path_to_json_string() -> None:
-    request = ProjectUpdateInput(**_project_update_kwargs())
+def test_project_config_update_request_serializes_path_to_json_string() -> None:
+    request = ProjectConfigUpdateRequest(config_dir=Path("/cfg"), language="en")
     payload = json.loads(request.model_dump_json())
     assert payload["config_dir"] == str(Path("/cfg"))
     assert "env_file_path" not in payload

@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.integrations.provider import SetupError
 from guildbotics.setup.setup_service import (
+    MEMBER_SECRET_NAMES,
     PersonSetupInput,
     PersonUpdateInput,
     ProjectSetupInput,
-    ProjectUpdateInput,
-    SetupServiceError,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
@@ -45,12 +45,15 @@ def _person_input(config_dir: Path, **overrides):
         "person_id": "alice",
         "person_name": "Alice",
         "is_active": True,
-        "github_username": "alice",
         "git_email": "1+alice@users.noreply.github.com",
         "roles": ["architect"],
     }
     payload.update(overrides)
     return PersonSetupInput(**payload)
+
+
+def _github(**fields) -> dict:
+    return {"github": {"account_type": "machine_user", "username": "alice", **fields}}
 
 
 def _config_dir(tmp_path: Path) -> Path:
@@ -91,7 +94,7 @@ class TestProjectSecrets:
         service.write_project(_project_input(config_dir))
 
         service.update_project(
-            ProjectUpdateInput(
+            ProjectSetupInput(
                 config_dir=config_dir,
                 language="en",
                 llm_api_type="anthropic",
@@ -118,9 +121,10 @@ class TestPersonSecrets:
         result = SimplePersonSetupService().write_person(
             _person_input(
                 config_dir,
-                github_access_token="ghp-secret",
-                slack_bot_token="xoxb-secret",
-                github_installation_id=42,
+                accounts={
+                    **_github(access_token="ghp-secret", installation_id=42),
+                    "slack": {"bot_token": "xoxb-secret"},
+                },
             )
         )
 
@@ -136,13 +140,17 @@ class TestPersonSecrets:
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(
-            _person_input(config_dir, github_access_token="ghp-secret")
+            _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
 
         snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
 
-        assert snapshot.has_github_access_token is True
-        assert snapshot.has_slack_bot_token is False
+        assert snapshot.accounts["github"]["has_access_token"] is True
+        assert snapshot.accounts["github"]["has_private_key"] is False
+        assert snapshot.accounts["slack"]["has_bot_token"] is False
+        assert snapshot.secret_env_keys == {
+            name: f"ALICE_{name}" for name in MEMBER_SECRET_NAMES
+        }
 
     @pytest.mark.parametrize(
         "original, renamed", [("alice", "alice-2"), ("Alice", "alice")]
@@ -153,7 +161,7 @@ class TestPersonSecrets:
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(
-            _person_input(config_dir, github_access_token="ghp-secret")
+            _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
         members = config_dir / "team/members"
         if original != "alice":
@@ -186,16 +194,15 @@ class TestPersonSecrets:
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(
-            _person_input(config_dir, github_access_token="ghp-secret")
+            _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
 
         service.update_person(
             PersonUpdateInput(
-                **{
-                    **_person_input(config_dir).model_dump(),
-                    "original_person_id": "alice",
-                    "github_access_token": "",
-                }
+                **_person_input(
+                    config_dir, accounts=_github(access_token="")
+                ).model_dump(),
+                original_person_id="alice",
             )
         )
 
@@ -213,8 +220,9 @@ class TestPersonSecrets:
         SimplePersonSetupService().write_person(
             _person_input(
                 config_dir,
-                github_private_key_path=pem_file,
-                github_app_id=7,
+                accounts=_github(
+                    account_type="github_apps", private_key_path=pem_file, app_id=7
+                ),
             )
         )
 
@@ -227,45 +235,7 @@ class TestPersonSecrets:
         snapshot = SimplePersonSetupService().read_person_config(
             config_dir=config_dir, person_id="alice"
         )
-        assert snapshot.has_github_private_key is True
-
-    def test_write_person_stores_the_key_it_is_given_over_a_key_file(
-        self, fake_keyring, tmp_path
-    ):
-        config_dir = self._workspace(tmp_path)
-
-        SimplePersonSetupService().write_person(
-            _person_input(
-                config_dir,
-                github_private_key_path=tmp_path / "missing.pem",
-                github_app_id=7,
-            ),
-            github_private_key="-----BEGIN RSA PRIVATE KEY-----\nheld\n",
-        )
-
-        assert KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY") == (
-            "-----BEGIN RSA PRIVATE KEY-----\nheld\n"
-        )
-
-    def test_update_person_stores_the_key_it_is_given(self, fake_keyring, tmp_path):
-        config_dir = self._workspace(tmp_path)
-        service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir))
-
-        service.update_person(
-            PersonUpdateInput(
-                **{
-                    **_person_input(config_dir).model_dump(),
-                    "original_person_id": "alice",
-                }
-            ),
-            github_private_key="pem-content",
-        )
-
-        assert (
-            KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY")
-            == "pem-content"
-        )
+        assert snapshot.accounts["github"]["has_private_key"] is True
 
     @pytest.mark.parametrize("content", [None, b"\xff\xfe"])
     def test_write_person_rejects_an_unreadable_key_file_before_writing(
@@ -276,12 +246,13 @@ class TestPersonSecrets:
         if content is not None:
             pem_file.write_bytes(content)
 
-        with pytest.raises(SetupServiceError) as exc_info:
+        with pytest.raises(SetupError) as exc_info:
             SimplePersonSetupService().write_person(
                 _person_input(
                     config_dir,
-                    github_access_token="ghp-secret",
-                    github_private_key_path=pem_file,
+                    accounts=_github(
+                        access_token="ghp-secret", private_key_path=pem_file
+                    ),
                 )
             )
 
@@ -294,17 +265,19 @@ class TestPersonSecrets:
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        service.write_person(
+            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
+        )
 
-        with pytest.raises(SetupServiceError) as exc_info:
+        with pytest.raises(SetupError) as exc_info:
             service.update_person(
                 PersonUpdateInput(
-                    **{
-                        **_person_input(config_dir).model_dump(),
-                        "original_person_id": "alice",
-                        "person_id": "alice-2",
-                        "github_private_key_path": tmp_path / "missing.pem",
-                    }
+                    **_person_input(
+                        config_dir,
+                        person_id="alice-2",
+                        accounts=_github(private_key_path=tmp_path / "missing.pem"),
+                    ).model_dump(),
+                    original_person_id="alice",
                 )
             )
 
@@ -313,28 +286,33 @@ class TestPersonSecrets:
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-old"
         assert not (config_dir / "team" / "members" / "alice-2").exists()
 
-    def test_update_person_rename_moves_private_key_content(
-        self, fake_keyring, tmp_path
-    ):
+    def test_rename_and_delete_follow_every_member_secret(self, fake_keyring, tmp_path):
+        """Every provider's member secrets move with a rename and go with a
+        delete, whichever provider the member's form named."""
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
         service.write_person(_person_input(config_dir))
-        KeyringSecretStore(config_dir).set("ALICE_GITHUB_PRIVATE_KEY", "pem-content")
+        store = KeyringSecretStore(config_dir)
+        store.set("OPENAI_API_KEY", "workspace-key")
+        for name in MEMBER_SECRET_NAMES:
+            store.set(f"ALICE_{name}", f"value-{name}")
 
         service.update_person(
             PersonUpdateInput(
-                **{
-                    **_person_input(config_dir).model_dump(),
-                    "original_person_id": "alice",
-                    "person_id": "alice-2",
-                    "person_name": "Alice 2",
-                }
+                **_person_input(config_dir, person_id="alice-2").model_dump(),
+                original_person_id="alice",
             )
         )
 
-        store = KeyringSecretStore(config_dir)
-        assert store.get("ALICE_2_GITHUB_PRIVATE_KEY") == "pem-content"
-        assert store.get("ALICE_GITHUB_PRIVATE_KEY") is None
+        assert sorted(store.keys()) == sorted(
+            ["OPENAI_API_KEY", *(f"ALICE_2_{name}" for name in MEMBER_SECRET_NAMES)]
+        )
+        for name in MEMBER_SECRET_NAMES:
+            assert store.get(f"ALICE_2_{name}") == f"value-{name}"
+
+        service.delete_person(config_dir=config_dir, person_id="alice-2")
+
+        assert store.keys() == ["OPENAI_API_KEY"]
 
     def test_delete_person_removes_keychain_tokens(self, fake_keyring, tmp_path):
         config_dir = self._workspace(tmp_path)
@@ -342,8 +320,10 @@ class TestPersonSecrets:
         service.write_person(
             _person_input(
                 config_dir,
-                github_access_token="ghp-secret",
-                slack_app_token="xapp-secret",
+                accounts={
+                    **_github(access_token="ghp-secret"),
+                    "slack": {"app_token": "xapp-secret"},
+                },
             )
         )
 
@@ -384,7 +364,9 @@ class TestStaleKeyMetadata:
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        service.write_person(
+            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
+        )
         self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
 
         service.update_person(
@@ -405,7 +387,9 @@ class TestStaleKeyMetadata:
     def test_delete_person_removes_stale_key_metadata(self, fake_keyring, tmp_path):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        service.write_person(
+            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
+        )
         self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
 
         service.delete_person(config_dir=config_dir, person_id="alice")
@@ -417,7 +401,9 @@ class TestStaleKeyMetadata:
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        service.write_person(
+            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
+        )
 
         def _raise(self, old_key, new_key):
             raise SecretStoreError("keychain is locked")
@@ -448,7 +434,7 @@ class TestStaleKeyMetadata:
         monkeypatch.setattr(KeyringSecretStore, "set", _raise)
         with pytest.raises(SecretStoreError):
             SimplePersonSetupService().write_person(
-                _person_input(config_dir), github_private_key="pem-content"
+                _person_input(config_dir, accounts={"slack": {"bot_token": "xoxb"}})
             )
 
         assert not (config_dir / "team" / "members" / "alice").exists()
@@ -458,7 +444,9 @@ class TestStaleKeyMetadata:
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir, github_access_token="ghp-old"))
+        service.write_person(
+            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
+        )
 
         def _raise(self, key):
             raise SecretStoreError("keychain is locked")

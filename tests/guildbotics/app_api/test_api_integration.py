@@ -76,7 +76,6 @@ def test_temp_workspace_member_flow_before_project_init(
         "person_id": "local-agent",
         "person_name": "Local Agent",
         "is_active": True,
-        "github_username": "",
         "git_email": "",
         "roles": ["architect"],
         "speaking_style": "concise",
@@ -156,7 +155,7 @@ def test_temp_workspace_init_project_member_team_flow(
         assert project_payload["description"] == "Temp automation workspace"
         assert project_payload["llm_api_type"] == "openai"
         assert project_payload["provider_api_keys"]["openai"] is True
-        assert project_payload["github_enabled"] is False
+        assert project_payload["services"] == {}
 
         member = client.post(
             "/config/members",
@@ -167,7 +166,6 @@ def test_temp_workspace_init_project_member_team_flow(
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
                 "is_active": True,
-                "github_username": "",
                 "git_email": "",
                 "roles": ["architect"],
                 "speaking_style": "concise",
@@ -343,7 +341,6 @@ def test_command_file_execution_status_and_run_guard(
                 "person_id": "local-agent",
                 "person_name": "Local Agent",
                 "is_active": True,
-                "github_username": "",
                 "git_email": "",
                 "roles": ["architect"],
                 "speaking_style": "concise",

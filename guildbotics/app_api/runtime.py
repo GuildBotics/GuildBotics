@@ -9,7 +9,7 @@ import shlex
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial
@@ -45,8 +45,6 @@ from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentEnvironmentStatusResponse,
-    AgentFieldOption,
-    AgentFieldStateResponse,
     ChatReceiveResetResponse,
     CliAgentLastTurn,
     CliAgentUsageCheck,
@@ -71,8 +69,6 @@ from guildbotics.app_api.models import (
     MemberSummary,
     MemoryEvent,
     MemoryEventsResponse,
-    ProjectStatusOptionsRequest,
-    ProjectStatusOptionsResponse,
     ProjectSummary,
     RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
@@ -181,7 +177,7 @@ from guildbotics.environment.toolchain import (
     load_toolchain,
 )
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
-from guildbotics.integrations.factory import chat_provider_name
+from guildbotics.integrations.factory import chat_provider_name, configured_providers
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
@@ -191,6 +187,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
 )
 from guildbotics.intelligences.brains.factory import cli_agent_of
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
+from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
@@ -207,7 +204,6 @@ from guildbotics.runtime import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import ServiceError
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
-from guildbotics.setup.github_project import ProjectBoard, with_project_board
 from guildbotics.setup.setup_service import (
     PersonConfigSummary,
     SimplePersonSetupService,
@@ -841,7 +837,17 @@ class AppRuntime:
         return context.clone_for(member)
 
     def _requirement_facts(self) -> _RequirementFacts:
-        return _RequirementFacts(github_enabled=self.is_github_integration_enabled())
+        try:
+            project = self._get_context().team.project
+        except Exception:
+            return _RequirementFacts(services=frozenset())
+        return _RequirementFacts(
+            services=frozenset(
+                service.value
+                for service in Service
+                if project.is_available_service(service)
+            )
+        )
 
     def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
         facts = self._requirement_facts()
@@ -1414,6 +1420,18 @@ class AppRuntime:
                         "active_members": response.active_members,
                         "scope_person_id": person_id or "",
                         "checks": [check.model_dump() for check in response.checks],
+                        # What the alerts of a provider no longer used close
+                        # by; unknown when the team could not be read.
+                        **(
+                            {
+                                "providers": [
+                                    provider.name
+                                    for provider in configured_providers(context.team)
+                                ]
+                            }
+                            if context is not None
+                            else {}
+                        ),
                     },
                 )
                 return response
@@ -1624,7 +1642,7 @@ class AppRuntime:
     def _refresh_activity_events(
         self, team: Team, start: datetime, end: datetime, *, force: bool
     ) -> None:
-        """Refresh GitHub-backed shared activity at most once per five minutes."""
+        """Refresh the shared activity of the services at most once per five minutes."""
         with self._activity_sync_lock:
             completed_weeks = _completed_activity_weeks()
             period = (start.isoformat(), end.isoformat())
@@ -1639,7 +1657,7 @@ class AppRuntime:
             ):
                 return
             # Count failed attempts too: a bad credential must not turn the UI's
-            # five-second history refresh into a five-second GitHub retry loop.
+            # five-second history refresh into a five-second service retry loop.
             self._activity_sync_attempts[period] = now
             threading.Thread(
                 target=self._sync_activity_events,
@@ -1725,85 +1743,6 @@ class AppRuntime:
             for item in MemoryAuditStore().list_events(trace_id=trace_id, limit=1000)
         ]
 
-    async def fetch_project_status_options(
-        self, request: ProjectStatusOptionsRequest
-    ) -> ProjectStatusOptionsResponse:
-        """Read the Status options of the GitHub Project identified by *request*.
-
-        Reads live (no writes) using a configured member's GitHub credentials,
-        so the setup form can list lanes for the project URL being entered
-        before it is saved. Returns ``available=False`` (instead of raising)
-        whenever options cannot be read—incomplete identity, no member token,
-        or a GitHub error—so the form falls back to manual lane entry.
-        """
-        result = await self._with_setup_board(request, lambda tm: tm.get_statuses())
-        if result is None:
-            return ProjectStatusOptionsResponse(available=False)
-        return ProjectStatusOptionsResponse(available=True, statuses=result)
-
-    async def fetch_agent_field_state(
-        self, request: ProjectStatusOptionsRequest
-    ) -> AgentFieldStateResponse:
-        """Read the ``Agent`` field state of the GitHub Project in *request*.
-
-        Read-only. Uses a configured member's credentials (like
-        :meth:`fetch_project_status_options`) and reports the registered and
-        still-missing non-human members so the setup form can show them.
-        """
-        result = await self._with_setup_board(
-            request, lambda tm: tm.get_agent_field_state()
-        )
-        return self._to_agent_field_response(result)
-
-    async def ensure_agent_field(
-        self, request: ProjectStatusOptionsRequest
-    ) -> AgentFieldStateResponse:
-        """Create the ``Agent`` field or add missing non-human-member options.
-
-        Existing options are preserved (resubmitted with their ids) so ticket
-        assignments are never cleared. Returns the refreshed field state.
-        """
-        result = await self._with_setup_board(request, lambda tm: tm.sync_agent_field())
-        return self._to_agent_field_response(result)
-
-    @staticmethod
-    def _to_agent_field_response(
-        result: dict[str, Any] | None,
-    ) -> AgentFieldStateResponse:
-        if result is None:
-            return AgentFieldStateResponse(available=False)
-        return AgentFieldStateResponse(
-            available=True,
-            exists=bool(result["exists"]),
-            options=[AgentFieldOption(**opt) for opt in result["options"]],
-            missing=[AgentFieldOption(**opt) for opt in result["missing"]],
-        )
-
-    async def _with_setup_board(
-        self,
-        request: ProjectStatusOptionsRequest,
-        action: Callable[[ProjectBoard], Awaitable[Any]],
-    ) -> Any:
-        """Run *action* against the board of the Project the form identifies;
-        ``None`` when the identity is incomplete, no context is available, or
-        every attempt fails (so callers degrade gracefully)."""
-        if not (request.owner and request.project_id and request.github_project_url):
-            return None
-        try:
-            context = self._get_context()
-        except Exception:
-            return None
-        try:
-            return await with_project_board(
-                context.team,
-                owner=request.owner,
-                project_id=request.project_id,
-                url=request.github_project_url,
-                action=action,
-            )
-        finally:
-            await context.aclose()
-
     def get_cli_agent_last_turns(self) -> list[CliAgentLastTurn]:
         return last_cli_agent_turns(self._diagnostics_store)
 
@@ -1820,13 +1759,10 @@ class AppRuntime:
         """Cancel running usage probes so their environments are released."""
         await self._cli_agent_usage.aclose()
 
-    def is_github_integration_enabled(self) -> bool:
-        try:
-            return self._get_context().team.project.is_available_service(
-                Service.TICKET_SERVICE
-            )
-        except Exception:
-            return False
+    def saved_team(self) -> Team:
+        """The workspace's saved team, with its members' secrets in reach."""
+        self._load_workspace_env()
+        return YamlTeamLoader().load()
 
     def _get_context(self, message: str = "") -> Context:
         self._load_workspace_env()
@@ -2223,25 +2159,14 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
         elif isinstance(node, ast.Attribute):
             attrs.add(node.attr)
 
-    kinds: set[str] = set()
-    if (
-        modules & {"guildbotics.runtime.ticket_service"}
-        or names
-        & {
-            "TicketService",
-        }
-        or attrs & {"get_ticket_service", "create_ticket_service"}
-    ):
-        kinds.add("github")
-    if (
-        modules & {"guildbotics.runtime.chat_service"}
-        or names
-        & {
-            "ChatService",
-        }
-        or attrs & {"get_chat_service", "create_chat_service"}
-    ):
-        kinds.add("slack")
+    # A command needs a kind of service when it uses its port.
+    kinds = {
+        service.value
+        for service in Service
+        if f"guildbotics.runtime.{service.value}" in modules
+        or service.value.title().replace("_", "") in names
+        or {f"get_{service.value}", f"create_{service.value}"} & attrs
+    }
     if modules & {"guildbotics.intelligences.functions"} or attrs & {"get_brain"}:
         kinds.add("llm")
     if names & {"CliAgentBrain"}:
@@ -2266,7 +2191,8 @@ class _RequirementFacts:
     then; what the device refuses is the ``environment``'s to say.
     """
 
-    github_enabled: bool
+    #: The kinds of service the project names a provider for.
+    services: frozenset[str]
 
     @cached_property
     def device(self) -> DeviceStatus:
@@ -2284,10 +2210,8 @@ class _RequirementFacts:
     def _satisfied(self, kind: str) -> bool:
         from guildbotics.utils.fileio import get_config_path
 
-        if kind == "github":
-            return self.github_enabled
-        if kind == "slack":
-            return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
+        if kind in {service.value for service in Service}:
+            return kind in self.services
         if kind == "llm":
             from guildbotics.intelligences.llm_providers import provider_env_keys
 

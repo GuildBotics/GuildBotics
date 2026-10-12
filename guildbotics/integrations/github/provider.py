@@ -14,6 +14,7 @@ from guildbotics.integrations.github.github_utils import (
     get_github_account_type,
     get_github_username,
 )
+from guildbotics.integrations.github.setup import SETUP
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
     Provider,
@@ -79,6 +80,7 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
                 ProviderCheck(
                     section=_SECTION,
                     code="github_project_access",
+                    credential=True,
                     status="ok",
                     message="GitHub project status options were fetched.",
                     person_id=member.person_id,
@@ -94,6 +96,7 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
                 ProviderCheck(
                     section=_SECTION,
                     code="github_access",
+                    credential=True,
                     status="error",
                     message=_safe_error("GitHub read-only check failed", exc),
                     person_id=member.person_id,
@@ -279,4 +282,5 @@ GITHUB = Provider(
     credentialed=_credentialed,
     verify=_verify,
     diagnose=_diagnose,
+    setup=SETUP,
 )

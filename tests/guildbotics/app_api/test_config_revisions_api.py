@@ -230,7 +230,8 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
             guarded.setattr(KeyringSecretStore, operation, unexpected)
         read = client.get("/config/members/alice-bak", headers=AUTH_HEADERS)
         assert read.status_code == HTTP_OK
-        assert read.json()["has_slack_bot_token"] is False
+        assert read.json()["accounts"]["slack"]["has_bot_token"] is False
+        assert read.json()["secret_env_keys"] == {}
         if action == "rename":
             response = client.put(
                 "/config/members/alice-bak",
@@ -355,7 +356,6 @@ def _project_payload(config_dir: Path, revisions: dict[str, str], **overrides) -
         "description": "Temp automation workspace",
         "llm_api_type": "openai",
         "cli_agent": "codex",
-        "github_enabled": False,
     }
     payload.update(overrides)
     return payload
@@ -370,7 +370,6 @@ def _member_payload(config_dir: Path, revisions: dict[str, str], **overrides) ->
         "person_id": "alice",
         "person_name": "Alice",
         "is_active": True,
-        "github_username": "",
         "git_email": "",
         "roles": ["architect"],
         "speaking_style": "concise",
@@ -523,7 +522,6 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
             "person_id": "alice",
             "person_name": "Alice",
             "is_active": True,
-            "github_username": "",
             "git_email": "",
             "roles": ["architect"],
             "speaking_style": "concise",
@@ -623,7 +621,6 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
             "person_id": "alice",
             "person_name": "Alice",
             "is_active": True,
-            "github_username": "",
             "git_email": "",
             "roles": ["architect"],
             "speaking_style": "concise",
@@ -742,7 +739,6 @@ def test_a_member_save_reports_the_paths_it_ended_up_writing(
             "person_id": "alice",
             "person_name": "Alice",
             "is_active": True,
-            "github_username": "",
             "git_email": "",
             "roles": ["architect"],
             "speaking_style": "concise",

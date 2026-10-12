@@ -398,7 +398,7 @@ describe("Service Runtime screen", () => {
     expect(screen.getAllByText("worker crashed").length).toBeGreaterThan(0);
   });
 
-  it("surfaces a Slack auth failure with the affected member id in the events card", async () => {
+  it("surfaces a chat auth failure with the affected member id in the events card", async () => {
     getSchedulerStatusMock.mockResolvedValue(
       runtimeStatus({
         events: runtimeUnit("events", {
@@ -406,6 +406,7 @@ describe("Service Runtime screen", () => {
           running: true,
           events_auth_failed_count: 1,
           events_auth_failed_persons: ["yuki"],
+          events_chat_provider: "slack",
           member_routines: [],
         }),
       }),
@@ -850,6 +851,7 @@ function runtimeUnit(
     events_drained_count: 0,
     events_auth_failed_count: 0,
     events_auth_failed_persons: [],
+    events_chat_provider: "",
     member_routines: [],
     ...overrides,
   };

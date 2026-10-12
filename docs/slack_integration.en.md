@@ -38,7 +38,7 @@ To receive chat events, start the service with **Event triggers** included on th
 
 Create a Slack App (send + receive) in Slack that acts as the AI agent. The default path is the semi-automatic registration in the desktop app: the required scopes, Socket Mode and event subscriptions all come pre-configured from an App Manifest that GuildBotics generates.
 
-Under **Setup → Members → Slack**, choose **Register a new app** and do the following.
+First choose Slack under **Setup → Integrations → Chat**; the members then have a Slack tab. Under **Setup → Members → Slack**, choose **Register a new app** and do the following.
 
 1. Enter an **App name** (defaults to the member ID) and press **Create the app on Slack**
    - Slack's app creation screen opens in your external browser with the manifest applied

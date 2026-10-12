@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from guildbotics.entities.task import ScheduledCommand
 from guildbotics.utils.fileio import get_config_path
-from guildbotics.utils.person_id import person_secret_env_keys, validate_person_id
+from guildbotics.utils.person_id import person_secret_prefix, validate_person_id
 
 KNOWN_LANGUAGE_NAMES = {
     "en": "English",
@@ -299,9 +299,8 @@ class Person(BaseModel):
         return scheduled_commands
 
     def to_person_env_key(self, key) -> str:
-        return person_secret_env_keys(get_config_path("team/members"), self.person_id)[
-            key.upper()
-        ]
+        prefix = person_secret_prefix(get_config_path("team/members"), self.person_id)
+        return prefix + key.upper()
 
     def get_account_info(self, key: str) -> str:
         """Return a non-secret account identifier from person configuration."""
