@@ -508,6 +508,13 @@ def test_quota_replay_keeps_the_captured_delay_in_the_future(year) -> None:
             None,
         ),
         ("401 Unauthorized", AgentRuntimeErrorCategory.AUTHENTICATION, True, None),
+        # The expired-login message 1.3.3's release notes name.
+        (
+            "Authentication expired. Please log back in.",
+            AgentRuntimeErrorCategory.AUTHENTICATION,
+            True,
+            None,
+        ),
         ("timeout waiting for response", AgentRuntimeErrorCategory.PROCESS, True, None),
     ],
 )

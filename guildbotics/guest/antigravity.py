@@ -83,12 +83,14 @@ _PATH_PARAMETERS = ("TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath")
 #: Last-resort classification of a terminal ``error`` string. ``agy`` reports
 #: quota and credential failures as prose. The real 1.2.13 quota fixture has
 #: "Individual quota reached" without an upstream status or HTTP code prefix.
+#: 1.3.3's release notes name the expired-login message "Authentication
+#: expired. Please log back in."
 _RATE_LIMIT_PATTERN = re.compile(
     r"RESOURCE_EXHAUSTED|Individual quota reached|quota exceeded", re.IGNORECASE
 )
 _AUTHENTICATION_PATTERN = re.compile(
     r"401 Unauthorized|UNAUTHENTICATED|invalid_grant"
-    r"|authentication(?:_error| failed| required)|token (?:expired|revoked)",
+    r"|authentication(?:_error| failed| required| expired)|token (?:expired|revoked)",
     re.IGNORECASE,
 )
 _RETRY_AFTER_PATTERN = re.compile(
