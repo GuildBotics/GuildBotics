@@ -358,10 +358,10 @@ def test_every_window_argument_is_classified() -> None:
 
 @pytest.mark.parametrize(
     ("kind", "basis"),
-    [
-        *((kind, basis) for kind, _commands, basis in MEMBER_ARGUMENTS.values()),
-        *WINDOW_ARGUMENTS.values(),
-    ],
+    sorted(
+        {(kind, basis) for kind, _commands, basis in MEMBER_ARGUMENTS.values()}
+        | set(WINDOW_ARGUMENTS.values())
+    ),
 )
 def test_an_argument_bounded_by_authority_names_its_basis(kind, basis) -> None:
     """A value the grant or the member's authority bounds names the function

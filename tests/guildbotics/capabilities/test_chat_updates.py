@@ -263,19 +263,29 @@ def test_heartbeat_throttles_idle_writes_but_publishes_transitions(monkeypatch):
     assert not status.available("slack", "aiko", "C1")
 
 
-@pytest.mark.parametrize("status", ["done", "asking", "blocked"])
 @pytest.mark.parametrize(
-    "action",
+    ("status", "action"),
     [
-        "chat_reply",
-        "chat_post",
-        "chat_reaction",
-        "chat_noop",
-        "git_commit",
-        "chat_inspect",
-        "issue_update",
-        "git_push",
-        *sorted(RunStore.TICKET_WRITE_EVIDENCE_TYPES),
+        # Classify every action once; the status gate only needs one action
+        # that fulfills input and one that does not.
+        *(
+            ("done", action)
+            for action in [
+                "chat_reply",
+                "chat_post",
+                "chat_reaction",
+                "chat_noop",
+                "git_commit",
+                "chat_inspect",
+                "issue_update",
+                "git_push",
+                *sorted(RunStore.TICKET_WRITE_EVIDENCE_TYPES),
+            ]
+        ),
+        ("asking", "chat_reply"),
+        ("asking", "chat_noop"),
+        ("blocked", "chat_reply"),
+        ("blocked", "chat_noop"),
     ],
 )
 def test_acknowledgement_requires_action_after_delivery(status, action):

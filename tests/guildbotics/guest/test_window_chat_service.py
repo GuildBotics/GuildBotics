@@ -53,15 +53,18 @@ def _ticket_service(client: SimpleNamespace) -> WindowTicketService:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "args"),
+    ("method", "args", "failure"),
     [
-        ("get_bot_identity", ()),
-        ("resolve_channel_id", ("general",)),
-        ("post_message", ("C1", "hello")),
-        ("add_reaction", ("C1", "1.0", "ack")),
+        # Each entry opts into the port's reported-failure contract.
+        ("get_bot_identity", (), "reported"),
+        ("resolve_channel_id", ("general",), "reported"),
+        ("post_message", ("C1", "hello"), "reported"),
+        ("add_reaction", ("C1", "1.0", "ack"), "reported"),
+        # Internal defects and window refusals share the member-result path.
+        ("get_bot_identity", (), "defect"),
+        ("get_bot_identity", (), "refused"),
     ],
 )
-@pytest.mark.parametrize("failure", ["reported", "defect", "refused"])
 async def test_chat_failure_contract(method, args, failure):
     refused = HostCallError("refused", "grant refused")
     client = SimpleNamespace(

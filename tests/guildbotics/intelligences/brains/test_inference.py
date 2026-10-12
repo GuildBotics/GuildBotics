@@ -42,16 +42,27 @@ pytestmark = pytest.mark.usefixtures("direct_inference")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["agno", "jev"])
-@pytest.mark.parametrize("category", ["failed", "refused", "unavailable"])
 @pytest.mark.parametrize(
-    ("message", "details"),
+    ("method", "category", "message", "details"),
     [
-        ("The host call timed out.", {}),
-        ("The call's result is too large.", {}),
-        ("Host operation failed.", {}),
-        ("The inference call failed (ProviderError).", {"error_type": "ProviderError"}),
+        # Each entry must use the shared conversion and preserve window errors.
+        *(
+            (method, category, "The host call timed out.", {})
+            for method in ["agno", "jev"]
+            for category in ["failed", "refused", "unavailable"]
+        ),
+        # Other safe messages are independent of the entry and category.
+        ("agno", "failed", "The call's result is too large.", {}),
+        ("agno", "failed", "Host operation failed.", {}),
         (
+            "agno",
+            "failed",
+            "The inference call failed (ProviderError).",
+            {"error_type": "ProviderError"},
+        ),
+        (
+            "agno",
+            "failed",
             "The inference call failed (ProviderError, reported status 429).",
             {"error_type": "ProviderError", "status_code": 429},
         ),

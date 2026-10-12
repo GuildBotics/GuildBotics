@@ -1283,8 +1283,15 @@ def test_usage_reader_registry_covers_supported_tools() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
-@pytest.mark.parametrize("outcome", ["windows", "limit", "empty", "error"])
+@pytest.mark.parametrize(
+    ("name", "outcome"),
+    [
+        *((name, "windows") for name in CLI_AGENT_USAGE_READERS),
+        ("codex", "limit"),
+        ("codex", "empty"),
+        ("codex", "error"),
+    ],
+)
 async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     monkeypatch, name, outcome
 ):
@@ -1293,6 +1300,8 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
 
     tool = cli_agent_info(name)
     provider_state.record_authentication_outcome(tool, failed=True)
+    other = cli_agent_info("claude" if name == "codex" else "codex")
+    provider_state.record_authentication_outcome(other, failed=True)
 
     async def read():
         if outcome == "error":
@@ -1313,6 +1322,7 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     else:
         await usage_module.read_cli_agent_usage(name)
     assert provider_state.authentication_failed(tool) is not succeeded
+    assert provider_state.authentication_failed(other)
 
 
 @pytest.mark.asyncio

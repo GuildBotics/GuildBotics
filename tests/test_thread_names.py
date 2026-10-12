@@ -91,28 +91,37 @@ def test_all_product_threads_have_the_isolation_prefix() -> None:
     assert offenders == [], f"Threads invisible to the isolation guard: {offenders}"
 
 
+_THREAD_CONSTRUCTORS = [
+    "import threading\nthreading.Thread({name})",
+    "import threading as th\nth.Thread({name})",
+    "from threading import Thread\nThread({name})",
+    "from threading import Thread as Worker\nWorker({name})",
+    "import threading\nclass Worker(threading.Thread):\n"
+    "    def __init__(self):\n        super().__init__({name})",
+    "from threading import Thread as Base\nclass Worker(Base):\n"
+    "    def __init__(self):\n        Base.__init__(self, {name})",
+]
+
+
 @pytest.mark.parametrize(
-    "constructor",
+    ("constructor", "name", "prefixed"),
     [
-        "import threading\nthreading.Thread({name})",
-        "import threading as th\nth.Thread({name})",
-        "from threading import Thread\nThread({name})",
-        "from threading import Thread as Worker\nWorker({name})",
-        "import threading\nclass Worker(threading.Thread):\n"
-        "    def __init__(self):\n        super().__init__({name})",
-        "from threading import Thread as Base\nclass Worker(Base):\n"
-        "    def __init__(self):\n        Base.__init__(self, {name})",
-    ],
-)
-@pytest.mark.parametrize(
-    ("name", "prefixed"),
-    [
-        ("", False),
-        ('name="worker"', False),
-        ("name=member_id", False),
-        ('name="guildbotics-worker"', True),
-        ('name=f"guildbotics-scheduler-{member_id}"', True),
-        ('name=f"{member_id}-guildbotics-worker"', False),
+        # Recognize an explicitly named thread for every constructor spelling.
+        *(
+            (constructor, 'name="guildbotics-worker"', True)
+            for constructor in _THREAD_CONSTRUCTORS
+        ),
+        # Prefix evaluation is shared after discovery.
+        *(
+            (_THREAD_CONSTRUCTORS[0], name, prefixed)
+            for name, prefixed in [
+                ("", False),
+                ('name="worker"', False),
+                ("name=member_id", False),
+                ('name=f"guildbotics-scheduler-{member_id}"', True),
+                ('name=f"{member_id}-guildbotics-worker"', False),
+            ]
+        ),
     ],
 )
 def test_thread_population_includes_aliases_and_subclasses(

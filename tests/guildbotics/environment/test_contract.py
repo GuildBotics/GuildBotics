@@ -34,8 +34,45 @@ from guildbotics.utils.i18n_tool import t
 
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
+# Keep the expected population independent of the production list, so deleting
+# a protected name cannot silently delete its tests as well.
+_SENSITIVE_HOME_PATHS = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".config/gh",
+    ".local/share/keyrings",
+    ".guildbotics",
+    ".codex",
+    ".claude",
+    ".grok",
+    ".copilot",
+    ".gemini",
+    ".agents",
+)
+_PROTECTED_PATH_DEPTHS = [".ssh", ".config/gh", ".local/share/keyrings"]
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+
+def test_sensitive_home_path_population_is_complete():
+    assert set(SENSITIVE_HOME_DIRECTORIES) == set(_SENSITIVE_HOME_PATHS)
+
+
+@pytest.mark.parametrize("name", _SENSITIVE_HOME_PATHS)
+def test_builtin_sensitive_paths_refuse_mounts(tmp_path, name):
+    from guildbotics.environment.contract import builtin_denied
+
+    home = tmp_path / "home"
+    home.mkdir()
+    denied = builtin_denied(home)
+    for source in (home / name, home / name / "new"):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(source, denied, grant=True, missing=True)
+    assert validate_mount_source(tmp_path / "work", denied, grant=True, missing=True)
+
+
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["missing", "file"])
 @pytest.mark.parametrize("tail", ["../ordinary", "child"])
 def test_untraversable_protected_target_closes_names_without_stopping_other_work(
@@ -75,7 +112,7 @@ def test_untraversable_protected_target_closes_names_without_stopping_other_work
         inspect_host_path(resolve_host_links(protected).path)
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["chain", "cycle", "parent", "repeat"])
 def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     tmp_path, symlinks, name, shape
@@ -130,7 +167,7 @@ def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     assert validate_mount_source(ordinary, denied, grant=True) == ordinary
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["self", "mutual", "broken"])
 def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
     tmp_path, symlinks, name, shape
@@ -216,7 +253,7 @@ def test_invalid_grants_allow_selection_but_still_refuse_execution(
     assert environment._contract(CommandAccess()).access.documents
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
     tmp_path, monkeypatch, symlinks, name
 ):

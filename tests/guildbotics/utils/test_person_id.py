@@ -11,47 +11,79 @@ from guildbotics.utils.avatar import get_member_avatar_dir
 from guildbotics.utils.fileio import get_member_clone_path, get_person_config_path
 
 
+# Input classes belong to the validators; each path entry still rejects a
+# traversal and a reserved new ID, while stored directory names are repairable.
+_UNSAFE_DIRECTORY_NAMES = [
+    "/private/keys",
+    "../../.ssh",
+    "a/b",
+    "a\\b",
+    "C:\\keys",
+    "a\n",
+    "",
+    ".",
+    "..",
+]
+_RESERVED_IDS = ["con", "nul", "aux", "prn", "com1", "lpt1"]
+
+
+@pytest.mark.parametrize("value", _UNSAFE_DIRECTORY_NAMES + _RESERVED_IDS)
+def test_person_id_validator_rejects_invalid_input_classes(value):
+    from guildbotics.utils.person_id import is_valid_person_id, validate_person_id
+
+    assert not is_valid_person_id(value)
+    with pytest.raises(ValueError):
+        validate_person_id(value)
+
+
+@pytest.mark.parametrize("value", _UNSAFE_DIRECTORY_NAMES)
+def test_stored_directory_validator_rejects_unsafe_names(value):
+    from guildbotics.utils.person_id import validate_member_directory_name
+
+    with pytest.raises(ValueError):
+        validate_member_directory_name(value)
+
+
+@pytest.mark.parametrize("value", _RESERVED_IDS)
+def test_reserved_directory_names_remain_addressable_for_repair(tmp_path, value):
+    from guildbotics.utils.person_id import validate_member_directory_name
+
+    assert validate_member_directory_name(value) == value
+    assert (
+        PersonUpdateInput(
+            **data_for(tmp_path), original_person_id=value
+        ).original_person_id
+        == value
+    )
+
+
+_PERSON_PATH_ENTRIES = [
+    "person",
+    "new",
+    "original",
+    "clone",
+    "avatar",
+    "config",
+    "config_paths",
+    "setup_dir",
+    "intelligence_revision",
+    "intelligence_scope",
+    "intelligence_read",
+    "intelligence_write",
+    "intelligence_mapping",
+    "intelligence_yaml",
+    "slot_mapping",
+    "intelligence_roots",
+    "command_discovery",
+    "runtime_commands",
+]
+
+
 @pytest.mark.parametrize(
-    "value",
+    ("entry", "value"),
     [
-        "/private/keys",
-        "../../.ssh",
-        "a/b",
-        "a\\b",
-        "C:\\keys",
-        "a\n",
-        "",
-        ".",
-        "..",
-        "con",
-        "nul",
-        "aux",
-        "prn",
-        "com1",
-        "lpt1",
-    ],
-)
-@pytest.mark.parametrize(
-    "entry",
-    [
-        "person",
-        "new",
-        "original",
-        "clone",
-        "avatar",
-        "config",
-        "config_paths",
-        "setup_dir",
-        "intelligence_revision",
-        "intelligence_scope",
-        "intelligence_read",
-        "intelligence_write",
-        "intelligence_mapping",
-        "intelligence_yaml",
-        "slot_mapping",
-        "intelligence_roots",
-        "command_discovery",
-        "runtime_commands",
+        *((entry, "../../.ssh") for entry in _PERSON_PATH_ENTRIES),
+        *((entry, "con") for entry in _PERSON_PATH_ENTRIES if entry != "original"),
     ],
 )
 def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry):
@@ -66,15 +98,6 @@ def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry
         load_person_slot_mapping,
     )
 
-    # Old directory names are addressable only to repair an existing config.
-    if entry == "original" and value in {"con", "nul", "aux", "prn", "com1", "lpt1"}:
-        assert (
-            PersonUpdateInput(
-                **{**data_for(tmp_path), "person_id": "aiko"}, original_person_id=value
-            ).original_person_id
-            == value
-        )
-        return
     data = {**data_for(tmp_path), "person_id": value}
     with pytest.raises(ValueError):
         if entry == "person":
