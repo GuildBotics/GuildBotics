@@ -146,10 +146,9 @@ def source_link(
     url = str(item.get("url") or "")
     if not url:
         return None
-    source_type = str(item.get("type") or "").lower()
-    kind: ActivityLinkKind = "external"
-    label = title or (source_type.title() if source_type else url)
-    return ActivityHistoryLink(kind=kind, label=label, url=url, timestamp=timestamp)
+    return ActivityHistoryLink(
+        kind="external", label=title or url, url=url, timestamp=timestamp
+    )
 
 
 def commit_links(

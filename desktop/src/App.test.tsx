@@ -645,11 +645,17 @@ describe("parseTicketQuery", () => {
       value: "https://github.com/owner/repo/issues/42",
       label: "https://github.com/owner/repo/issues/42",
     });
-    // A trailing comment fragment is stripped so it matches the stored url.
-    expect(parseTicketQuery("https://github.com/o/r/pull/7#issuecomment-1")).toEqual({
+  });
+
+  it.each([
+    "https://tracker.example/work?project=A&id=T-1",
+    "https://tracker.example/work#T-1",
+    "local://tickets/acme/team/demo/T-1?view=details#entry",
+  ])("preserves the complete target URL %s for exact matching", (url) => {
+    expect(parseTicketQuery(`  ${url}  `)).toEqual({
       key: "target.url",
-      value: "https://github.com/o/r/pull/7",
-      label: "https://github.com/o/r/pull/7",
+      value: url,
+      label: url,
     });
   });
 

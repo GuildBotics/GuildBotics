@@ -2749,11 +2749,10 @@ export function parseTicketQuery(input: string): AttrFilter | null {
     };
   }
   if (/^[a-z][a-z\d+.-]*:\/\/\S+$/i.test(trimmed)) {
-    const url = trimmed.replace(/[#?].*$/, "");
     return {
       key: "target.url",
-      value: url,
-      label: url,
+      value: trimmed,
+      label: trimmed,
     };
   }
   const refMatch = trimmed.match(/^(?:[\w.-]+\/[\w.-]+)?#?(\d+)$/);

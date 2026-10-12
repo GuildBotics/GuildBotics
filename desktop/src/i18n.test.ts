@@ -108,6 +108,16 @@ describe("app language storage", () => {
 });
 
 describe("i18n resources", () => {
+  it.each([
+    ["attributeLabels.chatProvider", "Chat provider", "チャットの提供元"],
+    ["attributeLabels.targetUrl", "Target URL", "対象の URL"],
+    ["eventTypes.ticket_item", "Ticket", "チケット"],
+    ["eventTypes.target_scope_refused", "Write refused", "範囲外への書き込みを拒否"],
+  ])("translates the trace label %s in both languages", (key, en, ja) => {
+    expect(i18n.getFixedT("en")(`diagnostics.executions.${key}`)).toBe(en);
+    expect(i18n.getFixedT("ja")(`diagnostics.executions.${key}`)).toBe(ja);
+  });
+
   function collectKeys(node: unknown, prefix = ""): string[] {
     if (node && typeof node === "object" && !Array.isArray(node)) {
       return Object.entries(node as Record<string, unknown>).flatMap(([key, value]) =>

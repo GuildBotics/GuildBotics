@@ -37,16 +37,11 @@ DeviceOs = Literal["macos", "windows", "linux"]
 DeviceStatus = Literal["active", "retired"]
 
 
-def _current_schema_version(value: int) -> int:
-    """Reject a record written by a schema the running code does not implement.
-
-    Shared records switch straight to a new schema without a compatibility
-    path, so reading a version this build does not know is shared-data damage,
-    not something to interpret loosely.
-    """
-    if value != SHARED_RECORD_SCHEMA_VERSION:
+def _supported_schema_version(value: int) -> int:
+    """Reject future generations; identity fields retain the same structure."""
+    if value > SHARED_RECORD_SCHEMA_VERSION:
         raise ValueError(
-            f"schema_version must be {SHARED_RECORD_SCHEMA_VERSION}, got {value}"
+            f"schema_version must not exceed {SHARED_RECORD_SCHEMA_VERSION}, got {value}"
         )
     return value
 
@@ -62,7 +57,7 @@ def _timestamp_string(value: str) -> str:
     return value
 
 
-SchemaVersion = Annotated[int, AfterValidator(_current_schema_version)]
+SchemaVersion = Annotated[int, Field(ge=1), AfterValidator(_supported_schema_version)]
 UuidString = Annotated[str, AfterValidator(_uuid_string)]
 TimestampString = Annotated[str, AfterValidator(_timestamp_string)]
 
@@ -238,7 +233,12 @@ def set_device_display_name(display_name: str) -> DeviceIdentity:
     with held_lock(_device_identity_lock_path()):
         current = read_device_identity()
         assert current is not None  # ensured above, and only ever created
-        identity = current.model_copy(update={"display_name": name})
+        identity = current.model_copy(
+            update={
+                "display_name": name,
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+            }
+        )
         _write_device_identity(identity)
         return identity
 

@@ -6,6 +6,7 @@ from guildbotics.app_api.activity_links import (
     links_from_attributes,
     links_from_record,
     memory_diagnostics_url,
+    source_links_from_payload,
 )
 from guildbotics.app_api.models import ActivityHistoryLink
 
@@ -128,6 +129,33 @@ def test_content_changing_memory_record_yields_links() -> None:
     kinds = {link.kind for link in links}
     assert "external" in kinds
     assert "doc" in kinds
+
+
+@pytest.mark.parametrize(
+    "source_type", ["pull_request", "pr", "issue", "ticket", "thread"]
+)
+@pytest.mark.parametrize("title", ["", "Work record"])
+def test_memory_source_label_uses_title_or_url(source_type: str, title: str) -> None:
+    url = "local://tickets/acme/team/demo/T-1"
+    links = source_links_from_payload(
+        {"title": title, "source": [{"type": source_type, "url": url}]}
+    )
+
+    assert [(link.kind, link.label, link.url) for link in links] == [
+        ("external", title or url, url)
+    ]
+
+
+def test_multiple_memory_sources_are_labeled_by_each_url() -> None:
+    urls = ["local://tickets/acme/team/demo/T-1", "local://code/acme/team/demo/pull/3"]
+    links = source_links_from_payload(
+        {
+            "title": "Work record",
+            "source": [{"type": "ticket", "url": url} for url in urls],
+        }
+    )
+
+    assert [link.label for link in links] == urls
 
 
 def test_memory_diagnostics_url_namespaces_the_trace_filter() -> None:
