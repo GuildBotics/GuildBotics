@@ -100,7 +100,8 @@ on the host:
   allowed there.
 - Python runs with GuildBotics' own Python environment and Shell with the tools of
   the environment's base image; never rely on tools or packages installed on the
-  host. `context.get_ticket_manager()` is not available there.
+  host. `context.get_ticket_service()` there only reads tickets: it neither writes
+  them nor reaches the board.
 
 Produce valid, focused source with no unrequested capabilities or compatibility
 code. Use `available_commands` only for read-only reference and composition, and

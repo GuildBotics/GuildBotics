@@ -653,22 +653,14 @@ describe("parseTicketQuery", () => {
     });
   });
 
-  it("matches a number / #number / owner/repo#number on github.number", () => {
-    expect(parseTicketQuery("42")).toEqual({
-      key: "github.number",
-      value: "42",
-      label: "#42",
-    });
-    expect(parseTicketQuery("#42")).toEqual({
-      key: "github.number",
-      value: "42",
-      label: "#42",
-    });
-    expect(parseTicketQuery("owner/repo#42")).toEqual({
-      key: "github.number",
-      value: "42",
-      label: "#42",
-    });
+  it("matches a number / #number / owner/repo#number / ticket:n on the #n github.label", () => {
+    for (const input of ["42", "#42", "owner/repo#42", "ticket:42"]) {
+      expect(parseTicketQuery(input)).toEqual({
+        key: "github.label",
+        value: "#42",
+        label: "#42",
+      });
+    }
   });
 
   it("returns null for empty or non-ticket input", () => {
@@ -689,14 +681,14 @@ describe("parseTraceSearch", () => {
   it("splits an explicit ticket token from the fuzzy query", () => {
     expect(parseTraceSearch("#42 timeout failed")).toEqual({
       query: "timeout failed",
-      attrFilter: { key: "github.number", value: "42", label: "#42" },
+      attrFilter: { key: "github.label", value: "#42", label: "#42" },
     });
   });
 
   it("keeps a bare number as a ticket lookup only when it is the whole input", () => {
     expect(parseTraceSearch("42")).toEqual({
       query: "",
-      attrFilter: { key: "github.number", value: "42", label: "#42" },
+      attrFilter: { key: "github.label", value: "#42", label: "#42" },
     });
     expect(parseTraceSearch("42 timeout")).toEqual({
       query: "42 timeout",
@@ -706,12 +698,12 @@ describe("parseTraceSearch", () => {
 });
 
 describe("ticketChipInfo", () => {
-  it("prefers the url for filtering and labels issues/PRs", () => {
+  it("prefers the url for filtering and labels tickets/PRs", () => {
     expect(
       ticketChipInfo({
-        "github.number": "42",
+        "github.label": "#42",
         "github.url": "https://github.com/o/r/issues/42",
-        "github.kind": "issue",
+        "github.kind": "ticket",
       }),
     ).toEqual({
       label: "#42",
@@ -719,10 +711,26 @@ describe("ticketChipInfo", () => {
       value: "https://github.com/o/r/issues/42",
       url: "https://github.com/o/r/issues/42",
     });
-    expect(ticketChipInfo({ "github.number": "7", "github.kind": "pull_request" })).toEqual({
+    expect(ticketChipInfo({ "github.label": "#7", "github.kind": "pull_request" })).toEqual({
       label: "PR #7",
-      key: "github.number",
-      value: "7",
+      key: "github.label",
+      value: "#7",
+      url: "",
+    });
+  });
+
+  it("shows the label the service gives the item", () => {
+    expect(
+      ticketChipInfo({
+        "github.label": "T-1",
+        "github.url": "local://tickets/acme/team/demo/T-1",
+        "github.kind": "ticket",
+      }),
+    ).toMatchObject({ label: "T-1", key: "github.url" });
+    expect(ticketChipInfo({ "github.label": "!3", "github.kind": "pull_request" })).toEqual({
+      label: "PR !3",
+      key: "github.label",
+      value: "!3",
       url: "",
     });
   });
@@ -798,13 +806,13 @@ describe("recordAttributeRows", () => {
   it("labels known diagnostic attributes for display", () => {
     expect(
       recordAttributeRows(t(), {
-        "github.repo": "owner/repo",
-        "github.number": "42",
+        "github.label": "#42",
+        "github.kind": "ticket",
         unknown: "kept in raw json only",
       }),
     ).toEqual([
-      ["GitHub repository", "owner/repo"],
-      ["Ticket / PR number", "42"],
+      ["Ticket / PR", "#42"],
+      ["GitHub item type", "ticket"],
     ]);
   });
 });

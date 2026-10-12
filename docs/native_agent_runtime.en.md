@@ -715,11 +715,13 @@ environment gets and the member's name, and with none of the turn's variables,
 the broker's token, or a login stand-in.
 
 The member's GitHub token is used only on the host, by a bare repository of the
-host's own per `owner/repo` under
+host's own per repository of the code host under
 `<workspace>/.guildbotics/local/member_git/<person_id>/` that no environment
-mounts, toward the URL the host derives. `prepare` records which of those a
-clone pushes to (a fork and its upstream share one clone directory, and the
-last `prepare` decides), and a clone `prepare` did not check out is not pushed.
+mounts, toward the URL the host derives. `prepare` places a clone at the
+repository's whole path (`clones/<person_id>/<owner>/<repo>` on GitHub), so
+repositories of one name in two namespaces -- a fork and its upstream among
+them -- have a clone each, and records which repository the clone pushes to;
+a clone `prepare` did not check out is not pushed.
 History crosses between the two as git bundles streamed over the process's
 standard streams, incrementally: the host takes of what the clone sends only
 `refs/heads/<branch>` (a name git itself accepts as a branch name; at most

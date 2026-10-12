@@ -8,13 +8,13 @@ from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.github.code_hosting_service import (
     GitHubCodeHostingService,
 )
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
     get_agent_token,
     get_github_account_type,
     get_github_username,
 )
+from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
     Provider,
     ProviderCheck,
@@ -63,7 +63,7 @@ def _credentialed(person: Person) -> bool:
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:
-    if context.team.project.get_service_name(Service.TICKET_MANAGER) != "github":
+    if context.team.project.get_service_name(Service.TICKET_SERVICE) != "github":
         return []
     checks: list[ProviderCheck] = []
     lane_checked = False
@@ -73,8 +73,8 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
             continue
         c = context.clone_for(member)
         try:
-            ticket_manager = cast(GitHubTicketManager, c.get_ticket_manager())
-            statuses = await ticket_manager.get_statuses()
+            board = cast(GitHubTicketService, c.get_ticket_service())
+            statuses = await board.get_statuses()
             checks.append(
                 ProviderCheck(
                     section=_SECTION,
@@ -86,9 +86,9 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
                 )
             )
             if not lane_checked:
-                checks.extend(_lane_mapping(ticket_manager, statuses))
+                checks.extend(_lane_mapping(board, statuses))
                 lane_checked = True
-            checks.append(await _agent_assignment(ticket_manager, member))
+            checks.append(await _agent_assignment(board, member))
         except Exception as exc:
             checks.append(
                 ProviderCheck(
@@ -117,8 +117,8 @@ async def _human_member(context: Context, member: Person) -> ProviderCheck:
         )
     c = context.clone_for(member)
     try:
-        ticket_manager = cast(GitHubTicketManager, c.get_ticket_manager())
-        if await ticket_manager.is_assignable_user(username):
+        board = cast(GitHubTicketService, c.get_ticket_service())
+        if await board.is_assignable_user(username):
             return ProviderCheck(
                 section=_SECTION,
                 code="human_github_user",
@@ -150,7 +150,7 @@ async def _human_member(context: Context, member: Person) -> ProviderCheck:
 
 
 def _lane_mapping(
-    ticket_manager: GitHubTicketManager, statuses: list[str]
+    board: GitHubTicketService, statuses: list[str]
 ) -> list[ProviderCheck]:
     """Validate that the configured ready/done lanes exist on the board.
 
@@ -158,10 +158,10 @@ def _lane_mapping(
     warning (tickets simply are not moved on start), never an error.
     """
     status_set = set(statuses)
-    lane_map = ticket_manager.lane_map
-    ready = lane_map.get(GitHubTicketManager.LANE_READY)
-    done = lane_map.get(GitHubTicketManager.LANE_DONE)
-    working = lane_map.get(GitHubTicketManager.LANE_WORKING)
+    lane_map = board.lane_map
+    ready = lane_map.get(GitHubTicketService.LANE_READY)
+    done = lane_map.get(GitHubTicketService.LANE_DONE)
+    working = lane_map.get(GitHubTicketService.LANE_WORKING)
 
     checks: list[ProviderCheck] = []
     missing = [name for name in (ready, done) if name and name not in status_set]
@@ -201,7 +201,7 @@ def _lane_mapping(
 
 
 async def _agent_assignment(
-    ticket_manager: GitHubTicketManager, member: Person
+    board: GitHubTicketService, member: Person
 ) -> ProviderCheck:
     """Verify each member can receive ticket assignments.
 
@@ -213,7 +213,7 @@ async def _agent_assignment(
     assigned through the project's ``Agent`` field and need a matching option.
     """
     username = get_github_username(member)
-    if username and await ticket_manager.is_assignable_user(username):
+    if username and await board.is_assignable_user(username):
         return ProviderCheck(
             section=_SECTION,
             code="github_agent_assignment",
@@ -235,7 +235,7 @@ async def _agent_assignment(
         )
 
     token = get_agent_token(member)
-    options = await ticket_manager.get_agent_field_options()
+    options = await board.get_agent_field_options()
     if token in options:
         return ProviderCheck(
             section=_SECTION,
@@ -272,8 +272,10 @@ GITHUB = Provider(
             "github_installation_id",
         }
     ),
-    code_hosting=lambda logger, person, team: GitHubCodeHostingService(person, team),
-    ticket_manager=GitHubTicketManager,
+    code_hosting_service=lambda logger, person, team: GitHubCodeHostingService(
+        person, team
+    ),
+    ticket_service=GitHubTicketService,
     credentialed=_credentialed,
     verify=_verify,
     diagnose=_diagnose,

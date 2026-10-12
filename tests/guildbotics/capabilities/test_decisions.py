@@ -6,6 +6,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.capabilities.decisions import assessment, engines, preparation
 from guildbotics.capabilities.decisions.chat_policy import (
@@ -18,6 +19,7 @@ from guildbotics.capabilities.decisions.models import (
     DecisionConfig,
     Evaluation,
     Question,
+    Selection,
 )
 from guildbotics.capabilities.decisions.normalization import normalize
 from guildbotics.environment import inference_host
@@ -347,7 +349,7 @@ def test_failed_judgment_delegates_without_execution_settings(failure):
     assert result.model_dump() == {
         "route": "agent",
         "reason": "invalid",
-        "reaction": "",
+        "reaction": None,
         "response_effort": None,
     }
 
@@ -413,6 +415,16 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
         brain_factory=SimpleNamespace(),
     )
     assert result.route == "agent"
+
+
+def test_a_selection_carries_only_a_semantic_reaction():
+    assert Selection(route="agent", reason="r").reaction is None
+    assert (
+        Selection(route="reaction-only", reason="r", reaction="celebrate").reaction
+        == "celebrate"
+    )
+    with pytest.raises(ValidationError):
+        Selection(route="reaction-only", reason="r", reaction="thumbsup")
 
 
 def test_generic_choice_is_not_restricted_to_chat_reactions():

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from guildbotics.integrations.github import async_client, github_utils
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
+from guildbotics.utils.i18n_tool import t
+
+_RESPONSE = "integrations.github.response"
 
 
 def _github_app_auth(monkeypatch: pytest.MonkeyPatch) -> github_utils.GitHubAppAuth:
@@ -69,7 +74,7 @@ async def test_app_refresh_inherits_request_bound_before_body_buffering(
     )
     client._mounts = {}
     async with client:
-        with pytest.raises(async_client.ResponseTooLarge):
+        with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.too_large"))):
             await client.get(
                 "/repos/acme/repo/dependabot/alerts",
                 extensions={"max_response_bytes": 150},
@@ -95,7 +100,7 @@ async def test_bounded_client_stops_before_auth_or_error_hooks_buffer_body(
     )
     client._mounts = {}
     async with client:
-        with pytest.raises(async_client.ResponseTooLarge):
+        with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.too_large"))):
             await client.get(
                 "/repos/acme/repo/dependabot/alerts",
                 extensions={"max_response_bytes": 150},
@@ -147,7 +152,7 @@ async def test_bounded_client_limits_decoded_compressed_body():
     )
     client._mounts = {}
     async with client:
-        with pytest.raises(async_client.ResponseTooLarge):
+        with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.too_large"))):
             await client.get(
                 "/repos/acme/repo/dependabot/alerts",
                 extensions={"max_response_bytes": 150},
@@ -155,59 +160,124 @@ async def test_bounded_client_limits_decoded_compressed_body():
     assert stream.closed
 
 
-@pytest.mark.asyncio
-async def test_unauthorized_response_records_credential_failure(monkeypatch) -> None:
-    recorded = []
-    monkeypatch.setattr(
-        async_client,
-        "record_correlated_event",
-        lambda **kwargs: recorded.append(kwargs),
-    )
-    request = httpx.Request("GET", "https://api.github.com/rate_limit")
-    response = httpx.Response(401, request=request, text="unauthorized")
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await async_client.raise_for_status_with_text(response)
-
-    assert recorded[0]["event_type"] == "credential.failed"
-    assert recorded[0]["payload"] == {
-        "provider": "github",
-        "code": "unauthorized",
-    }
-
-
-@pytest.mark.asyncio
-async def test_token_auth_unauthorized_records_member_id(monkeypatch) -> None:
-    recorded = []
-    monkeypatch.setattr(
-        async_client,
-        "record_correlated_event",
-        lambda **kwargs: recorded.append(kwargs),
-    )
-    auth = github_utils.GitHubTokenAuth("expired", person_id="alice")
-    request = httpx.Request("GET", "https://api.github.com/rate_limit")
-    response = httpx.Response(401, request=request, text="unauthorized")
+def _client(auth: httpx.Auth, respond) -> httpx.AsyncClient:
+    """A member's client of api.github.com whose transport is ``respond``."""
     client = async_client.get_async_client("https://api.github.com", auth, "acme")
+    client._transport = httpx.MockTransport(respond)
+    client._mounts = {}
+    return client
 
-    try:
-        with pytest.raises(httpx.HTTPStatusError):
-            await client.event_hooks["response"][0](response)
-    finally:
-        await client.aclose()
 
-    assert recorded[0]["person_id"] == "alice"
+@pytest.fixture
+def recorded(monkeypatch) -> list[dict]:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        async_client, "record_correlated_event", lambda **kwargs: events.append(kwargs)
+    )
+    return events
 
 
 @pytest.mark.asyncio
-async def test_recoverable_github_app_unauthorized_is_left_to_auth_flow() -> None:
-    request = httpx.Request("GET", "https://api.github.com/rate_limit")
-    response = httpx.Response(401, request=request, text="expired")
+@pytest.mark.parametrize(
+    ("status", "headers", "kind", "message"),
+    [
+        (401, {}, async_client.GitHubResponseError, t(f"{_RESPONSE}.authentication")),
+        (403, {}, async_client.GitHubResponseError, t(f"{_RESPONSE}.forbidden")),
+        (
+            403,
+            {"x-ratelimit-remaining": "0"},
+            async_client.GitHubResponseError,
+            t(f"{_RESPONSE}.rate_limit"),
+        ),
+        (404, {}, async_client.GitHubNotFound, t(f"{_RESPONSE}.not_found")),
+        (422, {}, async_client.GitHubResponseError, t(f"{_RESPONSE}.rejected")),
+        (429, {}, async_client.GitHubResponseError, t(f"{_RESPONSE}.rate_limit")),
+        (502, {}, async_client.GitHubResponseError, t(f"{_RESPONSE}.http", status=502)),
+    ],
+)
+async def test_an_error_answer_is_a_service_error_told_from_its_status_alone(
+    recorded, status, headers, kind, message
+):
+    """#787: the client's response hook turns every error answer into the
+    ports' failure, so no provider sees an error response; what GitHub wrote
+    in it never reaches the message."""
+    client = _client(
+        github_utils.GitHubTokenAuth("token"),
+        lambda _: httpx.Response(
+            status, headers=headers, json={"message": "SECRET-BODY ghp_leak"}
+        ),
+    )
+    async with client:
+        with pytest.raises(ServiceError) as raised:
+            await client.get("/repos/acme/demo/issues/1")
 
-    returned = await async_client.raise_for_status_with_text(
-        response, handle_unauthorized=False
+    assert type(raised.value) is kind
+    assert raised.value.status == status
+    assert str(raised.value) == message
+    assert "SECRET-BODY" not in str(raised.value)
+    assert isinstance(raised.value, ServiceNotFound) == (status == 404)
+    assert [event["event_type"] for event in recorded] == (
+        ["credential.failed"] if status == 401 else []
     )
 
-    assert returned is response
+
+@pytest.mark.asyncio
+async def test_a_transport_failure_is_a_service_error(recorded):
+    def respond(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused to SECRET-HOST", request=request)
+
+    async with _client(github_utils.GitHubTokenAuth("token"), respond) as client:
+        with pytest.raises(ServiceError) as raised:
+            await client.get("/repos/acme/demo/issues/1")
+
+    assert type(raised.value) is ServiceError
+    assert str(raised.value) == t(f"{_RESPONSE}.transport")
+    assert recorded == []
+
+
+@pytest.mark.asyncio
+async def test_an_unauthorized_answer_records_the_refused_credential(recorded):
+    auth = github_utils.GitHubTokenAuth("expired", person_id="alice")
+    respond = lambda _: httpx.Response(401, text="unauthorized")  # noqa: E731
+
+    async with _client(auth, respond) as client:
+        with pytest.raises(async_client.GitHubResponseError):
+            await client.get("/rate_limit")
+
+    assert len(recorded) == 1
+    assert recorded[0]["event_type"] == "credential.failed"
+    assert recorded[0]["person_id"] == "alice"
+    assert recorded[0]["attributes"] == {
+        "credential.provider": "github",
+        "error.category": "authentication",
+    }
+    assert recorded[0]["payload"] == {"provider": "github", "code": "unauthorized"}
+
+
+@pytest.mark.asyncio
+async def test_an_app_retry_refused_again_is_an_authentication_failure_recorded_once(
+    monkeypatch, recorded
+):
+    """The app's first 401 is left to its auth flow, which renews the token;
+    a 401 to the retry is the answer, recorded once."""
+    auth = _github_app_auth(monkeypatch)
+    statuses = iter([401, 201, 401])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        status = next(statuses)
+        if status == 201:
+            return httpx.Response(
+                201, json={"token": "new", "expires_at": "2099-01-01T00:00:00Z"}
+            )
+        return httpx.Response(status, text="expired")
+
+    async with _client(auth, respond) as client:
+        with pytest.raises(async_client.GitHubResponseError) as raised:
+            await client.get("/rate_limit")
+
+    assert raised.value.status == 401
+    assert str(raised.value) == t(f"{_RESPONSE}.authentication")
+    assert [event["person_id"] for event in recorded] == ["alice"]
 
 
 def test_github_app_refresh_success_does_not_record_failure(monkeypatch) -> None:

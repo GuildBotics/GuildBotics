@@ -10,7 +10,7 @@ import pytest
 
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.slack.provider import SLACK, base_url
-from guildbotics.runtime.chat_service import ChatCredentialsError
+from guildbotics.runtime.port import ServiceError
 
 
 def _team(*members: Person, **chat: str) -> Team:
@@ -33,7 +33,7 @@ def test_members_sharing_an_app_token_share_a_connection(monkeypatch):
     monkeypatch.setenv("CAROL_SLACK_APP_TOKEN", "xapp-other")
     alice, bob, carol = _member("alice"), _member("bob"), _member("carol")
     team = _team(alice, bob, carol)
-    key = SLACK.chat.listener_key  # type: ignore[union-attr]
+    key = SLACK.chat_service.listener_key  # type: ignore[union-attr]
 
     assert key(alice, team) == key(bob, team) != key(carol, team)
     assert key(alice, team).startswith(hashlib.sha256(b"xapp-shared").hexdigest())
@@ -43,7 +43,7 @@ def test_members_sharing_an_app_token_share_a_connection(monkeypatch):
 def test_a_connection_is_per_slack_too(monkeypatch):
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-shared")
     alice = _member("alice")
-    key = SLACK.chat.listener_key  # type: ignore[union-attr]
+    key = SLACK.chat_service.listener_key  # type: ignore[union-attr]
 
     assert key(alice, _team(alice)) != key(
         alice, _team(alice, base_url="https://proxy.example.test/slack/")
@@ -54,8 +54,8 @@ def test_a_member_without_an_app_token_cannot_connect(monkeypatch):
     monkeypatch.delenv("ALICE_SLACK_APP_TOKEN", raising=False)
     alice = _member("alice")
 
-    with pytest.raises(ChatCredentialsError, match="ALICE_SLACK_APP_TOKEN"):
-        SLACK.chat.listener_key(alice, _team(alice))  # type: ignore[union-attr]
+    with pytest.raises(ServiceError, match="ALICE_SLACK_APP_TOKEN"):
+        SLACK.chat_service.listener_key(alice, _team(alice))  # type: ignore[union-attr]
 
 
 def test_slack_is_where_the_projects_chat_service_says():
@@ -70,7 +70,7 @@ def test_a_listener_connects_with_the_first_members_app_token(monkeypatch):
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-alice")
     alice, bob = _member("alice"), _member("bob")
 
-    listener = SLACK.chat.event_listener(  # type: ignore[union-attr]
+    listener = SLACK.chat_service.event_listener(  # type: ignore[union-attr]
         logging.getLogger(__name__),
         _team(alice, bob, base_url="https://proxy.example.test/slack"),
         [alice, bob],

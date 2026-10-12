@@ -77,8 +77,8 @@ BOUNDARY_LIMITS = {
 
 #: Limits on content that never reaches a shared file, and what each bounds.
 NOT_SHARED = {
-    "guildbotics/runtime/code_hosting_resources.py:MAX_PAGE_BYTES": (
-        "one GitHub read page transported through the member broker"
+    "guildbotics/runtime/resources.py:MAX_PAGE_BYTES": (
+        "one page of a service read transported through the member broker"
     ),
     "guildbotics/app_api/command_input_files.py:MAX_COMMAND_INPUT_FILE_BYTES": (
         "a temporary upload outside the workspace"
@@ -136,8 +136,8 @@ NOT_SHARED = {
     "guildbotics/environment/command_environment.py:_MAX_LOG_LINE_BYTES": (
         "one line of a command's log, logged on the host"
     ),
-    "guildbotics/runtime/code_hosting_resources.py:MAX_LOG_TAIL_BYTES": (
-        "the local command output retained from one GitHub Actions job log"
+    "guildbotics/runtime/resources.py:MAX_LOG_TAIL_BYTES": (
+        "the tail retained from one CI job log of a failed check"
     ),
     "guildbotics/intelligences/agent_runtime/wire.py:MAX_WORKTREE_LIST_BYTES": (
         "the list of files copied into a command's microVM, kept by the host"

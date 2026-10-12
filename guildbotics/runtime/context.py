@@ -12,7 +12,7 @@ from guildbotics.runtime.brain_factory import BrainFactory
 from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.log_utils import get_logger
@@ -48,7 +48,7 @@ class Context:
         self.person = person or Person(
             person_id="default_person", name="Default Person"
         )
-        self.ticket_manager: TicketManager | None = None
+        self.ticket_service: TicketService | None = None
         self.chat_service: ChatService | None = None
         self.code_hosting_service: CodeHostingService | None = None
         self.pipe = message
@@ -94,19 +94,13 @@ class Context:
             class_resolver,
         )
 
-    def get_ticket_manager(self) -> TicketManager:
-        """
-        Get a ticket manager for the given person.
-        Args:
-            person (Person): The person for whom to get the ticket manager.
-        Returns:
-            TicketManager: An instance of the ticket manager for the person.
-        """
-        if self.ticket_manager is None:
-            self.ticket_manager = self.integration_factory.create_ticket_manager(
+    def get_ticket_service(self) -> TicketService:
+        """Get the configured ticket service for the current member."""
+        if self.ticket_service is None:
+            self.ticket_service = self.integration_factory.create_ticket_service(
                 self.logger, self.person, self.team
             )
-        return self.ticket_manager
+        return self.ticket_service
 
     def get_code_hosting_service(self) -> CodeHostingService:
         """Get the configured code-hosting service for the current member."""
@@ -143,8 +137,8 @@ class Context:
         """Close cached integrations that hold network resources."""
         await _maybe_aclose(self.code_hosting_service)
         self.code_hosting_service = None
-        await _maybe_aclose(self.ticket_manager)
-        self.ticket_manager = None
+        await _maybe_aclose(self.ticket_service)
+        self.ticket_service = None
         await _maybe_aclose(self.chat_service)
         self.chat_service = None
 

@@ -8,6 +8,7 @@ from guildbotics.capabilities.decisions.models import (
     Selection,
     Truth,
 )
+from guildbotics.runtime.port import SEMANTIC_REACTIONS, SemanticReaction
 
 QUESTION_VERSION = "chat-3"
 RULE_VERSION = "chat-5"
@@ -123,6 +124,10 @@ def select(
     reaction = values["reaction"]
     if reaction == "none":
         return Selection(route="no-op", reason="none")
-    if reaction in QUESTIONS["reaction"].criteria:
-        return Selection(route="reaction-only", reason="reaction", reaction=reaction)
+    if reaction in SEMANTIC_REACTIONS:
+        return Selection(
+            route="reaction-only",
+            reason="reaction",
+            reaction=cast(SemanticReaction, reaction),
+        )
     return agent("reaction.unknown")

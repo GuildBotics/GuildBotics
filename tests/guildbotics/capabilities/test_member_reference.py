@@ -29,7 +29,9 @@ def test_reference_covers_every_member_domain():
     assert "include_diff=true" in text
     assert "guildbotics member pr create" in text
     assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
-    assert "--issue-url appends Refs #<n> unless --closes-issue is set." in text
+    assert (
+        "a code host that cannot close that ticket on a merge refuses --closes-issue"
+    ) in text
     assert "guildbotics member pr update" in text
     assert "guildbotics member pr review-comment" in text
     assert "guildbotics run repository/pr_checks" in text
@@ -50,8 +52,10 @@ def test_reference_prepare_allows_issue_and_pr_url_together():
     # The CLI accepts --issue-url and --pr-url together (the ticket workflow's
     # PR-review path generates exactly that to check out the PR head). The
     # reference must not present them as mutually exclusive, or an agent building
-    # the command itself could drop one and fall back to issue-branch mode.
-    assert "--issue-url <url> [--pr-url <url>]" in text
+    # the command itself could drop one and fall back to ticket-branch mode.
+    # A ticket that belongs to no repository names it with --repo instead.
+    assert "--issue-url <url> [--pr-url <url> | --repo <repository>]" in text
+    assert "a ticket branch `ticket/<key>`" in text
 
 
 def test_reference_includes_standard_work_procedure():
@@ -63,23 +67,23 @@ def test_reference_includes_standard_work_procedure():
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
     assert (
-        "add `--closes-issue` only when the issue is complete once this PR merges "
+        "add `--closes-issue` only when the ticket is complete once this PR merges "
         "into the branch that receives its work"
     ) in text
-    assert "A child issue can therefore use `Closes`" in text
+    assert "A child ticket can therefore be closed by a PR" in text
     assert "`--issue-url <child> --closes-issue`" in text
-    assert "`Refs #<parent>` on a standalone line" in text
-    assert "feature branch to the default branch uses `Closes` for the parent" in text
-    assert "issues that the merge does not complete" in text
+    assert "refer to the parent ticket on a standalone line" in text
+    assert "feature branch to the default branch closes the parent ticket" in text
+    assert "tickets that the merge does not complete" in text
     assert (
-        "A merge into a branch other than the default branch closes no issue "
+        "A merge into a branch other than the default branch closes no ticket "
         "automatically"
     ) in text
     assert "follow the manual-close rule below" in text
-    assert "does not by itself authorize closing the issue" in text
-    assert "the issue closes when a human merges the PR" not in text
+    assert "does not by itself authorize closing the ticket" in text
     assert "files[].commentable_lines" in text
     assert "`line`, `side`" in text
+    assert "`member pr review-comment --head <head_sha>`" in text
     assert "take `path` from the containing file" in text
     assert "--start-line" in text
     assert "--start-side" in text
@@ -145,7 +149,7 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
-    assert "code-host and chat access, reads and writes alike" in text
+    assert "ticket, code-host, and chat access, reads and writes alike" in text
     assert "Never use a service's own CLI such as `gh`" in text
     assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
@@ -156,34 +160,34 @@ def test_reference_states_cross_cutting_rules():
 
 def test_reference_states_which_code_host_writes_stay_human_decisions():
     text = capability_reference_text()
-    # Opening/closing issues, priority, and assignees are decisions the member
+    # Opening/closing tickets, priority, and assignees are decisions the member
     # must not take on its own; the reference is where a member learns that.
     assert "--human-approved" in text
     assert "never on the member's own judgment" in text
     approval_rule = (
         "Pass `--human-approved` only when a human in the originating conversation "
-        "asked for or approved that specific issue, never on the member's own judgment "
+        "asked for or approved that specific ticket, never on the member's own judgment "
         "and never because another member asked for it."
     )
     manual_close_exception = (
         "The one exception is a human's merge outside the default branch: if the "
-        "code host does not close an issue after a human merges its PR there"
+        "code host does not close a ticket after a human merges its PR there"
     )
     assert f"{approval_rule} {manual_close_exception}" in text
-    assert "inspect the current PR and issue" in text
-    assert "verify that the merge completed the issue's whole scope" in text
-    assert "post a completion comment and close the issue" in text
+    assert "inspect the current PR and ticket" in text
+    assert "verify that the merge completed the ticket's whole scope" in text
+    assert "post a completion comment and close the ticket" in text
     assert (
         "ticket update --state closed --state-reason completed --human-approved" in text
     )
-    assert "leave the issue open and comment on what remains" in text
+    assert "leave the ticket open and comment on what remains" in text
     assert "Priority is a human triage decision" in text
     assert (
-        "do not express urgency by adding a label or setting a project or issue field"
+        "do not express urgency by adding a label or setting a board or ticket field"
         in (text)
     )
-    assert "Assignees are read-only on purpose" in text
-    assert "the labels the target repository already defines" in text
+    assert "Assignees and the lane are read-only on purpose" in text
+    assert "the labels the target tracker already defines" in text
 
 
 def test_reference_standardizes_free_form_input_with_utf8_files():
@@ -211,7 +215,7 @@ def test_reference_standardizes_free_form_input_with_utf8_files():
 
 def test_reference_documents_complete_content_command_usage():
     text = capability_reference_text()
-    assert "[--add-to-project|--no-add-to-project]" in text
+    assert "[--add-to-board|--no-add-to-board]" in text
     assert "(--channel-id <id> | --channel-name <name>) --thread-id <id>" in text
     assert "[--scope personal|team] --title <title> --content-file <file>" in text
     assert "[--keyword <word> ...] [--add-keyword <word> ...]" in text

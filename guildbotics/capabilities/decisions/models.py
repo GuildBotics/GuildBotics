@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from guildbotics.runtime.port import SemanticReaction
+
 Truth = Literal["true", "false", "unknown"]
 
 
@@ -46,6 +48,6 @@ class Selection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     route: Literal["agent", "reaction-only", "no-op"]
     reason: str
-    reaction: str = ""
+    reaction: SemanticReaction | None = None
     # No decision preserves the response workflow's existing effort.
     response_effort: Literal["default", "high"] | None = None

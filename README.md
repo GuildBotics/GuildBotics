@@ -181,7 +181,7 @@ This is the flow where you ask a member for work through a GitHub Projects ticke
 
 **Note**: GitHub integration is optional. Without it you can still use the Slack chat workflow and automate commands on a schedule.
 
-**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App. GitHub's own authorization limits which repositories that credential can push to and change, but **Only select repositories** does not stop it from creating issues, comments, reviews, or reactions on any public repository. So GuildBotics refuses, before sending anything, every GitHub write of a member (including `git push`) to a repository whose owner is not the owner configured for the project (`services.code_hosting_service.owner` in `team/project.yml`, or `services.ticket_manager.owner` when that is not set). Reads are not limited: a pull request from a fork can be checked out and reviewed, but its fork is not pushed to. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
+**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App. GitHub's own authorization limits which repositories that credential can push to and change, but **Only select repositories** does not stop it from creating issues, comments, reviews, or reactions on any public repository. So GuildBotics refuses, before sending anything, every GitHub write of a member (including `git push`) to a repository whose owner is not the owner configured for that service (`services.code_hosting_service.owner` in `team/project.yml` for the code host, including `git push`, and `services.ticket_service.owner` for issues and the Project). Reads are not limited: a pull request from a fork can be checked out and reviewed, but its fork is not pushed to. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
 
 ### What It Does
 
@@ -285,7 +285,7 @@ Press **Validate settings** under **Setup → Verification** in the desktop app 
 - By default `Todo` is ready, `In Progress` is working, and `Done` is done. A standard board needs no configuration
 - Statuses **between** ready and done (for example `In Review`) are automatically treated as working
 - Statuses **before** ready (for example `Backlog`) and **at or after** done (for example `Icebox`) are ignored. Intermediate or holding lanes can be added just by ordering the board columns
-- If you use your own status names, map them under **Setup → GitHub** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_manager.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
+- If you use your own status names, map them under **Setup → GitHub** → **Lane mapping** in the desktop app. Without the GUI, set `services.ticket_service.lane_map` in `team/project.yml` (→ [Configuration Files](#configuration-files))
 
 ### Start the Service and Ask for Work
 
@@ -950,8 +950,8 @@ discarding; the activity history record stays either way.
 - `name`: project name
 - `description`: short project description used as agent context
 - `language`: project language
-- `services.ticket_manager`: GitHub Projects settings
-- `services.ticket_manager.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
+- `services.ticket_service`: GitHub issues and Projects settings
+- `services.ticket_service.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
 - `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 

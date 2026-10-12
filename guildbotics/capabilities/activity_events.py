@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from logging import getLogger
 
+from guildbotics.capabilities.member_activity_events import (
+    EVENT_SUBJECTS,
+    target_record,
+)
 from guildbotics.entities.team import Service, Team
 from guildbotics.integrations.factory import (
     PROVIDERS,
@@ -21,7 +25,7 @@ async def refresh_activity_events(team: Team, start: datetime, end: datetime) ->
     inventing a repository list or subscribing to unrelated events. The board
     is read as the first member it would accept the credential of.
     """
-    provider = PROVIDERS.get(team.project.get_service_name(Service.TICKET_MANAGER))
+    provider = PROVIDERS.get(team.project.get_service_name(Service.TICKET_SERVICE))
     person = next(
         (
             member
@@ -32,37 +36,28 @@ async def refresh_activity_events(team: Team, start: datetime, end: datetime) ->
     )
     if person is None:
         return 0
-    manager = ServiceIntegrationFactory().create_ticket_manager(
+    tickets = ServiceIntegrationFactory().create_ticket_service(
         getLogger(__name__), person, team
     )
     try:
-        closed = await manager.closed_since(start, end)
+        closed = await tickets.closed_since(start, end)
     finally:
-        await manager.aclose()
+        await tickets.aclose()
     existing = _existing_activity_ids(start, end)
     recorded = 0
     for item in closed:
         activity = "merged" if item.merged else "closed"
-        activity_id = f"{item.kind}:{item.repo}:{item.number}:{activity}"
+        activity_id = f"{item.kind}:{item.url}:{activity}"
         if activity_id in existing:
             continue
+        entry, attributes = target_record(item.model_dump())
+        subject = EVENT_SUBJECTS[item.kind]
         record_correlated_event(
-            event_type=f"github.{item.kind}",
-            payload={
-                "action": "closed",
-                item.kind: {
-                    "number": item.number,
-                    "title": item.title,
-                    "html_url": item.url,
-                    "merged": item.merged,
-                },
-            },
+            event_type=f"github.{subject}",
+            payload={"action": "closed", subject: {**entry, "merged": item.merged}},
             attributes={
                 "github.action": "closed",
-                "github.kind": item.kind,
-                "github.number": str(item.number),
-                "github.url": item.url,
-                "github.repo": item.repo,
+                **attributes,
                 "github.activity_id": activity_id,
             },
             default_source="github",

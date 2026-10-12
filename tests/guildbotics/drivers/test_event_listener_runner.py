@@ -26,6 +26,7 @@ from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.local.chat import LocalChatService
 from guildbotics.runtime.chat_service import ChatEvent
+from guildbotics.runtime.port import WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 from tests.guildbotics.local_chat import at, chat_event, chat_team, lines, say
 from tests.guildbotics.runtime.configured_team import make_context
@@ -347,10 +348,7 @@ async def test_a_workflow_status_message_is_marked_processed_not_queued(monkeypa
         chat_event(
             "100.1",
             text="workflow notice",
-            metadata={
-                "event_type": "guildbotics.workflow_status",
-                "event_payload": {"routing": "suppress"},
-            },
+            status=WorkflowStatus(reason="failed", person_id="bob", run_id="run-1"),
         )
     )
 

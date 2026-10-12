@@ -43,6 +43,7 @@ from guildbotics.runtime.member_invocation import (
     Work,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import WorkflowStatus
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     ChatTurn,
@@ -98,9 +99,14 @@ class FakeChatService(LocalChatService):
         return await super().post_message(channel_id, text, **kwargs)
 
     @property
-    def posts(self) -> list[tuple[str, str, str, dict | None]]:
+    def posts(self) -> list[tuple[str, str, str, WorkflowStatus | None]]:
         return [
-            ("C1", line["text"], line["thread_id"], line.get("metadata"))
+            (
+                "C1",
+                line["text"],
+                line["thread_id"],
+                WorkflowStatus.from_payload(line.get("status")),
+            )
             for line in _channel()
             if line.get("author") == "alice" and "reaction" not in line
         ]
@@ -1214,16 +1220,16 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
         "local", "alice", "C1"
     ).processed_event_ids == ["C1:100.1"]
     assert len(service.posts) == 1
-    channel_id, text, thread_id, metadata = service.posts[0]
+    channel_id, text, thread_id, status = service.posts[0]
     assert channel_id == "C1"
     assert thread_id == "100.1"
     assert text == t(
         "commands.workflows.chat_conversation_workflow.incomplete_escalation"
     )
-    assert metadata is not None
-    assert metadata["event_type"] == "guildbotics.workflow_status"
-    assert metadata["event_payload"]["routing"] == "suppress"
-    assert metadata["event_payload"]["reason"] == "failed"
+    assert status is not None
+    assert status.reason == "failed"
+    assert status.person_id == "alice"
+    assert status.subject == "C1:100.1"
     # Giving up must be visible in the logs as an error, not silent.
     error_lines = [line for line in ctx.logger.lines if line[0] == "error"]
     assert len(error_lines) == 1
@@ -1306,18 +1312,17 @@ async def test_rate_limit_posts_notice_and_leaves_event_pending(
         await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert len(service.posts) == 1
-    _channel_id, text, _thread_ts, metadata = service.posts[0]
+    _channel_id, text, _thread_ts, status = service.posts[0]
     assert text == t(
         f"commands.workflows.common.rate_limited_escalation{suffix}",
         retry_after="2026-07-04 11:44:00+09:00" if at else hint,
         retry_guidance=t("commands.workflows.common.rate_limited_retry_chat"),
     )
-    assert metadata is not None
-    payload = metadata["event_payload"]
-    assert payload["reason"] == "rate_limited"
-    assert payload["routing"] == "suppress"
-    assert payload.get("retry_after_at", "") == at
-    assert payload.get("retry_after_text", "") == hint
+    assert status is not None
+    assert status.reason == "rate_limited"
+    assert status.subject == "C1:100.1"
+    assert status.retry_after_at == at
+    assert status.retry_after_text == hint
     assert (
         state_store.load_channel_cursor("local", "alice", "C1").processed_event_ids
         == []

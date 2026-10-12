@@ -25,8 +25,8 @@ from guildbotics.integrations.slack.slack_chat_service import (
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
-from guildbotics.runtime.chat_service import ChatCredentialsError
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.port import ServiceError
 
 _SECTION = "slack"
 _USER_ID = re.compile(r"^[UW][A-Z0-9]{8,}$")
@@ -64,7 +64,7 @@ def _listener_key(person: Person, team: Team) -> str:
     connection."""
     token = _app_token(person)
     if not token:
-        raise ChatCredentialsError(
+        raise ServiceError(
             f"Slack App Token is required for person '{person.person_id}'. "
             f"Set environment variable '{person.to_person_env_key('SLACK_APP_TOKEN')}'."
         )
@@ -286,7 +286,7 @@ SLACK = Provider(
     name="slack",
     secret_keys=frozenset({"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"}),
     account_info_keys=frozenset({"slack_user_id"}),
-    chat=Chat(
+    chat_service=Chat(
         service=_chat, event_listener=_event_listener, listener_key=_listener_key
     ),
     credentialed=lambda person: person.has_secret("SLACK_BOT_TOKEN"),

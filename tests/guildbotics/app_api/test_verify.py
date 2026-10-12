@@ -367,7 +367,7 @@ def test_verify_github_credentials_present(
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(
-        project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
+        project=Project(name="demo", services={"ticket_service": {"name": "GitHub"}}),
         members=[
             Person(
                 person_id="alice",
@@ -404,7 +404,7 @@ def test_verify_accepts_private_key_content_from_keychain(
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(
-        project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
+        project=Project(name="demo", services={"ticket_service": {"name": "GitHub"}}),
         members=[
             Person(
                 person_id="alice",
@@ -447,7 +447,7 @@ def test_verify_github_credentials_missing(
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(
-        project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
+        project=Project(name="demo", services={"ticket_service": {"name": "GitHub"}}),
         members=[
             Person(
                 person_id="alice",
@@ -476,7 +476,7 @@ def test_verify_human_member_has_no_github_keys(
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(
-        project=Project(name="demo", services={"ticket_manager": {"name": "GitHub"}}),
+        project=Project(name="demo", services={"ticket_service": {"name": "GitHub"}}),
         members=[
             Person(
                 person_id="alice",
@@ -508,7 +508,7 @@ def test_verify_checks_env_keys_and_github_credentials(
     )
     project = Project(
         name="demo",
-        services={"ticket_manager": {"name": "GitHub"}},
+        services={"ticket_service": {"name": "GitHub"}},
     )
     team = Team(
         project=project,

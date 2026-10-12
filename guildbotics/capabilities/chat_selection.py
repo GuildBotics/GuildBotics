@@ -49,12 +49,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadHandoffState,
     ThreadSystemNoticeState,
 )
-from guildbotics.integrations.chat_workflow_status import (
-    WORKFLOW_STATUS_KIND,
-    is_suppressed_chat_event,
-    workflow_status_fields,
-    workflow_status_metadata,
-)
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.chat_service import ChatEvent, ChatMessage, ChatService
@@ -66,10 +60,13 @@ from guildbotics.runtime.member_invocation import (
     current_member_invocation,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import WorkflowStatus, WorkflowStatusReason
 from guildbotics.runtime.workflow_invocation import ChatTurn
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import await_shared_change
 
+#: The kind of the notice a thread keeps of the status posted in it.
+_WORKFLOW_STATUS_NOTICE = "workflow_error"
 _MAX_THREAD_CONTEXT_MESSAGES = 100
 _MAX_HANDOFF_TEXT_LENGTH = 240
 
@@ -459,6 +456,7 @@ class ChatSelector:
         ensure_chat_current(person_id)
         store = RunStore()
         if decision.route == "reaction-only":
+            assert decision.reaction is not None
             existing = any(
                 item["evidence_type"] == "chat_reaction"
                 and item["payload"].get("message_id") == reaction_target
@@ -544,14 +542,14 @@ class ChatSelector:
         batch: ChatBatch,
         run_id: str,
         *,
-        reason: str,
+        reason: WorkflowStatusReason,
         retry_after_at: str = "",
         retry_after_text: str = "",
     ) -> None:
         """Post a thread reply when the member could not complete the event."""
         thread_state = batch.thread_state
         source_event_id = batch.event.event_id
-        if _has_system_notice(thread_state, WORKFLOW_STATUS_KIND, source_event_id):
+        if _has_system_notice(thread_state, _WORKFLOW_STATUS_NOTICE, source_event_id):
             return
         message = _workflow_status_notice_text(reason, retry_after_at, retry_after_text)
         try:
@@ -559,22 +557,20 @@ class ChatSelector:
                 batch.channel_id,
                 message,
                 thread_id=batch.event.thread_id,
-                metadata=workflow_status_metadata(
-                    workflow_status_fields(
-                        reason=reason,
-                        person_id=self._person_id,
-                        run_id=run_id,
-                        retry_after_at=retry_after_at,
-                        retry_after_text=retry_after_text,
-                        source_event_id=source_event_id,
-                    )
+                status=WorkflowStatus(
+                    reason=reason,
+                    person_id=self._person_id,
+                    run_id=run_id,
+                    subject=source_event_id,
+                    retry_after_at=retry_after_at,
+                    retry_after_text=retry_after_text,
                 ),
             )
         except Exception:
             return
         thread_state.system_notices.append(
             ThreadSystemNoticeState(
-                kind=WORKFLOW_STATUS_KIND,
+                kind=_WORKFLOW_STATUS_NOTICE,
                 reason=reason,
                 person_id=self._person_id,
                 source_event_id=source_event_id,
@@ -706,7 +702,7 @@ def _collect_batch_events(
         and item.thread_id == event.thread_id
         and item.position >= event.position
         and item.event_id not in processed_event_ids
-        and not is_suppressed_chat_event(item)
+        and item.status is None
     }
     return sorted(events.values(), key=lambda item: item.position)
 

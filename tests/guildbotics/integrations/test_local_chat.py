@@ -13,11 +13,8 @@ import pytest
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local import chat
 from guildbotics.integrations.local.chat import LocalChatListener, LocalChatService
-from guildbotics.runtime.chat_service import (
-    ChatEvent,
-    ChatServiceError,
-    ChatThreadNotFoundError,
-)
+from guildbotics.runtime.chat_service import ChatEvent
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from tests.guildbotics.local_chat import at, say
 
 #: Lines no message or reaction is recorded in.
@@ -105,13 +102,35 @@ async def test_reading_a_channel_passes_over_a_bad_line(bad):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"kind": "workflow_error", "reason": "unknown", "person_id": "otota"},
+        {"kind": "other", "reason": "failed", "person_id": "otota"},
+        "failed",
+    ],
+)
+async def test_a_status_that_is_none_leaves_its_message_carrying_none(status):
+    """A person may write any ``status``: the message still arrives, as
+    work, when what it carries is no workflow status."""
+    line = json.loads(_line("t1", 1, "root"))
+    _write("C1", json.dumps({**line, "status": status}))
+
+    channel = await LocalChatService(
+        Person(person_id="aiko", name="Aiko")
+    ).list_channel_events("C1")
+
+    assert [(e.message_id, e.status) for e in channel.events] == [("t1", None)]
+
+
+@pytest.mark.asyncio
 async def test_a_channel_nothing_was_written_to_is_empty_and_one_unreadable_fails():
     """A channel with no file yet has no messages and no threads; one whose
     file cannot be read has no answer, never an empty one."""
     service = LocalChatService(Person(person_id="aiko", name="Aiko"))
 
     assert (await service.list_channel_events("C1")).events == []
-    with pytest.raises(ChatThreadNotFoundError):
+    with pytest.raises(ServiceNotFound):
         await service.list_thread_events("C1", thread_id="t1")
     assert await service.resolve_channel_id("C1") is None
 
@@ -122,9 +141,9 @@ async def test_a_channel_nothing_was_written_to_is_empty_and_one_unreadable_fail
         service.list_channel_events("C1"),
         service.list_thread_events("C1", thread_id="t1"),
     ):
-        with pytest.raises(ChatServiceError, match="cannot be read") as caught:
+        with pytest.raises(ServiceError, match="cannot be read") as caught:
             await read
-        assert not isinstance(caught.value, ChatThreadNotFoundError)
+        assert not isinstance(caught.value, ServiceNotFound)
 
 
 @pytest.mark.asyncio
@@ -132,7 +151,7 @@ async def test_a_cursor_no_page_gave_is_refused():
     say("C1", "root", message_id="t1", occurred_at=at(1))
 
     for cursor in ("abc", "²"):
-        with pytest.raises(ChatServiceError, match="cursor"):
+        with pytest.raises(ServiceError, match="cursor"):
             await LocalChatService(
                 Person(person_id="aiko", name="Aiko")
             ).list_channel_events("C1", cursor=cursor)

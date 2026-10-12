@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from markdown_it import MarkdownIt
 
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.runtime.port import ServiceError
 
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
@@ -96,7 +96,7 @@ def _append_trailer(body: str, trailer: str) -> str:
         link.trailer == trailer and link.start == len(result) - len(trailer)
         for link in _issue_links(result)
     ):
-        raise MemberCapabilityError(
+        raise ServiceError(
             "Cannot append an issue link outside Markdown code or HTML. "
             "Close the open code or HTML block in the body first."
         )
@@ -116,13 +116,10 @@ def preserve_issue_links(body: str, previous_body: str) -> str:
     return body
 
 
-def append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
-    if not issue_url:
-        return body
-    match = re.search(r"/issues/(\d+)", issue_url)
-    if not match:
-        return body
-    issue_number = match.group(1)
+def append_issue_link(body: str, number: int, *, closes: bool) -> str:
+    """``body`` linking the issue ``number`` of its repository, closing it on a
+    merge or referring to it."""
+    issue_number = str(number)
     links = [link for link in _issue_links(body) if link.number == issue_number]
     refs = [link for link in links if re.match(_ISSUE_REFS_KEYWORD, link.trailer, re.I)]
     if len(links) > len(refs):

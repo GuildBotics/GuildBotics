@@ -80,8 +80,8 @@ GuildBoticsコマンドの正しい意味を維持してください。
   だけ届きます（省略時は拒否）。ネットワークに接続するコマンドは、そこで許可が必要な接続先を
   `description`に書きます。
 - PythonはGuildBotics自身のPython環境で、Shellは隔離環境のベースイメージにあるツールで動きます。
-  hostにインストールしたツールやpackageに依存してはいけません。`context.get_ticket_manager()`は
-  使えません。
+  hostにインストールしたツールやpackageに依存してはいけません。そこでの`context.get_ticket_service()`は
+  チケットを読むだけで、書き込みもボードの操作もできません。
 
 依頼されていないcapabilityや互換コードを加えず、有効で焦点の合ったソースを生成してください。
 `available_commands`は参照・合成判断のためだけに使い、変更対象は`allowed_operations`に限定してください。

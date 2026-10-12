@@ -3,6 +3,7 @@
 
 from collections.abc import Callable
 from logging import Logger
+from typing import Any
 
 from guildbotics.entities import Person, Service, Team
 from guildbotics.integrations.event_listener import EventListener
@@ -11,10 +12,10 @@ from guildbotics.integrations.local.provider import LOCAL
 from guildbotics.integrations.provider import Chat, Provider
 from guildbotics.integrations.slack.provider import SLACK
 from guildbotics.runtime import IntegrationFactory
-from guildbotics.runtime.chat_service import ChatService, ChatServiceError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
 
 PROVIDERS: dict[str, Provider] = {
@@ -33,18 +34,29 @@ def chat_provider_name(team: Team) -> str:
     recorded of its chat.
 
     Raises:
-        ChatServiceError: If the project names none, or one that has no chat.
+        ServiceError: If the project names none, or one that has no chat.
     """
     _chat(team)
     return team.project.get_service_name(Service.CHAT_SERVICE)
 
 
+def _served(team: Team, service: Service) -> Any:
+    """What the provider the project names for ``service`` makes of it.
+
+    Raises:
+        ServiceError: If the project names none, or one that does not serve it.
+    """
+    name = team.project.get_service_name(service)
+    made = getattr(PROVIDERS.get(name), service.value, None)
+    if made is None:
+        raise ServiceError(
+            t("integrations.resources.unsupported", service=service.value, name=name)
+        )
+    return made
+
+
 def _chat(team: Team) -> Chat:
-    name = team.project.get_service_name(Service.CHAT_SERVICE)
-    provider = PROVIDERS.get(name)
-    if provider is None or provider.chat is None:
-        raise ChatServiceError(t("integrations.chat.unsupported", name=name))
-    return provider.chat
+    return _served(team, Service.CHAT_SERVICE)
 
 
 class ServiceIntegrationFactory(IntegrationFactory):
@@ -53,25 +65,12 @@ class ServiceIntegrationFactory(IntegrationFactory):
     def create_code_hosting_service(
         self, logger: Logger, person: Person, team: Team
     ) -> CodeHostingService:
-        provider = PROVIDERS.get(
-            team.project.get_service_name(Service.CODE_HOSTING_SERVICE)
-        )
-        if provider is None or provider.code_hosting is None:
-            raise RepositoryReadError(t("integrations.repository.unsupported"))
-        return provider.code_hosting(logger, person, team)
+        return _served(team, Service.CODE_HOSTING_SERVICE)(logger, person, team)
 
-    def create_ticket_manager(
+    def create_ticket_service(
         self, logger: Logger, person: Person, team: Team
-    ) -> TicketManager:
-        name = team.project.get_service_name(Service.TICKET_MANAGER)
-        if not name:
-            raise ValueError(
-                "Issue tracking service name is required in the service configuration."
-            )
-        provider = PROVIDERS.get(name)
-        if provider is None or provider.ticket_manager is None:
-            raise ValueError(f"Unsupported issue tracking service: {name}")
-        return provider.ticket_manager(logger, person, team)
+    ) -> TicketService:
+        return _served(team, Service.TICKET_SERVICE)(logger, person, team)
 
     def create_chat_service(
         self, logger: Logger, person: Person, team: Team
@@ -93,6 +92,6 @@ class ServiceIntegrationFactory(IntegrationFactory):
         """The connection ``person``'s chat events arrive on.
 
         Raises:
-            ChatServiceError: If the person cannot connect.
+            ServiceError: If the person cannot connect.
         """
         return _chat(team).listener_key(person, team)

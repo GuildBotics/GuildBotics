@@ -12,6 +12,7 @@ Every process the host itself starts goes through ``subprocess.run``
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import shutil
 import subprocess
@@ -20,17 +21,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import git
-import httpx
 import pytest
 
 from guildbotics.capabilities import member_git
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
-from guildbotics.entities.team import Person, Project, Team
+from guildbotics.entities.team import Person
 from guildbotics.integrations import repository_scope
 from guildbotics.integrations.local import store
 from guildbotics.integrations.local.code_hosting import LocalCodeHostingService
-from guildbotics.integrations.repository_scope import RepositoryScopeError
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.integrations.local.tickets import LocalTicketService
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     GuestProcessError,
@@ -39,11 +39,26 @@ from guildbotics.runtime.member_invocation import (
     Work,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from tests.git_seed import WorkerGitSeed
-from tests.guildbotics.local_code_host import write
+from tests.guildbotics.local_code_host import (
+    REPOSITORY,
+    TRACKER,
+    local_team,
+    pull_request,
+    ticket,
+    tracker,
+)
 
 GUEST_MARK = "GUILDBOTICS_TEST_GUEST"
-_ISSUE = "local://owner/repo/issues/1"
+#: A repository of the same name as ``REPOSITORY``, outside the scope the
+#: member writes in.
+FORK = "contributor/team/demo"
+#: The remotes a member reaches, by who keeps them.
+_REPOSITORIES = {"owner": REPOSITORY, "contributor": FORK}
+#: The ticket of ``REPOSITORY`` the member works on, and its branch.
+_ISSUE = f"local://tickets/{TRACKER}/T-1"
+_TICKET_BRANCH = "ticket/T-1"
 _REAL_RUN = subprocess.run
 #: What the member's git may be given inside the environment.
 _GUEST_ENV_KEYS = {
@@ -165,49 +180,36 @@ class _CredentialedHost(LocalCodeHostingService):
 class _Member:
     """A member with a command's environment, and the remotes it reaches.
 
-    ``remotes[owner]`` is the ``<owner>/repo`` repository of the local code
-    host.
+    ``remotes[owner]`` is the repository ``_REPOSITORIES[owner]`` of the local
+    code host.
     """
 
     service: MemberGitWorkspaceService
     guest: _LocalGuest
     remotes: dict[str, Path]
 
-    def pull_request(self, number: int, head: str, head_repo: str = "") -> str:
-        """Open ``#<number>`` of owner/repo from ``head`` (of ``head_repo``)."""
-        write(
-            "owner",
-            "repo",
-            {
-                "kind": "pull_request",
-                "number": number,
-                "title": "PR",
-                "body": "",
-                "state": "open",
-                "author": "someone",
-                "head": head,
-                "head_repo": head_repo or None,
-                "base": "main",
-                "draft": False,
-                "reviewers": [],
-                "reviews": [],
-                "review_comments": [],
-                "comments": [],
-                "created_at": store.now(),
-            },
-        )
-        return store.url("owner", "repo", "pull_request", number)
+    def pull_request(self, number: int, head: str, head_repository: str = "") -> str:
+        """Open ``!<number>`` of ``REPOSITORY`` from ``head`` (of
+        ``head_repository``)."""
+        return pull_request(number, head, head_repository=head_repository or REPOSITORY)
+
+    def clone_of(self, repository: str) -> Path:
+        """Where the member's clone of ``repository`` is: its whole path."""
+        return self.service.workspace_root.joinpath(*repository.split("/"))
 
     @property
     def clone(self) -> Path:
-        return self.service.workspace_root / "repo"
+        return self.clone_of(REPOSITORY)
 
     def url(self, owner: str) -> str:
         return self.remotes[owner].as_uri()
 
-    @property
-    def origin(self) -> Path:
-        return self.service.host_root / "repositories"
+    def origin(self, repository: str = REPOSITORY) -> Path:
+        """The host's own repository of ``repository``."""
+        *namespace, name = repository.split("/")
+        return self.service.host_root.joinpath(
+            "repositories", *namespace, f"{name}.git"
+        )
 
     def run(self, operation: Callable[[MemberGitWorkspaceService], object]):
         async def invoke():
@@ -220,15 +222,20 @@ class _Member:
         anchor = anchor or {"issue_url": _ISSUE}
         return await self.run(lambda service: service.prepare(**anchor))
 
-    def repo(self) -> git.Repo:
-        return git.Repo(self.clone)
+    def repo(self, repository: str = REPOSITORY) -> git.Repo:
+        return git.Repo(self.clone_of(repository))
 
     def remote(self, owner: str = "owner") -> git.Repo:
         return git.Repo(self.remotes[owner])
 
-    def stage(self, name: str = "README.md", content: str = "changed\n") -> git.Repo:
-        (self.clone / name).write_text(content, encoding="utf-8")
-        repo = self.repo()
+    def stage(
+        self,
+        name: str = "README.md",
+        content: str = "changed\n",
+        repository: str = REPOSITORY,
+    ) -> git.Repo:
+        (self.clone_of(repository) / name).write_text(content, encoding="utf-8")
+        repo = self.repo(repository)
         repo.git.add(A=True)
         return repo
 
@@ -241,16 +248,15 @@ def member(
     posix_sh: str,
 ) -> _Member:
     remotes: dict[str, Path] = {}
-    for owner in ("owner", "contributor"):
-        remotes[owner] = store.bare(owner, "repo")
+    for owner, repository in _REPOSITORIES.items():
+        remotes[owner] = store.bare(repository)
         worker_git_seed.copy(worker_git_seed.member_remote, remotes[owner])
-    project = Project(
-        name="demo",
-        services={"code_hosting_service": {"name": "local", "owner": "owner"}},
-    )
-    team = Team(project=project, members=[_person()])
-    code = _CredentialedHost(_person(), team)
-    service = MemberGitWorkspaceService(_person(), team, lambda: code)
+    ticket(1)
+    person = _person()
+    team = local_team(person)
+    code = _CredentialedHost(person, team)
+    tickets = LocalTicketService(logging.getLogger(__name__), person, team)
+    service = MemberGitWorkspaceService(person, team, lambda: code, lambda: tickets)
     # The command's turns work in it: it is there before any of them runs.
     service.workspace_root.mkdir(parents=True)
     return _Member(service, _LocalGuest(posix_sh), remotes)
@@ -493,27 +499,32 @@ async def test_publish_commits_pushes_and_preserves_worktree(member, host_git):
 
     assert result.has_changes is True
     assert result.pushed is True
-    assert result.branch == "ticket/1"
+    assert result.branch == _TICKET_BRANCH
     assert result.commits == [
         {"id": result.commit_sha, "message": "publish changes", "url": ""}
     ]
     assert readme.read_text(encoding="utf-8") == "initial\nchanged\n"
     assert untracked.read_text(encoding="utf-8") == "new\n"
     assert repo.is_dirty(untracked_files=True) is False
-    assert member.remote().commit("ticket/1").hexsha == result.commit_sha
+    assert member.remote().commit(_TICKET_BRANCH).hexsha == result.commit_sha
     published = repo.commit(result.commit_sha)
     assert published.author.email == "aiko@example.com"
     assert published.committer.email == "aiko@example.com"
     # The clone knows it is pushed.
-    assert repo.commit("refs/remotes/origin/ticket/1").hexsha == result.commit_sha
+    assert (
+        repo.commit(f"refs/remotes/origin/{_TICKET_BRANCH}").hexsha == result.commit_sha
+    )
     push = next(call for call in host_git if "push" in call.args)
-    assert push.args[-2:] == ("origin", "refs/heads/ticket/1:refs/heads/ticket/1")
+    assert push.args[-2:] == (
+        "origin",
+        f"refs/heads/{_TICKET_BRANCH}:refs/heads/{_TICKET_BRANCH}",
+    )
     _connects_to(push, member.url("owner"))
 
 
 @pytest.mark.asyncio
 async def test_push_without_local_commits_reports_up_to_date(member):
-    await member.prepare(repo="owner/repo", branch="main")
+    await member.prepare(repo=REPOSITORY, branch="main")
 
     result = await member.run(lambda s: s.push(member.clone))
 
@@ -530,21 +541,21 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(member, monkey
     member.repo().index.commit("local commit")
     calls = {}
 
-    member.pull_request(7, "ticket/1")
+    pr_url = member.pull_request(7, _TICKET_BRANCH)
     open_pull_requests = member.service.code.open_pull_requests
 
-    async def observed(remote_url, branch):
-        calls.update({"remote_url": remote_url, "branch": branch})
-        return await open_pull_requests(remote_url, branch)
+    async def observed(repository, branch):
+        calls.update({"repository": repository, "branch": branch})
+        return await open_pull_requests(repository, branch)
 
     monkeypatch.setattr(member.service.code, "open_pull_requests", observed)
 
     result = await member.run(lambda s: s.push(member.clone))
 
-    assert calls == {"remote_url": member.url("owner"), "branch": "ticket/1"}
+    assert calls == {"repository": REPOSITORY, "branch": _TICKET_BRANCH}
     assert result.pull_requests == [
         {
-            "pr_url": "local://owner/repo/pull/7",
+            "url": pr_url,
             "readiness": "ready",
             "completion_blockers": [],
         }
@@ -553,20 +564,14 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(member, monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    [
-        MemberCapabilityError("GitHub API request failed with status 502."),
-        httpx.ConnectError("GitHub API connection failed."),
-    ],
-)
 async def test_push_stays_successful_when_pr_readiness_lookup_fails(
-    member, monkeypatch, failure
+    member, monkeypatch
 ):
     await member.prepare()
     commit_sha = member.stage().index.commit("local commit").hexsha
+    failure = ServiceError("The code host is unavailable.")
 
-    async def failed_open_pr_checks(_remote_url, _branch):
+    async def failed_open_pr_checks(_repository, _branch):
         raise failure
 
     monkeypatch.setattr(
@@ -578,12 +583,12 @@ async def test_push_stays_successful_when_pr_readiness_lookup_fails(
     assert result.pushed is True
     assert result.commits[0]["id"] == commit_sha
     assert result.pull_requests_error == str(failure)
-    assert member.remote().commit("ticket/1").hexsha == commit_sha
+    assert member.remote().commit(_TICKET_BRANCH).hexsha == commit_sha
 
 
 @pytest.mark.asyncio
 async def test_push_rejected_by_remote_raises(member, tmp_path):
-    await member.prepare(repo="owner/repo", branch="main")
+    await member.prepare(repo=REPOSITORY, branch="main")
     remote_sha = _advance(member.remotes["owner"], tmp_path, "remote\n")
     local_sha = member.stage().index.commit("local commit").hexsha
 
@@ -597,12 +602,12 @@ async def test_push_rejected_by_remote_raises(member, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_push_to_an_unreachable_remote_raises(member, tmp_path):
+async def test_push_to_a_remote_that_is_gone_raises(member, tmp_path):
     await member.prepare()
     member.stage().index.commit("local commit")
     member.remotes["owner"].rename(tmp_path / "gone.git")
 
-    with pytest.raises(MemberCapabilityError, match="git fetch failed"):
+    with pytest.raises(ServiceNotFound, match="has no remote repository"):
         await member.run(lambda s: s.push(member.clone))
 
 
@@ -624,7 +629,7 @@ async def test_a_bundle_over_the_limit_is_refused(member, monkeypatch):
     with pytest.raises(MemberCapabilityError, match="too much output"):
         await member.run(lambda s: s.push(member.clone))
 
-    assert "ticket/1" not in [head.name for head in member.remote().heads]
+    assert _TICKET_BRANCH not in [head.name for head in member.remote().heads]
 
 
 @pytest.mark.asyncio
@@ -652,10 +657,10 @@ async def test_chat_run_cannot_push_unchecked_work(member):
     with member_invocation_scope(invocation):
         with pytest.raises(ChatUpdatesRequired):
             await member.service.push(member.clone)
-        assert "ticket/1" not in [head.name for head in member.remote().heads]
+        assert _TICKET_BRANCH not in [head.name for head in member.remote().heads]
         check_chat_updates("aiko")
         await member.service.push(member.clone)
-    assert member.remote().commit("ticket/1").hexsha == commit_sha
+    assert member.remote().commit(_TICKET_BRANCH).hexsha == commit_sha
 
 
 # -- prepare --------------------------------------------------------------
@@ -667,16 +672,15 @@ async def test_prepare_checks_out_a_new_ticket_branch_from_the_default(member):
 
     repo = member.repo()
     assert result == {
-        "repo": "owner/repo",
-        "checkout_repo": "owner/repo",
+        "repository": REPOSITORY,
         "repo_path": str(member.clone),
-        "branch": "ticket/1",
+        "branch": _TICKET_BRANCH,
         "default_branch": "main",
         "issue_url": _ISSUE,
         "pr_url": "",
         "mode": "issue",
     }
-    assert repo.active_branch.name == "ticket/1"
+    assert repo.active_branch.name == _TICKET_BRANCH
     assert repo.head.commit == member.remote().commit("main")
     assert repo.remote("origin").url == member.url("owner")
     with repo.config_reader() as config:
@@ -687,17 +691,15 @@ async def test_prepare_checks_out_a_new_ticket_branch_from_the_default(member):
 async def test_prepare_pull_request_review_checks_out_the_fork_head(member, tmp_path):
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
-    pr_url = member.pull_request(7, "feature", "contributor/repo")
+    pr_url = member.pull_request(7, "feature", FORK)
 
-    result = await member.prepare(
-        issue_url="local://owner/repo/issues/42", pr_url=pr_url
-    )
+    result = await member.prepare(issue_url=_ISSUE, pr_url=pr_url)
 
-    assert result["repo"] == "owner/repo"
-    assert result["checkout_repo"] == "contributor/repo"
+    assert result["repository"] == FORK
+    assert result["repo_path"] == str(member.clone_of(FORK))
     assert result["branch"] == "feature"
     assert result["mode"] == "pull_request_review"
-    repo = member.repo()
+    repo = member.repo(FORK)
     assert repo.active_branch.name == "feature"
     assert repo.remote("origin").url == member.url("contributor")
     assert repo.active_branch.tracking_branch().path == "refs/remotes/origin/feature"
@@ -705,11 +707,11 @@ async def test_prepare_pull_request_review_checks_out_the_fork_head(member, tmp_
 
 @pytest.mark.asyncio
 async def test_prepare_branch_mode_checks_out_ad_hoc_branch(member):
-    # Chat-originated work has no issue: prepare must work from just a
+    # Chat-originated work has no ticket: prepare must work from just a
     # repository and a branch name.
-    result = await member.prepare(repo="owner/repo", branch="chat/fix-typo")
+    result = await member.prepare(repo=REPOSITORY, branch="chat/fix-typo")
 
-    assert result["repo"] == "owner/repo"
+    assert result["repository"] == REPOSITORY
     assert result["branch"] == "chat/fix-typo"
     assert result["mode"] == "branch"
     assert result["issue_url"] == result["pr_url"] == ""
@@ -722,12 +724,12 @@ async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
 ):
     """What is not committed is dropped; commits the remote lacks survive a
     branch it can fast-forward, and a diverged branch is reset to it."""
-    await member.prepare(repo="owner/repo", branch="main")
+    await member.prepare(repo=REPOSITORY, branch="main")
     local_sha = member.stage().index.commit("unpushed").hexsha
     (member.clone / "untracked.txt").write_text("x", encoding="utf-8")
     (member.clone / "README.md").write_text("dirty\n", encoding="utf-8")
 
-    await member.prepare(repo="owner/repo", branch="main")
+    await member.prepare(repo=REPOSITORY, branch="main")
 
     repo = member.repo()
     assert repo.head.commit.hexsha == local_sha
@@ -735,7 +737,7 @@ async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
     assert not repo.is_dirty()
 
     remote_sha = _advance(member.remotes["owner"], tmp_path, "remote\n")
-    await member.prepare(repo="owner/repo", branch="main")
+    await member.prepare(repo=REPOSITORY, branch="main")
 
     assert member.repo().head.commit.hexsha == remote_sha
     assert member.repo().commit("refs/remotes/origin/main").hexsha == remote_sha
@@ -750,33 +752,77 @@ async def test_prepare_requires_an_anchor(member):
 
 
 @pytest.mark.asyncio
-async def test_prepare_rejects_malformed_repo(member):
-    with pytest.raises(MemberCapabilityError, match="<owner>/<repo>"):
-        await member.run(lambda s: s.prepare(repo="acme", branch="chat/fix-typo"))
+@pytest.mark.parametrize("repository", ["acme", "acme/..", "acme//demo"])
+async def test_prepare_rejects_malformed_repo(member, repository):
     with pytest.raises(MemberCapabilityError, match="Invalid repository"):
-        await member.run(lambda s: s.prepare(repo="acme/..", branch="chat/fix-typo"))
+        await member.run(lambda s: s.prepare(repo=repository, branch="chat/fix-typo"))
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_of_no_repository_is_prepared_in_the_one_named(member):
+    """A ticket whose tracker belongs to no repository is worked on in the
+    repository ``--repo`` names, on the ticket's branch."""
+    place = "acme/team/loose"
+    tracker(place, repository=None)
+    loose = ticket(2, place=place)
+
+    with pytest.raises(MemberCapabilityError, match="belongs to no repository"):
+        await member.prepare(issue_url=loose)
+    result = await member.prepare(issue_url=loose, repo=REPOSITORY)
+
+    assert (result["repository"], result["branch"]) == (REPOSITORY, "ticket/T-2")
+    assert member.repo().active_branch.name == "ticket/T-2"
+
+
+@pytest.mark.asyncio
+async def test_a_repository_other_than_the_tickets_own_is_refused(member):
+    with pytest.raises(
+        MemberCapabilityError, match=f"belongs to {REPOSITORY}, not {FORK}"
+    ):
+        await member.prepare(issue_url=_ISSUE, repo=FORK)
+
+    assert not member.clone_of(FORK).exists()
+
+
+@pytest.mark.asyncio
+async def test_repositories_of_one_name_have_a_clone_each(member):
+    """``acme/team/demo`` and ``contributor/team/demo`` are both ``demo``:
+    each has its own clone, and its own record of where that pushes."""
+    own = await member.prepare(repo=REPOSITORY, branch="main")
+    fork = await member.prepare(repo=FORK, branch="main")
+
+    assert own["repo_path"] == str(member.clone_of(REPOSITORY))
+    assert fork["repo_path"] == str(member.clone_of(FORK))
+    assert member.repo(REPOSITORY).remote("origin").url == member.url("owner")
+    assert member.repo(FORK).remote("origin").url == member.url("contributor")
+    checkouts = member.service.host_root / "checkouts"
+    assert sorted(
+        record.read_text(encoding="utf-8") for record in checkouts.iterdir()
+    ) == sorted([REPOSITORY, FORK])
 
 
 @pytest.mark.asyncio
 async def test_a_fork_is_prepared_but_only_its_upstream_is_pushed_to(member, tmp_path):
-    """Both are the same clone directory; the last ``prepare`` decides where
-    it pushes, and only the configured owner's repository takes the push."""
+    """The fork's clone pushes to the fork, which lies outside the scope the
+    member writes in: only the configured scope's repository takes a push."""
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
     before = fork.commit("feature").hexsha
-    pr_url = member.pull_request(7, "feature", "contributor/repo")
+    pr_url = member.pull_request(7, "feature", FORK)
 
     await member.prepare(pr_url=pr_url)
-    member.stage(content="fork\n").index.commit("to the fork")
-    with pytest.raises(RepositoryScopeError, match="contributor/repo"):
-        await member.run(lambda s: s.push(member.clone))
+    member.stage(content="fork\n", repository=FORK).index.commit("to the fork")
+    with pytest.raises(ServiceError, match=f"Writes are limited to .*refused {FORK}"):
+        await member.run(lambda s: s.push(member.clone_of(FORK)))
     await member.prepare()
     ticket = member.stage(content="upstream\n").index.commit("upstream").hexsha
     await member.run(lambda s: s.push(member.clone))
 
     assert member.remote("contributor").commit("feature").hexsha == before
-    assert member.remote("owner").commit("ticket/1").hexsha == ticket
-    assert "ticket/1" not in [head.name for head in member.remote("contributor").heads]
+    assert member.remote("owner").commit(_TICKET_BRANCH).hexsha == ticket
+    assert _TICKET_BRANCH not in [
+        head.name for head in member.remote("contributor").heads
+    ]
     assert "feature" not in [head.name for head in member.remote("owner").heads]
 
 
@@ -807,7 +853,7 @@ async def test_a_worktree_and_a_submodule_of_a_clone_commit_and_push(
 
     added = await member.run(lambda s: s.publish(worktree, "feature in a worktree"))
 
-    assert member.remote().commit("ticket/1").hexsha == superproject.commit_sha
+    assert member.remote().commit(_TICKET_BRANCH).hexsha == superproject.commit_sha
     assert member.remote().commit("feature").hexsha == added.commit_sha
 
 
@@ -819,7 +865,7 @@ async def test_a_worktree_and_a_submodule_of_a_clone_commit_and_push(
 async def test_member_mode_git_is_refused_outside_a_command(member, operation):
     """Without the command's environment there is nowhere to run a clone's git."""
     calls = {
-        "prepare": lambda s: s.prepare(repo="owner/repo", branch="main"),
+        "prepare": lambda s: s.prepare(repo=REPOSITORY, branch="main"),
         "commit": lambda s: s.commit(member.clone, "message"),
         "push": lambda s: s.push(member.clone),
         "publish": lambda s: s.publish(member.clone, "message"),
@@ -1009,7 +1055,7 @@ async def test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token(
             for where in (clones, trap)
         )
         if call.env.get("GIT_PASSWORD"):
-            assert call.cwd == member.origin / "owner" / "repo.git"
+            assert call.cwd == member.origin()
             _connects_to(call, member.url("owner"))
     assert any(call.env.get("GIT_PASSWORD") for call in host_git)
 
@@ -1020,7 +1066,7 @@ async def test_a_branch_name_git_would_not_take_as_one_is_refused(
     member, host_git, branch
 ):
     with pytest.raises(MemberCapabilityError, match="branch"):
-        await member.run(lambda s: s.prepare(repo="owner/repo", branch=branch))
+        await member.run(lambda s: s.prepare(repo=REPOSITORY, branch=branch))
 
     await member.prepare()
     member.stage().index.commit("local")
@@ -1071,7 +1117,7 @@ async def test_the_host_takes_only_the_branch_of_what_a_clone_sends(
     result = await member.run(lambda s: s.push(member.clone))
 
     assert result.pushed is True
-    origin = git.Repo(member.origin / "owner" / "repo.git")
+    origin = git.Repo(member.origin())
     assert "planted" not in [tag.name for tag in origin.tags]
     assert "planted" not in [tag.name for tag in member.remote().tags]
     [taken] = [
@@ -1089,14 +1135,14 @@ async def test_a_prepare_that_failed_leaves_where_the_clone_pushes(member, tmp_p
     objects = member.remotes["contributor"] / "objects"
     objects.rename(tmp_path / "gone")
     (objects / "pack").mkdir(parents=True)
-    pr_url = member.pull_request(7, "feature", "contributor/repo")
+    pr_url = member.pull_request(7, "feature", FORK)
     with pytest.raises(MemberCapabilityError, match="git fetch failed"):
         await member.prepare(pr_url=pr_url)
     sha = member.stage().index.commit("to the upstream").hexsha
 
     await member.run(lambda s: s.push(member.clone))
 
-    assert member.remote().commit("ticket/1").hexsha == sha
+    assert member.remote().commit(_TICKET_BRANCH).hexsha == sha
 
 
 @pytest.mark.asyncio
@@ -1294,7 +1340,8 @@ def _in_global_config(monkeypatch, tmp_path, settings) -> None:
 
 
 def _owner_dir(member: _Member, owner: str) -> str:
-    """``file:///.../remotes/<owner>/``, which the repository is under."""
+    """``file:///.../code/<repository>/``, the directory the repository of
+    ``owner`` is kept in."""
     return member.url(owner).rsplit("/", 1)[0] + "/"
 
 
@@ -1381,13 +1428,13 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
     [
         (
             lambda member: [("remote.origin.url", member.url("contributor"))],
-            "contributor/repo",
+            f"refused {FORK}",
         ),
         (
             lambda member: [
                 ("remote.origin.url", "https://example.com/owner/repo.git")
             ],
-            "example.com",
+            "does not push to one repository",
         ),
         (
             lambda member: [
@@ -1396,25 +1443,25 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
                     "https://x-access-token:secret@example.com/owner/repo.git",
                 )
             ],
-            "example.com",
+            "does not push to one repository",
         ),
         (
             lambda member: [("remote.origin.url", "git@example.com:owner/repo.git")],
-            "example.com",
+            "does not push to one repository",
         ),
         (
             lambda member: [
                 ("remote.origin.url", member.url("owner")),
                 ("remote.origin.pushurl", member.url("contributor")),
             ],
-            "contributor/repo",
+            f"refused {FORK}",
         ),
         (
             lambda member: [
                 ("remote.origin.url", member.url("owner")),
                 (f"url.{member.url('contributor')}.pushInsteadOf", member.url("owner")),
             ],
-            "contributor/repo",
+            f"refused {FORK}",
         ),
         (
             lambda member: [
@@ -1422,7 +1469,7 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
                 ("remote.origin.pushurl", member.url("owner")),
                 ("remote.origin.pushurl", member.url("contributor")),
             ],
-            "refused",
+            "does not push to one repository",
         ),
     ],
     ids=[
@@ -1439,8 +1486,8 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
 async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote(
     member, tmp_path, worker_git_seed, host_git, monkeypatch, config, refused
 ):
-    """Where git would push is judged, not ``remote.origin.url``: another
-    owner's repository, or a host that is not the configured one, is refused
+    """Where git would push is judged, not ``remote.origin.url``: a repository
+    outside the scope, or one that is not the configured code host's, is refused
     before any git is given the member's credential, and the refusal names no
     credential the remote's URL carries."""
     recorded = []
@@ -1453,7 +1500,7 @@ async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote
     repo.index.commit("local")
     contributor = member.remote("contributor").commit("main").hexsha
 
-    with pytest.raises(RepositoryScopeError, match=refused) as refusal:
+    with pytest.raises((ServiceError, MemberCapabilityError), match=refused) as refusal:
         await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
 
     assert _credentialed(host_git) == []

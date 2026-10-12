@@ -4,9 +4,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
+from guildbotics.integrations.slack.workflow_status import metadata_status
 from guildbotics.runtime.chat_service import ChatEvent
 
 #: A user mention as Slack writes it into message text: ``<@U123>``, or
@@ -87,5 +85,5 @@ def chat_event(channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
         mentions=mentioned_user_ids(text),
         is_bot_message=is_bot_message(raw),
         is_thread_reply=thread_ts != message_ts,
-        metadata=normalize_workflow_status_metadata(raw.get("metadata")),
+        status=metadata_status(raw.get("metadata")),
     )

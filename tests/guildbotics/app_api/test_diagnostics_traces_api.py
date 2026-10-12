@@ -88,8 +88,8 @@ def test_traces_endpoint_titles_a_trace_by_its_work_target(tmp_path: Path) -> No
         command="workflows/ticket_driven_workflow",
         person_id="alice",
         attributes={
-            "github.kind": "issue",
-            "github.number": "544",
+            "github.kind": "ticket",
+            "github.label": "#544",
             "github.url": "https://github.com/owner/repo/issues/544",
             "github.title": "診断ログの実行タイトルに作業対象を表示する",
         },
@@ -228,15 +228,15 @@ def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
 
 def test_traces_endpoint_filters_by_exact_attribute(tmp_path: Path) -> None:
     client, bus = _app(tmp_path)
-    with trace_scope("routine", trace_id="t1", attributes={"github.number": "42"}):
+    with trace_scope("routine", trace_id="t1", attributes={"github.label": "#42"}):
         bus.publish_event("command.started", {})
-    with trace_scope("routine", trace_id="t2", attributes={"github.number": "7"}):
+    with trace_scope("routine", trace_id="t2", attributes={"github.label": "#7"}):
         bus.publish_event("command.started", {})
 
     with client:
         response = client.get(
             "/diagnostics/traces",
-            params={"attr_key": "github.number", "attr_value": "42"},
+            params={"attr_key": "github.label", "attr_value": "#42"},
             headers=HEADERS,
         )
 
@@ -361,8 +361,8 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         person_id="alice",
         command="demo",
         attributes={
-            "github.kind": "issue",
-            "github.number": "42",
+            "github.kind": "ticket",
+            "github.label": "#42",
             "github.url": "https://github.com/owner/repo/issues/42",
         },
     ):
@@ -404,9 +404,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         pr_opened = {
             "action": "opened",
             "pull_request": {
-                "number": 8,
+                "label": "#8",
                 "title": "Add member activity",
-                "html_url": "https://github.com/owner/repo/pull/8",
+                "url": "https://github.com/owner/repo/pull/8",
                 "merged": False,
             },
         }
@@ -451,9 +451,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     merged = {
         "action": "closed",
         "pull_request": {
-            "number": 7,
+            "label": "#7",
             "title": "Add activity",
-            "html_url": "https://github.com/owner/repo/pull/7",
+            "url": "https://github.com/owner/repo/pull/7",
             "merged": True,
         },
     }
@@ -480,9 +480,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     issue_closed = {
         "action": "closed",
         "issue": {
-            "number": 133,
+            "label": "#133",
             "title": "Reconnect websocket",
-            "html_url": "https://github.com/owner/repo/issues/133",
+            "url": "https://github.com/owner/repo/issues/133",
         },
     }
     bus.publish_event("github.issue", issue_closed, source="github")
@@ -505,7 +505,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     sessions = {session["trace_id"]: session for session in body["sessions"]}
     assert set(sessions) == {"agent-trace", "skill-trace"}
     assert sessions["agent-trace"]["mode"] == "workflow"
-    assert sessions["agent-trace"]["title"] == "Issue #42"
+    assert sessions["agent-trace"]["title"] == "Ticket #42"
     assert sessions["agent-trace"]["status"] == "success"
     assert sessions["skill-trace"]["mode"] == "interactive"
     assert sessions["skill-trace"]["title"] == "member memory recall"
@@ -513,7 +513,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert [_without_timestamp(link) for link in sessions["agent-trace"]["links"]] == [
         {
             "kind": "issue",
-            "label": "Issue #42",
+            "label": "Ticket #42",
             "url": "https://github.com/owner/repo/issues/42",
         }
     ]
@@ -560,7 +560,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
             "url": "https://github.com/owner/repo/commit/def",
         },
     ]
-    assert any(event["title"] == "Issue #133 Resolved" for event in body["events"])
+    assert any(event["title"] == "Ticket #133 Resolved" for event in body["events"])
     assert body["unsupported_event_sources"] == []
 
 

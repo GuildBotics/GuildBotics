@@ -1,44 +1,72 @@
+"""GitHub as a member's code host: its pull requests, their reviews and CI, the
+git remote, and the member commands that write through it."""
+
 import json
-import logging
-import re
-from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from zipfile import ZipFile
 
+import httpx
 import pytest
 
 from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.artifact_archive import MAX_ARTIFACT_BYTES
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_context import member_context
 from guildbotics.entities.team import Person, Project, Role, Team
+from guildbotics.integrations.github.api import GitHubItem
 from guildbotics.integrations.github.code_hosting_service import (
     GitHubCodeHostingService,
 )
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.issue_links import (
-    append_issue_link as _append_issue_link,
+    append_issue_link,
+    preserve_issue_links,
 )
-from guildbotics.integrations.github.issue_links import (
-    preserve_issue_links as _preserve_issue_links,
+from guildbotics.integrations.github.repository_scope import (
+    ADD_PROJECT_ITEM,
+    ADD_REACTION,
+    NODE_REPOSITORY,
 )
-from guildbotics.integrations.github.repository_scope import ADD_REACTION
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.integrations.github.workflow_status_comment import (
+    parse_workflow_status_comment,
+)
+from guildbotics.runtime.code_hosting_service import PullRequestHead
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
     MemberInvocation,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
+from guildbotics.runtime.resources import WorkTarget
 from guildbotics.utils.fileio import host_temporary_root
+from guildbotics.utils.i18n_tool import set_language, t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
+from tests.guildbotics.integrations.github_services import (
+    API,
+    LOGIN,
+    OWNER,
+    REPO,
+    WEB,
+    ScriptedGitHub,
+    code_host,
+    issue_url,
+    member,
+    pages,
+    pull_url,
+    ticket_service,
+)
 from tests.guildbotics.member_services import MemberServices
 
-HTTP_BAD_REQUEST = 400
-ISSUE_NUMBER = 42
-REPLY_COMMENT_ID = 123
-ROOT_REVIEW_COMMENT_ID = 101
-LATEST_REVIEW_COMMENT_ID = 102
+PULL = pull_url(7)
+ISSUE = issue_url(42)
+_REPO_API = f"{API}/repos/{REPO}"
 
 
 def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary():
@@ -46,358 +74,251 @@ def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary()
     assert MAX_ARTIFACT_BYTES > STREAM_READ_LIMIT
 
 
-_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-
-
-class FakeResponse:
-    def __init__(self, payload, status_code=200, *, content=b"", headers=None):
-        self._payload = payload
-        self.status_code = status_code
-        self.content = content
-        self.headers = headers or {}
-
-    @property
-    def has_redirect_location(self):
-        """As httpx reports it: a redirect status that carries a location."""
-        return "location" in self.headers and self.status_code in _REDIRECT_STATUSES
-
-    def json(self):
-        return self._payload
-
-    def raise_for_status(self):
-        if self.status_code >= HTTP_BAD_REQUEST:
-            raise RuntimeError(self.status_code)
-
-
-class FakeClient:
-    def __init__(self):
-        self.posts = []
-        self.gets = []
-        self.get_payloads = {}
-        self.get_sequences = {}
-        self.get_status_codes = {}
-        self.get_status_sequences = {}
-        self.post_payloads = {}
-        self.patches = []
-        self.patch_payloads = {}
-        self.patch_status_codes = {}
-        self.deletes = []
-        self.delete_status_codes = {}
-        self.graphql_payloads = []
-        self.history = []
-        self.contents = {}
-
-    async def get(self, endpoint, params=None, headers=None):
-        self.gets.append((endpoint, params, headers))
-        self.history.append(("get", endpoint))
-        if endpoint in self.contents:
-            return FakeResponse([], content=self.contents[endpoint])
-        status_code = self.get_status_codes.get(endpoint, 200)
-        if endpoint in self.get_status_sequences:
-            status_code = self.get_status_sequences[endpoint].pop(0)
-        if endpoint in self.get_sequences:
-            return FakeResponse(
-                self.get_sequences[endpoint].pop(0), status_code=status_code
-            )
-        payload = deepcopy(self.get_payloads.get(endpoint, []))
-        if "/branches/" in endpoint and endpoint not in self.get_payloads:
-            payload = {"commit": {"sha": "base123"}}
-        if (
-            re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", endpoint)
-            and endpoint not in self.get_payloads
-        ):
-            # An issue: GitHub answers a pull request here too, with the
-            # ``pull_request`` key that tells them apart.
-            payload = {"number": int(endpoint.rsplit("/", 1)[1]), "state": "open"}
-        if endpoint.startswith("/repos/owner/repo/pulls/") and isinstance(
-            payload, dict
-        ):
-            payload.setdefault("state", "open")
-            payload.setdefault("base", {}).setdefault("sha", "base123")
-            payload.setdefault("base", {}).setdefault("ref", "main")
-            payload.setdefault("head", {}).setdefault("sha", "abc123")
-        if "/compare/" in endpoint and endpoint not in self.get_payloads:
-            payload = {"behind_by": 0}
-        return FakeResponse(
-            payload,
-            status_code=status_code,
-        )
-
-    async def post(self, endpoint, json=None, headers=None):
-        self.posts.append((endpoint, json, headers))
-        self.history.append(("post", endpoint))
-        if endpoint == "/graphql":
-            payload = self.graphql_payloads.pop(0) if self.graphql_payloads else {}
-            return FakeResponse(payload)
-        if endpoint in self.post_payloads:
-            return FakeResponse(self.post_payloads[endpoint])
-        if endpoint.endswith("/reactions"):
-            return FakeResponse({"id": 10, "content": json["content"]})
-        return FakeResponse(
-            {
-                "id": 123,
-                "html_url": "https://github.com/owner/repo/pull/1#discussion_r123",
-                "created_at": "2026-01-01T00:00:00Z",
-                "user": {"login": "bot"},
-            }
-        )
-
-    async def patch(self, endpoint, json=None, headers=None):
-        self.patches.append((endpoint, json, headers))
-        self.history.append(("patch", endpoint))
-        return FakeResponse(
-            self.patch_payloads.get(
-                endpoint,
-                {
-                    "number": 7,
-                    "html_url": "https://github.com/owner/repo/pull/7",
-                    "body": json.get("body", ""),
-                    "title": "Original title",
-                    "base": {"ref": "main"},
-                    "state": "open",
-                    "draft": False,
-                },
-            ),
-            status_code=self.patch_status_codes.get(endpoint, 200),
-        )
-
-    async def delete(self, endpoint, headers=None):
-        self.deletes.append((endpoint, headers))
-        self.history.append(("delete", endpoint))
-        return FakeResponse([], status_code=self.delete_status_codes.get(endpoint, 200))
-
-
-def _service(person_type="machine_user"):
-    person = Person(
-        person_id="aiko",
-        name="Aiko",
-        person_type=person_type,
-        account_info={"github_username": "bot", "github_account_type": person_type},
-    )
-    team = Team(
-        project=Project(
-            name="demo",
-            services={
-                "code_hosting_service": {
-                    "name": "github",
-                    "owner": "owner",
-                    "api_base_url": "https://api.github.com",
-                },
-                "ticket_manager": {
-                    "name": "github",
-                    "owner": "owner",
-                    "project_id": "1",
-                    "url": "https://github.com/orgs/owner/projects/1",
-                },
-            },
-        ),
-        members=[person],
-    )
-    return GitHubCodeHostingService(person, team)
-
-
-def _member(service, board=None):
-    """The member's capabilities over ``service`` (and ``board``)."""
-    return MemberServices(service.person, service.team, service, board)
-
-
-def _board(service):
-    """The configured Project, sharing the code host's client."""
-    board = GitHubTicketManager(
-        logging.getLogger(__name__), service.person, service.team
-    )
-    board.client = service._client
-    return board
-
-
-async def _checks(service, url, **kwargs):
-    """A pull request's readiness, as the member CLI prints it."""
-    return (await service.readiness(url, **kwargs)).model_dump()
-
-
-def _pull_target(number: int, title: str = "") -> dict:
-    """The uniform work target every pull request command reports."""
-    return {
-        "kind": "pull_request",
-        "repo": "owner/repo",
-        "number": number,
-        "title": title,
-        "html_url": f"https://github.com/owner/repo/pull/{number}",
-    }
-
-
-def _issue_target(number: int, title: str = "") -> dict:
-    return {
-        "kind": "issue",
-        "repo": "owner/repo",
-        "number": number,
-        "title": title,
-        "html_url": f"https://github.com/owner/repo/issues/{number}",
-    }
-
-
-def _pull_request_payload(number: int, title: str) -> dict:
+def _pull(number: int = 7, **fields: Any) -> dict[str, Any]:
+    """Pull request ``number`` as GitHub answers it, at head ``abc123``."""
     return {
         "number": number,
-        "title": title,
-        "html_url": f"https://github.com/owner/repo/pull/{number}",
+        "node_id": f"PR_{number}",
+        "title": f"pr {number}",
+        "body": "",
+        "state": "open",
+        "html_url": pull_url(number),
+        "user": {"login": "human"},
+        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": REPO}},
+        "base": {"ref": "main"},
+        **fields,
     }
 
 
-async def _open_pull_request(_resource):
-    return {"state": "open", "user": {"login": "bot"}}
-
-
-def _pull_with_head(number: int, title: str) -> dict:
+def _issue(number: int = 42, **fields: Any) -> dict[str, Any]:
     return {
-        **_pull_request_payload(number, title),
-        "head": {
-            "sha": "abc123",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        },
+        "number": number,
+        "node_id": f"I_{number}",
+        "title": f"issue {number}",
+        "body": "",
+        "state": "open",
+        "html_url": issue_url(number),
+        "user": {"login": "human"},
+        "labels": [],
+        **fields,
     }
 
 
-def _issue_comment_call(service):
-    return member_repository.issue_comment(
-        _member(service), "https://github.com/owner/repo/issues/42", "Hi"
+def _written(number: int, url: str) -> dict[str, Any]:
+    """What GitHub answers a comment, review, or reply that it made."""
+    return {
+        "id": number,
+        "html_url": url,
+        "created_at": "2026-01-01T00:00:00Z",
+        "user": {"login": LOGIN},
+    }
+
+
+def _github() -> ScriptedGitHub:
+    """Pull request #7 and issue #42 of the repository, both open."""
+    return (
+        ScriptedGitHub()
+        .on("GET", f"/repos/{REPO}/pulls/7", _pull())
+        .on("GET", f"/repos/{REPO}/issues/42", _issue())
+        .on("GET", f"/repos/{REPO}", {"default_branch": "main"})
+        .on("GET", f"/repos/{REPO}/pulls", [])
+        .on("GET", f"/repos/{REPO}/labels", pages([{"name": "bug"}]))
     )
 
 
-def _pr_comment_call(service):
-    return member_repository.pr_comment(
-        _member(service), "https://github.com/owner/repo/pull/7", "Hi"
+def _service(github: ScriptedGitHub, monkeypatch, **account: str):
+    return code_host(github, monkeypatch, member(**account))
+
+
+def _member(service: GitHubCodeHostingService, tickets=None) -> MemberServices:
+    """The member's capabilities over ``service`` (and ``tickets``)."""
+    return MemberServices(service.person, service.team, service, tickets)
+
+
+def _target(url: str = PULL, title: str = "pr 7") -> WorkTarget:
+    kind = "pull_request" if "/pull/" in url else "ticket"
+    return WorkTarget(kind=kind, url=url, title=title, label=f"#{url.rsplit('/')[-1]}")
+
+
+def _sequence(*answers: Any):
+    """A route answering ``answers`` in turn, then the last one again."""
+    remaining = list(answers)
+
+    def answer(_request: httpx.Request) -> Any:
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    return answer
+
+
+# --------------------------------------------------------------------------- #
+#   Writes are read for before, never after                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _writers(github: ScriptedGitHub):
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/comments/101",
+        {"id": 101, "pull_request_url": f"{_REPO_API}/pulls/7"},
     )
+    github.on("POST", f"/repos/{REPO}/issues/42/comments", _written(1, ISSUE))
+    github.on("POST", f"/repos/{REPO}/issues/7/comments", _written(2, PULL))
+    github.on("POST", f"/repos/{REPO}/pulls/7/comments/101/replies", _written(3, PULL))
+    github.on("POST", f"/repos/{REPO}/pulls/7/reviews", _written(4, PULL))
+    github.on("POST", f"/repos/{REPO}/pulls/7/comments", _written(5, PULL))
+    github.on("POST", f"/repos/{REPO}/issues", _issue(43))
+    github.on("POST", f"/repos/{REPO}/pulls", _pull(8))
 
 
-def _pr_reply_call(service):
-    return member_repository.pr_reply(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        ROOT_REVIEW_COMMENT_ID,
-        "Fixed.",
-    )
-
-
-def _pr_review_call(service):
-    return member_repository.pr_review(
-        _member(service), "https://github.com/owner/repo/pull/7", "LGTM", "approve"
-    )
-
-
-def _pr_review_comment_call(service):
-    return member_repository.pr_review_comment(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        "Hmm",
-        "a.py",
-        12,
-        "RIGHT",
-        None,
-        None,
-    )
-
-
-def _issue_create_call(service):
-    return member_repository.issue_create(
-        _member(service), "owner/repo", "T", "B", False, human_approved=True
-    )
-
-
-def _pr_create_call(service):
-    return member_repository.pr_create(
-        _member(service), "owner/repo", "feature", "main", "T", "B", "", "false"
-    )
-
-
-#: Every command whose write is not idempotent: a comment, review, reply, or
-#: creation posted twice is two of them.
-_NON_IDEMPOTENT_WRITERS = [
-    ("issue_comment", _issue_comment_call),
-    ("pr_comment", _pr_comment_call),
-    ("pr_reply", _pr_reply_call),
-    ("pr_review", _pr_review_call),
-    ("pr_review_comment", _pr_review_comment_call),
-    ("issue_create", _issue_create_call),
-    ("pr_create", _pr_create_call),
-]
+_NON_IDEMPOTENT_WRITERS = {
+    "ticket_comment": lambda m: member_repository.ticket_comment(m, ISSUE, "Hi"),
+    "pr_comment": lambda m: member_repository.pr_comment(m, PULL, "Hi"),
+    "pr_reply": lambda m: member_repository.pr_reply(
+        m, PULL, "discussion_r101", "Fixed."
+    ),
+    "pr_review": lambda m: member_repository.pr_review(
+        m, PULL, "LGTM", "approve", "abc123"
+    ),
+    "pr_review_comment": lambda m: member_repository.pr_review_comment(
+        m, PULL, "Hmm", "abc123", "a.py", 12, "RIGHT", None, None
+    ),
+    "ticket_create": lambda m: member_repository.ticket_create(
+        m, REPO, "T", "B", False, human_approved=True
+    ),
+    "pr_create": lambda m: member_repository.pr_create(
+        m, REPO, "feature", "main", "T", "B", ISSUE, "false"
+    ),
+}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("name", "call"), _NON_IDEMPOTENT_WRITERS)
-async def test_non_idempotent_writers_never_read_after_the_write(name, call):
+@pytest.mark.parametrize("name", sorted(_NON_IDEMPOTENT_WRITERS))
+async def test_non_idempotent_writers_never_read_after_the_write(monkeypatch, name):
     # A read that fails after the write landed makes the CLI report failure
     # for a comment that exists, and a retry posts it again. So the target
     # (and everything else) is read before the first write, never after.
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {"number": 42, "title": "T"}
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "T")
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/issues"] = {"number": 43, "html_url": "u"}
-    fake.post_payloads["/repos/owner/repo/pulls"] = {"number": 8, "html_url": "u"}
-    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
-        "id": 101,
-        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-    }
-    service._client = fake
+    github = _github()
+    _writers(github)
+    service = _service(github, monkeypatch)
+    tickets = ticket_service(github, monkeypatch, service.person)
 
-    result = await call(service)
+    result = await _NON_IDEMPOTENT_WRITERS[name](_member(service, tickets))
 
-    methods = [method for method, _endpoint in fake.history]
-    assert "post" in methods, name
-    assert "get" not in methods[methods.index("post") :], (name, fake.history)
-    assert result["target"]["number"]
+    methods = [request.method for request in github.requests]
+    assert "POST" in methods, name
+    assert "GET" not in methods[methods.index("POST") :], (name, github.sent)
+    assert result["target"]["url"]
 
 
 @pytest.mark.asyncio
-async def test_pr_comment_reports_the_pull_request_it_commented_on():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "Title")
-    service._client = fake
+async def test_pr_comment_reports_the_pull_request_it_commented_on(monkeypatch):
+    github = _github().on(
+        "POST", f"/repos/{REPO}/issues/7/comments", _written(123, f"{PULL}#c")
+    )
+    service = _service(github, monkeypatch)
 
-    result = await member_repository.pr_comment(
-        _member(service), "https://github.com/owner/repo/pull/7", "Hi"
+    result = await member_repository.pr_comment(_member(service), PULL, "Hi")
+
+    assert result == {
+        "id": "issuecomment-123",
+        "url": f"{PULL}#c",
+        "author": LOGIN,
+        "created_at": "2026-01-01T00:00:00Z",
+        "target": _target().model_dump(),
+    }
+    assert github.bodies("POST", f"/repos/{REPO}/issues/7/comments") == [{"body": "Hi"}]
+
+
+@pytest.mark.asyncio
+async def test_a_pull_request_comment_needs_a_pull_request(monkeypatch):
+    github = _github()
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound):
+        await service.comment(ISSUE, "Hi")
+
+    assert github.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("author", "body", "addressed"),
+    [
+        ("human", "Run failed.", True),
+        (LOGIN, "Run failed.", False),
+        ("Human", "@human Run failed.", False),
+    ],
+)
+async def test_a_status_comment_carries_its_marker_and_addresses_the_author(
+    monkeypatch, author, body, addressed
+):
+    """The patrol reads the marker back; the author is told, once, unless the
+    member is the author."""
+    github = (
+        _github()
+        .on("GET", f"/repos/{REPO}/pulls/7", _pull(user={"login": author}))
+        .on("POST", f"/repos/{REPO}/issues/7/comments", _written(1, PULL))
+    )
+    service = _service(github, monkeypatch)
+    status = WorkflowStatus(reason="failed", person_id="aiko", run_id="r1")
+
+    await service.comment(PULL, body, status=status)
+    await service.comment(PULL, body)
+
+    with_status, plain = github.bodies("POST", f"/repos/{REPO}/issues/7/comments")
+    assert parse_workflow_status_comment(with_status["body"]) == status
+    assert with_status["body"].startswith(f"@{author}\n\n") is addressed
+    assert body in with_status["body"]
+    assert plain == {"body": body}
+
+
+# --------------------------------------------------------------------------- #
+#   Addresses                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_issue_and_pull_request_urls_name_their_items(monkeypatch):
+    service = _service(ScriptedGitHub(), monkeypatch)
+
+    assert service.item(ISSUE, "ticket") == GitHubItem(REPO, 42, "ticket")
+    assert service.item(PULL, "pull_request") == GitHubItem(REPO, 7, "pull_request")
+    for url, kind in [
+        (PULL, "ticket"),
+        (ISSUE, "pull_request"),
+        ("not-a-url", "ticket"),
+        (f"{PULL}/files", "pull_request"),
+        (f"{PULL}?diff=split", "pull_request"),
+        (f"https://gitlab.com/{REPO}/pull/7", "pull_request"),
+        (f"{WEB}/{REPO}/pull/07", "pull_request"),
+    ]:
+        with pytest.raises(ServiceNotFound):
+            service.item(url, kind)
+
+
+def test_the_remote_names_its_repository_on_the_configured_host(monkeypatch):
+    service = _service(ScriptedGitHub(), monkeypatch)
+
+    for remote in (
+        "https://github.com/owner/repo.git",
+        "https://github.com/owner/repo",
+        "git@github.com:owner/repo.git",
+        "ssh://git@github.com/owner/repo.git",
+    ):
+        assert service.repository_from_remote(remote) == "owner/repo", remote
+    for remote in (
+        "https://gitlab.com/owner/repo.git",
+        "/tmp/remote.git",
+        "https://github.com/owner/repo/extra",
+        "",
+    ):
+        assert service.repository_from_remote(remote) is None, remote
+    assert service.commit_url("owner/repo", "abc123") == (
+        "https://github.com/owner/repo/commit/abc123"
     )
 
-    assert result["comment_id"] == REPLY_COMMENT_ID
-    assert result["target"] == _pull_target(7, "Title")
 
-
-def test_parse_github_issue_and_pull_request_urls():
-    service = _service()
-
-    issue = service.parse_url("https://github.com/owner/repo/issues/42")
-    pull = service.parse_url("https://github.com/owner/repo/pull/7")
-
-    assert issue.full_repo == "owner/repo"
-    assert issue.number == ISSUE_NUMBER
-    assert issue.kind == "issue"
-    assert pull.kind == "pull"
-
-
-def test_commit_url_from_remote_supports_configured_github_hosts():
-    service = _service()
-
-    assert (
-        service.commit_url("https://github.com/owner/repo.git", "abc123")
-        == "https://github.com/owner/repo/commit/abc123"
-    )
-    assert (
-        service.commit_url("git@github.com:owner/repo.git", "abc123")
-        == "https://github.com/owner/repo/commit/abc123"
-    )
-    assert (
-        service.commit_url("ssh://git@github.com/owner/repo.git", "abc123")
-        == "https://github.com/owner/repo/commit/abc123"
-    )
-    assert service.commit_url("https://gitlab.com/owner/repo.git", "abc123") == ""
-    assert service.commit_url("/tmp/remote.git", "abc123") == ""
-
-
-def test_commit_url_from_remote_supports_github_enterprise_host():
+@pytest.mark.asyncio
+async def test_a_github_enterprise_server_is_its_own_web_host(monkeypatch):
     person = Person(person_id="aiko", name="Aiko")
     team = Team(
         project=Project(
@@ -414,18 +335,86 @@ def test_commit_url_from_remote_supports_github_enterprise_host():
     )
     service = GitHubCodeHostingService(person, team)
 
-    assert (
-        service.commit_url("git@ghe.example.test:owner/repo.git", "abc123")
-        == "https://ghe.example.test/owner/repo/commit/abc123"
+    assert service.repository_from_remote("git@ghe.example.test:owner/repo.git") == (
+        "owner/repo"
     )
-    assert (
-        service.commit_url("https://ghe.example.test/owner/repo.git", "abc123")
-        == "https://ghe.example.test/owner/repo/commit/abc123"
+    assert service.repository_from_remote("https://github.com/owner/repo") is None
+    assert service.commit_url("owner/repo", "abc123") == (
+        "https://ghe.example.test/owner/repo/commit/abc123"
+    )
+    assert await service.clone_url("owner/repo") == (
+        "https://ghe.example.test/owner/repo.git"
     )
 
 
 @pytest.mark.asyncio
-async def test_context_returns_llm_ready_communication_style():
+async def test_the_member_pushes_only_to_the_owners_repositories(monkeypatch):
+    service = _service(ScriptedGitHub(), monkeypatch)
+
+    service.check_push(REPO)
+    service.check_push("ACME/other")
+    for repository in ("other/demo", "acme/team/demo", "acme"):
+        with pytest.raises(ServiceError, match="'acme'"):
+            service.check_push(repository)
+    assert await service.clone_url(REPO) == f"{WEB}/{REPO}.git"
+    with pytest.raises(ServiceNotFound):
+        await service.clone_url("acme/team/demo")
+
+
+@pytest.mark.asyncio
+async def test_a_pull_requests_head_is_where_its_branch_lives(monkeypatch):
+    fork = {"sha": "f1", "ref": "topic", "repo": {"full_name": "fork/demo"}}
+    gone = {"sha": "f1", "ref": "topic", "repo": None, "label": "fork:topic"}
+    own = {"sha": "f1", "ref": "topic", "repo": None, "label": f"{OWNER}:topic"}
+    github = ScriptedGitHub().on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(_pull(head=fork), _pull(head=own), _pull(head=gone)),
+    )
+    service = _service(github, monkeypatch)
+
+    assert await service.pull_request_head(PULL) == PullRequestHead(
+        repository="fork/demo", branch="topic"
+    )
+    assert await service.pull_request_head(PULL) == PullRequestHead(
+        repository=REPO, branch="topic"
+    )
+    # A deleted fork leaves no repository to fetch the branch from.
+    with pytest.raises(ServiceError, match="not on a repository"):
+        await service.pull_request_head(PULL)
+
+
+@pytest.mark.asyncio
+async def test_the_default_branch_is_the_repositorys(monkeypatch):
+    github = ScriptedGitHub().on("GET", f"/repos/{REPO}", {"default_branch": "dev"})
+    service = _service(github, monkeypatch)
+
+    assert await service.default_branch(REPO) == "dev"
+    with pytest.raises(ServiceNotFound):
+        await service.default_branch("acme/team/demo")
+
+
+@pytest.mark.asyncio
+async def test_open_pull_requests_asks_for_the_pushed_branch(monkeypatch):
+    github = ScriptedGitHub().on(
+        "GET", f"/repos/{REPO}/pulls", [{"number": 7, "html_url": PULL}]
+    )
+    service = _service(github, monkeypatch)
+
+    assert await service.open_pull_requests(REPO, "feature") == [PULL]
+    [request] = github.requests
+    assert dict(request.url.params) == {"state": "open", "head": "acme:feature"}
+    with pytest.raises(ServiceNotFound):
+        await service.open_pull_requests("git@github.com:acme/demo.git", "feature")
+
+
+# --------------------------------------------------------------------------- #
+#   The member                                                                #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_context_returns_llm_ready_communication_style(monkeypatch):
     person = Person(
         person_id="yuki",
         name="Yuki Nakamura",
@@ -453,9 +442,7 @@ async def test_context_returns_llm_ready_communication_style():
     team = Team(project=Project(name="demo"), members=[person])
     service = GitHubCodeHostingService(person, team)
 
-    result = await member_context(
-        _member(service),
-    )
+    result = await member_context(_member(service))
 
     assert result["speaking_style"] == "柔らかく親しみやすい日本語で話す。"
     style = result["communication_style"]
@@ -470,28 +457,35 @@ async def test_context_returns_llm_ready_communication_style():
 
 
 @pytest.mark.asyncio
-async def test_context_check_credentials_uses_rate_limit_endpoint():
+async def test_context_check_credentials_uses_rate_limit_endpoint(monkeypatch):
     # /rate_limit works for every credential type, including GitHub App
     # installation tokens (github_apps) where /user would 403.
-    service = _service(person_type="github_apps")
-    fake = FakeClient()
-    service._client = fake
+    github = ScriptedGitHub().on("GET", "/rate_limit", {"resources": {}})
+    service = _service(github, monkeypatch, github_account_type="github_apps")
 
     result = await member_context(_member(service), check_credentials=True)
 
     assert result["credential_status"] == "ok"
-    assert [endpoint for endpoint, *_ in fake.gets] == ["/rate_limit"]
+    assert github.sent == ["GET /rate_limit"]
 
 
 @pytest.mark.asyncio
-async def test_context_includes_capability_reference():
-    service = _service()
-    fake = FakeClient()
-    service._client = fake
+async def test_a_refused_credential_fails_the_context_check(monkeypatch):
+    github = ScriptedGitHub().on("GET", "/rate_limit", httpx.Response(401))
+    service = _service(github, monkeypatch)
 
-    result = await member_context(
-        _member(service),
-    )
+    with pytest.raises(
+        ServiceError, match=t("integrations.github.response.authentication")
+    ):
+        await member_context(_member(service), check_credentials=True)
+
+
+@pytest.mark.asyncio
+async def test_context_includes_capability_reference(monkeypatch):
+    github = ScriptedGitHub()
+    service = _service(github, monkeypatch)
+
+    result = await member_context(_member(service))
 
     # The context carries the full capability reference (single source of truth)
     # instead of a flat command-name list, and not the old fields.
@@ -502,117 +496,170 @@ async def test_context_includes_capability_reference():
     assert "#### レビュー指摘への対応" in result["capabilities"]
     assert "available_member_commands" not in result
     assert "safety_note" not in result
-
-
-@pytest.mark.asyncio
-async def test_context_without_check_credentials_is_unchecked():
-    service = _service()
-    fake = FakeClient()
-    service._client = fake
-
-    result = await member_context(
-        _member(service),
-    )
-
     assert result["credential_status"] == "unchecked"
-    assert fake.gets == []
+    assert result["github_username"] == LOGIN
+    assert github.requests == []
+
+
+# --------------------------------------------------------------------------- #
+#   Reviews and replies                                                       #
+# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
-async def test_pr_reply_uses_pull_replies_endpoint():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
-        "id": 101,
-        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-    }
-    service._client = fake
+async def test_pr_reply_answers_the_thread_its_root_comment_starts(monkeypatch):
+    github = (
+        _github()
+        .on(
+            "GET",
+            f"/repos/{REPO}/pulls/comments/101",
+            # Outdated and resolved threads are answered all the same.
+            {"id": 101, "pull_request_url": f"{_REPO_API}/pulls/7", "position": None},
+        )
+        .on(
+            "POST",
+            f"/repos/{REPO}/pulls/7/comments/101/replies",
+            _written(123, f"{PULL}#discussion_r123"),
+        )
+    )
+    service = _service(github, monkeypatch)
 
     result = await member_repository.pr_reply(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        ROOT_REVIEW_COMMENT_ID,
-        "Fixed.",
+        _member(service), PULL, "discussion_r101", "Fixed.\n"
     )
 
-    assert result["reply_comment_id"] == REPLY_COMMENT_ID
-    assert fake.posts[-1:] == [
-        (
-            "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed."},
-            None,
-        )
+    assert result == {
+        "id": "discussion_r123",
+        "url": f"{PULL}#discussion_r123",
+        "created_at": "2026-01-01T00:00:00Z",
+        "target": _target().model_dump(),
+    }
+    assert github.bodies("POST", f"/repos/{REPO}/pulls/7/comments/101/replies") == [
+        {"body": "Fixed."}
     ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("event", "github_event"),
+    ("reply_to", "root"),
+    [
+        # A thread of another pull request.
+        ("discussion_r101", {"id": 101, "pull_request_url": f"{_REPO_API}/pulls/8"}),
+        # A reply, which roots no thread.
+        (
+            "discussion_r101",
+            {
+                "id": 101,
+                "in_reply_to_id": 99,
+                "pull_request_url": f"{_REPO_API}/pulls/7",
+            },
+        ),
+        # No such comment.
+        ("discussion_r102", None),
+        # Ids of no inline comment.
+        ("issuecomment-101", None),
+        ("pullrequestreview-101", None),
+        ("101", None),
+    ],
+)
+async def test_reply_requires_the_root_comment_of_a_thread_of_this_pr(
+    monkeypatch, reply_to, root
+):
+    github = _github()
+    if root is not None:
+        github.on("GET", f"/repos/{REPO}/pulls/comments/101", root)
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound):
+        await member_repository.pr_reply(_member(service), PULL, reply_to, "Fixed")
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verdict", "event"),
     [
         ("approve", "APPROVE"),
-        ("request-changes", "REQUEST_CHANGES"),
+        ("request_changes", "REQUEST_CHANGES"),
         ("comment", "COMMENT"),
     ],
 )
-async def test_pr_review_submits_a_review_on_the_current_head(event, github_event):
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
-    }
-    fake.post_payloads["/repos/owner/repo/pulls/7/reviews"] = {
-        "id": 555,
-        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
-        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
-        "submitted_at": "2026-01-01T00:00:00Z",
-    }
-    service._client = fake
+async def test_pr_review_submits_a_review_on_the_head_the_member_read(
+    monkeypatch, verdict, event
+):
+    github = _github().on(
+        "POST",
+        f"/repos/{REPO}/pulls/7/reviews",
+        _written(555, f"{PULL}#pullrequestreview-555"),
+    )
+    service = _service(github, monkeypatch)
 
     result = await member_repository.pr_review(
-        _member(service), "https://github.com/owner/repo/pull/7", "Looks good.\n", event
+        _member(service), PULL, "Looks good.\n", verdict, "abc123"
     )
 
     assert result == {
-        "review_id": 555,
-        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
-        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
-        "commit_id": "abc123",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "target": _pull_target(7),
+        "verdict": verdict,
+        "commit": "abc123",
+        "url": f"{PULL}#pullrequestreview-555",
+        "target": _target().model_dump(),
     }
-    assert fake.posts == [
-        (
-            "/repos/owner/repo/pulls/7/reviews",
-            {"body": "Looks good.", "event": github_event, "commit_id": "abc123"},
-            None,
-        )
+    assert github.bodies("POST", f"/repos/{REPO}/pulls/7/reviews") == [
+        {"body": "Looks good.", "event": event, "commit_id": "abc123"}
     ]
 
 
-@pytest.mark.asyncio
-async def test_pr_review_rejects_unknown_event():
-    service = _service()
-
-    with pytest.raises(MemberCapabilityError, match="Review event must be one of"):
-        await member_repository.pr_review(
-            _member(service), "https://github.com/owner/repo/pull/7", "x", "lgtm"
-        )
+_AT_HEAD = {
+    "review": lambda s: s.review(PULL, "LGTM", "approve", "old123"),
+    "review_comment": lambda s: s.review_comment(
+        PULL, "Hmm", "old123", "a.py", 3, "RIGHT", None, None
+    ),
+}
 
 
 @pytest.mark.asyncio
-async def test_pr_review_comment_posts_diff_coordinates():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
-    }
-    service._client = fake
+@pytest.mark.parametrize("operation", sorted(_AT_HEAD))
+async def test_a_review_on_a_head_that_moved_is_refused_unwritten(
+    monkeypatch, operation
+):
+    """A verdict is on the commits the member read: once the head moved, it
+    would be on commits nobody reviewed."""
+    github = _github()
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError, match="head") as raised:
+        await _AT_HEAD[operation](service)
+
+    assert "abc123" in str(raised.value)
+    assert github.sent == [f"GET /repos/{REPO}/pulls/7"]
+
+
+@pytest.mark.asyncio
+async def test_pr_review_rejects_unknown_verdict(monkeypatch):
+    github = _github()
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(MemberCapabilityError, match="Review verdict must be one of"):
+        await member_repository.pr_review(_member(service), PULL, "x", "lgtm", "abc")
+
+    assert github.requests == []
+
+
+@pytest.mark.asyncio
+async def test_pr_review_comment_posts_diff_coordinates(monkeypatch):
+    github = _github().on(
+        "POST",
+        f"/repos/{REPO}/pulls/7/comments",
+        _written(123, f"{PULL}#discussion_r123"),
+    )
+    service = _service(github, monkeypatch)
 
     result = await member_repository.pr_review_comment(
         _member(service),
-        "https://github.com/owner/repo/pull/7",
+        PULL,
         "Please simplify this branch.",
+        "abc123",
         "guildbotics/example.py",
         12,
         "RIGHT",
@@ -621,131 +668,277 @@ async def test_pr_review_comment_posts_diff_coordinates():
     )
 
     assert result == {
-        "review_comment_id": REPLY_COMMENT_ID,
-        "html_url": "https://github.com/owner/repo/pull/1#discussion_r123",
+        "id": "discussion_r123",
+        "url": f"{PULL}#discussion_r123",
         "created_at": "2026-01-01T00:00:00Z",
         "path": "guildbotics/example.py",
         "line": 12,
         "side": "RIGHT",
-        "target": _pull_target(7),
+        "target": _target().model_dump(),
     }
-    assert fake.posts == [
-        (
-            "/repos/owner/repo/pulls/7/comments",
-            {
-                "body": "Please simplify this branch.",
-                "commit_id": "abc123",
-                "path": "guildbotics/example.py",
-                "line": 12,
-                "side": "RIGHT",
-                "start_line": 10,
-                "start_side": "RIGHT",
-            },
-            None,
-        )
+    assert github.bodies("POST", f"/repos/{REPO}/pulls/7/comments") == [
+        {
+            "body": "Please simplify this branch.",
+            "commit_id": "abc123",
+            "path": "guildbotics/example.py",
+            "line": 12,
+            "side": "RIGHT",
+            "start_line": 10,
+            "start_side": "RIGHT",
+        }
     ]
 
 
 @pytest.mark.asyncio
-async def test_pr_review_comment_rejects_invalid_multiline_range():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
-    }
-    service._client = fake
+@pytest.mark.parametrize(
+    ("start_line", "start_side", "message"),
+    [
+        (10, "LEFT", "start_side must match side"),
+        (13, "RIGHT", "start_line must be less than or equal to line"),
+        (10, None, "requires both start_line and start_side"),
+    ],
+)
+async def test_pr_review_comment_rejects_invalid_multiline_range(
+    monkeypatch, start_line, start_side, message
+):
+    github = _github()
+    service = _service(github, monkeypatch)
 
-    with pytest.raises(MemberCapabilityError, match="start_side must match side"):
+    with pytest.raises(MemberCapabilityError, match=message):
         await member_repository.pr_review_comment(
             _member(service),
-            "https://github.com/owner/repo/pull/7",
+            PULL,
             "Please simplify this branch.",
+            "abc123",
             "guildbotics/example.py",
             12,
             "RIGHT",
-            10,
-            "LEFT",
+            start_line,
+            start_side,
         )
 
-    with pytest.raises(
-        MemberCapabilityError, match="start_line must be less than or equal to line"
-    ):
-        await member_repository.pr_review_comment(
-            _member(service),
-            "https://github.com/owner/repo/pull/7",
-            "Please simplify this branch.",
-            "guildbotics/example.py",
-            12,
-            "RIGHT",
-            13,
-            "RIGHT",
-        )
+    assert github.requests == []
+
+
+# --------------------------------------------------------------------------- #
+#   Reactions                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _reacting(github: ScriptedGitHub) -> ScriptedGitHub:
+    return github.on_graphql(
+        NODE_REPOSITORY,
+        {"node": {"repository": {"name": "demo", "owner": {"login": OWNER}}}},
+    ).on_graphql(ADD_REACTION, {"addReaction": {"reaction": {"content": "x"}}})
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("workflow_run", "expected_run_attempt"),
-    [({"id": 9, "run_attempt": 2}, 2), ({"id": 9}, 1)],
+    ("target_id", "path", "owner"),
+    [
+        # A pull request's conversation comments are issue comments on GitHub.
+        (
+            "issuecomment-101",
+            "/issues/comments/101",
+            ("issue_url", f"{_REPO_API}/issues/7"),
+        ),
+        (
+            "discussion_r101",
+            "/pulls/comments/101",
+            ("pull_request_url", f"{_REPO_API}/pulls/7"),
+        ),
+        (
+            "pullrequestreview-101",
+            "/pulls/7/reviews/101",
+            ("pull_request_url", f"{_REPO_API}/pulls/7"),
+        ),
+        # GitHub answers with the repository's own spelling of its name.
+        (
+            "discussion_r101",
+            "/pulls/comments/101",
+            ("pull_request_url", f"{API}/repos/ACME/Demo/pulls/7"),
+        ),
+    ],
 )
-async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
-    workflow_run, expected_run_attempt
+async def test_a_reaction_reads_where_its_id_says_then_reacts_to_its_node(
+    monkeypatch, target_id, path, owner
 ):
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
+    github = _reacting(_github()).on(
+        "GET",
+        f"/repos/{REPO}{path}",
+        {"id": 101, "node_id": "NODE_101", owner[0]: owner[1]},
+    )
+    service = _service(github, monkeypatch)
+
+    result = await member_repository.pr_reaction(
+        _member(service), PULL, target_id, "agree"
+    )
+
+    assert result == {"reaction": "agree", "id": target_id}
+    assert github.sent == [
+        f"GET /repos/{REPO}/pulls/7",
+        f"GET /repos/{REPO}{path}",
+        "POST /graphql",  # the gate reads where the node lives
+        "POST /graphql",
+    ]
+    assert github.documents()[-1] == {
+        "query": ADD_REACTION,
+        "variables": {"subject": "NODE_101", "content": "THUMBS_UP"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_id", "path", "found"),
+    [
+        (
+            "issuecomment-101",
+            "/issues/comments/101",
+            {"issue_url": f"{_REPO_API}/issues/8"},
+        ),
+        (
+            "discussion_r101",
+            "/pulls/comments/101",
+            {"pull_request_url": f"{_REPO_API}/pulls/8"},
+        ),
+        (
+            "pullrequestreview-101",
+            "/pulls/7/reviews/101",
+            {"pull_request_url": f"{_REPO_API}/pulls/8"},
+        ),
+        # A comment named by an id of another kind is read where that kind is.
+        (
+            "issuecomment-101",
+            "/issues/comments/101",
+            {"pull_request_url": f"{_REPO_API}/pulls/7"},
+        ),
+    ],
+)
+async def test_a_reaction_to_what_is_another_items_is_not_sent(
+    monkeypatch, target_id, path, found
+):
+    github = _reacting(_github()).on(
+        "GET", f"/repos/{REPO}{path}", {"id": 101, "node_id": "N", **found}
+    )
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound, match="is none of"):
+        await member_repository.pr_reaction(_member(service), PULL, target_id, "ack")
+
+    assert github.documents() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target_id", ["101", "comment-101", "discussion_r0", "pullrequestreview-x"]
+)
+async def test_a_reaction_to_an_id_of_no_kind_is_refused_unread(monkeypatch, target_id):
+    github = _reacting(_github())
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound):
+        await service.add_reaction(PULL, target_id, "ack")
+
+    assert github.sent == [f"GET /repos/{REPO}/pulls/7"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reaction", "content"),
+    [
+        ("ack", "EYES"),
+        ("agree", "THUMBS_UP"),
+        ("celebrate", "HOORAY"),
+        ("support", "HEART"),
+    ],
+)
+async def test_each_reaction_is_githubs_own(monkeypatch, reaction, content):
+    github = _reacting(_github()).on(
+        "GET",
+        f"/repos/{REPO}/issues/comments/1",
+        {"id": 1, "node_id": "N", "issue_url": f"{_REPO_API}/issues/7"},
+    )
+    service = _service(github, monkeypatch)
+
+    await service.add_reaction(PULL, "issuecomment-1", reaction)
+
+    assert github.documents()[-1]["variables"]["content"] == content
+
+
+# --------------------------------------------------------------------------- #
+#   Readiness                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def _checks(*runs: dict) -> dict:
+    return {"check_runs": list(runs)}
+
+
+def _run(conclusion: str, name: str = "test", **fields: Any) -> dict:
+    return {"name": name, "status": "completed", "conclusion": conclusion, **fields}
+
+
+def _ci(github: ScriptedGitHub, head: str, checks: dict, base: str = "base123"):
+    """The base branch at ``base``, the head ``head`` and its checks."""
+    github.on("GET", f"/repos/{REPO}/branches/main", {"commit": {"sha": base}})
+    github.on("GET", f"/repos/{REPO}/compare/{base}...{head}", {"behind_by": 0})
+    github.on("GET", f"/repos/{REPO}/commits/{head}/check-runs", checks)
+    github.on("GET", f"/repos/{REPO}/commits/{head}/status", {"statuses": []})
+    return github
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workflow_run", "job_id"),
+    [({"id": 9, "run_attempt": 2}, "9/2/90"), ({"id": 9}, "9/1/90")],
+)
+async def test_readiness_reports_rollup_and_tails_failed_job_logs(
+    monkeypatch, workflow_run, job_id
+):
+    github = _ci(
+        _github(),
+        "abc123",
+        _checks(_run("failure", details_url=f"{WEB}/{REPO}/actions/runs/9")),
+    )
+    github.on("GET", f"/repos/{REPO}/actions/runs", {"workflow_runs": [workflow_run]})
+    github.on(
+        "GET",
+        f"/repos/{REPO}/actions/runs/9/jobs",
         {
-            "/repos/owner/repo/pulls/7": {
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
+            "jobs": [
+                {
+                    "id": 90,
+                    "name": "Playwright (base)",
+                    "conclusion": "failure",
+                    "html_url": f"{WEB}/{REPO}/actions/runs/9/job/90",
                 },
-            },
-            "/repos/owner/repo/commits/abc123/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "details_url": "https://github.com/owner/repo/actions/runs/9",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/actions/runs": {"workflow_runs": [workflow_run]},
-            "/repos/owner/repo/actions/runs/9/jobs": {
-                "jobs": [
-                    {
-                        "id": 90,
-                        "name": "Playwright (base)",
-                        "conclusion": "failure",
-                        "html_url": (
-                            "https://github.com/owner/repo/actions/runs/9/job/90"
-                        ),
-                    },
-                    {"id": 91, "name": "lint", "conclusion": "success"},
-                    {"id": 92, "name": "matrix peer", "conclusion": "cancelled"},
-                ]
-            },
-            "/repos/owner/repo/actions/runs/9/artifacts": {
-                "artifacts": [
-                    {"name": "playwright-head-9-2", "expired": False},
-                    {"name": "old", "expired": True},
-                ]
-            },
-        }
+                {"id": 91, "name": "lint", "conclusion": "success"},
+                {"id": 92, "name": "matrix peer", "conclusion": "cancelled"},
+            ]
+        },
     )
-    fake.contents["/repos/owner/repo/actions/jobs/90/logs"] = b"prefix\nlast line\n"
-    service._client = fake
-
-    result = await _checks(
-        service,
-        "https://github.com/owner/repo/pull/7",
-        failed_logs=True,
-        log_tail_bytes=10,
+    github.on(
+        "GET",
+        f"/repos/{REPO}/actions/runs/9/artifacts",
+        {
+            "artifacts": [
+                {"name": "playwright-head-9-2", "expired": False},
+                {"name": "old", "expired": True},
+            ]
+        },
     )
+    github.on(
+        "GET",
+        f"/repos/{REPO}/actions/jobs/90/logs",
+        httpx.Response(200, content=b"prefix\nlast line\n"),
+    )
+    service = _service(github, monkeypatch)
 
+    result = (
+        await service.readiness(PULL, failed_logs=True, log_tail_bytes=10)
+    ).model_dump()
+
+    assert result["target"] == _target().model_dump()
     assert result["rollup"] == "failure"
     assert result["readiness"] == "blocked"
     assert result["completion_blockers"][0]["code"] == "checks_failed"
@@ -754,18 +947,15 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
             "name": "test",
             "status": "completed",
             "conclusion": "failure",
-            "details_url": "https://github.com/owner/repo/actions/runs/9",
-            "source": "check_run",
+            "details_url": f"{WEB}/{REPO}/actions/runs/9",
         }
     ]
     assert result["failed_logs"] == [
         {
-            "run_id": 9,
-            "run_attempt": expected_run_attempt,
-            "job_id": 90,
+            "job_id": job_id,
             "name": "Playwright (base)",
             "conclusion": "failure",
-            "html_url": "https://github.com/owner/repo/actions/runs/9/job/90",
+            "url": f"{WEB}/{REPO}/actions/runs/9/job/90",
             "artifact_names": ["playwright-head-9-2"],
             "log": "last line\n",
             "log_bytes": 10,
@@ -773,71 +963,35 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
             "truncated": True,
         }
     ]
-    assert "/repos/owner/repo/actions/jobs/92/logs" not in {
-        endpoint for endpoint, _params, _headers in fake.gets
-    }
+    assert f"GET /repos/{REPO}/actions/jobs/92/logs" not in github.sent
 
 
 @pytest.mark.asyncio
-async def test_pr_checks_reports_no_checks():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                }
-            },
-            "/repos/owner/repo/commits/abc123/check-runs": {"check_runs": []},
-            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/commits/base123/check-runs": {"check_runs": []},
-            "/repos/owner/repo/commits/base123/status": {"statuses": []},
-        }
-    )
-    service._client = fake
+async def test_readiness_reports_no_checks(monkeypatch):
+    github = _ci(_ci(_github(), "abc123", _checks()), "base123", _checks())
+    service = _service(github, monkeypatch)
 
-    result = await _checks(service, "https://github.com/owner/repo/pull/7")
+    result = await service.readiness(PULL)
 
-    assert result["rollup"] == "no_checks"
-    assert result["checks"] == []
-    assert result["checks_expected"] is False
-    assert result["readiness"] == "ready"
-    assert result["completion_blockers"] == []
+    assert result.rollup == "no_checks"
+    assert result.checks == []
+    assert result.checks_expected is False
+    assert result.readiness == "ready"
+    assert result.completion_blockers == []
 
 
 @pytest.mark.asyncio
-async def test_pr_checks_waits_when_checks_have_not_registered_for_the_head():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                }
-            },
-            "/repos/owner/repo/commits/abc123/check-runs": {"check_runs": []},
-            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/commits/base123/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/base123/status": {"statuses": []},
-        }
+async def test_readiness_waits_when_checks_have_not_registered_for_the_head(
+    monkeypatch,
+):
+    github = _ci(_github(), "abc123", _checks())
+    github.on(
+        "GET", f"/repos/{REPO}/commits/base123/check-runs", _checks(_run("success"))
     )
-    service._client = fake
+    github.on("GET", f"/repos/{REPO}/commits/base123/status", {"statuses": []})
+    service = _service(github, monkeypatch)
 
-    result = await _checks(service, "https://github.com/owner/repo/pull/7")
+    result = (await service.readiness(PULL)).model_dump()
 
     assert result["rollup"] == "no_checks"
     assert result["checks_expected"] is True
@@ -852,287 +1006,132 @@ async def test_pr_checks_waits_when_checks_have_not_registered_for_the_head():
 
 
 @pytest.mark.asyncio
-async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "state": "closed",
-                "merged_at": "2026-09-17T00:00:00Z",
-                "head": {
-                    "sha": "merged-head",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "old-base", "ref": "deleted-base"},
-            },
-            "/repos/owner/repo/commits/merged-head/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "failure",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/merged-head/status": {"statuses": []},
-        }
+async def test_readiness_preserves_ci_for_closed_pull_requests(monkeypatch):
+    head = {"sha": "merged-head", "ref": "feature", "repo": {"full_name": REPO}}
+    github = (
+        ScriptedGitHub()
+        .on(
+            "GET",
+            f"/repos/{REPO}/pulls/7",
+            _pull(
+                state="closed",
+                merged_at="2026-09-17T00:00:00Z",
+                head=head,
+                base={"ref": "deleted-base"},
+            ),
+        )
+        .on(
+            "GET",
+            f"/repos/{REPO}/commits/merged-head/check-runs",
+            _checks(_run("failure")),
+        )
+        .on("GET", f"/repos/{REPO}/commits/merged-head/status", {"statuses": []})
+        .on(
+            "GET",
+            f"/repos/{REPO}/actions/runs",
+            {"workflow_runs": [{"id": 9, "conclusion": "failure"}]},
+        )
+        .on(
+            "GET",
+            f"/repos/{REPO}/actions/runs/9/jobs",
+            {"jobs": [{"id": 3, "name": "test", "conclusion": "failure"}]},
+        )
+        .on("GET", f"/repos/{REPO}/actions/runs/9/artifacts", {"artifacts": []})
+        .on(
+            "GET",
+            f"/repos/{REPO}/actions/jobs/3/logs",
+            httpx.Response(200, content=b"failure"),
+        )
     )
-    service._client = fake
+    service = _service(github, monkeypatch)
 
-    async def fake_failed_action_logs(*_args):
-        return [
-            {
-                "run_id": 9,
-                "run_attempt": 1,
-                "job_id": 3,
-                "name": "test",
-                "conclusion": "failure",
-                "html_url": "",
-                "artifact_names": [],
-                "log": "failure",
-                "log_bytes": 7,
-                "tail_limit_bytes": 7,
-                "truncated": False,
-            }
-        ]
-
-    monkeypatch.setattr(service, "_failed_action_logs", fake_failed_action_logs)
-
-    result = await _checks(
-        service, "https://github.com/owner/repo/pull/7", failed_logs=True
-    )
+    result = (await service.readiness(PULL, failed_logs=True)).model_dump()
 
     assert result["readiness"] == "not_applicable"
     assert result["rollup"] == "failure"
     assert result["checks"][0]["conclusion"] == "failure"
-    assert [(log["run_id"], log["log"]) for log in result["failed_logs"]] == [
-        (9, "failure")
+    assert [(log["job_id"], log["log"]) for log in result["failed_logs"]] == [
+        ("9/1/3", "failure")
     ]
     assert result["completion_blockers"] == []
-    assert not any(
-        "/branches/" in endpoint or "/compare/" in endpoint
-        for endpoint, _params, _headers in fake.gets
+    assert not any("/branches/" in p or "/compare/" in p for p in github.sent)
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_ready_after_true_base_integration_and_successful_ci(
+    monkeypatch,
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert result.rollup == "success"
+    assert (result.base_sha, result.behind_by, result.out_of_date) == (
+        "base123",
+        0,
+        False,
+    )
+    assert result.readiness == "ready"
+    assert result.completion_blockers == []
+
+
+@pytest.mark.asyncio
+async def test_readiness_blocks_a_head_that_changes_during_the_check(monkeypatch):
+    old = {"sha": "old-head", "ref": "feature", "repo": {"full_name": REPO}}
+    new = {"sha": "new-head", "ref": "feature", "repo": {"full_name": REPO}}
+    github = _ci(ScriptedGitHub(), "old-head", _checks(_run("success")))
+    github.on(
+        "GET", f"/repos/{REPO}/pulls/7", _sequence(_pull(head=old), _pull(head=new))
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert (result.head_sha, result.current_head_sha) == ("old-head", "new-head")
+    assert result.readiness == "blocked"
+    assert [item.code for item in result.completion_blockers] == ["head_changed"]
+
+
+@pytest.mark.asyncio
+async def test_readiness_blocks_a_base_that_changes_during_the_check(monkeypatch):
+    github = _ci(_github(), "abc123", _checks(_run("success")), base="base-one")
+    github.on(
+        "GET",
+        f"/repos/{REPO}/branches/main",
+        _sequence({"commit": {"sha": "base-one"}}, {"commit": {"sha": "base-two"}}),
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert (result.base_sha, result.current_base_sha) == ("base-one", "base-two")
+    assert result.readiness == "blocked"
+    assert [item.code for item in result.completion_blockers] == ["base_changed"]
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_the_permission_ci_needs(monkeypatch):
+    github = _ci(_github(), "abc123", httpx.Response(403, text="SECRET"))
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError) as raised:
+        await service.readiness(PULL)
+
+    assert str(raised.value) == " ".join(
+        [
+            t("integrations.github.response.forbidden"),
+            t(
+                "integrations.github.response.permission",
+                permission="Actions / Checks / Commit statuses",
+            ),
+        ]
     )
 
 
-@pytest.mark.asyncio
-async def test_pr_checks_is_ready_after_true_base_integration_and_successful_ci():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "base123", "ref": "main"},
-            },
-            "/repos/owner/repo/compare/base123...abc123": {"behind_by": 0},
-            "/repos/owner/repo/commits/abc123/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-        }
-    )
-    service._client = fake
-
-    result = await _checks(service, "https://github.com/owner/repo/pull/7")
-
-    assert result["rollup"] == "success"
-    assert result["behind_by"] == 0
-    assert result["out_of_date"] is False
-    assert result["readiness"] == "ready"
-    assert result["completion_blockers"] == []
-
-
-@pytest.mark.asyncio
-async def test_pr_checks_blocks_a_head_that_changes_during_readiness_check():
-    service = _service()
-    fake = FakeClient()
-    endpoint = "/repos/owner/repo/pulls/7"
-    fake.get_sequences[endpoint] = [
-        {
-            "state": "open",
-            "html_url": "https://github.com/owner/repo/pull/7",
-            "head": {
-                "sha": "old-head",
-                "ref": "feature",
-                "repo": {"full_name": "owner/repo"},
-            },
-            "base": {"sha": "base123", "ref": "main"},
-        },
-        {
-            "state": "open",
-            "html_url": "https://github.com/owner/repo/pull/7",
-            "head": {
-                "sha": "new-head",
-                "ref": "feature",
-                "repo": {"full_name": "owner/repo"},
-            },
-            "base": {"sha": "base123", "ref": "main"},
-        },
-    ]
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/compare/base123...old-head": {"behind_by": 0},
-            "/repos/owner/repo/commits/old-head/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/old-head/status": {"statuses": []},
-        }
-    )
-    service._client = fake
-
-    result = await _checks(service, "https://github.com/owner/repo/pull/7")
-
-    assert result["head_sha"] == "old-head"
-    assert result["current_head_sha"] == "new-head"
-    assert result["readiness"] == "blocked"
-    assert [item["code"] for item in result["completion_blockers"]] == ["head_changed"]
-
-
-@pytest.mark.asyncio
-async def test_pr_checks_blocks_a_base_that_changes_during_readiness_check():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {
-                    "sha": "head123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "old-base", "ref": "main"},
-            },
-            "/repos/owner/repo/compare/base-one...head123": {"behind_by": 0},
-            "/repos/owner/repo/commits/head123/check-runs": {
-                "check_runs": [
-                    {
-                        "name": "test",
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            },
-            "/repos/owner/repo/commits/head123/status": {"statuses": []},
-        }
-    )
-    fake.get_sequences["/repos/owner/repo/branches/main"] = [
-        {"commit": {"sha": "base-one"}},
-        {"commit": {"sha": "base-two"}},
-    ]
-    service._client = fake
-
-    result = await _checks(service, "https://github.com/owner/repo/pull/7")
-
-    assert result["base_sha"] == "base-one"
-    assert result["current_base_sha"] == "base-two"
-    assert result["readiness"] == "blocked"
-    assert [item["code"] for item in result["completion_blockers"]] == ["base_changed"]
-
-
-@pytest.mark.asyncio
-async def test_open_pull_requests_asks_for_the_pushed_branch_of_the_remote():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = [
-        {"number": 7, "html_url": "https://github.com/owner/repo/pull/7"},
-        {"number": 0},
-    ]
-    service._client = fake
-
-    urls = await service.open_pull_requests("git@github.com:owner/repo.git", "feature")
-
-    assert fake.gets == [
-        ("/repos/owner/repo/pulls", {"state": "open", "head": "owner:feature"}, None)
-    ]
-    assert urls == ["https://github.com/owner/repo/pull/7"]
-    assert await service.open_pull_requests("git@gitlab.com:o/r.git", "x") == []
-
-
-@pytest.mark.asyncio
-async def test_linked_pull_requests_are_the_pull_requests_of_the_issue_timeline():
-    service = _service()
-    fake = FakeClient()
-    pull = {"html_url": "https://github.com/owner/repo/pull/7", "pull_request": {}}
-    issue = {"html_url": "https://github.com/owner/repo/issues/9"}
-    fake.get_payloads["/repos/owner/repo/issues/1/timeline"] = [
-        {"source": {"issue": pull}},
-        {"source": {"issue": issue}},
-        {"source": {"issue": pull}},
-        {"event": "labeled"},
-    ]
-    service._client = fake
-
-    assert await service.linked_pull_requests(
-        "https://github.com/owner/repo/issues/1"
-    ) == ["https://github.com/owner/repo/pull/7"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("after_page", [False, True])
-async def test_linked_pull_requests_refuse_an_incomplete_issue_timeline(after_page):
-    from guildbotics.integrations.github.github_utils import GITHUB_PAGE_SIZE
-
-    service = _service()
-    fake = FakeClient()
-    endpoint = "/repos/owner/repo/issues/1/timeline"
-    event = {
-        "source": {
-            "issue": {
-                "html_url": "https://github.com/owner/repo/pull/7",
-                "pull_request": {},
-            }
-        }
-    }
-    fake.get_sequences[endpoint] = (
-        [[event] * GITHUB_PAGE_SIZE] if after_page else []
-    ) + [[]]
-    fake.get_status_sequences[endpoint] = ([200] if after_page else []) + [403]
-    service._client = fake
-    with pytest.raises(MemberCapabilityError):
-        await service.linked_pull_requests("https://github.com/owner/repo/issues/1")
-    # The issue itself is read first, as an issue, then its timeline.
-    assert [endpoint for endpoint, _, _ in fake.gets][0] == "/repos/owner/repo/issues/1"
-    assert len(fake.gets) == (3 if after_page else 2)
-
-
-@pytest.mark.asyncio
-async def test_pr_checks_reports_permission_failure():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "head": {
-            "sha": "abc123",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        }
-    }
-    endpoint = "/repos/owner/repo/commits/abc123/check-runs"
-    fake.get_status_codes[endpoint] = 403
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="approve the permission update"):
-        await _checks(service, "https://github.com/owner/repo/pull/7")
+# --------------------------------------------------------------------------- #
+#   Artifacts                                                                 #
+# --------------------------------------------------------------------------- #
 
 
 def _artifact_zip(files: dict[str, bytes]) -> bytes:
@@ -1143,1497 +1142,100 @@ def _artifact_zip(files: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
-_ARTIFACT_PR = "https://github.com/owner/repo/pull/9"
-
-
-def _pull_request_artifacts(fake: FakeClient, *artifacts: dict) -> None:
-    """Pull request 9, whose head ``abc`` was built by run 9 into ``artifacts``."""
-    fake.get_payloads["/repos/owner/repo/pulls/9"] = {
-        "head": {"sha": "abc", "ref": "feature", "repo": {"full_name": "owner/repo"}}
-    }
-    fake.get_payloads["/repos/owner/repo/actions/artifacts"] = {
-        "artifacts": [
-            {**artifact, "workflow_run": {"id": 9, "head_sha": "abc"}}
-            for artifact in artifacts
-        ]
-    }
-
-
-@pytest.mark.asyncio
-async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "head": {
-                    "sha": "abc123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                }
-            },
-            "/repos/owner/repo/actions/artifacts": {
+def _artifacts(content: bytes, *artifacts: dict) -> ScriptedGitHub:
+    """Pull request #7, whose head ``abc123`` was built into ``artifacts``;
+    artifact 12's archive is ``content``."""
+    return (
+        _github()
+        .on(
+            "GET",
+            f"/repos/{REPO}/actions/artifacts",
+            {
                 "artifacts": [
-                    {
-                        "id": 12,
-                        "name": "playwright-report",
-                        "expired": False,
-                        "size_in_bytes": 100,
-                        "workflow_run": {"id": 9, "head_sha": "abc123"},
-                    }
+                    {"workflow_run": {"id": 9, "head_sha": "abc123"}, **artifact}
+                    for artifact in artifacts
                 ]
             },
-        }
-    )
-    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
-        {"error-context.md": b"failure details"}
-    )
-    service._client = fake
-
-    result = await member_repository.artifact_download(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        "playwright-report",
-        tmp_path,
+        )
+        .on(
+            "GET",
+            f"/repos/{REPO}/actions/artifacts/12/zip",
+            httpx.Response(200, content=content),
+        )
     )
 
-    assert result["run_id"] == 9
-    assert result["files"] == [str((tmp_path / "error-context.md").resolve())]
-    assert (tmp_path / "error-context.md").read_bytes() == b"failure details"
+
+def _report(name: str = "report", **fields: Any) -> dict:
+    return {"id": 12, "name": name, "expired": False, "size_in_bytes": 100, **fields}
 
 
 @pytest.mark.asyncio
-async def test_artifact_download_rejects_oversized_artifact(tmp_path):
-    service = _service()
-    fake = FakeClient()
-    _pull_request_artifacts(
-        fake,
-        {
-            "id": 12,
-            "name": "large",
-            "expired": False,
-            "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
-        },
+async def test_artifact_download_extracts_the_named_artifact_of_the_head(
+    monkeypatch, tmp_path
+):
+    github = _artifacts(
+        _artifact_zip({"error-context.md": b"failure details"}),
+        _report("playwright-report"),
+        # Of another head, newer, and expired: none of them is the head's.
+        {**_report("playwright-report", id=13), "workflow_run": {"head_sha": "old"}},
+        _report("playwright-report", id=14, expired=True),
     )
-    service._client = fake
+    service = _service(github, monkeypatch)
+
+    result = await member_repository.artifact_download(
+        _member(service), PULL, "playwright-report", tmp_path
+    )
+
+    assert result == {
+        "name": "playwright-report",
+        "id": "12",
+        "destination": str(tmp_path.resolve()),
+        "files": [str((tmp_path / "error-context.md").resolve())],
+    }
+    assert (tmp_path / "error-context.md").read_bytes() == b"failure details"
+    [listing] = [r for r in github.requests if r.url.path.endswith("/artifacts")]
+    assert listing.url.params["name"] == "playwright-report"
+
+
+@pytest.mark.asyncio
+async def test_a_head_without_the_artifact_has_none(monkeypatch, tmp_path):
+    github = _artifacts(b"", _report("other"))
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound, match="no artifact 'report'"):
+        await member_repository.artifact_download(
+            _member(service), PULL, "report", tmp_path
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_rejects_oversized_artifact(monkeypatch, tmp_path):
+    github = _artifacts(b"", _report(size_in_bytes=MAX_ARTIFACT_BYTES + 1))
+    service = _service(github, monkeypatch)
     # The destination is a directory of its own: ``tmp_path`` also holds the
     # isolated HOME, which anything in the process may write to.
     destination = tmp_path / "artifact"
 
-    with pytest.raises(MemberCapabilityError, match="Ask a human to retrieve it"):
+    with pytest.raises(ServiceError, match="Ask a human to retrieve it"):
         await member_repository.artifact_download(
-            _member(service),
-            _ARTIFACT_PR,
-            "large",
-            destination,
+            _member(service), PULL, "report", destination
         )
 
     assert list(destination.rglob("*")) == []
+    assert not any(p.endswith("/zip") for p in github.sent)
 
 
 @pytest.mark.asyncio
-async def test_artifact_download_rejects_path_traversal(tmp_path):
-    service = _service()
-    fake = FakeClient()
-    _pull_request_artifacts(
-        fake, {"id": 12, "name": "unsafe", "expired": False, "size_in_bytes": 100}
-    )
-    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
-        {"../outside.txt": b"must not escape"}
-    )
-    service._client = fake
+async def test_artifact_download_rejects_path_traversal(monkeypatch, tmp_path):
+    github = _artifacts(_artifact_zip({"../outside.txt": b"escape"}), _report())
+    service = _service(github, monkeypatch)
 
     with pytest.raises(MemberCapabilityError, match="unsafe path"):
         await member_repository.artifact_download(
-            _member(service),
-            _ARTIFACT_PR,
-            "unsafe",
-            tmp_path,
+            _member(service), PULL, "report", tmp_path / "work"
         )
 
-    assert not (tmp_path.parent / "outside.txt").exists()
-
-
-@pytest.mark.asyncio
-async def test_pr_reply_allows_outdated_thread():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
-        "id": 101,
-        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-    }
-    service._client = fake
-
-    result = await member_repository.pr_reply(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        ROOT_REVIEW_COMMENT_ID,
-        "Fixed.",
-    )
-
-    assert result["reply_comment_id"] == REPLY_COMMENT_ID
-    assert fake.posts[-1:] == [
-        (
-            "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed."},
-            None,
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_pr_reply_allows_resolved_thread():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
-        "id": 101,
-        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-    }
-    service._client = fake
-
-    result = await member_repository.pr_reply(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        ROOT_REVIEW_COMMENT_ID,
-        "Fixed.",
-    )
-
-    assert result["reply_comment_id"] == REPLY_COMMENT_ID
-    assert fake.posts[-1:] == [
-        (
-            "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed."},
-            None,
-        )
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "root",
-    [
-        [],
-        {
-            "id": 101,
-            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/8",
-        },
-        {
-            "id": 101,
-            "in_reply_to_id": 99,
-            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-        },
-        {
-            "id": 102,
-            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
-        },
-    ],
-)
-async def test_reply_requires_the_requested_root_comment_on_this_pr(root):
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = root
-    service._client = fake
-    with pytest.raises(MemberCapabilityError, match="not replyable"):
-        await member_repository.pr_reply(
-            _member(service), "https://github.com/owner/repo/pull/7", 101, "Fixed"
-        )
-    assert not fake.posts
-
-
-@pytest.mark.asyncio
-async def test_issue_create_creates_real_issue_and_adds_project_item():
-    service = _service()
-    fake = FakeClient()
-    fake.post_payloads["/repos/owner/repo/issues"] = {
-        "number": 43,
-        "html_url": "https://github.com/owner/repo/issues/43",
-        "node_id": "ISSUE_node",
-    }
-    fake.graphql_payloads.extend(
-        [
-            {"data": {"organization": {"projectV2": {"id": "PROJECT_node"}}}},
-            {"data": {"addProjectV2ItemById": {"item": {"id": "PROJECT_ITEM_node"}}}},
-        ]
-    )
-    fake.get_payloads["/repos/owner/repo/issues/43"] = {"node_id": "ISSUE_node"}
-    service._client = fake
-
-    result = await member_repository.issue_create(
-        _member(service, _board(service)),
-        "repo",
-        "Follow-up",
-        "Body",
-        True,
-        human_approved=True,
-    )
-
-    assert result == {
-        "issue_number": 43,
-        "issue_title": "Follow-up",
-        "repo": "owner/repo",
-        "issue_url": "https://github.com/owner/repo/issues/43",
-        "labels": [],
-        "project_item_id": "PROJECT_ITEM_node",
-        "target": _issue_target(43),
-    }
-    assert fake.posts[0] == (
-        "/repos/owner/repo/issues",
-        {"title": "Follow-up", "body": "Body"},
-        None,
-    )
-    assert fake.posts[1][0] == "/graphql"
-    assert fake.posts[2][0] == "/graphql"
-
-
-@pytest.mark.asyncio
-async def test_issue_comment_returns_issue_and_comment_activity_fields():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "title": "Original title",
-        "html_url": "https://github.com/owner/repo/issues/42",
-    }
-    fake.post_payloads["/repos/owner/repo/issues/42/comments"] = {
-        "id": 123,
-        "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
-        "created_at": "2026-07-01T00:00:00Z",
-        "user": {"login": "bot"},
-    }
-    service._client = fake
-
-    result = await member_repository.issue_comment(
-        _member(service), "https://github.com/owner/repo/issues/42", "Comment"
-    )
-
-    assert result == {
-        "comment_id": 123,
-        "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
-        "author": "bot",
-        "created_at": "2026-07-01T00:00:00Z",
-        "comment_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
-        "issue_number": 42,
-        "repo": "owner/repo",
-        "issue_url": "https://github.com/owner/repo/issues/42",
-        "target": _issue_target(42, "Original title"),
-    }
-
-
-@pytest.mark.asyncio
-async def test_issue_update_patches_only_body_and_returns_updated_issue():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "body": "Updated body",
-        "title": "Original title",
-        "state": "open",
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service), "https://github.com/owner/repo/issues/42", "Updated body"
-    )
-
-    assert result == {
-        "issue_number": 42,
-        "issue_url": "https://github.com/owner/repo/issues/42",
-        "repo": "owner/repo",
-        "title": "Original title",
-        "state": "open",
-        "state_changed": False,
-        "labels": [],
-        "body": "Updated body",
-        "target": _issue_target(42, "Original title"),
-    }
-    assert fake.patches == [
-        ("/repos/owner/repo/issues/42", {"body": "Updated body"}, None)
-    ]
-
-
-@pytest.mark.parametrize("requested_body", ["", "Requested body"])
-@pytest.mark.asyncio
-async def test_issue_update_normalizes_null_response_body(requested_body):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "body": None,
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service), "https://github.com/owner/repo/issues/42", requested_body
-    )
-
-    assert result["body"] == ""
-    assert fake.patches == [
-        ("/repos/owner/repo/issues/42", {"body": requested_body}, None)
-    ]
-
-
-@pytest.mark.asyncio
-async def test_issue_create_without_human_approval_is_refused_before_any_call():
-    service = _service()
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_create(
-            _member(service), "repo", "Follow-up", "Body", False
-        )
-
-    assert "requires a human instruction or approval" in str(error.value)
-    assert fake.posts == []
-
-
-@pytest.mark.asyncio
-async def test_issue_create_sends_repository_labels_with_their_defined_casing():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [
-        {"name": "priority: high"},
-        {"name": "CLI"},
-    ]
-    fake.post_payloads["/repos/owner/repo/issues"] = {
-        "number": 43,
-        "html_url": "https://github.com/owner/repo/issues/43",
-        "labels": [{"name": "priority: high"}, {"name": "CLI"}],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_create(
-        _member(service),
-        "repo",
-        "Follow-up",
-        "Body",
-        False,
-        labels=["Priority: High", "cli"],
-        human_approved=True,
-    )
-
-    assert fake.posts[0] == (
-        "/repos/owner/repo/issues",
-        {"title": "Follow-up", "body": "Body", "labels": ["priority: high", "CLI"]},
-        None,
-    )
-    assert result["labels"] == ["priority: high", "CLI"]
-
-
-@pytest.mark.asyncio
-async def test_issue_create_rejects_a_label_the_repository_does_not_define():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_create(
-            _member(service),
-            "repo",
-            "Follow-up",
-            "Body",
-            False,
-            labels=["priority: high"],
-            human_approved=True,
-        )
-
-    message = str(error.value)
-    assert "'priority: high' is not defined in owner/repo" in message
-    assert "Defined labels: cli" in message
-    assert fake.posts == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_closes_the_issue_with_its_state_reason():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {"state": "open"}
-    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "closed",
-        "body": "Body",
-        "labels": [{"name": "cli"}],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        state="closed",
-        state_reason="not_planned",
-        human_approved=True,
-    )
-
-    assert fake.patches == [
-        (
-            "/repos/owner/repo/issues/42",
-            {"state": "closed", "state_reason": "not_planned"},
-            None,
-        )
-    ]
-    assert result["state"] == "closed"
-    assert result["state_changed"] is True
-    assert result["repo"] == "owner/repo"
-    assert result["labels"] == ["cli"]
-
-
-@pytest.mark.asyncio
-async def test_issue_update_reports_a_re_close_as_an_unchanged_state():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {"state": "closed"}
-    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "closed",
-        "body": "Body",
-        "labels": [],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        state="closed",
-        human_approved=True,
-    )
-
-    assert result["state"] == "closed"
-    assert result["state_changed"] is False
-
-
-@pytest.mark.parametrize("state", ["closed", "open"])
-@pytest.mark.asyncio
-async def test_issue_update_state_change_without_human_approval_is_refused(state):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_update(
-            _member(service), "https://github.com/owner/repo/issues/42", state=state
-        )
-
-    assert f"Changing the issue state to '{state}'" in str(error.value)
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_removing_a_label_skips_the_repository_label_lookup():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "open",
-        "body": "Body",
-        "labels": [{"name": "cli"}],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        remove_labels=["docs"],
-    )
-
-    # Nothing is validated against the repository vocabulary when only
-    # removing, so the paginated label listing is never fetched; the first GET
-    # makes sure the number is an issue's, the last reads it back.
-    assert [endpoint for endpoint, _params, _headers in fake.gets] == [
-        "/repos/owner/repo/issues/42",
-        "/repos/owner/repo/issues/42",
-    ]
-    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
-    assert fake.patches == []
-    assert result["labels"] == ["cli"]
-
-
-@pytest.mark.asyncio
-async def test_issue_update_changes_labels_through_the_dedicated_label_endpoints():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [
-        {"name": "priority: high"},
-        {"name": "cli"},
-        {"name": "docs"},
-    ]
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "open",
-        "body": "Body",
-        "labels": [{"name": "cli"}, {"name": "priority: high"}],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        add_labels=["Priority: High"],
-        remove_labels=["docs"],
-    )
-
-    # Add and remove touch only the named labels, so labels a human sets
-    # concurrently survive; the full label set is never PATCHed.
-    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
-    assert fake.posts == [
-        ("/repos/owner/repo/issues/42/labels", {"labels": ["priority: high"]}, None)
-    ]
-    assert fake.patches == []
-    assert result["labels"] == ["cli", "priority: high"]
-
-
-@pytest.mark.asyncio
-async def test_issue_update_patches_fields_before_labels_and_refetches_the_result():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "New title",
-        "state": "open",
-        "body": "Body",
-        "labels": [{"name": "cli"}],
-    }
-    fake.patch_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "New title",
-        "state": "open",
-        "body": "Body",
-        "labels": [],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        title="New title",
-        add_labels=["cli"],
-    )
-
-    # The field PATCH runs before the label writes, and the result is
-    # re-fetched afterwards so it reflects the applied label changes.
-    assert fake.history == [
-        ("get", "/repos/owner/repo/labels"),
-        ("get", "/repos/owner/repo/issues/42"),
-        ("patch", "/repos/owner/repo/issues/42"),
-        ("post", "/repos/owner/repo/issues/42/labels"),
-        ("get", "/repos/owner/repo/issues/42"),
-    ]
-    assert result["labels"] == ["cli"]
-
-
-@pytest.mark.asyncio
-async def test_issue_update_leaves_labels_untouched_when_the_field_patch_fails():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
-    fake.patch_status_codes["/repos/owner/repo/issues/42"] = HTTP_BAD_REQUEST
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="status 400"):
-        await member_repository.issue_update(
-            _member(service),
-            "https://github.com/owner/repo/issues/42",
-            body="Body",
-            add_labels=["cli"],
-            remove_labels=["docs"],
-        )
-
-    assert fake.deletes == []
-    assert fake.posts == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_trims_label_names_and_skips_empty_ones():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "open",
-        "body": "Body",
-        "labels": [],
-    }
-    service._client = fake
-
-    await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        remove_labels=["  docs  ", ""],
-    )
-
-    assert fake.deletes == [("/repos/owner/repo/issues/42/labels/docs", None)]
-
-
-@pytest.mark.asyncio
-async def test_issue_update_with_only_blank_labels_is_refused():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_update(
-            _member(service),
-            "https://github.com/owner/repo/issues/42",
-            remove_labels=["   "],
-        )
-
-    assert "at least one of body, title, labels, or state" in str(error.value)
-    assert fake.deletes == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_tolerates_removing_a_label_the_issue_does_not_carry():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    endpoint = "/repos/owner/repo/issues/42/labels/priority%3A%20high"
-    fake.delete_status_codes[endpoint] = 404
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "title": "Original title",
-        "state": "open",
-        "body": "Body",
-        "labels": [],
-    }
-    service._client = fake
-
-    result = await member_repository.issue_update(
-        _member(service),
-        "https://github.com/owner/repo/issues/42",
-        remove_labels=["priority: high"],
-    )
-
-    assert fake.deletes == [(endpoint, None)]
-    assert result["labels"] == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_rejects_a_label_the_repository_does_not_define():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/labels"] = [{"name": "cli"}]
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_update(
-            _member(service),
-            "https://github.com/owner/repo/issues/42",
-            add_labels=["blocker"],
-        )
-
-    assert "Ask a human to add the label" in str(error.value)
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_without_any_requested_change_is_refused():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.issue_update(
-            _member(service), "https://github.com/owner/repo/issues/42"
-        )
-
-    assert "at least one of body, title, labels, or state" in str(error.value)
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_pr_update_replaces_the_title_without_touching_the_body():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
-        "number": 7,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "title": "New title",
-        "body": "Untouched body",
-    }
-    service._client = fake
-
-    result = await member_repository.pr_update(
-        _member(service), "https://github.com/owner/repo/pull/7", title="New title"
-    )
-
-    assert fake.patches == [("/repos/owner/repo/pulls/7", {"title": "New title"}, None)]
-    assert result["title"] == "New title"
-    assert result["body"] == "Untouched body"
-    assert fake.gets == []
-
-
-@pytest.mark.asyncio
-async def test_pr_update_without_any_requested_change_is_refused():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError) as error:
-        await member_repository.pr_update(
-            _member(service), "https://github.com/owner/repo/pull/7"
-        )
-
-    assert "pr update needs a body or a title." in str(error.value)
-    assert fake.patches == []
-
-
-@pytest.mark.parametrize(
-    ("url", "error"),
-    [
-        ("not-a-url", "Unsupported GitHub URL"),
-        ("https://github.com/owner/repo/pull/7", "Expected issue URL"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_issue_update_rejects_invalid_or_non_issue_url(url, error):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match=error):
-        await member_repository.issue_update(_member(service), url, "Body")
-
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_issue_update_propagates_github_api_error():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.patch_status_codes["/repos/owner/repo/issues/42"] = HTTP_BAD_REQUEST
-    service._client = fake
-
-    with pytest.raises(
-        MemberCapabilityError, match="GitHub API request failed with status 400"
-    ):
-        await member_repository.issue_update(
-            _member(service), "https://github.com/owner/repo/issues/42", "Body"
-        )
-
-    assert fake.patches == [("/repos/owner/repo/issues/42", {"body": "Body"}, None)]
-
-
-@pytest.mark.asyncio
-async def test_pr_create_uses_explicit_base_branch():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/pulls"] = {
-        "number": 8,
-        "html_url": "https://github.com/owner/repo/pull/8",
-        "draft": False,
-    }
-    service._client = fake
-
-    result = await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "ticket-driven-workflow",
-        "Title",
-        "Body",
-        "",
-        "false",
-    )
-
-    assert result == {
-        "pr_number": 8,
-        "pr_url": "https://github.com/owner/repo/pull/8",
-        "created": True,
-        "draft": False,
-        "head": "feature",
-        "base": "ticket-driven-workflow",
-        "target": _pull_target(8),
-    }
-    assert fake.gets[0] == (
-        "/repos/owner/repo/pulls",
-        {
-            "head": "owner:feature",
-            "base": "ticket-driven-workflow",
-            "state": "open",
-        },
-        None,
-    )
-    assert fake.posts[0] == (
-        "/repos/owner/repo/pulls",
-        {
-            "title": "Title",
-            "head": "feature",
-            "base": "ticket-driven-workflow",
-            "body": "Body",
-            "draft": False,
-        },
-        None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_pr_create_opens_a_draft_when_draft_is_true():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/pulls"] = {
-        "number": 8,
-        "html_url": "https://github.com/owner/repo/pull/8",
-        "draft": True,
-    }
-    service._client = fake
-
-    result = await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "main",
-        "Title",
-        "Body",
-        "",
-        "true",
-    )
-
-    assert result["draft"] is True
-    assert fake.posts[0][1]["draft"] is True
-
-
-@pytest.mark.asyncio
-async def test_pr_create_uses_default_branch_when_base_is_empty():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo"] = {"default_branch": "develop"}
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/pulls"] = {
-        "number": 9,
-        "html_url": "https://github.com/owner/repo/pull/9",
-        "draft": False,
-    }
-    service._client = fake
-
-    result = await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "",
-        "Title",
-        "Body",
-        "",
-        "false",
-    )
-
-    assert result["base"] == "develop"
-    assert fake.gets[:2] == [
-        ("/repos/owner/repo", None, None),
-        (
-            "/repos/owner/repo/pulls",
-            {"head": "owner:feature", "base": "develop", "state": "open"},
-            None,
-        ),
-    ]
-    assert fake.posts[0][1]["base"] == "develop"
-
-
-@pytest.mark.asyncio
-async def test_pr_create_returns_matching_open_pr_without_updating_it():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = [
-        {
-            "number": 7,
-            "html_url": "https://github.com/owner/repo/pull/7",
-            "draft": False,
-        }
-    ]
-    service._client = fake
-
-    result = await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "main",
-        "Replacement title",
-        "Replacement body",
-        "https://github.com/owner/repo/issues/42",
-        "true",
-    )
-
-    assert result == {
-        "pr_number": 7,
-        "pr_url": "https://github.com/owner/repo/pull/7",
-        "created": False,
-        "draft": False,
-        "head": "feature",
-        "base": "main",
-        "target": _pull_target(7),
-    }
-    assert fake.gets == [
-        (
-            "/repos/owner/repo/pulls",
-            {"head": "owner:feature", "base": "main", "state": "open"},
-            None,
-        )
-    ]
-    assert fake.posts == []
-    assert fake.patches == []
-
-
-ISSUE_URL = "https://github.com/owner/repo/issues/42"
-
-
-@pytest.mark.parametrize(
-    ("body", "issue_url", "closes", "expected"),
-    [
-        ("Body", ISSUE_URL, False, "Body\n\nRefs #42"),
-        ("Body", ISSUE_URL, True, "Body\n\nCloses #42"),
-        ("", ISSUE_URL, True, "Closes #42"),
-        ("Body", "", True, "Body"),
-        ("Body", "https://github.com/owner/repo/pull/1", True, "Body"),
-        ("Closes #42", ISSUE_URL, True, "Closes #42"),
-        ("Fixes #42", ISSUE_URL, True, "Fixes #42"),
-        ("Resolved #42", ISSUE_URL, True, "Resolved #42"),
-        ("Refs #42", ISSUE_URL, False, "Refs #42"),
-        ("Refs #42", ISSUE_URL, True, "Closes #42"),
-        ("Ref #42", ISSUE_URL, True, "Closes #42"),
-        ("Body\n\nRefs #42", ISSUE_URL, True, "Body\n\nCloses #42"),
-        ("Refs #42\n\nCloses #42", ISSUE_URL, True, "Refs #42\n\nCloses #42"),
-        ("Closes #42", ISSUE_URL, False, "Closes #42"),
-        ("See #42", ISSUE_URL, False, "See #42\n\nRefs #42"),
-        ("Closes #41", ISSUE_URL, True, "Closes #41\n\nCloses #42"),
-    ],
-)
-def test_append_issue_link_chooses_trailer_and_skips_existing_keywords(
-    body, issue_url, closes, expected
-):
-    assert _append_issue_link(body, issue_url, closes=closes) == expected
-
-
-@pytest.mark.parametrize(
-    "keyword",
-    [
-        "close",
-        "closes",
-        "closed",
-        "fix",
-        "fixes",
-        "fixed",
-        "resolve",
-        "resolves",
-        "resolved",
-        "ref",
-        "refs",
-    ],
-)
-def test_preserve_issue_links_keeps_keyword_variants(keyword):
-    trailer = f"{keyword.upper()} #42"
-    assert _preserve_issue_links("New", f"Old\n{trailer}") == f"New\n\n{trailer}"
-
-
-@pytest.mark.parametrize(
-    ("body", "previous", "expected"),
-    [
-        ("Refs #42", "Closes #42", "Refs #42"),
-        ("Fixes #42", "Refs #42", "Fixes #42"),
-        ("Closes #42", "Fixes #42", "Closes #42"),
-        ("", "Old\nCloses #42\nRefs #43", "Closes #42\n\nRefs #43"),
-        ("New", "Refs #42\nRefs #42", "New\n\nRefs #42"),
-        ("New", "Refs #42\nCloses #42", "New\n\nRefs #42\n\nCloses #42"),
-        ("New\n", "Old without links", "New\n"),
-        ("New", "See #42; prefixedRefs #43; Closes #44suffix", "New"),
-        ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
-        ("See #42", "Closes #42", "See #42\n\nCloses #42"),
-        ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
-        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\nRefs #42"),
-        ("New", "Use `tool`.\nCloses #42", "New\n\nCloses #42"),
-        ("New", "Text\r\rCloses #99\n```\nCloses #42\n```", "New\n\nCloses #99"),
-        ("New", "Text\r\rCloses #42\rRefs #43", "New\n\nCloses #42\n\nRefs #43"),
-        ("New", "  Closes #42  \r\nRefs\t#43", "New\n\nCloses #42\n\nRefs\t#43"),
-    ],
-)
-def test_preserve_issue_links_prefers_replacement_and_deduplicates(
-    body, previous, expected
-):
-    assert _preserve_issue_links(body, previous) == expected
-
-
-@pytest.mark.parametrize(
-    "example",
-    [
-        "Example: `Closes #617`",
-        "Do not use Closes #617 here.",
-        "`Closes #617`",
-        "```text\nCloses #617\n```",
-        "~~~\nCloses #617\n~~~",
-        "    Closes #617",
-        "> Closes #617",
-        "> example\nCloses #617",
-        "<!--\nCloses #617\n-->",
-        "<pre>\nCloses #617\n</pre>",
-        "Closes &#35;617",
-        "Closes \\#617",
-        "Closes\n#617",
-        "`example\nCloses #617\nexample`",
-    ],
-)
-def test_issue_link_examples_do_not_become_trailers_or_override_real_links(example):
-    assert (
-        _preserve_issue_links("New", f"{example}\n\nCloses #630")
-        == "New\n\nCloses #630"
-    )
-    assert _preserve_issue_links(example, "Closes #617") == f"{example}\n\nCloses #617"
-    assert (
-        _append_issue_link(
-            example, "https://github.com/owner/repo/issues/617", closes=True
-        )
-        == f"{example}\n\nCloses #617"
-    )
-
-
-def test_create_upgrades_only_the_real_reference_link():
-    body = "Example: `Refs #42`\n\nRefs #42"
-    assert (
-        _append_issue_link(body, ISSUE_URL, closes=True)
-        == "Example: `Refs #42`\n\nCloses #42"
-    )
-
-
-def test_nested_image_code_does_not_mask_an_adjacent_link():
-    body = "Refs #42\n![`x`](https://example.com)"
-    assert _preserve_issue_links(body, "Closes #42") == body
-    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
-
-
-@pytest.mark.parametrize("body", ["```text\nNew", "~~~\nNew", "<!-- New", "<pre>\nNew"])
-def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
-    with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
-        _preserve_issue_links(body, "Closes #42")
-    with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
-        _append_issue_link(body, ISSUE_URL, closes=True)
-
-
-@pytest.mark.parametrize(
-    "prefix", ["- ", "+ ", "* ", "1. ", "1) ", "- - ", "- item\n  "]
-)
-def test_list_links_are_preserved_and_replacement_links_take_precedence(prefix):
-    body = f"{prefix}Refs #42\r\n"
-    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
-    assert _preserve_issue_links(body, "Closes #42") == body
-    assert _append_issue_link(body, ISSUE_URL, closes=False) == body
-    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{prefix}Closes #42\r\n"
-
-
-@pytest.mark.parametrize("prefix", ["", "\\\\", "[link](https://example.com/`)\n"])
-def test_code_example_does_not_mask_or_upgrade_a_real_link_with_the_same_text(prefix):
-    example = f"{prefix}`example\nRefs #42\nexample`"
-    body = f"{example}\nRefs #42"
-    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{example}\nCloses #42"
-    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
-
-
-@pytest.mark.parametrize(
-    "url", ["[link](https://example.com/`)", "<https://example.com/`>"]
-)
-def test_backticks_in_urls_do_not_mask_standalone_links(url):
-    body = f"{url}\nRefs #42\n`"
-    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
-    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{url}\nCloses #42\n`"
-
-
-@pytest.mark.asyncio
-async def test_pr_create_appends_refs_when_issue_url_is_set():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/pulls"] = {
-        "number": 8,
-        "html_url": "https://github.com/owner/repo/pull/8",
-        "draft": False,
-    }
-    service._client = fake
-
-    await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "ticket-driven-workflow",
-        "Title",
-        "Body",
-        ISSUE_URL,
-        "false",
-    )
-
-    assert fake.posts[0][1]["body"] == "Body\n\nRefs #42"
-
-
-@pytest.mark.asyncio
-async def test_pr_create_appends_closes_when_closes_issue_is_true():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls"] = []
-    fake.post_payloads["/repos/owner/repo/pulls"] = {
-        "number": 8,
-        "html_url": "https://github.com/owner/repo/pull/8",
-        "draft": False,
-    }
-    service._client = fake
-
-    await member_repository.pr_create(
-        _member(service),
-        "owner/repo",
-        "feature",
-        "main",
-        "Title",
-        "Body",
-        ISSUE_URL,
-        "false",
-        True,
-    )
-
-    assert fake.posts[0][1]["body"] == "Body\n\nCloses #42"
-
-
-@pytest.mark.parametrize(
-    ("body", "expected"),
-    [
-        ("Updated body", "Updated body\n\nCloses #42\n\nRefs #43"),
-        ("", "Closes #42\n\nRefs #43"),
-        ("Refs #42", "Refs #42\n\nRefs #43"),
-        ("Closes #43", "Closes #43\n\nCloses #42"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_pr_update_preserves_existing_issue_links(body, expected):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "body": "Old body\n\nCloses #42\nRefs #43"
-    }
-    service._client = fake
-
-    result = await member_repository.pr_update(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        body,
-        title="New title",
-    )
-
-    assert result["body"] == expected
-    assert fake.patches == [
-        (
-            "/repos/owner/repo/pulls/7",
-            {"body": expected, "title": "New title"},
-            None,
-        )
-    ]
-    assert fake.history == [
-        ("get", "/repos/owner/repo/pulls/7"),
-        ("patch", "/repos/owner/repo/pulls/7"),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_pr_update_patches_only_body_and_returns_updated_pr():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Old body"}
-    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
-        "number": 7,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "body": "Updated body",
-        "title": "Original title",
-        "base": {"ref": "main"},
-        "state": "open",
-        "draft": False,
-    }
-    service._client = fake
-
-    result = await member_repository.pr_update(
-        _member(service), "https://github.com/owner/repo/pull/7", "Updated body"
-    )
-
-    assert result == {
-        "pr_number": 7,
-        "pr_url": "https://github.com/owner/repo/pull/7",
-        "title": "Original title",
-        "body": "Updated body",
-        "target": _pull_target(7, "Original title"),
-    }
-    assert fake.patches == [
-        ("/repos/owner/repo/pulls/7", {"body": "Updated body"}, None)
-    ]
-
-
-@pytest.mark.parametrize("requested_body", ["", "Requested body"])
-@pytest.mark.asyncio
-async def test_pr_update_normalizes_null_response_body(requested_body):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": None}
-    fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
-        "number": 7,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "body": None,
-    }
-    service._client = fake
-
-    result = await member_repository.pr_update(
-        _member(service), "https://github.com/owner/repo/pull/7", requested_body
-    )
-
-    assert result["body"] == ""
-    assert fake.patches == [
-        ("/repos/owner/repo/pulls/7", {"body": requested_body}, None)
-    ]
-
-
-@pytest.mark.parametrize(
-    ("url", "error"),
-    [
-        ("not-a-url", "Unsupported GitHub URL"),
-        ("https://github.com/owner/repo/issues/7", "Expected pull URL"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match=error):
-        await member_repository.pr_update(_member(service), url, "Body")
-
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_pr_update_propagates_github_api_error():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Old body"}
-    fake.patch_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
-    service._client = fake
-
-    with pytest.raises(
-        MemberCapabilityError, match="GitHub API request failed with status 400"
-    ):
-        await member_repository.pr_update(
-            _member(service), "https://github.com/owner/repo/pull/7", "Body"
-        )
-
-    assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": "Body"}, None)]
-
-
-@pytest.mark.parametrize("body", ["", "New\n\nRefs #43"])
-@pytest.mark.asyncio
-async def test_pr_update_drop_issue_links_replaces_body_verbatim(body):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Closes #42"}
-    service._client = fake
-
-    result = await member_repository.pr_update(
-        _member(service),
-        "https://github.com/owner/repo/pull/7",
-        body,
-        drop_issue_links=True,
-    )
-
-    assert result["body"] == body
-    assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": body}, None)]
-    assert fake.gets == []
-
-
-@pytest.mark.asyncio
-async def test_pr_update_refuses_to_patch_when_existing_body_cannot_be_read():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="GitHub API request failed"):
-        await member_repository.pr_update(
-            _member(service), "https://github.com/owner/repo/pull/7", "New"
-        )
-
-    assert fake.patches == []
-
-
-@pytest.mark.asyncio
-async def test_pr_update_drop_issue_links_requires_replacement_body():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="requires a body"):
-        await member_repository.pr_update(
-            _member(service),
-            "https://github.com/owner/repo/pull/7",
-            title="New",
-            drop_issue_links=True,
-        )
-
-    assert fake.gets == fake.patches == []
-
-
-_API = "https://api.github.com/repos/owner/repo"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("url", "target", "path", "owner"),
-    [
-        (
-            "https://github.com/owner/repo/issues/7",
-            "comment",
-            "/issues/comments/101",
-            ("issue_url", f"{_API}/issues/7"),
-        ),
-        # A pull request's conversation comments are issue comments on GitHub.
-        (
-            "https://github.com/owner/repo/pull/7",
-            "comment",
-            "/issues/comments/101",
-            ("issue_url", f"{_API}/issues/7"),
-        ),
-        (
-            "https://github.com/owner/repo/pull/7",
-            "review-comment",
-            "/pulls/comments/101",
-            ("pull_request_url", f"{_API}/pulls/7"),
-        ),
-        (
-            "https://github.com/owner/repo/pull/7",
-            "review",
-            "/pulls/7/reviews/101",
-            ("pull_request_url", f"{_API}/pulls/7"),
-        ),
-    ],
-)
-async def test_a_reaction_reads_where_its_comment_is_then_reacts_to_its_node(
-    url, target, path, owner
-):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads[f"/repos/owner/repo{path}"] = {
-        "id": 101,
-        "node_id": "NODE_101",
-        owner[0]: owner[1],
-    }
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"number": 7}
-    fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
-    service._client = fake
-
-    result = await member_repository.reaction_add(
-        _member(service), url, target, 101, "+1"
-    )
-
-    assert result == {"content": "+1", "comment_id": 101}
-    # A conversation comment's id says nothing of its item's kind, so the
-    # item the URL names is read as that kind first.
-    named = "/issues/7" if "/issues/" in url else "/pulls/7"
-    assert fake.history == [
-        *([("get", f"/repos/owner/repo{named}")] if target == "comment" else []),
-        ("get", f"/repos/owner/repo{path}"),
-        ("post", "/graphql"),
-    ]
-    assert fake.posts[0][1] == {
-        "query": ADD_REACTION,
-        "variables": {"subject": "NODE_101", "content": "THUMBS_UP"},
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "comment",
-    [
-        {"id": 101, "node_id": "N", "issue_url": f"{_API}/issues/8"},
-        {"id": 102, "node_id": "N", "issue_url": f"{_API}/issues/7"},
-        [],
-    ],
-)
-async def test_a_reaction_to_a_comment_of_another_item_is_not_sent(comment):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/comments/101"] = comment
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="is not one of"):
-        await member_repository.reaction_add(
-            _member(service),
-            "https://github.com/owner/repo/issues/7",
-            "comment",
-            101,
-            "+1",
-        )
-
-    assert fake.posts == []
-
-
-@pytest.mark.asyncio
-async def test_a_reaction_to_a_review_of_another_pull_request_is_not_sent():
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7/reviews/55"] = {
-        "id": 55,
-        "node_id": "N",
-        "pull_request_url": f"{_API}/pulls/8",
-    }
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="is not one of"):
-        await member_repository.reaction_add(
-            _member(service), "https://github.com/owner/repo/pull/7", "review", 55, "+1"
-        )
-
-    assert fake.posts == []
-
-
-@pytest.mark.asyncio
-async def test_a_reaction_names_the_repository_in_any_case():
-    """GitHub answers with the repository's own spelling of its name."""
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/Owner/Repo/issues/comments/101"] = {
-        "id": 101,
-        "node_id": "N",
-        "issue_url": f"{_API}/issues/7",
-    }
-    fake.graphql_payloads = [{"data": {"addReaction": {"reaction": {}}}}]
-    service._client = fake
-
-    await member_repository.reaction_add(
-        _member(service), "https://github.com/Owner/Repo/issues/7", "comment", 101, "+1"
-    )
-
-    assert fake.history[-1] == ("post", "/graphql")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("target", ["review", "review-comment"])
-async def test_a_reaction_on_a_review_needs_a_pull_request_url(target):
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError):
-        await member_repository.reaction_add(
-            _member(service), "https://github.com/owner/repo/issues/7", target, 55, "+1"
-        )
-
-    assert fake.history == []
+    assert not (tmp_path / "outside.txt").exists()
 
 
 class _Guest:
@@ -2669,20 +1271,9 @@ class _Guest:
         return self.result
 
 
-def _artifact_service(content: bytes) -> GitHubCodeHostingService:
-    service = _service()
-    fake = FakeClient()
-    _pull_request_artifacts(
-        fake, {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
-    )
-    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = content
-    service._client = fake
-    return service
-
-
 @pytest.mark.asyncio
 async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
-    tmp_path, symlinks
+    monkeypatch, tmp_path, symlinks
 ):
     """The host downloads it and writes none of it where the environment
     can: a destination the environment made a link to elsewhere leads the
@@ -2695,13 +1286,11 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     (tmp_path / "work").mkdir()
     destination = tmp_path / "work" / "artifact"
     destination.symlink_to(outside, target_is_directory=True)
+    service = _service(_artifacts(archive, _report()), monkeypatch)
 
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
-            _member(_artifact_service(archive)),
-            _ARTIFACT_PR,
-            "report",
-            destination,
+            _member(service), PULL, "report", destination
         )
 
     [run] = guest.runs
@@ -2718,25 +1307,22 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     assert Path(str(run["stdin"])).is_relative_to(host_temporary_root())
     assert not Path(str(run["stdin"])).exists()
     assert list(outside.iterdir()) == []
-    assert (result["destination"], result["files"]) == (
-        unpacked["destination"],
-        unpacked["files"],
-    )
+    assert result == {"name": "report", "id": "12", **unpacked}
 
 
 @pytest.mark.asyncio
-async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
+async def test_an_artifact_the_environment_refused_fails_the_command(
+    monkeypatch, tmp_path
+):
     guest = _Guest(GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n"))
+    service = _service(_artifacts(_artifact_zip({"../x": b""}), _report()), monkeypatch)
 
     with (
         member_invocation_scope(MemberInvocation(guest=guest)),
         pytest.raises(MemberCapabilityError, match="unsafe path: ../x"),
     ):
         await member_repository.artifact_download(
-            _member(_artifact_service(_artifact_zip({"../x": b""}))),
-            _ARTIFACT_PR,
-            "report",
-            tmp_path,
+            _member(service), PULL, "report", tmp_path
         )
 
 
@@ -2751,104 +1337,821 @@ async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
     ],
 )
 async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
-    tmp_path, answer, message
+    monkeypatch, tmp_path, answer, message
 ):
     """It writes its answer where the agent's code runs: one that is not
     where it unpacked fails the command, and says nothing of the host."""
     guest = _Guest(answer)
+    service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with (
         member_invocation_scope(MemberInvocation(guest=guest)),
         pytest.raises(MemberCapabilityError, match=message),
     ):
         await member_repository.artifact_download(
-            _member(_artifact_service(_artifact_zip({"a": b""}))),
-            _ARTIFACT_PR,
-            "report",
-            tmp_path,
+            _member(service), PULL, "report", tmp_path
         )
 
 
 @pytest.mark.asyncio
-async def test_what_the_environment_answers_decides_nothing_else(tmp_path):
+async def test_what_the_environment_answers_decides_nothing_else(monkeypatch, tmp_path):
     """Fields the host decides stay the host's, whatever the answer adds."""
-    answer = {"destination": "/w", "files": [], "repo": "else/where", "run_id": 1}
+    answer = {"destination": "/w", "files": [], "name": "else", "id": "1"}
     guest = _Guest(GuestResult(0, json.dumps(answer).encode(), b""))
+    service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with member_invocation_scope(MemberInvocation(guest=guest)):
         result = await member_repository.artifact_download(
-            _member(_artifact_service(_artifact_zip({"a": b""}))),
-            _ARTIFACT_PR,
-            "report",
-            tmp_path,
+            _member(service), PULL, "report", tmp_path
         )
 
-    assert (result["repo"], result["run_id"]) == ("owner/repo", 9)
+    assert (result["name"], result["id"]) == ("report", "12")
+
+
+# --------------------------------------------------------------------------- #
+#   Tickets through the member commands                                       #
+# --------------------------------------------------------------------------- #
+
+
+def _tickets(github: ScriptedGitHub, monkeypatch):
+    service = _service(github, monkeypatch)
+    tickets = ticket_service(github, monkeypatch, service.person)
+    tickets._project_node_id = "PROJECT"
+    return _member(service, tickets)
+
+
+@pytest.mark.asyncio
+async def test_ticket_create_opens_the_ticket_and_puts_it_on_the_board(monkeypatch):
+    github = (
+        _github()
+        .on("POST", f"/repos/{REPO}/issues", _issue(43, title="Follow-up"))
+        .on("GET", f"/repos/{REPO}/issues/43", _issue(43, title="Follow-up"))
+        .on_graphql(
+            NODE_REPOSITORY,
+            {"node": {"repository": {"name": "demo", "owner": {"login": OWNER}}}},
+        )
+        .on_graphql(ADD_PROJECT_ITEM, {"addProjectV2ItemById": {"item": {"id": "X"}}})
+    )
+
+    result = await member_repository.ticket_create(
+        _tickets(github, monkeypatch),
+        REPO,
+        "Follow-up",
+        "Body",
+        True,
+        human_approved=True,
+    )
+
+    assert result == {
+        "labels": [],
+        "target": _target(issue_url(43), "Follow-up").model_dump(),
+        "on_board": True,
+    }
+    assert github.bodies("POST", f"/repos/{REPO}/issues") == [
+        {"title": "Follow-up", "body": "Body"}
+    ]
+    assert github.documents()[-1] == {
+        "query": ADD_PROJECT_ITEM,
+        "variables": {"proj": "PROJECT", "content": "I_43"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_failed_board_add_is_reported_after_the_ticket_was_created(
+    monkeypatch,
+):
+    """The ticket exists; the member is told the board add failed, in one line
+    the member CLI shows, never GitHub's raw errors."""
+    github = (
+        _github()
+        .on("POST", f"/repos/{REPO}/issues", _issue(43))
+        .on("GET", f"/repos/{REPO}/issues/43", _issue(43))
+        .on_graphql(
+            NODE_REPOSITORY,
+            {"node": {"repository": {"name": "demo", "owner": {"login": OWNER}}}},
+        )
+        .on_graphql(
+            ADD_PROJECT_ITEM,
+            httpx.Response(200, json={"errors": [{"message": "SECRET project"}]}),
+        )
+    )
+
+    with pytest.raises(ServiceError, match="could not be put on the board") as raised:
+        await member_repository.ticket_create(
+            _tickets(github, monkeypatch), REPO, "T", "B", True, human_approved=True
+        )
+
+    assert issue_url(43) in str(raised.value)
+    assert "SECRET" not in str(raised.value)
+    assert github.writes[0] == f"POST /repos/{REPO}/issues"
+
+
+@pytest.mark.asyncio
+async def test_ticket_create_without_human_approval_is_refused_before_any_call(
+    monkeypatch,
+):
+    github = _github()
+
+    with pytest.raises(MemberCapabilityError, match="requires a human instruction"):
+        await member_repository.ticket_create(
+            _tickets(github, monkeypatch), REPO, "Follow-up", "Body", False
+        )
+
+    assert github.requests == []
+
+
+@pytest.mark.asyncio
+async def test_ticket_create_rejects_a_label_the_tracker_does_not_define(monkeypatch):
+    github = _github().on("GET", f"/repos/{REPO}/labels", pages([{"name": "cli"}]))
+
+    with pytest.raises(ServiceError) as error:
+        await member_repository.ticket_create(
+            _tickets(github, monkeypatch),
+            REPO,
+            "Follow-up",
+            "Body",
+            False,
+            labels=["priority: high"],
+            human_approved=True,
+        )
+
+    message = str(error.value)
+    assert f"'priority: high' is not defined in {REPO}" in message
+    assert "Defined labels: cli" in message
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+async def test_ticket_comment_reports_the_ticket_it_commented_on(monkeypatch):
+    github = _github().on(
+        "POST",
+        f"/repos/{REPO}/issues/42/comments",
+        _written(123, f"{ISSUE}#issuecomment-123"),
+    )
+
+    result = await member_repository.ticket_comment(
+        _tickets(github, monkeypatch), ISSUE, "Comment"
+    )
+
+    assert result == {
+        "id": "issuecomment-123",
+        "url": f"{ISSUE}#issuecomment-123",
+        "author": LOGIN,
+        "created_at": "2026-01-01T00:00:00Z",
+        "target": _target(ISSUE, "issue 42").model_dump(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_ticket_update_patches_only_the_body(monkeypatch):
+    github = _github().on(
+        "PATCH",
+        f"/repos/{REPO}/issues/42",
+        _issue(body=None, labels=[{"name": "cli"}]),
+    )
+
+    result = await member_repository.ticket_update(
+        _tickets(github, monkeypatch), ISSUE, "Updated body"
+    )
+
+    assert result == {
+        "body": "",
+        "state": "open",
+        "state_changed": False,
+        "labels": ["cli"],
+        "target": _target(ISSUE, "issue 42").model_dump(),
+    }
+    assert github.bodies("PATCH", f"/repos/{REPO}/issues/42") == [
+        {"body": "Updated body"}
+    ]
+    # Nothing is validated against the tracker's labels when none is added.
+    assert f"GET /repos/{REPO}/labels" not in github.sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("before", "changed"), [("open", True), ("closed", False)])
+async def test_ticket_update_closes_the_ticket_with_its_state_reason(
+    monkeypatch, before, changed
+):
+    github = (
+        _github()
+        .on("GET", f"/repos/{REPO}/issues/42", _issue(state=before))
+        .on("PATCH", f"/repos/{REPO}/issues/42", _issue(state="closed"))
+    )
+
+    result = await member_repository.ticket_update(
+        _tickets(github, monkeypatch),
+        ISSUE,
+        state="closed",
+        state_reason="not_planned",
+        human_approved=True,
+    )
+
+    assert github.bodies("PATCH", f"/repos/{REPO}/issues/42") == [
+        {"state": "closed", "state_reason": "not_planned"}
+    ]
+    assert (result["state"], result["state_changed"]) == ("closed", changed)
+
+
+@pytest.mark.parametrize("state", ["closed", "open"])
+@pytest.mark.asyncio
+async def test_ticket_update_state_change_without_human_approval_is_refused(
+    monkeypatch, state
+):
+    github = _github()
+
+    with pytest.raises(MemberCapabilityError) as error:
+        await member_repository.ticket_update(
+            _tickets(github, monkeypatch), ISSUE, state=state
+        )
+
+    assert f"Changing the ticket state to '{state}'" in str(error.value)
+    assert github.requests == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("author", "body", "addressed"),
-    [
-        ("human", "Run failed.", True),
-        ("bot", "Run failed.", False),
-        ("Human", "@human Run failed.", False),
-    ],
+    "change",
+    [{}, {"remove_labels": ["   "]}, {"add_labels": ["", " "]}],
 )
-async def test_a_status_comment_carries_its_marker_and_addresses_the_author(
-    author, body, addressed
+async def test_ticket_update_without_any_requested_change_is_refused(
+    monkeypatch, change
 ):
-    """The patrol reads the marker back; the author is told, once, unless the
-    member is the author."""
-    from guildbotics.integrations.chat_workflow_status import workflow_status_fields
-    from guildbotics.integrations.github.workflow_status_comment import (
-        parse_workflow_status_comment,
-    )
+    github = _github()
 
-    service = _service(person_type="agent")
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "number": 42,
-        "title": "T",
-        "user": {"login": author},
-    }
-    service._client = fake
-    status = workflow_status_fields(reason="failed", person_id="aiko", run_id="r1")
+    with pytest.raises(MemberCapabilityError, match="at least one of body, title"):
+        await member_repository.ticket_update(
+            _tickets(github, monkeypatch), ISSUE, **change
+        )
 
-    await service.comment(
-        "https://github.com/owner/repo/issues/42", body, status=status
-    )
-    await service.comment("https://github.com/owner/repo/issues/42", body)
-
-    [(_, with_status, _), (_, plain, _)] = fake.posts
-    parsed = parse_workflow_status_comment(with_status["body"])
-    assert parsed is not None and (parsed.reason, parsed.run_id) == ("failed", "r1")
-    assert with_status["body"].startswith(f"@{author}\n\n") is addressed
-    assert body in with_status["body"]
-    assert plain == {"body": body}
+    assert github.requests == []
 
 
 @pytest.mark.asyncio
-async def test_a_failed_board_add_is_reported_after_the_issue_was_created():
-    """The issue exists; the member is told the Project add failed, in one
-    line the member CLI shows, never GitHub's raw errors as a traceback."""
-    service = _service()
-    fake = FakeClient()
-    fake.post_payloads["/repos/owner/repo/issues"] = {
-        "number": 43,
-        "html_url": "https://github.com/owner/repo/issues/43",
-    }
-    fake.get_payloads["/repos/owner/repo/issues/43"] = {"node_id": "ISSUE_node"}
-    fake.graphql_payloads.append({"errors": [{"message": "no such project"}]})
-    service._client = fake
-
-    with pytest.raises(MemberCapabilityError, match="could not be added"):
-        await member_repository.issue_create(
-            _member(service, _board(service)),
-            "repo",
-            "Follow-up",
-            "Body",
-            True,
-            human_approved=True,
+async def test_ticket_update_patches_fields_before_labels_and_rereads_the_result(
+    monkeypatch,
+):
+    github = (
+        _github()
+        .on("GET", f"/repos/{REPO}/labels", pages([{"name": "cli"}]))
+        .on(
+            "GET",
+            f"/repos/{REPO}/issues/42",
+            _sequence(_issue(), _issue(title="New", labels=[{"name": "cli"}])),
         )
-    assert fake.posts[0][0] == "/repos/owner/repo/issues"
+        .on("PATCH", f"/repos/{REPO}/issues/42", _issue(title="New"))
+        .on("POST", f"/repos/{REPO}/issues/42/labels", [])
+        .on("DELETE", f"/repos/{REPO}/issues/42/labels/docs", [])
+    )
+
+    result = await member_repository.ticket_update(
+        _tickets(github, monkeypatch),
+        ISSUE,
+        title="New",
+        add_labels=["  CLI "],
+        remove_labels=["docs", ""],
+    )
+
+    assert github.sent == [
+        f"GET /repos/{REPO}/labels",
+        f"GET /repos/{REPO}/issues/42",
+        f"PATCH /repos/{REPO}/issues/42",
+        f"DELETE /repos/{REPO}/issues/42/labels/docs",
+        f"POST /repos/{REPO}/issues/42/labels",
+        f"GET /repos/{REPO}/issues/42",
+    ]
+    assert github.bodies("POST", f"/repos/{REPO}/issues/42/labels") == [
+        {"labels": ["cli"]}
+    ]
+    assert result["labels"] == ["cli"]
+
+
+@pytest.mark.asyncio
+async def test_ticket_update_leaves_labels_untouched_when_the_field_patch_fails(
+    monkeypatch,
+):
+    github = (
+        _github()
+        .on("GET", f"/repos/{REPO}/labels", pages([{"name": "cli"}]))
+        .on(
+            "PATCH",
+            f"/repos/{REPO}/issues/42",
+            httpx.Response(422, json={"message": "SECRET"}),
+        )
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await member_repository.ticket_update(
+            _tickets(github, monkeypatch),
+            ISSUE,
+            body="Body",
+            add_labels=["cli"],
+            remove_labels=["docs"],
+        )
+
+    assert str(raised.value) == t("integrations.github.response.rejected")
+    assert github.writes == [f"PATCH /repos/{REPO}/issues/42"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["not-a-url", PULL])
+async def test_ticket_update_refuses_what_is_no_issue_url(monkeypatch, url):
+    github = _github()
+
+    with pytest.raises(ServiceNotFound):
+        await member_repository.ticket_update(_tickets(github, monkeypatch), url, "B")
+
+    assert github.requests == []
+
+
+# --------------------------------------------------------------------------- #
+#   Opening and updating pull requests                                        #
+# --------------------------------------------------------------------------- #
+
+
+async def _create(service, base="main", ticket_url="", draft="false", closes=False):
+    return await member_repository.pr_create(
+        _member(service),
+        REPO,
+        "feature",
+        base,
+        "Title",
+        "Body",
+        ticket_url,
+        draft,
+        closes,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("draft", [False, True])
+async def test_pr_create_opens_one_on_the_base_it_is_given(monkeypatch, draft):
+    github = _github().on("POST", f"/repos/{REPO}/pulls", _pull(8, draft=draft))
+    service = _service(github, monkeypatch)
+
+    result = await _create(service, "ticket-driven-workflow", draft=str(draft).lower())
+
+    assert result == {
+        "created": True,
+        "draft": draft,
+        "head": "feature",
+        "base": "ticket-driven-workflow",
+        "target": _target(pull_url(8), "pr 8").model_dump(),
+    }
+    [lookup] = [r for r in github.requests if r.method == "GET"]
+    assert dict(lookup.url.params) == {
+        "head": "acme:feature",
+        "base": "ticket-driven-workflow",
+        "state": "open",
+    }
+    assert github.bodies("POST", f"/repos/{REPO}/pulls") == [
+        {
+            "title": "Title",
+            "head": "feature",
+            "base": "ticket-driven-workflow",
+            "body": "Body",
+            "draft": draft,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_create_uses_the_default_branch_when_base_is_empty(monkeypatch):
+    github = (
+        _github()
+        .on("GET", f"/repos/{REPO}", {"default_branch": "develop"})
+        .on("POST", f"/repos/{REPO}/pulls", _pull(9))
+    )
+    service = _service(github, monkeypatch)
+
+    result = await _create(service, "")
+
+    assert result["base"] == "develop"
+    assert github.sent[:2] == [f"GET /repos/{REPO}", f"GET /repos/{REPO}/pulls"]
+    assert github.bodies("POST", f"/repos/{REPO}/pulls")[0]["base"] == "develop"
+
+
+@pytest.mark.asyncio
+async def test_pr_create_returns_the_open_pr_of_the_head_without_updating_it(
+    monkeypatch,
+):
+    github = _github().on("GET", f"/repos/{REPO}/pulls", [_pull(7, draft=False)])
+    service = _service(github, monkeypatch)
+
+    result = await _create(service, ticket_url=ISSUE, draft="true")
+
+    assert result == {
+        "created": False,
+        "draft": False,
+        "head": "feature",
+        "base": "main",
+        "target": _target().model_dump(),
+    }
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ticket_url", "closes", "body"),
+    [
+        (ISSUE, False, "Body\n\nRefs #42"),
+        (ISSUE, True, "Body\n\nCloses #42"),
+        # Another repository's issue, or another service's ticket, is
+        # referred to by its URL.
+        (
+            issue_url(5, "acme/other"),
+            False,
+            f"Body\n\nRefs {issue_url(5, 'acme/other')}",
+        ),
+        (
+            "https://tickets.example.com/browse/OPS-7",
+            False,
+            "Body\n\nRefs https://tickets.example.com/browse/OPS-7",
+        ),
+    ],
+)
+async def test_pr_create_links_the_ticket(monkeypatch, ticket_url, closes, body):
+    github = (
+        _github()
+        .on("GET", "/repos/acme/other/issues/5", _issue(5))
+        .on("POST", f"/repos/{REPO}/pulls", _pull(8))
+    )
+    service = _service(github, monkeypatch)
+
+    await _create(service, ticket_url=ticket_url, closes=closes)
+
+    assert github.bodies("POST", f"/repos/{REPO}/pulls")[0]["body"] == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ticket_url", "error"),
+    [
+        # A merge closes only an issue of its own repository.
+        (issue_url(5, "acme/other"), ServiceUnsupported),
+        ("https://tickets.example.com/browse/OPS-7", ServiceUnsupported),
+        # No such issue, and a pull request's number.
+        (issue_url(404), ServiceNotFound),
+        (issue_url(8), ServiceNotFound),
+    ],
+)
+async def test_pr_create_refuses_a_ticket_it_cannot_close_before_opening(
+    monkeypatch, ticket_url, error
+):
+    github = (
+        _github()
+        .on("GET", "/repos/acme/other/issues/5", _issue(5))
+        .on("GET", f"/repos/{REPO}/issues/8", _issue(8, pull_request={}))
+    )
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(error):
+        await _create(service, ticket_url=ticket_url, closes=True)
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+async def test_pr_create_outside_the_owner_is_refused_before_it_is_sent(monkeypatch):
+    github = ScriptedGitHub().on("GET", "/repos/other/demo/pulls", [])
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError, match="'acme'"):
+        await member_repository.pr_create(
+            _member(service), "other/demo", "feature", "main", "T", "B", "", "false"
+        )
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_replaces_the_title_without_touching_the_body(monkeypatch):
+    github = _github().on(
+        "PATCH", f"/repos/{REPO}/pulls/7", _pull(title="New title", body="Untouched")
+    )
+    service = _service(github, monkeypatch)
+
+    result = await member_repository.pr_update(
+        _member(service), PULL, title="New title"
+    )
+
+    assert github.sent == [f"PATCH /repos/{REPO}/pulls/7"]
+    assert github.bodies("PATCH", f"/repos/{REPO}/pulls/7") == [{"title": "New title"}]
+    assert result == {
+        "body": "Untouched",
+        "target": _target(PULL, "New title").model_dump(),
+    }
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("Updated body", "Updated body\n\nCloses #42\n\nRefs #43"),
+        ("", "Closes #42\n\nRefs #43"),
+        ("Refs #42", "Refs #42\n\nRefs #43"),
+        ("Closes #43", "Closes #43\n\nCloses #42"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pr_update_preserves_existing_issue_links(monkeypatch, body, expected):
+    github = (
+        _github()
+        .on(
+            "GET",
+            f"/repos/{REPO}/pulls/7",
+            _pull(body="Old body\n\nCloses #42\nRefs #43"),
+        )
+        .on("PATCH", f"/repos/{REPO}/pulls/7", lambda r: _pull(**json.loads(r.content)))
+    )
+    service = _service(github, monkeypatch)
+
+    result = await member_repository.pr_update(
+        _member(service), PULL, body, title="New title"
+    )
+
+    assert result["body"] == expected
+    assert github.bodies("PATCH", f"/repos/{REPO}/pulls/7") == [
+        {"body": expected, "title": "New title"}
+    ]
+    assert github.sent == [f"GET /repos/{REPO}/pulls/7", f"PATCH /repos/{REPO}/pulls/7"]
+
+
+@pytest.mark.parametrize("body", ["", "New\n\nRefs #43"])
+@pytest.mark.asyncio
+async def test_pr_update_drop_ticket_links_replaces_body_verbatim(monkeypatch, body):
+    github = _github().on(
+        "PATCH", f"/repos/{REPO}/pulls/7", lambda r: _pull(**json.loads(r.content))
+    )
+    service = _service(github, monkeypatch)
+
+    result = await member_repository.pr_update(
+        _member(service), PULL, body, drop_ticket_links=True
+    )
+
+    assert result["body"] == body
+    assert github.sent == [f"PATCH /repos/{REPO}/pulls/7"]
+
+
+@pytest.mark.asyncio
+async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
+    monkeypatch,
+):
+    github = ScriptedGitHub().on(
+        "GET", f"/repos/{REPO}/pulls/7", httpx.Response(502, text="down")
+    )
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError, match="HTTP 502"):
+        await member_repository.pr_update(_member(service), PULL, "New")
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"title": "New", "drop_ticket_links": True}, "requires a body"),
+        ({}, "pr update needs a body or a title."),
+    ],
+)
+async def test_pr_update_needs_what_it_changes(monkeypatch, change, message):
+    github = _github()
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(MemberCapabilityError, match=message):
+        await member_repository.pr_update(_member(service), PULL, **change)
+
+    assert github.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["not-a-url", issue_url(7)])
+async def test_pr_update_refuses_what_is_no_pull_request_url(monkeypatch, url):
+    github = _github()
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound):
+        await member_repository.pr_update(_member(service), url, "Body")
+
+    assert github.requests == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_reports_what_github_refused(monkeypatch):
+    github = _github().on(
+        "PATCH", f"/repos/{REPO}/pulls/7", httpx.Response(400, text="SECRET")
+    )
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError) as raised:
+        await member_repository.pr_update(
+            _member(service), PULL, "Body", drop_ticket_links=True
+        )
+
+    assert str(raised.value) == t("integrations.github.response.http", status=400)
+
+
+# --------------------------------------------------------------------------- #
+#   Issue links of a pull request body                                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("body", "closes", "expected"),
+    [
+        ("Body", False, "Body\n\nRefs #42"),
+        ("Body", True, "Body\n\nCloses #42"),
+        ("", True, "Closes #42"),
+        ("Closes #42", True, "Closes #42"),
+        ("Fixes #42", True, "Fixes #42"),
+        ("Resolved #42", True, "Resolved #42"),
+        ("Refs #42", False, "Refs #42"),
+        ("Refs #42", True, "Closes #42"),
+        ("Ref #42", True, "Closes #42"),
+        ("Body\n\nRefs #42", True, "Body\n\nCloses #42"),
+        ("Refs #42\n\nCloses #42", True, "Refs #42\n\nCloses #42"),
+        ("Closes #42", False, "Closes #42"),
+        ("See #42", False, "See #42\n\nRefs #42"),
+        ("Closes #41", True, "Closes #41\n\nCloses #42"),
+    ],
+)
+def test_append_issue_link_chooses_trailer_and_skips_existing_keywords(
+    body, closes, expected
+):
+    assert append_issue_link(body, 42, closes=closes) == expected
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    [
+        "close",
+        "closes",
+        "closed",
+        "fix",
+        "fixes",
+        "fixed",
+        "resolve",
+        "resolves",
+        "resolved",
+        "ref",
+        "refs",
+    ],
+)
+def test_preserve_issue_links_keeps_keyword_variants(keyword):
+    trailer = f"{keyword.upper()} #42"
+    assert preserve_issue_links("New", f"Old\n{trailer}") == f"New\n\n{trailer}"
+
+
+@pytest.mark.parametrize(
+    ("body", "previous", "expected"),
+    [
+        ("Refs #42", "Closes #42", "Refs #42"),
+        ("Fixes #42", "Refs #42", "Fixes #42"),
+        ("Closes #42", "Fixes #42", "Closes #42"),
+        ("", "Old\nCloses #42\nRefs #43", "Closes #42\n\nRefs #43"),
+        ("New", "Refs #42\nRefs #42", "New\n\nRefs #42"),
+        ("New", "Refs #42\nCloses #42", "New\n\nRefs #42\n\nCloses #42"),
+        ("New\n", "Old without links", "New\n"),
+        ("New", "See #42; prefixedRefs #43; Closes #44suffix", "New"),
+        ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
+        ("See #42", "Closes #42", "See #42\n\nCloses #42"),
+        ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
+        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\nRefs #42"),
+        ("New", "Use `tool`.\nCloses #42", "New\n\nCloses #42"),
+        ("New", "Text\r\rCloses #99\n```\nCloses #42\n```", "New\n\nCloses #99"),
+        ("New", "Text\r\rCloses #42\rRefs #43", "New\n\nCloses #42\n\nRefs #43"),
+        ("New", "  Closes #42  \r\nRefs\t#43", "New\n\nCloses #42\n\nRefs\t#43"),
+    ],
+)
+def test_preserve_issue_links_prefers_replacement_and_deduplicates(
+    body, previous, expected
+):
+    assert preserve_issue_links(body, previous) == expected
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "Example: `Closes #617`",
+        "Do not use Closes #617 here.",
+        "`Closes #617`",
+        "```text\nCloses #617\n```",
+        "~~~\nCloses #617\n~~~",
+        "    Closes #617",
+        "> Closes #617",
+        "> example\nCloses #617",
+        "<!--\nCloses #617\n-->",
+        "<pre>\nCloses #617\n</pre>",
+        "Closes &#35;617",
+        "Closes \\#617",
+        "Closes\n#617",
+        "`example\nCloses #617\nexample`",
+    ],
+)
+def test_issue_link_examples_do_not_become_trailers_or_override_real_links(example):
+    assert (
+        preserve_issue_links("New", f"{example}\n\nCloses #630") == "New\n\nCloses #630"
+    )
+    assert preserve_issue_links(example, "Closes #617") == f"{example}\n\nCloses #617"
+    assert append_issue_link(example, 617, closes=True) == f"{example}\n\nCloses #617"
+
+
+def test_create_upgrades_only_the_real_reference_link():
+    body = "Example: `Refs #42`\n\nRefs #42"
+    assert append_issue_link(body, 42, closes=True) == (
+        "Example: `Refs #42`\n\nCloses #42"
+    )
+
+
+def test_nested_image_code_does_not_mask_an_adjacent_link():
+    body = "Refs #42\n![`x`](https://example.com)"
+    assert preserve_issue_links(body, "Closes #42") == body
+    assert preserve_issue_links("New", body) == "New\n\nRefs #42"
+
+
+@pytest.mark.parametrize("body", ["```text\nNew", "~~~\nNew", "<!-- New", "<pre>\nNew"])
+def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
+    with pytest.raises(ServiceError, match="Close the open code or HTML"):
+        preserve_issue_links(body, "Closes #42")
+    with pytest.raises(ServiceError, match="Close the open code or HTML"):
+        append_issue_link(body, 42, closes=True)
+
+
+@pytest.mark.parametrize(
+    "prefix", ["- ", "+ ", "* ", "1. ", "1) ", "- - ", "- item\n  "]
+)
+def test_list_links_are_preserved_and_replacement_links_take_precedence(prefix):
+    body = f"{prefix}Refs #42\r\n"
+    assert preserve_issue_links("New", body) == "New\n\nRefs #42"
+    assert preserve_issue_links(body, "Closes #42") == body
+    assert append_issue_link(body, 42, closes=False) == body
+    assert append_issue_link(body, 42, closes=True) == f"{prefix}Closes #42\r\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "\\\\", "[link](https://example.com/`)\n"])
+def test_code_example_does_not_mask_or_upgrade_a_real_link_with_the_same_text(prefix):
+    example = f"{prefix}`example\nRefs #42\nexample`"
+    body = f"{example}\nRefs #42"
+    assert append_issue_link(body, 42, closes=True) == f"{example}\nCloses #42"
+    assert preserve_issue_links("New", body) == "New\n\nRefs #42"
+
+
+@pytest.mark.parametrize(
+    "url", ["[link](https://example.com/`)", "<https://example.com/`>"]
+)
+def test_backticks_in_urls_do_not_mask_standalone_links(url):
+    body = f"{url}\nRefs #42\n`"
+    assert preserve_issue_links("New", body) == "New\n\nRefs #42"
+    assert append_issue_link(body, 42, closes=True) == f"{url}\nCloses #42\n`"
+
+
+# --------------------------------------------------------------------------- #
+#   The patrol's notices                                                      #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_phrases", "dropped_phrase"),
+    [
+        (
+            "en",
+            (
+                "converted it to a draft",
+                "conversation comments",
+                "review bodies",
+                "Ready for review",
+                "starts over",
+                "through the chat",
+                "interactive session",
+            ),
+            "request my review",
+        ),
+        (
+            "ja",
+            (
+                "Draft にしました",
+                "会話コメント",
+                "review の本文",
+                "Ready for review",
+                "数え直し",
+                "チャット",
+                "対話セッション",
+            ),
+            "review request",
+        ),
+    ],
+)
+def test_review_limit_notice_explains_how_to_restart(
+    language, expected_phrases, dropped_phrase
+):
+    set_language(language)
+    try:
+        message = t(
+            "integrations.github.code_hosting_service.review_limit_reached", count=3
+        )
+    finally:
+        set_language("en")
+
+    assert all(phrase in message for phrase in expected_phrases)
+    assert dropped_phrase not in message

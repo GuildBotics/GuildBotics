@@ -420,7 +420,7 @@ class ScenarioDiagnosticsService:
             for provider in providers
             for check in await provider.diagnose(context, members)
         ]
-        if not any(p.code_hosting or p.ticket_manager for p in providers):
+        if not any(p.code_hosting_service or p.ticket_service for p in providers):
             checks.append(
                 self._check(
                     "github",
@@ -429,7 +429,7 @@ class ScenarioDiagnosticsService:
                     "GitHub integration is not configured; GitHub diagnostics were skipped.",
                 )
             )
-        if not any(p.chat for p in providers):
+        if not any(p.chat_service for p in providers):
             checks.append(
                 self._check(
                     "slack",

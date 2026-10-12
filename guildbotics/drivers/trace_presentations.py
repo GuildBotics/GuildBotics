@@ -311,11 +311,10 @@ def _span_presentation(payload: dict[str, Any], event_type: str) -> TracePresent
 def _github_presentation(
     payload: dict[str, Any], attributes: dict[str, Any], event_type: str
 ) -> TracePresentation:
-    repo = str(attributes.get("github.repo") or "")
-    number = str(
-        attributes.get("github.number")
-        or _nested(payload, "pull_request", "number")
-        or _nested(payload, "issue", "number")
+    target = str(
+        attributes.get("github.label")
+        or _nested(payload, "pull_request", "label")
+        or _nested(payload, "issue", "label")
         or ""
     )
     title = str(
@@ -325,16 +324,10 @@ def _github_presentation(
         or attributes.get("github.title")
         or ""
     )
-    target = (
-        f"{repo}#{number}"
-        if repo and number
-        else repo or (f"#{number}" if number else "")
-    )
     if title:
         target = f"{target} · {title}" if target else title
     if event_type == "github.push":
-        ref = str(payload.get("ref") or "").removeprefix("refs/heads/")
-        target = " · ".join(part for part in (repo, ref) if part) or target
+        target = str(payload.get("ref") or "").removeprefix("refs/heads/") or target
     return _presentation(
         label_key=_event_key(_GITHUB_LABELS[event_type]),
         label=event_type,

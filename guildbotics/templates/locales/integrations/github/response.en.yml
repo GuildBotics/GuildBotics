@@ -1,0 +1,12 @@
+en:
+  too_large: "The GitHub response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
+  response: "GitHub returned an invalid response."
+  rate_limit: "GitHub rate-limited the request. Wait before retrying."
+  authentication: "GitHub rejected authentication. Check the member's GitHub credentials."
+  forbidden: "GitHub denied access. This response alone does not establish the cause."
+  not_found: "GitHub has no such resource, or does not show it to the member's credential."
+  permission: "Check that the member's GitHub App or fine-grained PAT has approved permissions for %{permission} and access to this repository."
+  alerts_disabled: "Dependabot alerts may also be disabled for the repository."
+  rejected: "GitHub rejected the request or temporarily limited this endpoint. Check the request and retry later."
+  http: "The GitHub request failed (HTTP %{status})."
+  transport: "Could not complete the GitHub request. Check connectivity and retry."

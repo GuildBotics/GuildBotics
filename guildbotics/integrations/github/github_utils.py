@@ -12,8 +12,8 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person
 from guildbotics.integrations.github.async_client import (
+    get_app_client,
     get_async_client,
-    raise_for_status_with_text,
     record_github_auth_failure,
 )
 from guildbotics.utils.env_loader import workspace_secret_store
@@ -193,7 +193,7 @@ async def create_github_app_installation_token(
 ) -> str:
     """Create a short-lived GitHub App installation token."""
     jwt_token = create_github_app_jwt(app_id, private_key_pem)
-    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+    async with get_app_client(base_url) as client:
         resp = await client.post(
             f"/app/installations/{installation_id}/access_tokens",
             headers={
@@ -203,7 +203,6 @@ async def create_github_app_installation_token(
                 "User-Agent": "GuildBotics/1.0",
             },
         )
-        await raise_for_status_with_text(resp)
         return str(resp.json()["token"])
 
 
@@ -228,7 +227,7 @@ async def create_github_client(
         person (Person): The person object with GitHub credentials.
         base_url (str): The base URL for the GitHub API.
         owner (str): The configured owner, the only one whose repositories
-            the client writes to (``repository_scope.configured_owner``).
+            the client writes to (the ``owner`` of the service's configuration).
     Returns:
         AsyncClient: An authenticated httpx.AsyncClient.
     """

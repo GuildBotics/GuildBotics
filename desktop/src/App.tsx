@@ -2587,8 +2587,7 @@ export function recordAttributeRows(
 ): Array<[string, string]> {
   return [
     ["event.provider", t("diagnostics.executions.attributeLabels.eventProvider")],
-    ["github.repo", t("diagnostics.executions.attributeLabels.githubRepo")],
-    ["github.number", t("diagnostics.executions.attributeLabels.githubNumber")],
+    ["github.label", t("diagnostics.executions.attributeLabels.githubLabel")],
     ["github.kind", t("diagnostics.executions.attributeLabels.githubKind")],
     ["github.title", t("diagnostics.executions.attributeLabels.githubTitle")],
     ["github.url", t("diagnostics.executions.attributeLabels.githubUrl")],
@@ -2715,21 +2714,23 @@ export function traceSubtitle(trace: TraceSummary): string {
   return trace.title && trace.command && trace.command !== trace.title ? trace.command : "";
 }
 
-// Derive the GitHub ticket/PR chip from a trace's attributes. Prefers the URL
-// (globally unique) for exact filtering; falls back to the bare number.
+// Derive the ticket/PR chip from a trace's attributes: the label its service
+// shows it by. Prefers the URL (globally unique) for exact filtering; falls
+// back to the label.
 export function ticketChipInfo(
   attributes: Record<string, unknown>,
 ): { label: string; key: string; value: string; url: string } | null {
-  const number = typeof attributes["github.number"] === "string" ? attributes["github.number"] : "";
+  const reference =
+    typeof attributes["github.label"] === "string" ? attributes["github.label"] : "";
   const url = typeof attributes["github.url"] === "string" ? attributes["github.url"] : "";
-  if (!number && !url) {
+  if (!reference && !url) {
     return null;
   }
-  const prefix = attributes["github.kind"] === "pull_request" ? "PR #" : "#";
-  const label = number ? `${prefix}${number}` : prefix.trim();
+  const prefix = attributes["github.kind"] === "pull_request" ? "PR" : "";
+  const label = [prefix, reference].filter(Boolean).join(" ");
   return url
     ? { label, key: "github.url", value: url, url }
-    : { label, key: "github.number", value: number, url: "" };
+    : { label, key: "github.label", value: reference, url: "" };
 }
 
 // Turn a ticket-lookup input into an exact structured filter. Accepts a GitHub
@@ -2742,8 +2743,8 @@ export function parseTicketQuery(input: string): AttrFilter | null {
   const ticketPrefixMatch = trimmed.match(/^ticket:(\d+)$/i);
   if (ticketPrefixMatch) {
     return {
-      key: "github.number",
-      value: ticketPrefixMatch[1],
+      key: "github.label",
+      value: `#${ticketPrefixMatch[1]}`,
       label: `#${ticketPrefixMatch[1]}`,
     };
   }
@@ -2757,7 +2758,7 @@ export function parseTicketQuery(input: string): AttrFilter | null {
   }
   const refMatch = trimmed.match(/^(?:[\w.-]+\/[\w.-]+)?#?(\d+)$/);
   if (refMatch) {
-    return { key: "github.number", value: refMatch[1], label: `#${refMatch[1]}` };
+    return { key: "github.label", value: `#${refMatch[1]}`, label: `#${refMatch[1]}` };
   }
   return null;
 }

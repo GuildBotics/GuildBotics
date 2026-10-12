@@ -14,32 +14,13 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from guildbotics.entities.team import Person
-
-SemanticReaction = Literal["ack", "agree", "celebrate", "support"]
-SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
-    "ack",
-    "agree",
-    "celebrate",
-    "support",
-)
+from guildbotics.runtime.port import SemanticReaction, WorkflowStatus
 
 
 def message_position(occurred_at: datetime, message_id: str) -> str:
     """Where a message stands in its channel's order, as comparable text:
     the UTC time at fixed width, then the id for messages of the same time."""
     return f"{occurred_at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%fZ} {message_id}"
-
-
-class ChatServiceError(RuntimeError):
-    """An anticipated chat operation failure with a message fit for the user."""
-
-
-class ChatCredentialsError(ChatServiceError):
-    """The member has no credential the operation needs."""
-
-
-class ChatThreadNotFoundError(ChatServiceError):
-    """The thread asked for is not there (any more)."""
 
 
 @dataclass(slots=True)
@@ -99,7 +80,8 @@ class ChatEvent(ChatMessage):
 
     event_id: str
     is_thread_reply: bool = False
-    metadata: dict[str, object] = field(default_factory=dict)
+    #: The workflow status the message carries, which makes it no work.
+    status: WorkflowStatus | None = None
 
     def payload(self) -> dict[str, Any]:
         """The event as the member commands print it."""
@@ -132,7 +114,8 @@ class ChatPostResult:
 
 
 class ChatService(ABC):
-    """A member's chat. Provider failures raise :class:`ChatServiceError`."""
+    """A member's chat. Its operations fail as the other ports' do
+    (:class:`~guildbotics.runtime.port.ServiceError`)."""
 
     @abstractmethod
     async def get_bot_identity(self) -> ChatIdentity:
@@ -178,7 +161,7 @@ class ChatService(ABC):
         """Fetch the messages of one thread.
 
         Raises:
-            ChatThreadNotFoundError: If the thread is not there.
+            ServiceNotFound: If the thread is not there.
         """
 
     @abstractmethod
@@ -192,15 +175,16 @@ class ChatService(ABC):
         text: str,
         *,
         thread_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        status: WorkflowStatus | None = None,
     ) -> ChatPostResult:
-        """Post a message, optionally as a thread reply."""
+        """Post a message, optionally as a thread reply, carrying ``status``."""
 
     @abstractmethod
     async def add_reaction(
-        self, channel_id: str, message_id: str, reaction: str
+        self, channel_id: str, message_id: str, reaction: SemanticReaction
     ) -> None:
-        """Add a semantic reaction to a message."""
+        """Add a semantic reaction to a message; a chat that has no reaction
+        for its meaning raises ``ServiceUnsupported``."""
 
     def normalize_participant_text(
         self, text: str, participant_labels: dict[str, str]
