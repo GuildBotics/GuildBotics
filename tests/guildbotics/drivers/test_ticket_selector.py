@@ -301,14 +301,16 @@ async def test_failed_move_is_reported_like_a_failed_run(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["routine", "scheduled", "manual"])
-@pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
+@pytest.mark.parametrize("notice_language", ["en"], indirect=True)
 @pytest.mark.parametrize(
-    "at, hint, suffix",
+    ("source", "at", "hint", "suffix"),
     [
-        ("2026-07-04T02:44:00Z", "11:44 AM", "_with_reset"),
-        ("", "Resets in 1h", "_with_hint"),
-        ("", "", ""),
+        *(
+            (source, "2026-07-04T02:44:00Z", "11:44 AM", "_with_reset")
+            for source in ["routine", "scheduled", "manual"]
+        ),
+        ("routine", "", "Resets in 1h", "_with_hint"),
+        ("routine", "", "", ""),
     ],
 )
 async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(

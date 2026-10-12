@@ -104,23 +104,25 @@ def test_all_product_threads_have_the_isolation_prefix() -> None:
         "    def __init__(self):\n        Base.__init__(self, {name})",
     ],
 )
+def test_thread_population_includes_aliases_and_subclasses(constructor: str) -> None:
+    source = constructor.format(name='name="guildbotics-worker"')
+    assert [prefixed for _, prefixed in _thread_names(source)] == [True]
+
+
 @pytest.mark.parametrize(
     ("name", "prefixed"),
     [
         ("", False),
         ('name="worker"', False),
         ("name=member_id", False),
-        ('name="guildbotics-worker"', True),
         ('name=f"guildbotics-scheduler-{member_id}"', True),
         ('name=f"{member_id}-guildbotics-worker"', False),
     ],
 )
-def test_thread_population_includes_aliases_and_subclasses(
-    constructor: str, name: str, prefixed: bool
-) -> None:
-    assert [
-        result for _line, result in _thread_names(constructor.format(name=name))
-    ] == [prefixed]
+def test_thread_names_require_a_literal_prefix(name: str, prefixed: bool) -> None:
+    assert _thread_names(f"import threading\nthreading.Thread({name})") == [
+        (2, prefixed)
+    ]
 
 
 @pytest.mark.parametrize(

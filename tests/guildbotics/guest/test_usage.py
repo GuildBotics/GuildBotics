@@ -1293,6 +1293,8 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
 
     tool = cli_agent_info(name)
     provider_state.record_authentication_outcome(tool, failed=True)
+    other = cli_agent_info("claude" if name == "codex" else "codex")
+    provider_state.record_authentication_outcome(other, failed=True)
 
     async def read():
         if outcome == "error":
@@ -1313,6 +1315,7 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     else:
         await usage_module.read_cli_agent_usage(name)
     assert provider_state.authentication_failed(tool) is not succeeded
+    assert provider_state.authentication_failed(other)
 
 
 @pytest.mark.asyncio

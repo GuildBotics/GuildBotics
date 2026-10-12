@@ -1,5 +1,12 @@
 import pytest
 
+from guildbotics.app_api.intelligences import (
+    IntelligenceConfigService,
+    intelligence_config_dir,
+)
+from guildbotics.app_api.models import IntelligenceConfigUpdateRequest
+from guildbotics.app_api.runtime import _command_roots
+from guildbotics.commands.discovery import iter_candidate_paths
 from guildbotics.entities.team import Person
 from guildbotics.setup.setup_service import (
     PersonSetupInput,
@@ -8,135 +15,108 @@ from guildbotics.setup.setup_service import (
     person_config_paths,
 )
 from guildbotics.utils.avatar import get_member_avatar_dir
-from guildbotics.utils.fileio import get_member_clone_path, get_person_config_path
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "/private/keys",
-        "../../.ssh",
-        "a/b",
-        "a\\b",
-        "C:\\keys",
-        "a\n",
-        "",
-        ".",
-        "..",
-        "con",
-        "nul",
-        "aux",
-        "prn",
-        "com1",
-        "lpt1",
-    ],
+from guildbotics.utils.fileio import (
+    get_intelligence_roots,
+    get_member_clone_path,
+    get_person_config_path,
+    load_person_slot_mapping,
 )
-@pytest.mark.parametrize(
-    "entry",
-    [
-        "person",
-        "new",
-        "original",
-        "clone",
-        "avatar",
-        "config",
-        "config_paths",
-        "setup_dir",
-        "intelligence_revision",
-        "intelligence_scope",
-        "intelligence_read",
-        "intelligence_write",
-        "intelligence_mapping",
-        "intelligence_yaml",
-        "slot_mapping",
-        "intelligence_roots",
-        "command_discovery",
-        "runtime_commands",
-    ],
+from guildbotics.utils.person_id import (
+    is_valid_person_id,
+    validate_member_directory_name,
+    validate_person_id,
 )
-def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry):
-    from guildbotics.app_api.intelligences import (
-        IntelligenceConfigService,
-        intelligence_config_dir,
-    )
-    from guildbotics.app_api.runtime import _command_roots
-    from guildbotics.commands.discovery import iter_candidate_paths
-    from guildbotics.utils.fileio import (
-        get_intelligence_roots,
-        load_person_slot_mapping,
-    )
 
-    # Old directory names are addressable only to repair an existing config.
-    if entry == "original" and value in {"con", "nul", "aux", "prn", "com1", "lpt1"}:
-        assert (
-            PersonUpdateInput(
-                **{**data_for(tmp_path), "person_id": "aiko"}, original_person_id=value
-            ).original_person_id
-            == value
-        )
-        return
-    data = {**data_for(tmp_path), "person_id": value}
+
+_UNSAFE_DIRECTORY_NAMES = [
+    "/private/keys",
+    "../../.ssh",
+    "a/b",
+    "a\\b",
+    "C:\\keys",
+    "a\n",
+    "",
+    ".",
+    "..",
+]
+_RESERVED_IDS = ["con", "nul", "aux", "prn", "com1", "lpt1"]
+
+
+@pytest.mark.parametrize("value", _UNSAFE_DIRECTORY_NAMES + _RESERVED_IDS)
+def test_person_id_and_stored_directory_input_classes(tmp_path, value):
+    assert not is_valid_person_id(value)
     with pytest.raises(ValueError):
-        if entry == "person":
-            Person(person_id=value, name="Aiko")
-        elif entry == "new":
-            PersonSetupInput(**data)
-        elif entry == "original":
-            PersonUpdateInput(**{**data, "person_id": "aiko"}, original_person_id=value)
-        elif entry == "clone":
-            get_member_clone_path(value, tmp_path)
-        elif entry == "avatar":
-            get_member_avatar_dir(tmp_path, value)
-        elif entry == "config":
-            get_person_config_path(value, "person.yml")
-        elif entry == "config_paths":
-            person_config_paths(value)
-        elif entry == "setup_dir":
-            _person_config_dir(tmp_path, value)
-        elif entry == "intelligence_revision":
-            intelligence_config_dir(value)
-        elif entry == "intelligence_scope":
-            IntelligenceConfigService()._scope_dir(tmp_path, value)
-        elif entry == "intelligence_read":
-            IntelligenceConfigService().read_config(
-                config_dir=tmp_path, person_id=value
-            )
-        elif entry == "intelligence_write":
-            from guildbotics.app_api.models import IntelligenceConfigUpdateRequest
-
-            # IO must validate even when its input model has been bypassed.
-            request = IntelligenceConfigUpdateRequest.model_construct(
-                config_dir=tmp_path, person_id=value, inherit_team_defaults=True
-            )
-            IntelligenceConfigService().update_config(request)
-        elif entry == "intelligence_mapping":
-            IntelligenceConfigService()._read_merged_mapping(
-                tmp_path, value, "model_mapping.yml"
-            )
-        elif entry == "intelligence_yaml":
-            IntelligenceConfigService()._read_scoped_yaml(
-                tmp_path, value, "models/default.yml"
-            )
-        elif entry == "slot_mapping":
-            load_person_slot_mapping(value, "intelligences/model_mapping.yml")
-        elif entry == "intelligence_roots":
-            get_intelligence_roots(tmp_path, value, "models")
-        elif entry == "command_discovery":
-            list(iter_candidate_paths("example", "en", value))
-        elif entry == "runtime_commands":
-            _command_roots(value)
+        validate_person_id(value)
+    if value in _RESERVED_IDS:
+        assert validate_member_directory_name(value) == value
+        config = PersonUpdateInput(**data_for(tmp_path), original_person_id=value)
+        assert config.original_person_id == value
+    else:
+        with pytest.raises(ValueError):
+            validate_member_directory_name(value)
+        with pytest.raises(ValueError):
+            PersonUpdateInput(**data_for(tmp_path), original_person_id=value)
 
 
-def data_for(config_dir):
-    return {
-        "config_dir": config_dir,
-        "person_type": "agent",
-        "person_id": "aiko",
-        "person_name": "Aiko",
-        "is_active": True,
-        "github_username": "aiko",
-        "git_email": "aiko@example.com",
-    }
+_PERSON_PATH_ENTRIES = {
+    "person": lambda root, value: Person(person_id=value, name="Aiko"),
+    "new": lambda root, value: PersonSetupInput(**data_for(root, value)),
+    "clone": lambda root, value: get_member_clone_path(value, root),
+    "avatar": lambda root, value: get_member_avatar_dir(root, value),
+    "config": lambda root, value: get_person_config_path(value, "person.yml"),
+    "config_paths": lambda root, value: person_config_paths(value),
+    "setup_dir": lambda root, value: _person_config_dir(root, value),
+    "intelligence_revision": lambda root, value: intelligence_config_dir(value),
+    "intelligence_scope": lambda root, value: IntelligenceConfigService()._scope_dir(
+        root, value
+    ),
+    "intelligence_read": lambda root, value: IntelligenceConfigService().read_config(
+        config_dir=root, person_id=value
+    ),
+    # IO must validate even when its input model has been bypassed.
+    "intelligence_write": lambda root, value: IntelligenceConfigService().update_config(
+        IntelligenceConfigUpdateRequest.model_construct(
+            config_dir=root, person_id=value, inherit_team_defaults=True
+        )
+    ),
+    "intelligence_mapping": lambda root, value: (
+        IntelligenceConfigService()._read_merged_mapping(
+            root, value, "model_mapping.yml"
+        )
+    ),
+    "intelligence_yaml": lambda root, value: (
+        IntelligenceConfigService()._read_scoped_yaml(root, value, "models/default.yml")
+    ),
+    "slot_mapping": lambda root, value: load_person_slot_mapping(
+        value, "intelligences/model_mapping.yml"
+    ),
+    "intelligence_roots": lambda root, value: get_intelligence_roots(
+        root, value, "models"
+    ),
+    "command_discovery": lambda root, value: list(
+        iter_candidate_paths("example", "en", value)
+    ),
+    "runtime_commands": lambda root, value: _command_roots(value),
+}
+
+
+@pytest.mark.parametrize(
+    "entry", _PERSON_PATH_ENTRIES.values(), ids=_PERSON_PATH_ENTRIES
+)
+@pytest.mark.parametrize("value", ["../../.ssh", "con"])
+def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry):
+    with pytest.raises(ValueError):
+        entry(tmp_path, value)
+
+
+def data_for(config_dir, person_id="aiko"):
+    return dict(
+        config_dir=config_dir,
+        person_type="agent",
+        person_id=person_id,
+        person_name="Aiko",
+        is_active=True,
+    )
 
 
 def test_valid_member_identifier_is_preserved(tmp_path):
@@ -154,11 +134,7 @@ def test_member_config_messages_use_localized_keys(tmp_path, language, shape):
 
     from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
     from guildbotics.utils.i18n_tool import t
-    from guildbotics.utils.person_id import (
-        MemberConfigError,
-        validate_member_directory_name,
-        validate_person_id,
-    )
+    from guildbotics.utils.person_id import MemberConfigError
 
     previous = i18n.get("locale")
     i18n.set("locale", language)

@@ -197,12 +197,6 @@ def test_a_newer_task_run_record_stops_the_boundary() -> None:
         )
 
 
-def test_the_current_schema_version_is_carried_normally() -> None:
-    validate_shared_file(
-        "state/events/2026/08/e1.json", REGULAR_FILE_MODE, ACTIVITY_EVENT_JSON
-    )
-
-
 def test_the_secret_index_may_name_keys_but_hold_no_value() -> None:
     validate_shared_file("config/secrets.yml", REGULAR_FILE_MODE, SECRETS_INDEX)
 

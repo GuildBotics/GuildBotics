@@ -11,7 +11,6 @@ from pydantic import ValidationError
 from guildbotics.environment.contract import (
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
-    SENSITIVE_HOME_DIRECTORIES,
     AccessContract,
     AccessContractError,
     DocumentGrant,
@@ -34,8 +33,28 @@ from guildbotics.utils.i18n_tool import t
 
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
+# Keep the expected population independent of the production list, so deleting
+# a protected name cannot silently delete its tests as well.
+_SENSITIVE_HOME_PATHS = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".config/gh",
+    ".local/share/keyrings",
+    ".guildbotics",
+    ".codex",
+    ".claude",
+    ".grok",
+    ".copilot",
+    ".gemini",
+    ".agents",
+)
+_PROTECTED_PATH_DEPTHS = [".ssh", ".config/gh", ".local/share/keyrings"]
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["missing", "file"])
 @pytest.mark.parametrize("tail", ["../ordinary", "child"])
 def test_untraversable_protected_target_closes_names_without_stopping_other_work(
@@ -75,7 +94,7 @@ def test_untraversable_protected_target_closes_names_without_stopping_other_work
         inspect_host_path(resolve_host_links(protected).path)
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["chain", "cycle", "parent", "repeat"])
 def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     tmp_path, symlinks, name, shape
@@ -130,7 +149,7 @@ def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     assert validate_mount_source(ordinary, denied, grant=True) == ordinary
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 @pytest.mark.parametrize("shape", ["self", "mutual", "broken"])
 def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
     tmp_path, symlinks, name, shape
@@ -216,7 +235,7 @@ def test_invalid_grants_allow_selection_but_still_refuse_execution(
     assert environment._contract(CommandAccess()).access.documents
 
 
-@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
     tmp_path, monkeypatch, symlinks, name
 ):
@@ -603,11 +622,18 @@ def test_the_builtin_denies_include_absent_credential_directories(
     )
 
     assert [(d.path, d.builtin) for d in access.denied] == [
-        *((home / name, True) for name in SENSITIVE_HOME_DIRECTORIES),
+        *((home / name, True) for name in _SENSITIVE_HOME_PATHS),
         (tmp_path / ".guildbotics", True),
         (private, False),
         (home / ".local/share/some-app", False),
     ]
+    for name in _SENSITIVE_HOME_PATHS:
+        for source in (home / name, home / name / "new"):
+            with pytest.raises(AccessContractError):
+                validate_mount_source(source, access.denied, grant=True, missing=True)
+    assert validate_mount_source(
+        tmp_path / "work", access.denied, grant=True, missing=True
+    )
     too_broad = t(
         "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
     )
@@ -695,7 +721,7 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
         "denied": [
             *(
                 {"path": _native("$HOME/" + name), "builtin": True}
-                for name in SENSITIVE_HOME_DIRECTORIES
+                for name in _SENSITIVE_HOME_PATHS
             ),
             {"path": str(tmp_path / ".guildbotics"), "builtin": True},
             {"path": _native("$HOME/.local/share/x"), "builtin": False},
