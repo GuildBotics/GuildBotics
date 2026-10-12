@@ -7,10 +7,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from guildbotics.entities.team import Project, Team
-from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.github.ticket_service import GitHubTicketService
 
 #: The board the setup form reads and prepares.
-ProjectBoard = GitHubTicketManager
+ProjectBoard = GitHubTicketService
 
 
 async def with_project_board(
@@ -19,7 +19,7 @@ async def with_project_board(
     owner: str,
     project_id: str,
     url: str,
-    action: Callable[[GitHubTicketManager], Awaitable[Any]],
+    action: Callable[[GitHubTicketService], Awaitable[Any]],
 ) -> Any:
     """Run *action* against the board of the Project the form identifies.
 
@@ -33,7 +33,7 @@ async def with_project_board(
         project=Project(
             name=team.project.name or "setup",
             services={
-                "ticket_manager": {
+                "ticket_service": {
                     "name": "GitHub",
                     "owner": owner,
                     "project_id": project_id,
@@ -45,17 +45,17 @@ async def with_project_board(
     )
     logger = logging.getLogger(__name__)
     for member in members:
-        # Construct inside the try: GitHubTicketManager.__init__ raises for a
+        # Construct inside the try: GitHubTicketService.__init__ raises for a
         # member without a GitHub username, and such members must be skipped
         # (not surfaced as a 500) so a later credentialed member is still
         # tried.
-        ticket_manager: GitHubTicketManager | None = None
+        tickets: GitHubTicketService | None = None
         try:
-            ticket_manager = GitHubTicketManager(logger, member, board)
-            return await action(ticket_manager)
+            tickets = GitHubTicketService(logger, member, board)
+            return await action(tickets)
         except Exception:
             continue
         finally:
-            if ticket_manager is not None:
-                await ticket_manager.aclose()
+            if tickets is not None:
+                await tickets.aclose()
     return None

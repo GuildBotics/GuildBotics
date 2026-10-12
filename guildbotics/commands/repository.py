@@ -1,38 +1,40 @@
-"""Collect bounded repository pages for bundled inspection commands."""
+"""Collect the bounded pages of a ticket's, a pull request's, or a
+repository's resources for the bundled inspection commands."""
 
 import json
 from typing import Any
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.resources import TICKET_RESOURCES
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 
 class RepositoryReader:
-    """A single inspection's aggregate bound, shared by all of its resources."""
+    """A single inspection's aggregate bound, shared by all of its resources,
+    which are of ``subject``: a ticket's or pull request's URL, or a
+    repository's path."""
 
-    def __init__(self, context: Any, repo: str, number: str) -> None:
-        try:
-            if int(number) <= 0:
-                raise ValueError
-        except ValueError:
-            raise CommandError(t("commands.repository.inspect.number")) from None
-        self.service = context.get_code_hosting_service()
-        self.repo = repo
-        self.number = str(int(number))
+    def __init__(self, context: Any, subject: str) -> None:
+        self.context = context
+        self.subject = subject
         self.bytes = 0
 
     async def read(self, resource: str, **parameters: Any) -> list[dict[str, Any]]:
         continuation = ""
         seen: set[str] = set()
         items: list[dict[str, Any]] = []
+        service = (
+            self.context.get_ticket_service()
+            if resource in TICKET_RESOURCES
+            else self.context.get_code_hosting_service()
+        )
         try:
             for _ in range(100):
-                page = await self.service.read(
+                page = await service.read(
                     resource,
-                    self.repo,
-                    identifier=self.number,
+                    self.subject,
                     parameters=parameters,
                     continuation=continuation,
                 )
@@ -46,7 +48,7 @@ class RepositoryReader:
                     break
                 continuation = page.continuation
                 seen.add(continuation)
-        except RepositoryReadError as exc:
+        except ServiceError as exc:
             raise CommandError(str(exc)) from exc
         raise CommandError(
             t("commands.repository.inspect.incomplete", resource=resource)

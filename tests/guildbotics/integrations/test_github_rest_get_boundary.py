@@ -14,20 +14,32 @@ ROOT = Path(__file__).parents[3]
 # Adding a raw GET requires both a classification and a concrete reason.
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
-        "guildbotics/integrations/github/code_hosting_service.py",
-        "_read_resource",
-        "client.get",
+        "guildbotics/integrations/github/api.py",
+        "get",
+        "(await self.client()).get",
         "path",
-    ): "bounded: one host-defined detail or page, with a condition-bound continuation",
+    ): "transport: get is the one JSON read every single-resource read goes through",
     (
-        "guildbotics/integrations/github/code_hosting_service.py",
-        "_child",
-        "client.get",
-        "f'/repos/{resource.full_repo}/{collection}/{child_id}'",
+        "guildbotics/integrations/github/api.py",
+        "fetch",
+        "self.get",
+        "item.api",
+    ): "single_resource: repository, kind, and number identify one issue or pull request",
+    (
+        "guildbotics/integrations/github/api.py",
+        "node_of",
+        "self.get",
+        "path",
     ): "single_resource: one comment or review, checked to be the named item's before it is acted on",
     (
-        "guildbotics/integrations/github/code_hosting_service.py",
-        "read",
+        "guildbotics/integrations/github/reads.py",
+        "read_collection",
+        "client.get",
+        "_REST[resource].format(api=item.api, conversation=item.conversation)",
+    ): "bounded: one size-limited page with a condition-bound continuation",
+    (
+        "guildbotics/integrations/github/reads.py",
+        "read_alerts",
         "client.get",
         "path",
     ): "bounded: one alert or one size-limited page with an explicit continuation token",
@@ -40,20 +52,20 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
         "guildbotics/integrations/github/code_hosting_service.py",
         "identity",
-        "client.get",
+        "self.get",
         "'/rate_limit'",
     ): "single_resource: GitHub exposes one rate-limit status document",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
-        "update_issue",
-        "client.get",
-        "issue_endpoint",
-    ): "single_resource: issue_endpoint identifies one issue",
+        "reply",
+        "self.get",
+        "f'/repos/{item.repository}/pulls/comments/{number}'",
+    ): "single_resource: the thread's root comment, checked to be the pull request's",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
         "open_pull_requests",
-        "client.get",
-        "f'/repos/{owner}/{repo}/pulls'",
+        "self.get",
+        "f'/repos/{repository}/pulls'",
     ): "bounded: the configured repository and exact head branch select member-owned PRs",
     (
         "guildbotics/integrations/github/code_hosting_service.py",
@@ -64,29 +76,22 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
         "guildbotics/integrations/github/code_hosting_service.py",
         "default_branch",
-        "client.get",
-        "f'/repos/{owner}/{repo}'",
+        "self.get",
+        "f'/repos/{self.repository(repository)}'",
     ): "single_resource: owner and repository identify one repository",
     (
         "guildbotics/integrations/github/pull_requests.py",
-        "_item",
-        "client.get",
-        "f'/repos/{resource.owner}/{resource.repo}/{collection}/{resource.number}'",
-    ): "single_resource: owner, repository, kind, and number identify one item",
-    (
-        "guildbotics/integrations/github/pull_requests.py",
-        "_pull_request_freshness",
-        "client.get",
-        'f"/repos/{resource.owner}/{resource.repo}/compare/'
+        "_freshness",
+        "self.get",
+        'f"/repos/{item.repository}/compare/'
         "{quote(base_sha, safe='')}...{quote(head_sha, safe='')}\"",
     ): "single_resource: the base and head pair identify one comparison",
     (
         "guildbotics/integrations/github/pull_requests.py",
-        "_pull_request_current_base_sha",
-        "client.get",
-        'f"/repos/{resource.owner}/{resource.repo}/branches/'
-        "{quote(branch, safe='')}\"",
-    ): "single_resource: owner, repository, and branch name identify one branch",
+        "_base_sha",
+        "self.get",
+        "f\"/repos/{item.repository}/branches/{quote(branch, safe='')}\"",
+    ): "single_resource: repository and branch name identify one branch",
     (
         "guildbotics/integrations/github/app_manifest.py",
         "get_page",
@@ -94,23 +99,11 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "endpoint",
     ): "paginated: get_page is passed to paginated_items for app installations",
     (
-        "guildbotics/integrations/github/github_ticket_manager.py",
-        "_get_pull_request_from_url",
-        "client.get",
-        "f'/repos/{owner}/{repo}/pulls/{number}'",
-    ): "single_resource: owner, repository, and pull request number identify one PR",
-    (
         "guildbotics/integrations/github/code_hosting_service.py",
         "_search_pull_requests",
-        "client.get",
+        "self.get",
         "'/search/issues'",
     ): "bounded: oldest updated matches are intentionally processed first per qualifier",
-    (
-        "guildbotics/integrations/github/github_ticket_manager.py",
-        "add_ticket",
-        "client.get",
-        "f'/repos/{parts[0]}/{parts[1]}/issues/{parts[3]}'",
-    ): "single_resource: repository and issue number identify the issue to add",
     (
         "guildbotics/integrations/github/actions_client.py",
         "_redirect_or_body",
@@ -122,7 +115,7 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "_get",
         "self._client.get",
         "endpoint",
-    ): "transport: _get centralizes HTTP error conversion for Actions requests",
+    ): "transport: _get centralizes the permission a refused Actions request needs",
     (
         "guildbotics/integrations/github/github_utils.py",
         "paginated_items",

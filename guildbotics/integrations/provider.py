@@ -19,7 +19,7 @@ from guildbotics.integrations.event_listener import EventListener
 from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.ticket_service import TicketService
 
 
 class ProviderCheck(BaseModel):
@@ -65,22 +65,26 @@ class Chat:
         [Logger, Team, list[Person], Callable[[], None]], EventListener
     ]
     #: The connection a member's chat events arrive on: the members of one key
-    #: share one listener. Raises ``ChatCredentialsError`` for a member who
-    #: cannot connect.
+    #: share one listener. Raises ``ServiceError`` for a member who cannot
+    #: connect.
     listener_key: Callable[[Person, Team], str] = lambda person, team: ""
 
 
 @dataclass(frozen=True)
 class Provider:
+    """A provider, its services named as ``project.services`` names the kinds."""
+
     name: str
     #: The secrets a member may need, by their member-relative names: all the
     #: provider's package reads of a member's secrets.
     secret_keys: frozenset[str] = frozenset()
     #: All the ``account_info`` keys the provider's package reads.
     account_info_keys: frozenset[str] = frozenset()
-    code_hosting: Callable[[Logger, Person, Team], CodeHostingService] | None = None
-    ticket_manager: Callable[[Logger, Person, Team], TicketManager] | None = None
-    chat: Chat | None = None
+    code_hosting_service: (
+        Callable[[Logger, Person, Team], CodeHostingService] | None
+    ) = None
+    ticket_service: Callable[[Logger, Person, Team], TicketService] | None = None
+    chat_service: Chat | None = None
     #: Whether a member holds what the provider authenticates with.
     credentialed: Callable[[Person], bool] = lambda person: True
     #: Whether a member's configuration has what the provider needs, without

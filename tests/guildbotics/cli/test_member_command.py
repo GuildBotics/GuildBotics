@@ -32,6 +32,7 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from guildbotics.runtime.person_lease import PersonExecutionLease
+from guildbotics.runtime.port import ServiceError
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import t
@@ -159,6 +160,7 @@ class FakeContext:
         self.logger = None
         #: The capabilities' service of the command (``_fake_capabilities``).
         self.service = None
+        self.tickets = None
         self.closed = False
 
     def clone_for(self, person):
@@ -172,24 +174,34 @@ class FakeContext:
             )
         return self.service
 
+    def get_ticket_service(self):
+        """The configured ticket service, as a real context makes it."""
+        if self.tickets is None:
+            self.tickets = ServiceIntegrationFactory().create_ticket_service(
+                logging.getLogger(__name__), self.person, self.team
+            )
+        return self.tickets
+
     async def aclose(self):
         self.closed = True
-        if self.service is not None and hasattr(self.service, "aclose"):
-            await self.service.aclose()
+        for service in (self.service, self.tickets):
+            if service is not None and hasattr(service, "aclose"):
+                await service.aclose()
 
 
-#: The code-host capabilities the member CLI runs.
+#: The code-host and ticket capabilities the member CLI runs.
 _CODE_HOST_CAPABILITIES = (
-    "issue_comment",
-    "issue_create",
-    "issue_update",
+    "ticket_comment",
+    "ticket_create",
+    "ticket_update",
+    "ticket_reaction",
     "pr_create",
     "pr_update",
     "pr_comment",
     "pr_review",
     "pr_review_comment",
     "pr_reply",
-    "reaction_add",
+    "pr_reaction",
     "artifact_download",
     "task_completion_readiness",
 )
@@ -408,7 +420,7 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         assert member_module._member_command_needs_lease() is False
 
 
-_READ_GROUPS = {"issue": "ticket", "pull_request": "pr", "repository": "repo-info"}
+_READ_GROUPS = {"ticket": "ticket", "pull_request": "pr", "repository": "repo-info"}
 
 
 def test_ci_inspection_commands_are_read_only() -> None:
@@ -430,9 +442,9 @@ def test_inspection_cli_leaves_are_removed():
 
 @pytest.mark.parametrize(("subject", "group"), _READ_GROUPS.items())
 def test_each_read_reads_only_its_subjects_resources(subject, group):
-    """``ticket read`` reads an issue, ``pr read`` a pull request, and
+    """``ticket read`` reads a ticket, ``pr read`` a pull request, and
     ``repo-info read`` the repository: every resource is read in one place."""
-    from guildbotics.runtime.code_hosting_resources import RESOURCES_BY_SUBJECT
+    from guildbotics.runtime.resources import RESOURCES_BY_SUBJECT
 
     read = member_module.member.commands[group].commands["read"]
     [resource] = [option for option in read.params if option.name == "resource"]
@@ -445,7 +457,16 @@ def test_each_read_reads_only_its_subjects_resources(subject, group):
     )
     result = CliRunner().invoke(
         member_module.member,
-        [group, "read", "--person", "aiko", "--resource", elsewhere, "--repo", "o/r"],
+        [
+            group,
+            "read",
+            "--person",
+            "aiko",
+            "--resource",
+            elsewhere,
+            "--subject",
+            "o/r",
+        ],
     )
     assert result.exit_code != 0
     assert "Invalid value for '--resource'" in result.output
@@ -470,25 +491,23 @@ def test_member_commands_are_named_by_kind_not_provider():
 
 
 def test_pr_read_records_host_target_in_workflow_trace(monkeypatch, bind_invocation):
-
-    from guildbotics.runtime.code_hosting_resources import (
-        RepositoryReadPage,
-        WorkTarget,
-    )
+    from guildbotics.runtime.resources import ReadPage, WorkTarget
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     bind_invocation(run_id="run-1", trace_id="trace-parent")
+    url = "https://github.com/owner/repo/pull/544"
     target = {
         "kind": "pull_request",
-        "repo": "owner/repo",
-        "number": 544,
+        "url": url,
         "title": "Host observed title",
-        "html_url": "https://github.com/owner/repo/pull/544",
+        "label": "#544",
     }
+    reads = []
 
     class Service:
         async def read(self, *args, **kwargs):
-            return RepositoryReadPage(
+            reads.append((args, kwargs))
+            return ReadPage(
                 items=[{"title": target["title"]}],
                 target=WorkTarget.model_validate(target),
             )
@@ -508,19 +527,30 @@ def test_pr_read_records_host_target_in_workflow_trace(monkeypatch, bind_invocat
             "aiko",
             "--resource",
             "pull_requests",
-            "--repo",
-            "owner/repo",
-            "--identifier",
-            "544",
+            "--subject",
+            url,
+            "--params",
+            '{"page_size": 5}',
+            "--continuation",
+            "next",
         ],
     )
     assert result.exit_code == 0, result.output
+    # The subject is read as the item's URL, with the conditions and
+    # continuation as given.
+    assert reads == [
+        (
+            ("pull_requests", url),
+            {"parameters": {"page_size": 5}, "continuation": "next"},
+        )
+    ]
     summary = DiagnosticsStore().get_summary("trace-parent")
     assert summary["title"] == target["title"]
     records = DiagnosticsStore().get_records("trace-parent")
     assert [record["type"] for record in records] == ["github.work_target"]
     [(action, attributes)] = _work_target_records()
-    assert action == "inspected" and attributes["github.number"] == "544"
+    assert action == "inspected"
+    assert (attributes["github.label"], attributes["github.url"]) == ("#544", url)
     assert _domain_event_records("type") == []
 
 
@@ -1110,6 +1140,9 @@ def test_member_active_workspace_without_env_does_not_load_cwd_env(
 
 
 def test_member_context_check_credentials_fail_closed(monkeypatch):
+    """A credential the service does not accept fails the check with the
+    service's own words, which name no secret value and are shown as they
+    are."""
     person = Person(
         person_id="aiko",
         name="Aiko",
@@ -1127,7 +1160,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
 
         async def context(self, check_credentials=False):
             assert check_credentials is True
-            raise KeyError("AIKO_GITHUB_ACCESS_TOKEN")
+            raise ServiceError("Set AIKO_GITHUB_ACCESS_TOKEN for the member.")
 
         async def aclose(self):
             pass
@@ -1144,8 +1177,7 @@ def test_member_context_check_credentials_fail_closed(monkeypatch):
     )
 
     assert result.exit_code != 0
-    assert "Member credential could not be resolved" in result.output
-    assert "GITHUB_ACCESS_TOKEN" not in result.output
+    assert result.output == "Error: Set AIKO_GITHUB_ACCESS_TOKEN for the member.\n"
 
 
 def test_member_write_command_requires_content_source():
@@ -1176,11 +1208,13 @@ CONTENT_COMMANDS = (
     "git commit --person aiko --repo-path .",
     "git publish --person aiko --repo-path .",
     "ticket comment --person aiko --url https://github.com/owner/repo/issues/1",
-    "ticket create --person aiko --repo owner/repo --title Title",
+    "ticket create --person aiko --tracker owner/repo --title Title",
     "pr create --person aiko --repo owner/repo --head feature --title Title",
     "pr comment --person aiko --url https://github.com/owner/repo/pull/1",
-    "pr review-comment --person aiko "
-    "--url https://github.com/owner/repo/pull/1 --path file.py --line 1",
+    "pr review --person aiko --url https://github.com/owner/repo/pull/1 "
+    "--event comment --head abc123",
+    "pr review-comment --person aiko --url https://github.com/owner/repo/pull/1 "
+    "--head abc123 --path file.py --line 1",
     "pr reply --person aiko --url https://github.com/owner/repo/pull/1 "
     "--reply-target-id 1",
     "task complete --person aiko --status done",
@@ -1343,7 +1377,7 @@ def test_content_file_read_failure_is_reported(monkeypatch, tmp_path):
     "command",
     [
         "memory record --person aiko",
-        "ticket create --person aiko --repo owner/repo",
+        "ticket create --person aiko --tracker owner/repo",
         "pr create --person aiko --repo owner/repo --head feature",
     ],
 )
@@ -1375,27 +1409,26 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def issue_comment(self, issue_url, body):
-            calls.append(("comment", issue_url, body))
+        async def ticket_comment(self, ticket_url, body):
+            calls.append(("comment", ticket_url, body))
             return {
-                "comment_id": 1,
-                "comment_url": f"{issue_url}#issuecomment-1",
-                "issue_number": 1,
-                "repo": "owner/repo",
-                "issue_url": issue_url,
+                "id": "issuecomment-1",
+                "url": f"{ticket_url}#issuecomment-1",
+                "target": _ticket_target(ticket_url, "#1"),
             }
 
-        async def issue_create(
-            self, repo, title, body, add_to_project, labels, human_approved
+        async def ticket_create(
+            self, tracker, title, body, add_to_board, labels, human_approved
         ):
             calls.append(
-                ("create", repo, title, body, add_to_project, labels, human_approved)
+                ("create", tracker, title, body, add_to_board, labels, human_approved)
             )
             return {
-                "issue_number": 2,
-                "issue_title": title,
-                "repo": repo,
-                "issue_url": "https://github.com/owner/repo/issues/2",
+                "labels": list(labels),
+                "target": _ticket_target(
+                    "https://github.com/owner/repo/issues/2", "#2", title
+                ),
+                "on_board": add_to_board,
             }
 
         async def aclose(self):
@@ -1437,13 +1470,13 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
             "create",
             "--person",
             "aiko",
-            "--repo",
+            "--tracker",
             "owner/repo",
             "--title",
             "Issue title",
             "--label",
             "priority: high",
-            "--no-add-to-project",
+            "--no-add-to-board",
             "--human-approved",
             "--content-stdin",
         ],
@@ -1470,8 +1503,11 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
     ]
     assert [call[0] for call in activity_calls] == ["comment", "create"]
     assert all(call[1] is person for call in activity_calls)
-    assert activity_calls[0][2]["issue_url"] == "https://github.com/owner/repo/issues/1"
-    assert activity_calls[1][2]["issue_title"] == "Issue title"
+    assert activity_calls[0][2]["target"]["url"] == (
+        "https://github.com/owner/repo/issues/1"
+    )
+    assert activity_calls[1][2]["target"]["title"] == "Issue title"
+    assert json.loads(create.output)["on_board"] is False
 
 
 def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
@@ -1488,13 +1524,13 @@ def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def issue_comment(self, _issue_url, _body):
-            raise member_module.MemberCapabilityError("GitHub API failed")
+        async def ticket_comment(self, _ticket_url, _body):
+            raise ServiceError("GitHub API failed")
 
-        async def issue_create(
-            self, _repo, _title, _body, _add_to_project, _labels, _human_approved
+        async def ticket_create(
+            self, _tracker, _title, _body, _add_to_board, _labels, _human_approved
         ):
-            raise member_module.MemberCapabilityError("GitHub API failed")
+            raise ServiceError("GitHub API failed")
 
         async def aclose(self):
             pass
@@ -1532,7 +1568,7 @@ def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
             "create",
             "--person",
             "aiko",
-            "--repo",
+            "--tracker",
             "owner/repo",
             "--title",
             "Issue title",
@@ -1557,7 +1593,15 @@ def test_member_write_outside_the_configured_owner_is_never_sent(monkeypatch):
     context.team = Team(
         project=Project(
             name="demo",
-            services={"code_hosting_service": {"name": "GitHub", "owner": "acme"}},
+            services={
+                "code_hosting_service": {"name": "GitHub", "owner": "acme"},
+                "ticket_service": {
+                    "name": "GitHub",
+                    "owner": "acme",
+                    "project_id": "1",
+                    "url": "https://github.com/orgs/acme/projects/1",
+                },
+            },
         ),
         members=[person],
     )
@@ -1585,12 +1629,12 @@ def test_member_write_outside_the_configured_owner_is_never_sent(monkeypatch):
             "create",
             "--person",
             "aiko",
-            "--repo",
+            "--tracker",
             "other-owner/demo",
             "--title",
             "Issue title",
             "--human-approved",
-            "--no-add-to-project",
+            "--no-add-to-board",
             "--content-stdin",
         ],
         input="Issue body\n",
@@ -1798,39 +1842,79 @@ def test_member_git_prepare_rejects_missing_anchor():
     assert "Provide --issue-url, --pr-url, or --repo with --branch." in result.output
 
 
-def test_member_git_prepare_rejects_repo_combined_with_url():
-    runner = CliRunner()
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        (
+            ["--repo", "acme/widget", "--pr-url", "https://github.com/acme/w/pull/1"],
+            "--repo cannot be combined with --pr-url.",
+        ),
+        (
+            [
+                "--repo",
+                "acme/widget",
+                "--branch",
+                "chat/fix-typo",
+                "--issue-url",
+                "https://github.com/acme/widget/issues/1",
+            ],
+            "--branch cannot be combined with --issue-url.",
+        ),
+        (["--repo", "acme/widget"], "--repo requires --branch or --issue-url."),
+    ],
+    ids=["repo-and-pr", "branch-and-ticket", "repo-alone"],
+)
+def test_member_git_prepare_rejects_an_anchor_it_cannot_take(arguments, error):
+    result = CliRunner().invoke(
+        member_module.member, ["git", "prepare", "--person", "aiko", *arguments]
+    )
 
-    result = runner.invoke(
+    assert result.exit_code != 0
+    assert error in result.output
+
+
+def test_member_git_prepare_names_the_repository_of_a_ticket_with_repo(monkeypatch):
+    """A ticket that belongs to no repository is prepared in the one --repo
+    names: the two are passed on together."""
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    context = FakeContext(person)
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", lambda _identifier: (context, person)
+    )
+    calls = []
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def prepare(self, **anchor):
+            calls.append(anchor)
+            return {"repository": anchor["repo"], "branch": "ticket/OPS-7"}
+
+    monkeypatch.setattr(member_module, "_git_service", lambda *_: FakeService())
+    ticket_url = "https://tickets.example.com/browse/OPS-7"
+
+    result = CliRunner().invoke(
         member_module.member,
         [
             "git",
             "prepare",
             "--person",
             "aiko",
+            "--issue-url",
+            ticket_url,
             "--repo",
             "acme/widget",
-            "--branch",
-            "chat/fix-typo",
-            "--issue-url",
-            "https://github.com/acme/widget/issues/1",
+            "--format",
+            "json",
         ],
     )
 
-    assert result.exit_code != 0
-    assert "--repo cannot be combined with --issue-url or --pr-url." in result.output
-
-
-def test_member_git_prepare_rejects_repo_without_branch():
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        ["git", "prepare", "--person", "aiko", "--repo", "acme/widget"],
-    )
-
-    assert result.exit_code != 0
-    assert "--repo requires --branch." in result.output
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {"issue_url": ticket_url, "pr_url": None, "repo": "acme/widget", "branch": None}
+    ]
+    assert context.closed
 
 
 def test_member_git_prepare_rejects_branch_without_repo():
@@ -2065,12 +2149,13 @@ def test_member_pr_create_passes_base(monkeypatch):
                 }
             )
             return {
-                "pr_number": 1,
-                "pr_url": "https://github.com/owner/repo/pull/1",
                 "created": True,
                 "draft": False,
                 "head": head,
                 "base": base,
+                "target": _pr_target(
+                    "https://github.com/owner/repo/pull/1", "#1", title
+                ),
             }
 
         async def aclose(self):
@@ -2126,18 +2211,18 @@ def test_member_pr_create_passes_base(monkeypatch):
             "payload": {
                 "action": "opened",
                 "pull_request": {
-                    "number": 1,
+                    "label": "#1",
                     "title": "PR title",
-                    "html_url": "https://github.com/owner/repo/pull/1",
+                    "url": "https://github.com/owner/repo/pull/1",
                     "merged": False,
                 },
             },
             "attributes": {
                 "github.action": "opened",
                 "github.kind": "pull_request",
-                "github.number": "1",
-                "github.repo": "owner/repo",
+                "github.label": "#1",
                 "github.url": "https://github.com/owner/repo/pull/1",
+                "github.title": "PR title",
             },
         }
     ]
@@ -2171,12 +2256,13 @@ def test_member_pr_create_reads_content_from_stdin(monkeypatch):
                 }
             )
             return {
-                "pr_number": 1,
-                "pr_url": "https://github.com/owner/repo/pull/1",
                 "created": True,
                 "draft": False,
                 "head": head,
                 "base": base,
+                "target": _pr_target(
+                    "https://github.com/owner/repo/pull/1", "#1", title
+                ),
             }
 
         async def aclose(self):
@@ -2241,12 +2327,13 @@ def test_member_pr_create_passes_closes_issue(monkeypatch):
             calls["closes_issue"] = closes_issue
             calls["issue_url"] = issue_url
             return {
-                "pr_number": 1,
-                "pr_url": "https://github.com/owner/repo/pull/1",
                 "created": True,
                 "draft": False,
                 "head": head,
                 "base": base,
+                "target": _pr_target(
+                    "https://github.com/owner/repo/pull/1", "#1", title
+                ),
             }
 
         async def aclose(self):
@@ -2439,16 +2526,16 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_issue_links):
+        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_issue_links": drop_issue_links,
+                    "drop_ticket_links": drop_ticket_links,
                 }
             )
-            return {"pr_number": 7, "pr_url": pr_url, "body": body}
+            return {"body": body, "target": _pr_target(pr_url)}
 
         async def aclose(self):
             calls["closed"] = True
@@ -2478,7 +2565,7 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "## Summary\n\nUpdated body\n",
         "title": None,
-        "drop_issue_links": drop_issue_links,
+        "drop_ticket_links": drop_issue_links,
         "closed": True,
     }
 
@@ -2499,20 +2586,16 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_issue_links):
+        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_issue_links": drop_issue_links,
+                    "drop_ticket_links": drop_ticket_links,
                 }
             )
-            return {
-                "pr_number": 7,
-                "pr_url": pr_url,
-                "body": body,
-            }
+            return {"body": body, "target": _pr_target(pr_url)}
 
         async def aclose(self):
             calls["closed"] = True
@@ -2542,7 +2625,7 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "",
         "title": None,
-        "drop_issue_links": False,
+        "drop_ticket_links": False,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""
@@ -2564,7 +2647,7 @@ def test_member_issue_update_rejects_update_without_any_change():
     )
 
     assert result.exit_code != 0
-    assert "issue update needs --content-stdin" in result.output
+    assert "ticket update needs --content-stdin" in result.output
 
 
 @pytest.mark.parametrize(
@@ -2616,18 +2699,15 @@ def test_member_issue_edit_on_a_closed_issue_records_no_close_activity(
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, **_kwargs):
-            # An already-closed issue reports state "closed" for any edit; the
-            # capability marks the state as unchanged.
+        async def ticket_update(self, ticket_url, **_kwargs):
+            # An already-closed ticket reports state "closed" for any edit;
+            # the service marks the state as unchanged.
             return {
-                "issue_number": 42,
-                "issue_url": issue_url,
-                "repo": "owner/repo",
-                "title": "Capability gap",
+                "body": "Updated body",
                 "state": "closed",
                 "state_changed": False,
                 "labels": [],
-                "body": "Updated body",
+                "target": _ticket_target(ticket_url, "#42", "Capability gap"),
             }
 
         async def aclose(self):
@@ -2660,7 +2740,8 @@ def test_member_issue_edit_on_a_closed_issue_records_no_close_activity(
     )
 
     assert result.exit_code == 0
-    assert recorded == []
+    # The ticket is the command's work target, and nothing more: no close.
+    assert [event["event_type"] for event in recorded] == ["github.work_target"]
 
 
 def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
@@ -2672,17 +2753,14 @@ def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, **kwargs):
-            calls.update({"issue_url": issue_url, **kwargs})
+        async def ticket_update(self, ticket_url, **kwargs):
+            calls.update({"ticket_url": ticket_url, **kwargs})
             return {
-                "issue_number": 42,
-                "issue_url": issue_url,
-                "repo": "owner/repo",
-                "title": "Capability gap",
+                "body": "Body",
                 "state": "closed",
                 "state_changed": True,
                 "labels": ["cli"],
-                "body": "Body",
+                "target": _ticket_target(ticket_url, "#42", "Capability gap"),
             }
 
         async def aclose(self):
@@ -2721,7 +2799,7 @@ def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == {
-        "issue_url": "https://github.com/owner/repo/issues/42",
+        "ticket_url": "https://github.com/owner/repo/issues/42",
         "body": None,
         "title": None,
         "add_labels": ("cli",),
@@ -2748,13 +2826,14 @@ def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, **kwargs):
-            calls.update({"issue_url": issue_url, **kwargs})
+        async def ticket_update(self, ticket_url, **kwargs):
+            calls.update({"ticket_url": ticket_url, **kwargs})
             return {
-                "issue_number": 42,
-                "issue_url": issue_url,
                 "body": kwargs["body"],
                 "state": "open",
+                "state_changed": False,
+                "labels": [],
+                "target": _ticket_target(ticket_url, "#42"),
             }
 
         async def aclose(self):
@@ -2781,7 +2860,7 @@ def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == {
-        "issue_url": "https://github.com/owner/repo/issues/42",
+        "ticket_url": "https://github.com/owner/repo/issues/42",
         "body": "## Summary\n\nUpdated body\n",
         "title": None,
         "add_labels": (),
@@ -2809,13 +2888,14 @@ def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def issue_update(self, issue_url, **kwargs):
-            calls.update({"issue_url": issue_url, **kwargs})
+        async def ticket_update(self, ticket_url, **kwargs):
+            calls.update({"ticket_url": ticket_url, **kwargs})
             return {
-                "issue_number": 42,
-                "issue_url": issue_url,
                 "body": kwargs["body"],
                 "state": "open",
+                "state_changed": False,
+                "labels": [],
+                "target": _ticket_target(ticket_url, "#42"),
             }
 
         async def aclose(self):
@@ -2843,7 +2923,7 @@ def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
 
     assert result.exit_code == 0
     assert calls == {
-        "issue_url": "https://github.com/owner/repo/issues/42",
+        "ticket_url": "https://github.com/owner/repo/issues/42",
         "body": "",
         "title": None,
         "add_labels": (),
@@ -2872,14 +2952,15 @@ def test_member_pr_review_reads_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_review(self, pr_url, body, event):
-            calls.update({"pr_url": pr_url, "body": body, "event": event})
+        async def pr_review(self, pr_url, body, verdict, head):
+            calls.update(
+                {"pr_url": pr_url, "body": body, "verdict": verdict, "head": head}
+            )
             return {
-                "review_id": 555,
-                "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
-                "state": "APPROVED",
-                "commit_id": "abc123",
-                "submitted_at": "2026-01-01T00:00:00Z",
+                "verdict": verdict,
+                "commit": head,
+                "url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+                "target": _pr_target(pr_url),
             }
 
         async def aclose(self):
@@ -2901,22 +2982,25 @@ def test_member_pr_review_reads_stdin_and_records_evidence(
             "--url",
             "https://github.com/owner/repo/pull/7",
             "--event",
-            "approve",
+            "request_changes",
+            "--head",
+            "abc123",
             "--content-stdin",
         ],
         input="Nothing blocks this.\n",
     )
     lease.release()
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "Nothing blocks this.\n",
-        "event": "approve",
+        "verdict": "request_changes",
+        "head": "abc123",
         "closed": True,
     }
     payload = json.loads(result.output)
-    assert payload["review_id"] == 555
+    assert (payload["verdict"], payload["commit"]) == ("request_changes", "abc123")
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_review"
 
 
@@ -2934,6 +3018,8 @@ def test_member_pr_review_rejects_unknown_event():
             "https://github.com/owner/repo/pull/7",
             "--event",
             "lgtm",
+            "--head",
+            "abc123",
             "--content-stdin",
         ],
         input="x\n",
@@ -2941,6 +3027,31 @@ def test_member_pr_review_rejects_unknown_event():
 
     assert result.exit_code != 0
     assert "Invalid value for '--event'" in result.output
+
+
+@pytest.mark.parametrize("command", ["review", "review-comment"])
+def test_member_pr_review_needs_the_head_the_member_read(command):
+    """A review is submitted on the head the member read, so it names it."""
+    location = ["--path", "a.py", "--line", "1"] if command == "review-comment" else []
+    event = ["--event", "comment"] if command == "review" else []
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "pr",
+            command,
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            *event,
+            *location,
+            "--content-stdin",
+        ],
+        input="x\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Missing option '--head'" in result.output
 
 
 def test_member_pr_review_comment_reads_stdin_and_records_evidence(
@@ -2959,12 +3070,13 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
             pass
 
         async def pr_review_comment(
-            self, pr_url, body, file_path, line, side, start_line, start_side
+            self, pr_url, body, head, file_path, line, side, start_line, start_side
         ):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
+                    "head": head,
                     "file_path": file_path,
                     "line": line,
                     "side": side,
@@ -2973,9 +3085,13 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
                 }
             )
             return {
-                "review_comment_id": 123,
-                "html_url": "https://github.com/owner/repo/pull/7#discussion_r123",
+                "id": "discussion_r123",
+                "url": "https://github.com/owner/repo/pull/7#discussion_r123",
                 "created_at": "2026-01-01T00:00:00Z",
+                "path": file_path,
+                "line": line,
+                "side": side,
+                "target": _pr_target(pr_url),
             }
 
         async def aclose(self):
@@ -2996,6 +3112,8 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
+            "--head",
+            "abc123",
             "--path",
             "guildbotics/example.py",
             "--line",
@@ -3016,6 +3134,7 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "Please simplify this branch.\n",
+        "head": "abc123",
         "file_path": "guildbotics/example.py",
         "line": 12,
         "side": "RIGHT",
@@ -3024,7 +3143,7 @@ def test_member_pr_review_comment_reads_stdin_and_records_evidence(
         "closed": True,
     }
     payload = json.loads(result.output)
-    assert payload["review_comment_id"] == 123
+    assert payload["id"] == "discussion_r123"
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == ("pr_review_comment")
 
 
@@ -3040,6 +3159,8 @@ def test_member_pr_review_comment_rejects_partial_range():
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
+            "--head",
+            "abc123",
             "--path",
             "guildbotics/example.py",
             "--line",
@@ -3060,22 +3181,15 @@ _PULL = "https://github.com/owner/repo/pull/7"
 
 
 @pytest.mark.parametrize(
-    ("arguments", "url", "target"),
-    [
-        (["ticket", "reaction", "add", "--url", _ISSUE], _ISSUE, "comment"),
-        *(
-            (
-                ["pr", "reaction", "add", "--url", _PULL, "--target", target],
-                _PULL,
-                target,
-            )
-            for target in ("comment", "review-comment", "review")
-        ),
-    ],
+    ("group", "url", "capability"),
+    [("ticket", _ISSUE, "ticket_reaction"), ("pr", _PULL, "pr_reaction")],
 )
-def test_member_reaction_add_names_its_target_and_records_evidence(
-    monkeypatch, bind_invocation, arguments, url, target
+@pytest.mark.parametrize("reaction", ["ack", "agree", "celebrate", "support"])
+def test_member_reaction_add_names_its_comment_and_records_evidence(
+    monkeypatch, bind_invocation, group, url, capability, reaction
 ):
+    """A reaction names the comment (or review) by the id the item's read
+    gave it, and is one of the four meanings every service carries."""
     lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = []
@@ -3084,9 +3198,11 @@ def test_member_reaction_add_names_its_target_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def reaction_add(self, *args):
-            calls.append(args)
-            return {"content": "eyes", "comment_id": 55}
+        async def react(self, *args):
+            calls.append((capability, *args))
+            return {"reaction": args[2], "id": args[1]}
+
+        ticket_reaction = pr_reaction = react
 
         async def aclose(self):
             pass
@@ -3101,44 +3217,48 @@ def test_member_reaction_add_names_its_target_and_records_evidence(
     result = CliRunner().invoke(
         member_module.member,
         [
-            *arguments,
+            group,
+            "reaction",
+            "add",
+            "--url",
+            url,
             "--person",
             "aiko",
             "--comment-id",
-            "55",
+            "pullrequestreview-55",
             "--reaction",
-            "eyes",
+            reaction,
         ],
     )
     lease.release()
 
     assert result.exit_code == 0, result.output
-    assert calls == [(url, target, 55, "eyes")]
+    assert calls == [(capability, url, "pullrequestreview-55", reaction)]
+    assert json.loads(result.output) == {
+        "reaction": reaction,
+        "id": "pullrequestreview-55",
+    }
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "reaction_add"
 
 
-def test_member_ticket_reaction_add_takes_no_target():
-    result = CliRunner().invoke(
+@pytest.mark.parametrize(("group", "url"), [("ticket", _ISSUE), ("pr", _PULL)])
+def test_member_reaction_add_takes_neither_a_target_nor_an_emoji(group, url):
+    base = [group, "reaction", "add", "--person", "aiko", "--url", url]
+    with_target = CliRunner().invoke(
         member_module.member,
-        [
-            "ticket",
-            "reaction",
-            "add",
-            "--person",
-            "aiko",
-            "--url",
-            _ISSUE,
-            "--target",
-            "review",
-            "--comment-id",
-            "55",
-            "--reaction",
-            "eyes",
-        ],
+        [*base, "--target", "review", "--comment-id", "55", "--reaction", "ack"],
+    )
+    emoji = CliRunner().invoke(
+        member_module.member,
+        [*base, "--comment-id", "55", "--reaction", "eyes"],
     )
 
-    assert result.exit_code != 0
-    assert "No such option '--target'" in result.output
+    assert with_target.exit_code != 0
+    assert "No such option '--target'" in with_target.output
+    assert emoji.exit_code != 0
+    assert "'eyes' is not one of 'ack', 'agree', 'celebrate', 'support'" in (
+        emoji.output
+    )
 
 
 def test_member_task_status_cli(monkeypatch, bind_invocation, tmp_path):
@@ -3146,7 +3266,7 @@ def test_member_task_status_cli(monkeypatch, bind_invocation, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     bind_invocation(task_run_id="run-1")
     store = TaskRunStore()
-    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.append_evidence("run-1", "issue_comment", {"id": "issuecomment-1"})
     store.complete(
         "run-1",
         "done",
@@ -3207,7 +3327,7 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
 
     monkeypatch.setattr(member_module, "resolve_member_context", unexpected_context)
     store = TaskRunStore()
-    store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    store.append_evidence("run-1", "issue_comment", {"id": "issuecomment-1"})
     store.complete(
         "run-1",
         "done",
@@ -3473,7 +3593,10 @@ def test_member_chat_needs_a_chat_service(monkeypatch):
     result = _chat("identity")
 
     assert result.exit_code != 0
-    assert t("integrations.chat.unsupported", name="") in result.output
+    assert (
+        t("integrations.resources.unsupported", service="chat_service", name="")
+        in result.output
+    )
 
 
 def test_member_chat_noop_and_complete(tmp_path, monkeypatch, bind_invocation):
@@ -3549,7 +3672,7 @@ def test_member_task_complete_reads_summary_from_stdin(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
     _fake_capabilities(monkeypatch, FakeService)
-    TaskRunStore().append_evidence("run-1", "issue_comment", {"comment_id": 1})
+    TaskRunStore().append_evidence("run-1", "issue_comment", {"id": "issuecomment-1"})
     result = CliRunner().invoke(
         member_module.member,
         [
@@ -3605,7 +3728,7 @@ def test_member_task_complete_rejects_blocked_pr_readiness(
     store.append_evidence(
         "run-1",
         "pr_create",
-        {"pr_url": "https://github.com/owner/repo/pull/7"},
+        {"target": _pr_target("https://github.com/owner/repo/pull/7")},
     )
 
     result = CliRunner().invoke(
@@ -3640,7 +3763,7 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     _bind_workflow(bind_invocation, task_run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     readiness = {
-        "pr_url": "https://github.com/owner/repo/pull/7",
+        "target": _pr_target("https://github.com/owner/repo/pull/7"),
         "head_sha": "abc123",
         "readiness": "ready",
         "completion_blockers": [],
@@ -3669,7 +3792,7 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     TaskRunStore().append_evidence(
         "run-1",
         "pr_create",
-        {"pr_url": "https://github.com/owner/repo/pull/7"},
+        {"target": _pr_target("https://github.com/owner/repo/pull/7")},
     )
 
     result = CliRunner().invoke(
@@ -3806,6 +3929,14 @@ def _fake_github_service(monkeypatch, person, **results):
     _fake_capabilities(monkeypatch, FakeService)
 
 
+def _ticket_target(url, label, title=""):
+    return {"kind": "ticket", "url": url, "title": title, "label": label}
+
+
+def _pr_target(url, label="#7", title=""):
+    return {"kind": "pull_request", "url": url, "title": title, "label": label}
+
+
 def _work_target_records():
     return [
         (record["attributes"].get("github.action", ""), record["attributes"])
@@ -3833,17 +3964,13 @@ def test_member_code_hosting_commands_declare_their_work_target(
     monkeypatch, arguments, read_only
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    target = {
-        "kind": "pull_request",
-        "repo": "owner/repo",
-        "number": 544,
-        "title": "Show the work target",
-        "html_url": "https://github.com/owner/repo/pull/544",
-    }
+    target = _pr_target(
+        "https://github.com/owner/repo/pull/544", "#544", "Show the work target"
+    )
     _fake_github_service(
         monkeypatch,
         person,
-        pr_comment={"comment_id": 1, "target": target},
+        pr_comment={"id": "issuecomment-1", "target": target},
     )
 
     result = CliRunner().invoke(
@@ -3856,6 +3983,6 @@ def test_member_code_hosting_commands_declare_their_work_target(
     [(action, attributes)] = _work_target_records()
     assert action == ("inspected" if read_only else "")
     assert attributes["github.title"] == "Show the work target"
-    assert attributes["github.number"] == "544"
+    assert attributes["github.label"] == "#544"
     # A read is diagnostics only: it never becomes shared activity.
     assert _domain_event_records("type") == []

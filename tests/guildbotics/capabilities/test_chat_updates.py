@@ -22,9 +22,10 @@ from guildbotics.runtime.member_invocation import (
     Work,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import WorkflowStatus
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
 from tests.guildbotics.local_chat import at, chat_event, lines, say
-from tests.guildbotics.local_code_host import issue, item, local_member
+from tests.guildbotics.local_code_host import item, local_member, pull_request, ticket
 
 _SOURCE = ChatSubject(
     service="slack",
@@ -59,6 +60,18 @@ def event(number, **kwargs):
 
 def queue(store, message):
     store.upsert_pending_event("slack", "aiko", "C1", message)
+
+
+def test_a_message_carrying_a_workflow_status_is_no_new_input(chat_run):
+    status = WorkflowStatus(
+        reason="failed", person_id="bob", run_id="run-1", subject="C1:100.1"
+    )
+    queue(chat_run, event(5, status=status))
+
+    result = check_chat_updates("aiko")
+
+    assert (result["status"], result["messages"]) == ("up_to_date", [])
+    ensure_chat_current("aiko")
 
 
 def test_check_delivers_all_new_input_without_consuming_queue(chat_run):
@@ -177,15 +190,23 @@ async def test_chat_write_checks_source_even_for_another_destination(chat_run, a
 
 
 @pytest.mark.asyncio
-async def test_code_host_comment_checks_original_chat(chat_run):
+@pytest.mark.parametrize(
+    ("make", "write"),
+    [
+        (lambda: ticket(1), member_repository.ticket_comment),
+        (lambda: pull_request(1, "feature"), member_repository.pr_comment),
+    ],
+    ids=["ticket", "pull_request"],
+)
+async def test_a_comment_checks_original_chat(chat_run, make, write):
     member = local_member()
-    url = issue(1)
+    url = make()
     with pytest.raises(ChatUpdatesRequired):
-        await member_repository.issue_comment(member, url, "comment")
-    # A refused write reaches the code host for nothing.
+        await write(member, url, "comment")
+    # A refused write reaches the service for nothing.
     assert item(url)["comments"] == []
     check_chat_updates("aiko")
-    await member_repository.issue_comment(member, url, "comment")
+    await write(member, url, "comment")
     assert [c["body"] for c in item(url)["comments"]] == ["comment"]
 
 

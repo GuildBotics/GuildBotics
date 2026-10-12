@@ -7,109 +7,125 @@ import pytest
 from guildbotics.capabilities import member_activity_events
 from guildbotics.entities.team import Person
 
+PR_URL = "https://github.com/owner/repo/pull/544"
+TICKET_URL = "local://tickets/acme/team/demo-tickets/T-7"
 
-@pytest.mark.parametrize("read_only", [True, False])
-def test_record_member_work_target_names_the_item_and_marks_reads(
-    monkeypatch, read_only: bool
-) -> None:
+
+def _target(kind: str, url: str, label: str, title: str = "") -> dict[str, Any]:
+    return {"kind": kind, "url": url, "label": label, "title": title}
+
+
+@pytest.fixture
+def recorded(monkeypatch) -> dict[str, Any]:
     recorded: dict[str, Any] = {}
     monkeypatch.setattr(
         member_activity_events,
         "record_correlated_event",
         lambda **kwargs: recorded.update(kwargs),
     )
+    return recorded
 
+
+@pytest.mark.parametrize("read_only", [True, False])
+def test_record_member_work_target_names_the_item_and_marks_reads(
+    recorded: dict[str, Any], read_only: bool
+) -> None:
     member_activity_events.record_member_work_target(
         Person(person_id="aiko", name="Aiko"),
-        {
-            "kind": "pull_request",
-            "repo": "owner/repo",
-            "number": 544,
-            "title": "  Show the work target  ",
-            "html_url": "https://github.com/owner/repo/pull/544",
-        },
+        _target("pull_request", PR_URL, "#544", "  Show the work target  "),
         read_only=read_only,
     )
 
     assert recorded["event_type"] == "github.work_target"
     assert recorded["payload"] == {
         "pull_request": {
-            "number": 544,
+            "label": "#544",
             "title": "Show the work target",
-            "html_url": "https://github.com/owner/repo/pull/544",
+            "url": PR_URL,
         }
     }
     assert recorded["attributes"] == {
         "github.action": "inspected" if read_only else "",
         "github.kind": "pull_request",
-        "github.number": "544",
-        "github.repo": "owner/repo",
-        "github.url": "https://github.com/owner/repo/pull/544",
+        "github.label": "#544",
+        "github.url": PR_URL,
         "github.title": "Show the work target",
     }
 
 
-def test_record_member_pr_create_event_records_github_number_as_string(
-    monkeypatch,
+def test_a_ticket_target_is_recorded_as_an_issue_by_its_label(
+    recorded: dict[str, Any],
 ) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
+    member_activity_events.record_member_work_target(
+        Person(person_id="aiko", name="Aiko"),
+        _target("ticket", TICKET_URL, "T-7", "A ticket"),
+        read_only=False,
     )
 
+    assert recorded["payload"] == {
+        "issue": {"label": "T-7", "title": "A ticket", "url": TICKET_URL}
+    }
+    assert recorded["attributes"]["github.kind"] == "ticket"
+    assert recorded["attributes"]["github.label"] == "T-7"
+
+
+def test_record_member_pr_create_event_records_the_created_target(
+    recorded: dict[str, Any],
+) -> None:
     member_activity_events.record_member_pr_create_event(
         Person(person_id="aiko", name="Aiko"),
-        "owner/repo",
-        "  Fix trace ticket chip  ",
         {
             "created": True,
-            "pr_number": 403,
-            "pr_url": "https://github.com/owner/repo/pull/403",
+            "target": _target(
+                "pull_request", PR_URL, "#403", "  Fix trace ticket chip  "
+            ),
         },
     )
 
-    assert recorded["payload"]["pull_request"]["number"] == 403
-    assert recorded["attributes"]["github.number"] == "403"
+    assert recorded["event_type"] == "github.pull_request"
+    assert recorded["payload"] == {
+        "action": "opened",
+        "pull_request": {
+            "label": "#403",
+            "title": "Fix trace ticket chip",
+            "url": PR_URL,
+            "merged": False,
+        },
+    }
+    assert recorded["attributes"]["github.label"] == "#403"
+
+
+def test_record_member_pr_create_event_ignores_a_reused_pull_request(
+    recorded: dict[str, Any],
+) -> None:
+    member_activity_events.record_member_pr_create_event(
+        Person(person_id="aiko", name="Aiko"),
+        {"created": False, "target": _target("pull_request", PR_URL, "#403")},
+    )
+
+    assert recorded == {}
 
 
 def test_record_member_issue_create_event_builds_github_domain_payload(
-    monkeypatch,
+    recorded: dict[str, Any],
 ) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
-    )
-
     member_activity_events.record_member_issue_create_event(
         Person(person_id="aiko", name="Aiko"),
-        {
-            "issue_number": 290,
-            "issue_title": "  Follow-up  ",
-            "repo": "owner/repo",
-            "issue_url": "https://github.com/owner/repo/issues/290",
-        },
+        {"target": _target("ticket", TICKET_URL, "T-7", "  Follow-up  ")},
     )
 
     assert recorded == {
         "event_type": "github.issue",
         "payload": {
             "action": "opened",
-            "issue": {
-                "number": 290,
-                "title": "Follow-up",
-                "html_url": "https://github.com/owner/repo/issues/290",
-            },
+            "issue": {"label": "T-7", "title": "Follow-up", "url": TICKET_URL},
         },
         "attributes": {
             "github.action": "opened",
-            "github.kind": "issue",
-            "github.number": "290",
-            "github.repo": "owner/repo",
-            "github.url": "https://github.com/owner/repo/issues/290",
+            "github.kind": "ticket",
+            "github.label": "T-7",
+            "github.url": TICKET_URL,
+            "github.title": "Follow-up",
         },
         "default_source": "github",
         "person_id": "aiko",
@@ -117,83 +133,41 @@ def test_record_member_issue_create_event_builds_github_domain_payload(
 
 
 def test_record_member_issue_close_event_reports_the_close_as_activity(
-    monkeypatch,
+    recorded: dict[str, Any],
 ) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
-    )
-
     member_activity_events.record_member_issue_close_event(
         Person(person_id="aiko", name="Aiko"),
         {
-            "issue_number": 376,
-            "title": "  Capability gap  ",
             "state": "closed",
             "state_changed": True,
-            "repo": "owner/repo",
-            "issue_url": "https://github.com/owner/repo/issues/376",
+            "target": _target("ticket", TICKET_URL, "T-7", "  Capability gap  "),
         },
     )
 
     assert recorded["event_type"] == "github.issue"
     assert recorded["payload"] == {
         "action": "closed",
-        "issue": {
-            "number": 376,
-            "title": "Capability gap",
-            "html_url": "https://github.com/owner/repo/issues/376",
-        },
+        "issue": {"label": "T-7", "title": "Capability gap", "url": TICKET_URL},
     }
     assert recorded["attributes"]["github.action"] == "closed"
-    assert recorded["attributes"]["github.number"] == "376"
+    assert recorded["attributes"]["github.label"] == "T-7"
     assert recorded["person_id"] == "aiko"
 
 
-def test_record_member_issue_close_event_ignores_updates_that_keep_the_issue_open(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("state", "state_changed"),
+    [("open", True), ("closed", False)],
+    ids=["kept-open", "already-closed"],
+)
+def test_record_member_issue_close_event_ignores_updates_that_close_nothing(
+    recorded: dict[str, Any], state: str, state_changed: bool
 ) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
-    )
-
     member_activity_events.record_member_issue_close_event(
         Person(person_id="aiko", name="Aiko"),
         {
-            "issue_number": 376,
-            "state": "open",
-            "state_changed": True,
-            "repo": "owner/repo",
-            "issue_url": "https://github.com/owner/repo/issues/376",
-        },
-    )
-
-    assert recorded == {}
-
-
-def test_record_member_issue_close_event_ignores_a_close_that_changed_nothing(
-    monkeypatch,
-) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
-    )
-
-    member_activity_events.record_member_issue_close_event(
-        Person(person_id="aiko", name="Aiko"),
-        {
-            "issue_number": 376,
-            "state": "closed",
-            "state_changed": False,
-            "repo": "owner/repo",
-            "issue_url": "https://github.com/owner/repo/issues/376",
+            "state": state,
+            "state_changed": state_changed,
+            "target": _target("ticket", TICKET_URL, "T-7"),
         },
     )
 
@@ -201,43 +175,32 @@ def test_record_member_issue_close_event_ignores_a_close_that_changed_nothing(
 
 
 def test_record_member_issue_comment_event_keeps_comment_diagnostics_url(
-    monkeypatch,
+    recorded: dict[str, Any],
 ) -> None:
-    recorded: dict[str, Any] = {}
-    monkeypatch.setattr(
-        member_activity_events,
-        "record_correlated_event",
-        lambda **kwargs: recorded.update(kwargs),
-    )
-
+    ticket_url = "https://github.com/owner/repo/issues/42"
     member_activity_events.record_member_issue_comment_event(
         Person(person_id="aiko", name="Aiko"),
         {
-            "comment_id": 123,
-            "comment_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
-            "issue_number": 42,
-            "repo": "owner/repo",
-            "issue_url": "https://github.com/owner/repo/issues/42",
+            "id": "issuecomment-123",
+            "url": f"{ticket_url}#issuecomment-123",
+            "target": _target("ticket", ticket_url, "#42"),
         },
     )
 
     assert recorded["event_type"] == "github.issue_comment"
     assert recorded["payload"] == {
         "action": "commented",
-        "issue": {
-            "number": 42,
-            "html_url": "https://github.com/owner/repo/issues/42",
-        },
+        "issue": {"label": "#42", "title": "", "url": ticket_url},
         "comment": {
-            "id": 123,
-            "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
+            "id": "issuecomment-123",
+            "url": f"{ticket_url}#issuecomment-123",
         },
     }
     assert recorded["attributes"] == {
         "github.action": "commented",
-        "github.kind": "issue",
-        "github.number": "42",
-        "github.repo": "owner/repo",
-        "github.url": "https://github.com/owner/repo/issues/42",
+        "github.kind": "ticket",
+        "github.label": "#42",
+        "github.url": ticket_url,
+        "github.title": "",
     }
     assert recorded["person_id"] == "aiko"

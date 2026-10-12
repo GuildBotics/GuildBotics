@@ -30,7 +30,8 @@ def chat(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored_effort", ["", "high"])
 @pytest.mark.parametrize(
-    "route,reaction,visible", [("no-op", "", False), ("reaction-only", "support", True)]
+    "route,reaction,visible",
+    [("no-op", None, False), ("reaction-only", "support", True)],
 )
 async def test_fast_path_records_evidence_before_completing(
     chat, monkeypatch, route, reaction, visible, stored_effort

@@ -181,7 +181,7 @@ GitHub Projects のチケットでメンバーに作業を依頼し、調査・�
 
 **注**: GitHub 統合は任意です。GitHub 統合なしでも、Slack チャットワークフローやスケジュール実行によるコマンド自動化は利用できます。
 
-**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とします。GitHub 側の認可は、その認証情報で push や変更ができるリポジトリを限定しますが、**Only select repositories** を選んでも、公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。そのため GuildBotics は、メンバーの GitHub への書き込み（`git push` を含む）のうち、書き込み先リポジトリの owner がプロジェクトに設定した owner（`team/project.yml` の `services.code_hosting_service.owner`、未設定なら `services.ticket_manager.owner`）と異なるものを、送信する前に拒否します。読み取りは制限しません（フォークからの Pull Request はチェックアウトしてレビューできますが、フォークへは push しません）。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
+**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とします。GitHub 側の認可は、その認証情報で push や変更ができるリポジトリを限定しますが、**Only select repositories** を選んでも、公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。そのため GuildBotics は、メンバーの GitHub への書き込み（`git push` を含む）のうち、書き込み先リポジトリの owner がそのサービスに設定した owner（`team/project.yml` の、コードホスト（`git push` を含む）は `services.code_hosting_service.owner`、Issue と Project は `services.ticket_service.owner`）と異なるものを、送信する前に拒否します。読み取りは制限しません（フォークからの Pull Request はチェックアウトしてレビューできますが、フォークへは push しません）。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
 
 ### できること
 
@@ -284,7 +284,7 @@ GitHub App 作成後に以下の作業を行ってください。
 - 既定では `Todo` が着手可能、`In Progress` が作業中、`Done` が完了です。標準的なボードなら設定は不要です
 - 着手可能と完了の**間**にあるステータス（例: `In Review`）は、自動的に作業中として扱われます
 - 着手可能より**前**のステータス（例: `Backlog`）と、完了**以降**のステータス（例: `Icebox`）は無視されます。途中レーンや保留レーンは、ボード列の並び順だけで追加できます
-- 独自のステータス名を使っている場合は、デスクトップアプリの **設定 → GitHub** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_manager.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
+- 独自のステータス名を使っている場合は、デスクトップアプリの **設定 → GitHub** の **レーンマッピング** で対応付けてください。GUI を使わない場合は `team/project.yml` の `services.ticket_service.lane_map` に指定します（→ [設定ファイル](#設定ファイル)）
 
 ### サービスを起動して作業を依頼する
 
@@ -922,8 +922,8 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `name`: プロジェクト名
 - `description`: エージェント文脈として使う短いプロジェクト説明
 - `language`: プロジェクト言語
-- `services.ticket_manager`: GitHub Projects 設定
-- `services.ticket_manager.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
+- `services.ticket_service`: GitHub の Issue と Projects の設定
+- `services.ticket_service.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
 - `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
 - `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 

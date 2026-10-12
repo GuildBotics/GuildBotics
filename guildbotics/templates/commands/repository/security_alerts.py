@@ -9,7 +9,7 @@ from typing import Any
 from pydantic_core import to_jsonable_python
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -41,11 +41,12 @@ async def main(
         page = await context.get_code_hosting_service().read(
             "dependency_alerts",
             repo,
-            identifier=str(alert),
-            parameters={} if alert else {"state": state, "page_size": size},
+            parameters={"id": str(alert)}
+            if alert
+            else {"state": state, "page_size": size},
             continuation=continuation,
         )
-    except RepositoryReadError as exc:
+    except ServiceError as exc:
         # An anticipated read failure carries its guidance to the user.
         raise CommandError(str(exc)) from exc
     result = {

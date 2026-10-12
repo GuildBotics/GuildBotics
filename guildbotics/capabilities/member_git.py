@@ -6,8 +6,8 @@ fetch or a push goes, which directory it works on. Every git that reads or
 writes a clone therefore runs inside the command's environment
 (:class:`CommandGuest`), never on the host, and outside a command there is
 none to run it. The member's credential is only used on the host, against a
-repository of the host's own per ``owner/repo`` that no environment mounts,
-and toward the URL the code host gives it. The two exchange history as git bundles:
+repository of the host's own per repository of the code host that no
+environment mounts, and toward the URL the code host gives it. The two exchange history as git bundles:
 data, which the host takes only under the branch it checked.
 
 The repository open in the user's own session (``--workspace-mode current``)
@@ -29,25 +29,22 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
-
-import httpx
+from urllib.parse import quote
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
-from guildbotics.integrations.repository_scope import (
-    NAME,
-    check_repository,
-    configured_owner,
-)
+from guildbotics.integrations.repository_scope import valid_path
 from guildbotics.runtime.code_hosting_service import CodeHostingService
-from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
     GuestResult,
     current_member_invocation,
 )
+from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import (
     get_member_clone_path,
@@ -262,20 +259,20 @@ def _checked(
 
 
 class _Origin:
-    """The host's own repository of one ``owner/repo``, and the URL it
-    pushes to. No environment mounts it, and only the host writes it."""
+    """The host's own repository of one repository of the code host, and the
+    URL it pushes to. No environment mounts it, and only the host writes it."""
 
     def __init__(
         self,
         root: Path,
-        owner: str,
-        repo: str,
+        repository: str,
         url: str,
         timeout: Callable[[], float] | None,
     ) -> None:
-        self.full_repo = f"{owner}/{repo}"
+        self.repository = repository
         self.url = url
-        path = root / "repositories" / owner / f"{repo}.git"
+        *namespace, name = repository.split("/")
+        path = root.joinpath("repositories", *namespace, f"{name}.git")
         if not path.is_dir():
             path.parent.mkdir(parents=True, exist_ok=True)
             _HostGit(path.parent, timeout)("init", "--bare", "-q", "--", path.name)
@@ -349,6 +346,7 @@ class MemberGitWorkspaceService:
         person: Person,
         team: Team,
         code: Callable[[], CodeHostingService],
+        tickets: Callable[[], TicketService],
         logger: logging.Logger | None = None,
     ) -> None:
         """
@@ -357,11 +355,13 @@ class MemberGitWorkspaceService:
             team: The member's team.
             code: The code host, asked for only by what reaches it (a commit
                 does not).
+            tickets: The ticket service, asked for only by a ticket's checkout.
             logger: Where to log.
         """
         self.person = person
         self.team = team
         self._code = code
+        self._tickets = tickets
         self.logger = logger or logging.getLogger(__name__)
         self.workspace_root = get_member_clone_path(person.person_id)
         #: The host's own repositories and records of the member's clones.
@@ -378,51 +378,49 @@ class MemberGitWorkspaceService:
         repo: str | None = None,
         branch: str | None = None,
     ) -> dict[str, Any]:
-        # Three anchors decide the checkout: a PR head, an issue-derived
-        # ticket/<n> branch, or an ad-hoc repo+branch (e.g. chat-originated work
-        # with no issue). Issue anchoring is a ticket-workflow contract, not a
-        # capability requirement.
+        # Three anchors decide the checkout: a PR head, a ticket's
+        # ticket/<key> branch, or an ad-hoc repo+branch (e.g. chat-originated
+        # work with no ticket). Ticket anchoring is a ticket-workflow contract,
+        # not a capability requirement.
         guest = self._guest()
-        anchor_url = pr_url or issue_url
-        if anchor_url:
-            resource = self.code.locate(anchor_url)
-            full_repo = resource.full_repo
-            if resource.kind == "pull_request":
-                mode = "pull_request_review"
-                pr_url = pr_url or anchor_url
-                head = await self.code.pull_request_head(pr_url)
-                branch = head.branch
-                checkout_owner = head.owner
-                checkout_repo = head.repo
-            else:
-                mode = "issue"
-                branch = f"ticket/{resource.number}"
-                checkout_owner = resource.owner
-                checkout_repo = resource.repo
+        if pr_url:
+            mode = "pull_request_review"
+            head = await self.code.pull_request_head(pr_url)
+            branch, repository = head.branch, head.repository
+        elif issue_url:
+            mode = "issue"
+            ticket = (await self._tickets().read("tickets", issue_url)).items[0]
+            repository = ticket["repository"] or repo or ""
+            if not repository:
+                raise MemberCapabilityError(
+                    f"{issue_url} belongs to no repository: name one with --repo."
+                )
+            if repo and repo != repository:
+                raise MemberCapabilityError(
+                    f"{issue_url} belongs to {repository}, not {repo}."
+                )
+            branch = f"ticket/{ticket['key']}"
         else:
             if not repo or not branch:
                 raise MemberCapabilityError(
                     "prepare requires --issue-url, --pr-url, or --repo with --branch."
                 )
             mode = "branch"
-            checkout_owner, separator, checkout_repo = repo.partition("/")
-            if not separator or not checkout_owner or not checkout_repo:
-                raise MemberCapabilityError("--repo must be in <owner>/<repo> format.")
-            full_repo = repo
-        _name(checkout_owner, "owner")
-        _name(checkout_repo, "repository")
-        default_branch = await self.code.default_branch(checkout_owner, checkout_repo)
+            repository = repo
+        if not valid_path(repository):
+            raise MemberCapabilityError(f"Invalid repository: {repository!r}")
+        default_branch = await self.code.default_branch(repository)
         token = await self.code.push_credential()
         with self._locked(self.host_root, guest.remaining()):
             self._branch_name(guest.remaining, branch)
             self._branch_name(guest.remaining, default_branch)
-            origin = await self._origin(
-                self.host_root, checkout_owner, checkout_repo, guest.remaining
-            )
+            origin = await self._origin(self.host_root, repository, guest.remaining)
             origin.fetch(token)
-            repo_path = self.workspace_root / checkout_repo
+            # The clone's place is the repository's whole path, so repositories
+            # of one name in two namespaces have one each.
+            repo_path = self.workspace_root.joinpath(*repository.split("/"))
             _GuestGit(guest, guest.path(self.workspace_root))(
-                "init", "-q", "--", checkout_repo
+                "init", "-q", "--", repository
             )
             clone = _GuestGit(guest, guest.path(repo_path))
             git_user, git_email = self._git_identity()
@@ -435,15 +433,15 @@ class MemberGitWorkspaceService:
                 clone("config", "--replace-all", key, value)
             refs = origin.refs(*_SHARED_REFS)
             _send(origin, clone, refs)
-            # Where the clone pushes follows what it now tracks.
+            # What the host pushes the clone to is its own record of what the
+            # clone was prepared from.
             (self.host_root / "checkouts").mkdir(parents=True, exist_ok=True)
-            (self.host_root / "checkouts" / checkout_repo).write_text(
-                origin.full_repo, encoding="utf-8"
+            _checkout_record(self.host_root, repository).write_text(
+                repository, encoding="utf-8"
             )
             _check_out(clone, branch, default_branch, refs)
         return {
-            "repo": full_repo,
-            "checkout_repo": f"{checkout_owner}/{checkout_repo}",
+            "repository": repository,
             "repo_path": str(repo_path),
             "branch": branch,
             "default_branch": default_branch,
@@ -514,14 +512,14 @@ class MemberGitWorkspaceService:
             source = _GuestGit(guest, guest.path(repo_path))
             root, wait, timeout = self.host_root, guest.remaining(), guest.remaining
         with self._locked(root, wait):
-            owner, repo = (
+            repository = (
                 self._checkout_of(source)
                 if isinstance(source, _GuestGit)
                 else self._push_destination(source)
             )
-            check_repository(configured_owner(self.team.project), owner, repo)
+            self.code.check_push(repository)
             branch = self._branch_name(timeout, _current_branch(source))
-            origin = await self._origin(root, owner, repo, timeout)
+            origin = await self._origin(root, repository, timeout)
             ensure_chat_current(self.person.person_id)
             token = await self.code.push_credential()
             origin.fetch(token)
@@ -539,9 +537,9 @@ class MemberGitWorkspaceService:
         pull_requests_error = None
         try:
             pull_requests = await open_pull_request_readiness(
-                self.code, origin.url, branch
+                self.code, repository, branch
             )
-        except (MemberCapabilityError, httpx.HTTPError) as exc:
+        except ServiceError as exc:
             pull_requests_error = str(exc)
         return PushResult(
             repo_path=str(repo_path),
@@ -611,24 +609,30 @@ class MemberGitWorkspaceService:
             raise MemberCapabilityError(str(exc)) from exc
 
     async def _origin(
-        self, root: Path, owner: str, repo: str, timeout: Callable[[], float] | None
+        self, root: Path, repository: str, timeout: Callable[[], float] | None
     ) -> _Origin:
-        url = await self.code.clone_url(owner, repo)
-        return _Origin(root, owner, repo, url, timeout)
+        url = await self.code.clone_url(repository)
+        return _Origin(root, repository, url, timeout)
 
-    def _push_destination(self, git: _Git) -> tuple[str, str]:
-        """The ``owner/repo`` the user's ``origin`` pushes to, as git resolves
-        it (``pushurl``, ``pushInsteadOf``). Only that name is taken from it.
+    def _push_destination(self, git: _Git) -> str:
+        """The repository the user's ``origin`` pushes to, as git resolves it
+        (``pushurl``, ``pushInsteadOf``). Only that name is taken from it.
+
+        Raises:
+            MemberCapabilityError: If it pushes elsewhere than to one
+                repository of the code host.
         """
         listed = git("remote", "get-url", "--push", "--all", "origin").stdout
         remotes = listed.decode(errors="replace").splitlines()
         repository = (
             self.code.repository_from_remote(remotes[0]) if len(remotes) == 1 else None
         )
-        return repository or (
-            ", ".join(self.code.remote_host(url) for url in remotes),
-            "",
-        )
+        if repository is None:
+            raise MemberCapabilityError(
+                "origin does not push to one repository of the configured code"
+                " host, so the member's credential is not sent."
+            )
+        return repository
 
     def _branch_name(self, timeout: Callable[[], float] | None, value: str) -> str:
         """``value`` if git takes it as a branch name as it stands.
@@ -667,8 +671,8 @@ class MemberGitWorkspaceService:
             )
         return path
 
-    def _checkout_of(self, clone: _GuestGit) -> tuple[str, str]:
-        """The ``owner/repo`` the clone ``prepare`` last checked out pushes to.
+    def _checkout_of(self, clone: _GuestGit) -> str:
+        """The repository the clone ``prepare`` last checked out pushes to.
 
         The clone only names which of the member's clones it belongs to (a
         worktree's is the clone it was added to); where that pushes is the
@@ -680,20 +684,19 @@ class MemberGitWorkspaceService:
             .strip()
         )
         root = PurePosixPath(clone.guest.path(self.workspace_root))
-        record = self.host_root / "checkouts" / common.parent.name
-        if (
-            common.name != ".git"
-            or common.parent.parent != root
-            or not NAME.fullmatch(common.parent.name)
-            or common.parent.name in {".", ".."}
-            or not record.is_file()
-        ):
+        place = common.parent
+        repository = (
+            "/".join(place.relative_to(root).parts)
+            if place.is_relative_to(root)
+            else ""
+        )
+        record = _checkout_record(self.host_root, repository)
+        if common.name != ".git" or not valid_path(repository) or not record.is_file():
             raise MemberCapabilityError(
                 "This repository was not checked out with `member git prepare`;"
                 " only a prepared clone can be pushed."
             )
-        owner, _, repo = record.read_text(encoding="utf-8").partition("/")
-        return owner, repo
+        return record.read_text(encoding="utf-8")
 
     def _current_repo(self, repo_path: Path, cwd: Path) -> Path:
         repo_path = repo_path.expanduser().resolve()
@@ -795,7 +798,7 @@ class MemberGitWorkspaceService:
             {
                 "id": sha,
                 "message": subject or sha[:7],
-                "url": self.code.commit_url(origin.url, sha),
+                "url": self.code.commit_url(origin.repository, sha),
             }
             for sha, _, subject in (
                 line.partition("\0") for line in listed.stdout.decode().splitlines()
@@ -810,15 +813,9 @@ class MemberGitWorkspaceService:
         return True, commits
 
 
-def _name(value: str, what: str) -> str:
-    """``value`` as an owner or repository name, safe as a directory name.
-
-    Raises:
-        MemberCapabilityError: If it is not one.
-    """
-    if not NAME.fullmatch(value) or value in {".", ".."}:
-        raise MemberCapabilityError(f"Invalid {what} name: {value!r}")
-    return value
+def _checkout_record(root: Path, repository: str) -> Path:
+    """Where the host records what the clone of ``repository`` pushes to."""
+    return root / "checkouts" / quote(repository, safe="")
 
 
 def _refs(git: _Git, *prefixes: str) -> dict[str, str]:

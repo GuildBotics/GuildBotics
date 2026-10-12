@@ -1,15 +1,16 @@
 import pytest
 
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local import chat
 from guildbotics.integrations.local.chat import LocalChatService
 from guildbotics.runtime.chat_service import ChatIdentity, CredentialCheck
-from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     MemberInvocation,
     member_invocation_scope,
 )
+from guildbotics.runtime.port import ServiceError, ServiceUnsupported
 from tests.guildbotics.local_chat import at, lines, say
 
 AIKO = Person(person_id="aiko", name="Aiko")
@@ -170,7 +171,7 @@ async def test_reply_resolves_channel_name_and_renders_labels():
 
 
 @pytest.mark.asyncio
-async def test_reaction_add_restricts_to_semantic_reactions():
+async def test_reaction_add_adds_a_semantic_reaction_and_the_chat_refuses_others():
     service = _service()
 
     result = await service.add_reaction(
@@ -185,13 +186,14 @@ async def test_reaction_add_restricts_to_semantic_reactions():
     assert result["message_id"] == "0"
     assert result["reacted"] is True
 
-    with pytest.raises(MemberCapabilityError):
+    with pytest.raises(ServiceUnsupported):
         await service.add_reaction(
             channel_id="dev",
             channel_name=None,
             message_id="0",
-            reaction="white_check_mark",
+            reaction="white_check_mark",  # type: ignore[arg-type]
         )
+    assert [line for line in lines("dev") if "reaction" in line] == reactions
 
 
 class _Credentials(LocalChatService):
@@ -247,14 +249,19 @@ async def test_check_credentials_reports_each_credential_and_the_whole(checks, s
 
 
 @pytest.mark.asyncio
-async def test_safe_error_redacts_secret_markers():
+async def test_a_service_error_reaches_the_member_as_the_service_wrote_it():
+    """The chat's errors are written for the user, so the capability passes
+    them on as they are, a credential's name included."""
+    message = "Slack bot token is not configured: set AIKO_SLACK_BOT_TOKEN."
+
     class FailingChatService(LocalChatService):
         async def get_bot_identity(self) -> ChatIdentity:
-            raise RuntimeError("SLACK_BOT_TOKEN=xoxb-secret")
+            raise ServiceError(message)
 
     service = _service(FailingChatService(AIKO))
 
-    with pytest.raises(MemberCapabilityError, match="safely") as exc_info:
+    with pytest.raises(ServiceError) as exc_info:
         await service.identity()
 
-    assert "xoxb-secret" not in str(exc_info.value)
+    assert str(exc_info.value) == message
+    assert not isinstance(exc_info.value, MemberCapabilityError)

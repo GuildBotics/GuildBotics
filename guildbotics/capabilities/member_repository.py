@@ -1,10 +1,12 @@
-"""The member's work on the configured code host: issues, pull requests,
-reviews, reactions, CI, and the readiness a run is completed against.
+"""The member's work on the configured code host and tickets: reads, pull
+requests, reviews, reactions, CI, and the readiness a run is completed
+against.
 
-Each operation is the code host's (:class:`CodeHostingService`); here are only
-the rules that hold whichever code host it is -- what needs a human's
-approval, that a write waits for the chat the run answers, how a result reads
--- and the result payloads the member CLI prints.
+Each operation is a service's (:class:`CodeHostingService`,
+:class:`TicketService`); here are only the rules that hold whichever service
+it is -- what needs a human's approval, that a write waits for the chat the
+run answers, how a result reads -- and the result payloads the member CLI
+prints.
 """
 
 from __future__ import annotations
@@ -25,23 +27,26 @@ from guildbotics.capabilities.artifact_archive import (
     unpacked,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.entities.message import Message
-from guildbotics.entities.team import Service
-from guildbotics.runtime.code_hosting_resources import (
-    MAX_PAGE_BYTES,
-    RepositoryReadError,
-)
-from guildbotics.runtime.code_hosting_service import (
-    CodeHostingService,
-    ReactionTarget,
-    ReviewEvent,
-)
+from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     current_member_invocation,
 )
+from guildbotics.runtime.port import (
+    SemanticReaction,
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+)
+from guildbotics.runtime.resources import (
+    MAX_PAGE_BYTES,
+    TICKET_RESOURCES,
+    ReviewVerdict,
+)
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -49,69 +54,61 @@ from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 _SIDES = {"LEFT", "RIGHT"}
 
 
-async def read_repository(
+async def read_resource(
     context: Context,
     resource: str,
-    repo: str,
+    subject: str,
     *,
-    identifier: str,
     parameters: dict[str, Any],
     continuation: str,
 ) -> dict[str, Any]:
-    page = await context.get_code_hosting_service().read(
-        resource,
-        repo,
-        identifier=identifier,
-        parameters=parameters,
-        continuation=continuation,
+    """A page of ``resource`` of ``subject``, read by the service it is of."""
+    service: CodeHostingService | TicketService = (
+        context.get_ticket_service()
+        if resource in TICKET_RESOURCES
+        else context.get_code_hosting_service()
+    )
+    page = await service.read(
+        resource, subject, parameters=parameters, continuation=continuation
     )
     result = page.model_dump()
     if page.target is None:
         result.pop("target")
     if len(json.dumps(result).encode()) > MAX_PAGE_BYTES:
-        raise RepositoryReadError(t("integrations.repository.too_large"))
+        raise ServiceError(t("integrations.resources.too_large"))
     return result
 
 
-async def issue_comment(context: Context, url: str, body: str) -> dict[str, Any]:
-    code = _writing(context)
-    written = await code.comment(url, body, kind="issue")
-    return {
-        **written.model_dump(exclude={"target"}),
-        "comment_url": written.html_url,
-        "issue_number": written.target.number,
-        "repo": written.target.repo,
-        "issue_url": written.target.html_url,
-        "target": written.target.model_dump(),
-    }
+async def ticket_comment(context: Context, url: str, body: str) -> dict[str, Any]:
+    written = await _tickets(context).comment(url, body)
+    return written.model_dump()
 
 
-async def issue_create(
+async def ticket_create(
     context: Context,
-    repo: str,
+    tracker: str,
     title: str,
     body: str,
-    add_to_project: bool,
+    add_to_board: bool,
     labels: Sequence[str] = (),
     human_approved: bool = False,
 ) -> dict[str, Any]:
-    _require_human_approval(human_approved, "Creating an issue")
-    created = await _writing(context).create_issue(repo, title, body, _cleaned(labels))
-    project_item_id = None
-    if add_to_project and context.team.project.is_available_service(
-        Service.TICKET_MANAGER
-    ):
-        project_item_id = await context.get_ticket_manager().add_ticket(
-            created.issue_url
-        )
-    return {
-        **created.model_dump(exclude={"target"}),
-        "project_item_id": project_item_id,
-        "target": created.target.model_dump(),
-    }
+    _require_human_approval(human_approved, "Creating a ticket")
+    tickets = _tickets(context)
+    created = await tickets.create_ticket(tracker, title, body, _cleaned(labels))
+    on_board = False
+    if add_to_board:
+        try:
+            on_board = await tickets.add(created.target.url)
+        except ServiceError as exc:
+            raise ServiceError(
+                f"{created.target.url} was created, but it could not be put on"
+                f" the board: {exc}"
+            ) from exc
+    return {**created.model_dump(), "on_board": on_board}
 
 
-async def issue_update(
+async def ticket_update(
     context: Context,
     url: str,
     body: str | None = None,
@@ -124,7 +121,7 @@ async def issue_update(
 ) -> dict[str, Any]:
     if state is not None:
         _require_human_approval(
-            human_approved, f"Changing the issue state to '{state}'"
+            human_approved, f"Changing the ticket state to '{state}'"
         )
     add_labels, remove_labels = _cleaned(add_labels), _cleaned(remove_labels)
     if (
@@ -134,9 +131,9 @@ async def issue_update(
         and not (add_labels or remove_labels)
     ):
         raise MemberCapabilityError(
-            "issue update needs at least one of body, title, labels, or state."
+            "ticket update needs at least one of body, title, labels, or state."
         )
-    updated = await _writing(context).update_issue(
+    updated = await _tickets(context).update_ticket(
         url,
         body=body,
         title=title,
@@ -148,26 +145,33 @@ async def issue_update(
     return updated.model_dump()
 
 
+async def ticket_reaction(
+    context: Context, url: str, target_id: str, reaction: SemanticReaction
+) -> dict[str, Any]:
+    added = await _tickets(context).add_reaction(url, target_id, reaction)
+    return added.model_dump()
+
+
 async def pr_create(
     context: Context,
-    repo: str,
+    repository: str,
     head: str,
     base: str,
     title: str,
     body: str,
-    issue_url: str,
+    ticket_url: str,
     draft: str,
-    closes_issue: bool = False,
+    closes: bool = False,
 ) -> dict[str, Any]:
-    created = await _writing(context).create_pull_request(
-        repo,
+    created = await _code(context).create_pull_request(
+        repository,
         head,
         base,
         title,
         body,
         draft=draft == "true",
-        issue_url=issue_url,
-        closes_issue=closes_issue,
+        ticket_url=ticket_url,
+        closes=closes,
     )
     return created.model_dump()
 
@@ -178,37 +182,38 @@ async def pr_update(
     body: str | None = None,
     title: str | None = None,
     *,
-    drop_issue_links: bool = False,
+    drop_ticket_links: bool = False,
 ) -> dict[str, Any]:
-    if drop_issue_links and body is None:
+    if drop_ticket_links and body is None:
         raise MemberCapabilityError("--drop-issue-links requires a body.")
     if body is None and title is None:
         raise MemberCapabilityError("pr update needs a body or a title.")
-    updated = await _writing(context).update_pull_request(
-        url, body=body, title=title, drop_issue_links=drop_issue_links
+    updated = await _code(context).update_pull_request(
+        url, body=body, title=title, drop_ticket_links=drop_ticket_links
     )
     return updated.model_dump()
 
 
 async def pr_comment(context: Context, url: str, body: str) -> dict[str, Any]:
-    written = await _writing(context).comment(url, body, kind="pull_request")
+    written = await _code(context).comment(url, body)
     return written.model_dump()
 
 
 async def pr_review(
-    context: Context, url: str, body: str, event: ReviewEvent
+    context: Context, url: str, body: str, verdict: ReviewVerdict, head: str
 ) -> dict[str, Any]:
-    if event not in get_args(ReviewEvent):
+    if verdict not in get_args(ReviewVerdict):
         raise MemberCapabilityError(
-            "Review event must be one of " + ", ".join(get_args(ReviewEvent)) + "."
+            "Review verdict must be one of " + ", ".join(get_args(ReviewVerdict)) + "."
         )
-    return (await _writing(context).review(url, body, event)).model_dump()
+    return (await _code(context).review(url, body, verdict, head)).model_dump()
 
 
 async def pr_review_comment(
     context: Context,
     url: str,
     body: str,
+    head: str,
     path: str,
     line: int,
     side: str,
@@ -216,23 +221,23 @@ async def pr_review_comment(
     start_side: str | None,
 ) -> dict[str, Any]:
     _validate_review_comment_location(path, line, side, start_line, start_side)
-    written = await _writing(context).review_comment(
-        url, body, path, line, side, start_line, start_side
+    written = await _code(context).review_comment(
+        url, body, head, path, line, side, start_line, start_side
     )
     return written.model_dump()
 
 
 async def pr_reply(
-    context: Context, url: str, reply_target_id: int, body: str
+    context: Context, url: str, reply_to: str, body: str
 ) -> dict[str, Any]:
-    written = await _writing(context).reply(url, reply_target_id, body)
+    written = await _code(context).reply(url, reply_to, body)
     return written.model_dump()
 
 
-async def reaction_add(
-    context: Context, url: str, target: ReactionTarget, comment_id: int, reaction: str
+async def pr_reaction(
+    context: Context, url: str, target_id: str, reaction: SemanticReaction
 ) -> dict[str, Any]:
-    added = await _writing(context).add_reaction(url, target, comment_id, reaction)
+    added = await _code(context).add_reaction(url, target_id, reaction)
     return added.model_dump()
 
 
@@ -250,16 +255,22 @@ async def artifact_download(
 
 
 async def open_pull_request_readiness(
-    code: CodeHostingService, remote_url: str, branch: str
+    code: CodeHostingService, repository: str, branch: str
 ) -> list[dict[str, Any]]:
     """Readiness of the open pull requests whose head is the pushed branch."""
     results = []
-    for url in await code.open_pull_requests(remote_url, branch):
+    for url in await code.open_pull_requests(repository, branch):
         checks = await code.readiness(url)
         if checks.readiness == "not_applicable":
             continue
         results.append(
-            checks.model_dump(include={"pr_url", "readiness", "completion_blockers"})
+            {
+                "url": checks.target.url,
+                "readiness": checks.readiness,
+                "completion_blockers": [
+                    blocker.model_dump() for blocker in checks.completion_blockers
+                ],
+            }
         )
     return results
 
@@ -270,30 +281,23 @@ async def task_completion_readiness(
     """Revalidate every PR a ticket run is answerable for before completion.
 
     PRs the run pushed to or opened (evidence) are always targets. The
-    ticket itself, when it is a PR, and PRs linked from an issue ticket
-    are targets only when the member authored them: a reviewer cannot
-    make someone else's PR ready.
+    ticket itself, when it is a PR, and the PRs that refer to a ticket are
+    targets only when the member authored them: a reviewer cannot make
+    someone else's PR ready.
 
     Raises:
         MemberCapabilityError: If a target is not ready.
     """
     code = context.get_code_hosting_service()
-    touched = _pull_request_urls(code, evidence)
+    touched = _pull_request_urls(evidence)
     try:
-        ticket = code.locate(ticket_url)
-    except (MemberCapabilityError, ValueError):
-        ticket = None
-    urls = [ticket.url] if ticket is not None and ticket.kind == "pull_request" else []
+        urls = [(await code.read("pull_requests", ticket_url)).items[0]["url"]]
+    except ServiceNotFound:
+        urls = await _referring_pull_requests(code, ticket_url)
     urls.extend(touched)
-    if ticket is not None and ticket.kind == "issue":
-        urls.extend(await code.linked_pull_requests(ticket_url))
     results = []
     for url in dict.fromkeys(urls):
-        ref = code.locate(url, "pull_request")
-        page = await code.read(
-            "pull_requests", ref.full_repo, identifier=str(ref.number)
-        )
-        pr = page.items[0]
+        pr = (await code.read("pull_requests", url)).items[0]
         if pr["state"] != "open" or (
             url not in touched and pr["author_type"] != Message.ASSISTANT
         ):
@@ -304,7 +308,7 @@ async def task_completion_readiness(
     blocked = [result for result in results if result["readiness"] != "ready"]
     if blocked:
         details = "; ".join(
-            f"{result['pr_url']}: "
+            f"{result['target']['url']}: "
             + ", ".join(
                 str(blocker["message"]) for blocker in result["completion_blockers"]
             )
@@ -316,42 +320,59 @@ async def task_completion_readiness(
     return results
 
 
-def _pull_request_urls(
-    code: CodeHostingService, evidence: list[dict[str, Any]]
+async def _referring_pull_requests(
+    code: CodeHostingService, ticket_url: str
 ) -> list[str]:
-    """The pull requests a run's evidence names, as the code host spells them."""
-    candidates: list[str] = []
+    """The code host's pull requests that refer to the ticket; none when the
+    ticket is another service's, whose pull requests the code host cannot
+    tell."""
+    urls: list[str] = []
+    continuation = ""
+    while True:
+        try:
+            page = await code.read(
+                "ticket_pull_requests", ticket_url, continuation=continuation
+            )
+        except ServiceUnsupported:
+            return []
+        urls.extend(str(item["url"]) for item in page.items)
+        if not page.continuation:
+            return urls
+        continuation = page.continuation
+
+
+def _pull_request_urls(evidence: list[dict[str, Any]]) -> list[str]:
+    """The pull requests a run's evidence names: what it wrote to, and what
+    its pushes found open."""
+    urls: list[str] = []
     for record in evidence:
         payload = record.get("payload")
         if not isinstance(payload, dict):
             continue
-        for key in ("pr_url", "html_url"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                candidates.append(value)
+        target = payload.get("target")
+        if isinstance(target, dict) and target.get("kind") == "pull_request":
+            urls.append(str(target.get("url") or ""))
         pull_requests = payload.get("pull_requests")
         if isinstance(pull_requests, list):
-            candidates.extend(
-                str(item.get("pr_url") or "")
+            urls.extend(
+                str(item.get("url") or "")
                 for item in pull_requests
                 if isinstance(item, dict)
             )
-    urls: list[str] = []
-    for candidate in candidates:
-        try:
-            url = code.locate(candidate, "pull_request").url
-        except (MemberCapabilityError, ValueError):
-            continue
-        if url not in urls:
-            urls.append(url)
-    return urls
+    return [url for url in dict.fromkeys(urls) if url]
 
 
-def _writing(context: Context) -> CodeHostingService:
+def _code(context: Context) -> CodeHostingService:
     """The code host, once the chat the run answers is current: a write made
     without reading what was said since would answer an old conversation."""
     ensure_chat_current(context.person.person_id)
     return context.get_code_hosting_service()
+
+
+def _tickets(context: Context) -> TicketService:
+    """The ticket service, once the chat the run answers is current."""
+    ensure_chat_current(context.person.person_id)
+    return context.get_ticket_service()
 
 
 def _cleaned(labels: Sequence[str]) -> list[str]:
@@ -361,7 +382,7 @@ def _cleaned(labels: Sequence[str]) -> list[str]:
 def _require_human_approval(human_approved: bool, action: str) -> None:
     """Guard the writes that stay a human decision.
 
-    Opening and closing issues shape the team's backlog, so the member may only
+    Opening and closing tickets shape the team's backlog, so the member may only
     perform them on a human's instruction or approval. The flag is the member's
     attestation that such an instruction exists in the originating conversation.
     """

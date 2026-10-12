@@ -39,8 +39,8 @@ CHAT_ATTRIBUTES = {
 }
 TICKET_ATTRIBUTES = {
     "github.url": TICKET_URL,
-    "github.number": "42",
-    "github.kind": "issue",
+    "github.label": "#42",
+    "github.kind": "ticket",
 }
 
 
@@ -212,10 +212,10 @@ def test_fact_records_without_a_lifecycle_make_events_but_no_session() -> None:
                 attributes={
                     "github.action": "opened",
                     "github.kind": "pull_request",
-                    "github.number": 51,
+                    "github.label": "#51",
                     "github.url": pr_url,
                 },
-                payload={"action": "opened", "pull_request": {"number": 51}},
+                payload={"action": "opened", "pull_request": {"label": "#51"}},
             )
         ],
     )
@@ -337,12 +337,12 @@ def test_completed_ticket_session_titled_by_summary_keeps_issue_link() -> None:
     )
     assert session.title == "Issue #42 のバグを修正"
     assert any(
-        link.kind == "issue" and link.label == "Issue #42" for link in session.links
+        link.kind == "issue" and link.label == "Ticket #42" for link in session.links
     )
 
 
 def test_ticket_session_without_summary_falls_back_to_issue_link() -> None:
-    assert _title(_ticket_lifecycle(status="succeeded")) == "Issue #42"
+    assert _title(_ticket_lifecycle(status="succeeded")) == "Ticket #42"
 
 
 def test_ticket_title_recorded_in_the_lifecycle_names_the_session_everywhere() -> None:
@@ -417,12 +417,11 @@ def _work_target_record(action: str) -> dict[str, Any]:
         attributes={
             "github.action": action,
             "github.kind": "pull_request",
-            "github.number": "528",
-            "github.repo": "o/r",
+            "github.label": "#528",
             "github.url": "https://github.com/o/r/pull/528",
             "github.title": "Copilot の利用枠を表示する",
         },
-        payload={"pull_request": {"number": 528}},
+        payload={"pull_request": {"label": "#528"}},
     )
 
 
@@ -443,7 +442,7 @@ def test_inspected_target_kept_by_the_session_record_is_not_a_link() -> None:
         attributes={
             "github.action": "inspected",
             "github.kind": "pull_request",
-            "github.number": "528",
+            "github.label": "#528",
             "github.url": "https://github.com/o/r/pull/528",
             "github.title": "Copilot の利用枠を表示する",
         },
@@ -458,15 +457,15 @@ def test_inspected_target_kept_by_the_session_record_is_not_a_link() -> None:
     later["trace_id"] = "t-int"
     later["attributes"] = {
         **later["attributes"],
-        "github.kind": "issue",
-        "github.number": "9",
+        "github.kind": "ticket",
+        "github.label": "#9",
         "github.url": "https://github.com/o/r/issues/9",
         "github.title": "A later, different item",
     }
     session = _session(inspected, [later])
     assert session.title == "Copilot の利用枠を表示する"
     assert [(link.kind, link.label) for link in session.links] == [
-        ("issue", "Issue #9")
+        ("issue", "Ticket #9")
     ]
 
 
@@ -489,8 +488,8 @@ def test_the_first_recorded_target_names_the_session_like_the_execution_list(
     second["timestamp"] = "2026-07-01T10:02:00+00:00"
     second["attributes"] = {
         **second["attributes"],
-        "github.kind": "issue",
-        "github.number": "9",
+        "github.kind": "ticket",
+        "github.label": "#9",
         "github.url": "https://github.com/o/r/issues/9",
         "github.title": "A later, different item",
     }
@@ -501,7 +500,7 @@ def test_the_first_recorded_target_names_the_session_like_the_execution_list(
     assert session.title == "Copilot の利用枠を表示する"
     assert [(link.kind, link.label) for link in session.links] == [
         ("pull_request", "PR #528"),
-        ("issue", "Issue #9"),
+        ("issue", "Ticket #9"),
     ]
 
 
@@ -569,16 +568,15 @@ def test_manual_command_session_is_hidden_but_its_events_remain() -> None:
                 attributes={
                     "github.action": "opened",
                     "github.kind": "pull_request",
-                    "github.number": 51,
-                    "github.repo": "o/r",
+                    "github.label": "#51",
                     "github.url": pr_url,
                 },
                 payload={
                     "action": "opened",
                     "pull_request": {
-                        "number": 51,
+                        "label": "#51",
                         "title": "Add release notes",
-                        "html_url": pr_url,
+                        "url": pr_url,
                     },
                 },
             )
@@ -600,17 +598,16 @@ def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
             trace_id="t-issue",
             attributes={
                 "github.action": "opened",
-                "github.kind": "issue",
-                "github.number": 43,
-                "github.repo": "o/r",
+                "github.kind": "ticket",
+                "github.label": "#43",
                 "github.url": issue_url,
             },
             payload={
                 "action": "opened",
                 "issue": {
-                    "number": 43,
+                    "label": "#43",
                     "title": "Track issue activity",
-                    "html_url": issue_url,
+                    "url": issue_url,
                 },
             },
         ),
@@ -621,17 +618,16 @@ def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
                 trace_id="t-issue",
                 attributes={
                     "github.action": "commented",
-                    "github.kind": "issue",
-                    "github.number": 43,
-                    "github.repo": "o/r",
+                    "github.kind": "ticket",
+                    "github.label": "#43",
                     "github.url": issue_url,
                 },
                 payload={
                     "action": "commented",
-                    "issue": {"number": 43, "html_url": issue_url},
+                    "issue": {"label": "#43", "url": issue_url},
                     "comment": {
-                        "id": index,
-                        "html_url": f"{issue_url}#issuecomment-{index}",
+                        "id": f"issuecomment-{index}",
+                        "url": f"{issue_url}#issuecomment-{index}",
                     },
                 },
             )
@@ -653,12 +649,41 @@ def test_issue_create_event_and_comments_share_one_session_issue_link() -> None:
     )
 
     assert [(event.type, event.title, event.detail) for event in history.events] == [
-        ("issue_create", "Issue #43 Created", "Track issue activity")
+        ("issue_create", "Ticket #43 Created", "Track issue activity")
     ]
     assert history.events[0].url == issue_url
     assert [
         (link.kind, link.label, link.url) for link in history.sessions[0].links
-    ] == [("issue", "Issue #43", issue_url)]
+    ] == [("issue", "Ticket #43", issue_url)]
+
+
+def test_event_title_uses_the_label_the_ticket_service_shows() -> None:
+    # A local ticket is "T-1", not "#n": the label is shown as recorded.
+    ticket_url = "local://tickets/acme/team/demo/T-1"
+    history = _history(
+        [],
+        [
+            _event(
+                "github.issue",
+                "2026-07-01T12:00:00+00:00",
+                trace_id="t-local",
+                attributes={
+                    "github.action": "closed",
+                    "github.kind": "ticket",
+                    "github.label": "T-1",
+                    "github.url": ticket_url,
+                },
+                payload={
+                    "action": "closed",
+                    "issue": {"label": "T-1", "title": "Local", "url": ticket_url},
+                },
+            )
+        ],
+    )
+
+    assert [(event.type, event.title, event.url) for event in history.events] == [
+        ("issue_resolve", "Ticket T-1 Resolved", ticket_url)
+    ]
 
 
 def test_issue_comments_add_session_link_without_event_row() -> None:
@@ -680,17 +705,16 @@ def test_issue_comments_add_session_link_without_event_row() -> None:
                 trace_id="t-comment",
                 attributes={
                     "github.action": "commented",
-                    "github.kind": "issue",
-                    "github.number": 44,
-                    "github.repo": "o/r",
+                    "github.kind": "ticket",
+                    "github.label": "#44",
                     "github.url": issue_url,
                 },
                 payload={
                     "action": "commented",
-                    "issue": {"number": 44, "html_url": issue_url},
+                    "issue": {"label": "#44", "url": issue_url},
                     "comment": {
-                        "id": 1,
-                        "html_url": f"{issue_url}#issuecomment-1",
+                        "id": "issuecomment-1",
+                        "url": f"{issue_url}#issuecomment-1",
                     },
                 },
             )
@@ -699,7 +723,7 @@ def test_issue_comments_add_session_link_without_event_row() -> None:
 
     assert history.events == []
     assert [(link.label, link.url) for link in history.sessions[0].links] == [
-        ("Issue #44", issue_url)
+        ("Ticket #44", issue_url)
     ]
 
 

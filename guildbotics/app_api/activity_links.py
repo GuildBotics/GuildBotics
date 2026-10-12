@@ -7,8 +7,8 @@ from urllib.parse import urlencode, urlparse
 from guildbotics.app_api.activity_events import commit_entries, commit_message
 from guildbotics.app_api.models import ActivityHistoryLink
 from guildbotics.observability.trace_title import (
-    github_reference_label,
     is_read_only_action,
+    target_reference_label,
 )
 
 type ActivityLinkKind = Literal["doc", "issue", "pull_request", "commit", "external"]
@@ -59,12 +59,12 @@ def links_from_attributes(
     timestamp: str = "",
 ) -> list[ActivityHistoryLink]:
     url = str(attributes.get("github.url") or "")
-    number = str(attributes.get("github.number") or "")
+    label = str(attributes.get("github.label") or "")
     kind = str(attributes.get("github.kind") or "")
-    if not (url or number):
+    if not (url or label):
         return []
     link_kind = github_link_kind(kind)
-    label = github_link_label(link_kind, number, url)
+    label = target_reference_label(kind, label) or url
     return [
         ActivityHistoryLink(kind=link_kind, label=label, url=url, timestamp=timestamp)
     ]
@@ -73,13 +73,9 @@ def links_from_attributes(
 def github_link_kind(kind: str) -> ActivityLinkKind:
     if kind == "pull_request":
         return "pull_request"
-    if kind == "issue":
+    if kind == "ticket":
         return "issue"
     return "external"
-
-
-def github_link_label(kind: ActivityLinkKind, number: str, url: str) -> str:
-    return github_reference_label(kind, number) or url
 
 
 def doc_link_from_memory(

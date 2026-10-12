@@ -71,9 +71,9 @@ def test_a_provider_serves_a_kind_and_is_chosen_by_its_name(name):
     provider = PROVIDERS[name]
     assert provider.name == name
     kinds = {
-        "code_hosting_service": provider.code_hosting,
-        "ticket_manager": provider.ticket_manager,
-        "chat_service": provider.chat,
+        "code_hosting_service": provider.code_hosting_service,
+        "ticket_service": provider.ticket_service,
+        "chat_service": provider.chat_service,
     }
     assert any(kinds.values())
     for kind in (kind for kind, serves in kinds.items() if serves):

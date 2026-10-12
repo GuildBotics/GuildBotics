@@ -2,19 +2,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-from guildbotics.integrations.chat_workflow_status import (
-    workflow_status_fields,
-    workflow_status_metadata,
-)
 from guildbotics.integrations.slack.auth_errors import slack_api_error
 from guildbotics.integrations.slack.message_events import chat_event
+from guildbotics.integrations.slack.workflow_status import status_metadata
+from guildbotics.runtime.port import WorkflowStatus
 
 
 def test_chat_event_reads_a_thread_reply() -> None:
-    metadata = workflow_status_metadata(
-        workflow_status_fields(
-            reason="failed", person_id="p1", source_event_id="C1:1.0", run_id="r1"
-        )
+    status = WorkflowStatus(
+        reason="failed", person_id="p1", subject="C1:1.0", run_id="r1"
     )
 
     event = chat_event(
@@ -24,7 +20,7 @@ def test_chat_event_reads_a_thread_reply() -> None:
             "thread_ts": "1.0",
             "user": "U1",
             "text": "hi <@U2> and <@U3>",
-            "metadata": metadata,
+            "metadata": status_metadata(status),
         },
     )
 
@@ -38,7 +34,7 @@ def test_chat_event_reads_a_thread_reply() -> None:
     assert event.mentions == ["U2", "U3"]
     assert event.is_thread_reply is True
     assert event.is_bot_message is False
-    assert event.metadata == metadata
+    assert event.status == status
 
 
 def test_chat_event_starts_its_own_thread_without_thread_ts() -> None:
@@ -49,6 +45,7 @@ def test_chat_event_starts_its_own_thread_without_thread_ts() -> None:
     assert event.is_thread_reply is False
     assert event.is_bot_message is True
     assert event.author_id is None
+    assert event.status is None
 
 
 def test_chat_event_is_none_for_what_is_no_conversation() -> None:

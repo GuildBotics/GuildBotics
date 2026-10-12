@@ -175,8 +175,8 @@ Trust rules that follow from this shape:
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
 - Ticket completion with `status=done` resolves the pull requests the run pushed to or opened
-  (run evidence) plus, when the member authored them, the ticket PR and the PRs linked from the
-  issue timeline, then revalidates each open PR against the code host's current state;
+  (run evidence) plus, when the member authored them, the ticket PR and the code host's PRs
+  that refer to the ticket (`ticket_pull_requests`), then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
   remains pending, the head does not contain the current base, or the head/base changes
@@ -197,6 +197,69 @@ Member-facing agent instructions are layered so each contract has exactly one so
 (shared reference → workflow envelope → trigger-specific prompt → interactive SKILL).
 The layer model and its guard tests are described in `AGENTS.md`
 (「member プロンプト層モデル」).
+
+### External service ports
+
+A member works with external services through four ports, chosen per kind by
+`project.services` (`integrations/factory.py`). A port is the contract of operations
+and data a caller understands without knowing the service; a provider maps it onto a
+service's API.
+
+| port | responsibility | called by |
+| --- | --- | --- |
+| `CodeHostingService` | repositories (git remote, default branch, push credential and scope, commit URL), pull requests (reads and writes, conversation comments, reviews, inline comments, replies, reactions), CI (readiness, failed logs, artifacts), repository information, the pull request patrol, the pull requests that refer to a ticket | `member pr / repo-info / git`, task completion, the patrol |
+| `TicketService` | tickets (reads and writes, comments, reactions) and the board (candidates, re-reading, lanes, adding, closed work) | `member ticket`, the ticket selector, the activity import |
+| `ChatService` | the chat: identity, history, posts and replies, reactions | `member chat`, the chat workflow |
+| `EventListener` | receiving the chat, one connection at a time | the chat receiving runner |
+
+```mermaid
+flowchart LR
+    CodeCLI["member pr / repo-info / git<br/>task completion"] --> Code["CodeHostingService"]
+    TicketCLI["member ticket"] --> Tickets["TicketService"]
+    Patrol["ticket and PR patrol"] --> Code
+    Patrol --> Tickets
+    ChatCLI["member chat"] --> Chat["ChatService"]
+    Receive["chat receiving"] --> Listener["EventListener"]
+    Receive --> Chat
+
+    Code --> GitHub["github"]
+    Tickets --> GitHub
+    Chat --> Slack["slack"]
+    Listener --> Slack
+    Code --> Local["local"]
+    Tickets --> Local
+    Chat --> Local
+    Listener --> Local
+```
+
+What every port shares (`runtime/port.py`, `runtime/resources.py`):
+
+- **References.** Tickets and pull requests are named by their URLs; a read is
+  `read(resource, subject)`, the subject being the item's URL or, for repository
+  information, the repository's path, which the provider checks and spells (GitHub
+  `owner/repo`). Comments, reviews, threads, CI jobs, and artifacts are opaque string
+  ids that mean something only together with their item's URL. A work target is
+  `{kind: ticket | pull_request, url, title, label}`, `label` being the short reference
+  the service shows it by (GitHub `#12`); shared code never builds one from a number. A
+  ticket has a `key` (its branch is `ticket/<key>`), a `tracker` (where it is kept), the
+  `repository` it belongs to, if any, and its `lane` on the board.
+- **Failures.** `ServiceError` (a message fit for the user, never what the service
+  answered or a credential), `ServiceNotFound` (not there, or not this service's), and
+  `ServiceUnsupported` (the service cannot do it at all). Optional features — reactions
+  by meaning, `request_changes`, adding to the board, artifacts, failed logs,
+  `dependency_alerts`, the pull requests of another service's ticket, a link that closes
+  a ticket on a merge — raise `ServiceUnsupported` when called; an empty result means
+  read and found nothing.
+- **Reactions** are four meanings (`ack`, `agree`, `celebrate`, `support`) on every
+  port; a provider never substitutes another reaction for one it lacks.
+- **Reviews** take a verdict (`approve`, `request_changes`, `comment`) and, like inline
+  comments, the head the member read: on a moved head nothing is written.
+- **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
+  its work came from; each provider carries it in its own form (a hidden comment marker,
+  message metadata) and gives it back on reading.
+- **Write scope.** Each service's configuration names a scope (an owner on GitHub); a
+  write goes only to a repository or tracker directly in it (`check_path`), a push only
+  to the code host's.
 
 ## 4. Workflow Invocation
 
@@ -219,8 +282,9 @@ purpose:
   operations around it, and there is no webhook receiver (local-first design). The
   candidates are the pull requests that ask something of the member
   (`CodeHostingService.pull_request_candidates()`), then the board's tickets
-  (`TicketManager.get_task_candidates()`), and each is re-read from the port it came
-  from before it is dispatched.
+  (`TicketService.candidates()`), and each is re-read from the port it came
+  from before it is dispatched; a failed or rate-limited run's status comment goes to
+  that port too.
   Every route that runs it — the patrol, a scheduled command, a manual run
   (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the
@@ -1412,11 +1476,12 @@ Two Person distinctions matter architecturally:
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement the ports of the kinds the provider serves
-  (`CodeHostingService` with the item shapes of `runtime/code_hosting_resources.py`,
-  `TicketManager`, `ChatService` with its `EventListener`; all in `runtime/` but the
-  listener, at the root of `integrations/`) under
-  `integrations/<provider>/`, passing every write through `check_repository`
-  (`integrations/repository_scope.py`). Describe it with a `Provider`
+  (`CodeHostingService` and `TicketService` with the item shapes of
+  `runtime/resources.py`, `ChatService` with its `EventListener`; all in `runtime/` but
+  the listener, at the root of `integrations/`) under
+  `integrations/<provider>/`, failing only with the ports' failures
+  (`runtime/port.py`) and passing every write through `check_path`
+  (`integrations/repository_scope.py`) with the scope of its own service. Describe it with a `Provider`
   (`integrations/provider.py`: its kinds -- for a chat, the `Chat` of its service,
   listener, and `listener_key` --, the secret names and `account_info` keys a member
   needs, `verify`, `diagnose`, `credentialed`) and add it to `PROVIDERS` in

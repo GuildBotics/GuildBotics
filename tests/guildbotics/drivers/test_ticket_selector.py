@@ -9,18 +9,20 @@ import pytest
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.entities.task import Task
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.port import WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import current_trace, trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 from tests.guildbotics.local_code_host import (
+    TRACKER,
     comment,
-    issue,
     item,
     local_member,
     pull_request,
+    ticket,
 )
 
-ISSUE_URL = "local://owner/repo/issues/1"
+ISSUE_URL = f"local://tickets/{TRACKER}/T-1"
 
 
 @pytest.fixture(autouse=True)
@@ -51,8 +53,8 @@ class _Context:
     def clone_for(self, person: object) -> "_Context":
         return self
 
-    def get_ticket_manager(self):
-        return self.member.board
+    def get_ticket_service(self):
+        return self.member.tickets
 
     def get_code_hosting_service(self):
         return self.member.code
@@ -62,21 +64,30 @@ class _Context:
 
 
 def _task(status: str = Task.READY, number: int = 1) -> Task:
-    url = issue(number, title="Fix login", lane=status, assignees=["aiko"])
-    return Task(
-        id=url,
-        title="Fix login",
-        description="",
-        status=status,
-        repository="repo",
-        number=number,
-        url=url,
-    )
+    url = ticket(number, title="Fix login", lane=status, assignees=["aiko"])
+    return Task(id=url, title="Fix login", description="", status=status, url=url)
 
 
-def _statuses(url: str = ISSUE_URL) -> list[dict]:
-    """The status comments the run left on the ticket."""
-    return [c["status"] for c in item(url)["comments"] if c.get("status")]
+def _statuses(url: str = ISSUE_URL) -> list[WorkflowStatus]:
+    """The statuses the comments the run left on the item carry."""
+    return [
+        status
+        for c in item(url)["comments"]
+        if (status := WorkflowStatus.from_payload(c.get("status"))) is not None
+    ]
+
+
+def _moves(monkeypatch, context: "_Context") -> list[tuple[str, str]]:
+    """The moves the selector makes on the board, each made."""
+    moves: list[tuple[str, str]] = []
+    move = context.member.tickets.move
+
+    async def recorded(task: Task, lane):
+        moves.append((task.url or "", lane))
+        return await move(task, lane)
+
+    monkeypatch.setattr(context.member.tickets, "move", recorded)
+    return moves
 
 
 def _invocation(task: Task, source: str = "routine") -> WorkflowInvocation:
@@ -136,6 +147,7 @@ def _failing(error: Exception):
 async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "3")
     context = _Context()
+    moves = _moves(monkeypatch, context)
     task = _task()
     seen: list[tuple[WorkflowInvocation, dict[str, object]]] = []
 
@@ -151,6 +163,7 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
         )
 
     assert result == "done"
+    assert moves == [(ISSUE_URL, "in_progress")]
     assert item(ISSUE_URL)["lane"] == Task.IN_PROGRESS
     assert item(ISSUE_URL)["comments"] == []
     invocation, attributes = seen[0]
@@ -172,6 +185,7 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
 async def test_run_hands_the_turn_the_default_budget(monkeypatch, raw, expected):
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", raw)
     context = _Context()
+    moves = _moves(monkeypatch, context)
     invocations: list[WorkflowInvocation] = []
 
     async def run_workflow(invocation: WorkflowInvocation) -> None:
@@ -184,7 +198,7 @@ async def test_run_hands_the_turn_the_default_budget(monkeypatch, raw, expected)
     assert invocations[0].run_id == "trace"
     assert invocations[0].payload["max_completion_attempts"] == expected
     # Only a ticket that is ready moves to the working lane.
-    assert item(ISSUE_URL)["lane"] == Task.IN_PROGRESS
+    assert moves == []
 
 
 @pytest.mark.asyncio
@@ -225,13 +239,41 @@ async def test_failed_run_posts_a_safe_status_comment_and_raises():
     assert "secret-token-123" not in comment["body"]
     assert "RuntimeError" not in comment["body"]
     assert ".log" not in comment["body"]
-    status = comment["status"]
-    assert (
-        status["reason"],
-        status["person_id"],
-        status["run_id"],
-        status["subject_id"],
-    ) == ("failed", "aiko", "trace-9", ISSUE_URL)
+    assert _statuses() == [
+        WorkflowStatus(
+            reason="failed", person_id="aiko", run_id="trace-9", subject=ISSUE_URL
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_pull_request_run_says_so_on_the_pull_request():
+    """The status goes where the work came from: a pull request's on the code
+    host, not on the ticket service."""
+    context = _Context()
+    ticket_url = _task()
+    pull = pull_request(
+        2, "feature", author="aiko", comments=[comment("reviewer", "please fix")]
+    )
+    selector = TicketSelector(context)  # type: ignore[arg-type]
+    [candidate, _] = await selector.candidates(context.person)  # type: ignore[arg-type]
+    invocation = await selector.refresh(context.person, candidate)  # type: ignore[arg-type]
+    assert invocation is not None
+
+    with (
+        trace_scope("routine", trace_id="trace-4", person_id="aiko"),
+        pytest.raises(RuntimeError),
+    ):
+        await selector.run(  # type: ignore[arg-type]
+            context.person, invocation, _failing(RuntimeError("boom"))
+        )
+
+    assert _statuses(pull) == [
+        WorkflowStatus(
+            reason="failed", person_id="aiko", run_id="trace-4", subject=pull
+        )
+    ]
+    assert item(ticket_url.url or "")["comments"] == []
 
 
 @pytest.mark.asyncio
@@ -240,10 +282,10 @@ async def test_failed_move_is_reported_like_a_failed_run(monkeypatch):
     context = _Context()
     task = _task()
 
-    async def failing_move(task: Task, status: str) -> bool:
+    async def failing_move(task: Task, lane: str) -> bool:
         raise RuntimeError("project board is down")
 
-    monkeypatch.setattr(context.member.board, "move_ticket", failing_move)
+    monkeypatch.setattr(context.member.tickets, "move", failing_move)
     called: list[WorkflowInvocation] = []
 
     async def run_workflow(invocation: WorkflowInvocation) -> None:
@@ -297,12 +339,13 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
         ),
     )
     assert result in comment["body"]
-    status = comment["status"]
-    assert (
-        status["reason"],
-        status["run_id"],
-        status.get("retry_after_text", ""),
-    ) == ("rate_limited", "trace-3", hint)
+    [status] = _statuses()
+    assert (status.reason, status.run_id, status.subject, status.retry_after_text) == (
+        "rate_limited",
+        "trace-3",
+        ISSUE_URL,
+        hint,
+    )
     [event] = recorded
     assert event["event_type"] == "workflow.rate_limited"
     assert event["default_source"] == source
@@ -310,7 +353,7 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
     assert event["payload"]["run_id"] == "trace-3"
     assert event["payload"]["subject_id"] == ISSUE_URL
     assert event["attributes"]["rate_limit.retry_after_at"] == at
-    assert status.get("retry_after_at", "") == at
+    assert status.retry_after_at == at
 
 
 @pytest.mark.asyncio
@@ -324,7 +367,7 @@ async def test_rate_limit_is_recorded_even_if_the_comment_cannot_be_posted(
     async def failing_comment(*_args, **_kwargs):
         raise RuntimeError("the code host is down")
 
-    monkeypatch.setattr(context.member.code, "comment", failing_comment)
+    monkeypatch.setattr(context.member.tickets, "comment", failing_comment)
     recorded = _capture_rate_limit_events(monkeypatch)
 
     result = await TicketSelector(context).run(  # type: ignore[arg-type]
@@ -357,7 +400,7 @@ async def test_run_next_runs_the_first_ticket_in_patrol_order():
     # The work is fixed when the ticket is selected: its URL, its subject.
     assert invocation.work == Work.of_ticket(invocation.payload["ticket_url"])
     assert item(first.id or "")["lane"] == Task.IN_PROGRESS
-    assert item("local://owner/repo/issues/2")["lane"] == Task.READY
+    assert item(f"local://tickets/{TRACKER}/T-2")["lane"] == Task.READY
 
 
 @pytest.mark.asyncio
@@ -376,9 +419,9 @@ async def test_candidates_are_the_pull_requests_and_then_the_board_and_refresh_b
     """The patrol takes up the pull requests it answers for before new tickets,
     and re-reads each candidate from the service it came from."""
     context = _Context()
-    ticket = _task()
+    ready = _task()
     pull = pull_request(
-        2, "ticket/1", author="aiko", comments=[comment("reviewer", "please fix")]
+        2, "ticket/T-1", author="aiko", comments=[comment("reviewer", "please fix")]
     )
     selector = TicketSelector(context)  # type: ignore[arg-type]
 
@@ -386,47 +429,36 @@ async def test_candidates_are_the_pull_requests_and_then_the_board_and_refresh_b
 
     assert [(task.url, task.trigger_reason) for task in candidates] == [
         (pull, "pull_request_feedback"),
-        (ticket.url, "ready_lane"),
+        (ready.url, "ready_lane"),
     ]
     refreshed = [
         await selector.refresh(context.person, task)  # type: ignore[arg-type]
         for task in candidates
     ]
-    assert [r.payload["ticket_url"] for r in refreshed if r is not None] == [
-        pull,
-        ticket.url,
+    # The run's ticket URL is the candidate's own URL, a pull request's
+    # included.
+    assert [
+        (r.payload["ticket_url"], r.payload["pull_request_url"], r.work)
+        for r in refreshed
+        if r is not None
+    ] == [
+        (pull, pull, Work.of_ticket(pull)),
+        (ready.url, "", Work.of_ticket(ready.url or "")),
     ]
 
 
-def test_ticket_trace_attributes_for_issue_and_pull_request():
-    issue = Task(
-        id="1",
-        title="T",
-        description="D",
-        repository="repo",
-        number=42,
-        url="https://github.com/owner/repo/issues/42",
-    )
-    assert issue.trace_attributes() == {
-        "github.repo": "repo",
+def test_ticket_trace_attributes_for_ticket_and_pull_request():
+    ticket_task = Task(id="1", title="T", description="D", url=ISSUE_URL)
+    assert ticket_task.trace_attributes() == {
+        "github.kind": "ticket",
         "github.title": "T",
-        "github.kind": "issue",
-        "github.url": "https://github.com/owner/repo/issues/42",
-        "github.number": "42",
+        "github.url": ISSUE_URL,
     }
 
-    pr = Task(
-        id="2",
-        title="T",
-        description="D",
-        repository="repo",
-        number=7,
-        pull_request_url="https://github.com/owner/repo/pull/7",
-    )
+    pr_url = "local://code/acme/team/demo/pulls/7"
+    pr = Task(id="2", title="T", description="D", url=pr_url, pull_request_url=pr_url)
     assert pr.trace_attributes() == {
-        "github.repo": "repo",
-        "github.title": "T",
         "github.kind": "pull_request",
-        "github.url": "https://github.com/owner/repo/pull/7",
-        "github.number": "7",
+        "github.title": "T",
+        "github.url": pr_url,
     }

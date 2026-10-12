@@ -245,7 +245,7 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     assert disabled["services"] == {"chat_service": {"name": "slack"}}
     assert "repositories" not in disabled
 
-    # Enabled: ticket_manager + code_hosting_service added (no repository entry;
+    # Enabled: ticket_service + code_hosting_service added (no repository entry;
     # the repository is derived from each issue at runtime).
     service.update_project(
         ProjectUpdateInput(
@@ -258,9 +258,9 @@ def test_update_project_github_disabled_enabled_disabled_diff(
     )
     enabled = load_yaml_file(project_file)
     services = enabled["services"]
-    assert services["ticket_manager"]["owner"] == "GuildBotics"
-    assert services["ticket_manager"]["project_id"] == "42"
-    assert services["ticket_manager"]["url"].endswith("/projects/42")
+    assert services["ticket_service"]["owner"] == "GuildBotics"
+    assert services["ticket_service"]["project_id"] == "42"
+    assert services["ticket_service"]["url"].endswith("/projects/42")
     assert services["code_hosting_service"]["owner"] == "GuildBotics"
     assert "repositories" not in enabled
 
@@ -337,7 +337,7 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
     SimpleProjectSetupService().write_project(_github_project_input(config_dir))
 
     stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["ticket_manager"]["lane_map"] == {
+    assert stored["services"]["ticket_service"]["lane_map"] == {
         "ready": "Todo",
         "working": "In Progress",
         "done": "Done",
@@ -354,7 +354,7 @@ def test_write_project_persists_custom_lane_map(tmp_path: Path) -> None:
     )
 
     stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["ticket_manager"]["lane_map"] == {
+    assert stored["services"]["ticket_service"]["lane_map"] == {
         "ready": "Ready",
         "working": "Doing",
         "done": "Shipped",
@@ -373,7 +373,7 @@ def test_blank_working_lane_falls_back_to_default(tmp_path: Path) -> None:
     )
 
     stored = load_yaml_file(config_dir / "team/project.yml")
-    assert stored["services"]["ticket_manager"]["lane_map"]["working"] == "In Progress"
+    assert stored["services"]["ticket_service"]["lane_map"]["working"] == "In Progress"
 
 
 def test_lane_map_rejects_identical_ready_and_done() -> None:

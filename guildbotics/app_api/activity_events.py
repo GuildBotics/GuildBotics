@@ -43,7 +43,7 @@ def classify_event(
             return "pr_create"
         if action == "closed" or "closed" in normalized_type:
             return "pr_closed"
-    if issue is not None or github_kind == "issue" or "issue" in normalized_type:
+    if issue is not None or github_kind == "ticket" or "issue" in normalized_type:
         if action in {"opened", "created"} or "create" in normalized_type:
             return "issue_create"
         if action in {"closed", "resolved"} or "resolve" in normalized_type:
@@ -56,7 +56,7 @@ def event_label(
     attributes: dict[str, Any],
     classification: ActivityEventType,
 ) -> str:
-    number = github_number(payload, attributes)
+    label = target_label(payload, attributes)
     if classification == "sync_rejected":
         paths = rejected_paths(payload)
         return (
@@ -73,8 +73,8 @@ def event_label(
         "pr_create": "PR",
         "pr_merge": "PR",
         "pr_closed": "PR",
-        "issue_create": "Issue",
-        "issue_resolve": "Issue",
+        "issue_create": "Ticket",
+        "issue_resolve": "Ticket",
         "external": "Event",
     }[classification]
     suffix = {
@@ -85,9 +85,7 @@ def event_label(
         "issue_resolve": "Resolved",
         "external": "",
     }[classification]
-    if number:
-        return f"{prefix} #{number} {suffix}".strip()
-    return f"{prefix} {suffix}".strip()
+    return " ".join(part for part in (prefix, label, suffix) if part)
 
 
 def rejected_paths(payload: dict[str, Any]) -> list[str]:
@@ -105,7 +103,6 @@ def event_detail(
         _dict_value(payload.get("issue"), "title"),
         payload.get("ref"),
         item.get("message"),
-        attributes.get("github.repo"),
     ):
         if value:
             return str(value)
@@ -119,8 +116,8 @@ def event_url(
 ) -> str:
     for value in (
         attributes.get("github.url"),
-        _dict_value(payload.get("pull_request"), "html_url"),
-        _dict_value(payload.get("issue"), "html_url"),
+        _dict_value(payload.get("pull_request"), "url"),
+        _dict_value(payload.get("issue"), "url"),
         payload.get("html_url"),
         payload.get("compare"),
     ):
@@ -129,12 +126,12 @@ def event_url(
     return fallback_url
 
 
-def github_number(payload: dict[str, Any], attributes: dict[str, Any]) -> str:
+def target_label(payload: dict[str, Any], attributes: dict[str, Any]) -> str:
+    """The label the work target's service shows it by."""
     for value in (
-        attributes.get("github.number"),
-        payload.get("number"),
-        _dict_value(payload.get("pull_request"), "number"),
-        _dict_value(payload.get("issue"), "number"),
+        attributes.get("github.label"),
+        _dict_value(payload.get("pull_request"), "label"),
+        _dict_value(payload.get("issue"), "label"),
     ):
         if value:
             return str(value)
@@ -147,12 +144,12 @@ def github_attrs_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     issue = payload.get("issue")
     if isinstance(pull_request, dict):
         attrs["github.kind"] = "pull_request"
-        attrs["github.number"] = pull_request.get("number")
-        attrs["github.url"] = pull_request.get("html_url")
+        attrs["github.label"] = pull_request.get("label")
+        attrs["github.url"] = pull_request.get("url")
     elif isinstance(issue, dict):
-        attrs["github.kind"] = "issue"
-        attrs["github.number"] = issue.get("number")
-        attrs["github.url"] = issue.get("html_url")
+        attrs["github.kind"] = "ticket"
+        attrs["github.label"] = issue.get("label")
+        attrs["github.url"] = issue.get("url")
     return {key: value for key, value in attrs.items() if value}
 
 

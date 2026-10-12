@@ -1,7 +1,7 @@
 """Decision tests for the pull request patrol.
 
 Each case is one snapshot of a PR and the answer to "what does it ask of
-me?". Fetching is not involved; see the ticket manager tests for that.
+me?". Fetching is not involved; see the code host tests for that.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
     FEEDBACK,
@@ -27,6 +26,7 @@ from guildbotics.integrations.github.pull_request_patrol import (
 from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
 )
+from guildbotics.runtime.port import WorkflowStatus
 
 ME = "aiko-gh"
 
@@ -113,11 +113,11 @@ def _thread(
     }
 
 
-def _notice(reason: str, **payload: str) -> str:
+def _notice(reason: str, **fields: str) -> str:
     return render_workflow_status_comment(
-        body="notice",
-        payload=workflow_status_fields(
-            reason=reason, person_id="aiko", run_id="r", **payload
+        "notice",
+        WorkflowStatus.model_validate(
+            {"reason": reason, "person_id": "aiko", "run_id": "r", **fields}
         ),
     )
 

@@ -18,11 +18,12 @@ import pytest
 import pytest_asyncio
 
 from guildbotics.integrations.factory import PROVIDERS, ServiceIntegrationFactory
-from guildbotics.runtime.chat_service import (
-    ChatEvent,
-    ChatService,
-    ChatServiceError,
-    ChatThreadNotFoundError,
+from guildbotics.runtime.chat_service import ChatEvent, ChatService
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
 )
 from tests.guildbotics.integrations.contracts.chat_providers import (
     CHANNEL_NAME,
@@ -39,7 +40,9 @@ _OPERATIONS = sorted(
 )
 
 
-@pytest_asyncio.fixture(params=sorted(name for name, p in PROVIDERS.items() if p.chat))
+@pytest_asyncio.fixture(
+    params=sorted(name for name, p in PROVIDERS.items() if p.chat_service)
+)
 async def chat(request, monkeypatch):
     provided = chat_harness(request.param, monkeypatch)
     yield provided
@@ -113,14 +116,36 @@ async def test_a_reaction_is_kept_once(chat: ChatHarness):
     await chat.service.add_reaction(chat.channel_id, message_id, "ack")
 
     assert len(chat.reactions(message_id)) == 1
-    with pytest.raises(ChatServiceError):
+    with pytest.raises(ServiceUnsupported):
         await chat.service.add_reaction(chat.channel_id, message_id, "thumbsup")
     assert identity.user_id
 
 
 @pytest.mark.asyncio
+async def test_a_status_a_message_carries_reads_back_and_is_no_work(
+    chat: ChatHarness,
+):
+    root = chat.write("question")
+    status = WorkflowStatus(
+        reason="rate_limited",
+        person_id="aiko",
+        run_id="run-1",
+        subject=f"{chat.channel_id}:{root}",
+        retry_after_at="2026-07-10T01:00:00+00:00",
+    )
+
+    notice = await chat.service.post_message(
+        chat.channel_id, "I will retry later.", thread_id=root, status=status
+    )
+    thread = await chat.service.list_thread_events(chat.channel_id, thread_id=root)
+
+    statuses = {event.message_id: event.status for event in thread.events}
+    assert statuses == {root: None, notice.message_id: status}
+
+
+@pytest.mark.asyncio
 async def test_a_missing_thread_is_not_found(chat: ChatHarness):
-    with pytest.raises(ChatThreadNotFoundError):
+    with pytest.raises(ServiceNotFound):
         await chat.service.list_thread_events(
             chat.channel_id, thread_id="1728999999.999999"
         )
@@ -139,7 +164,7 @@ def test_a_message_url_names_its_message_and_thread(chat: ChatHarness):
         root,
     )
     assert (of_reply.message_id, of_reply.thread_id) == (reply, root)
-    with pytest.raises(ChatServiceError):
+    with pytest.raises(ServiceNotFound):
         chat.service.parse_message_url("https://example.com/not/a/message")
 
 
@@ -181,7 +206,7 @@ async def test_a_chat_that_fails_underneath_answers_with_the_ports_error(
 ):
     """Whatever fails under a provider -- the network, the HTTP answer, its
     decoding, its shape, a file -- reaches its user as the port's
-    ``ChatServiceError``, so no user needs to know a provider's libraries to
+    ``ServiceError``, so no user needs to know a provider's libraries to
     handle it. What cannot be read is never an empty answer or a thread that
     is not there: a user would take either as the truth and act on it."""
     root = chat.write("question")
@@ -198,9 +223,9 @@ async def test_a_chat_that_fails_underneath_answers_with_the_ports_error(
     for failure, (fail, affected) in chat.failures.items():
         fail()
         for name in affected:
-            with pytest.raises(ChatServiceError) as caught:
+            with pytest.raises(ServiceError) as caught:
                 await operation[name]()
-            assert not isinstance(caught.value, ChatThreadNotFoundError), (
+            assert not isinstance(caught.value, ServiceNotFound), (
                 failure,
                 name,
             )

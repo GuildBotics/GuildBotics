@@ -350,28 +350,28 @@ async def main(context, repo):
     return [alert.package for alert in page.items]
 ```
 
-member CLI は `guildbotics member repo-info read --person alice --resource dependency_alerts --repo org/repo --params '{"state":"open","page_size":10}'` です。共通形式の `items` と `continuation` を返します。個別取得は `--identifier 42` を指定し、条件と continuation は渡しません。
+member CLI は `guildbotics member repo-info read --person alice --resource dependency_alerts --subject org/repo --params '{"state":"open","page_size":10}'` です。共通形式の `items` と `continuation` を返します。個別取得は `--params '{"id":"42"}'` を指定し、ほかの条件と continuation は渡しません。依存の脆弱性アラートを持たないコードホストは、0 件と答えずに未対応として拒否します。
 
-Issue・PR・CI は、LLM を使わない同梱コマンドで確認できます。
+チケット・PR・CI は、LLM を使わない同梱コマンドで確認できます。チケットと PR は URL で指定します。
 
 ```shell
-# Issue の本文・ラベル・担当者・コメント・Project・関連 PR
-guildbotics run repository/issue_inspect --person alice repo=org/repo number=42
+# チケットの本文・ラベル・担当者・コメント・ボードのレーン・参照している PR
+guildbotics run repository/issue_inspect --person alice url=https://github.com/org/repo/issues/42
 # PR の情報・レビューの判定と会話・コメント可能な差分座標
-guildbotics run repository/pr_inspect --person alice repo=org/repo number=43 include_comments=true include_diff=true
-# host が確認した完了可否と、失敗した Actions のログ末尾
-guildbotics run repository/pr_checks --person alice repo=org/repo number=43 failed_logs=true log_tail_bytes=65536
+guildbotics run repository/pr_inspect --person alice url=https://github.com/org/repo/pull/43 include_comments=true include_diff=true
+# host が確認した完了可否と、失敗した CI のログ末尾
+guildbotics run repository/pr_checks --person alice url=https://github.com/org/repo/pull/43 failed_logs=true log_tail_bytes=65536
 ```
 
-結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`python -m guildbotics.guest.entry repository/pr_inspect repo=org/repo number=43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", repo="org/repo", number="43")` でも呼べます。
+結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`python -m guildbotics.guest.entry repository/pr_inspect url=https://github.com/org/repo/pull/43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", url="https://github.com/org/repo/pull/43")` でも呼べます。
 
-各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。Project のフィールドは 1 項目 100 件までで、超過もエラーです。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member ticket read` または `member pr read` でページごとに確認してください。
+各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member ticket read` または `member pr read` でページごとに確認してください。
 
-`member ticket read` は Issue の `issues`、`issue_comments`、`issue_timeline`、`issue_projects` を、`member pr read` は PR の `pull_requests`、`pull_request_comments`（会話コメント）、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`、`review_thread_comments`、`pull_request_readiness` を読みます。いずれも `identifier` に Issue または PR の番号を指定します。一覧は `page_size`（1〜100、既定 30）を受け取り、`review_thread_comments` は取得済みスレッドの `node` も必要です。個別の Issue・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536、既定 65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host がコードのホストを再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
+`member ticket read` はチケットの `tickets`（チケット自身。`key`・`tracker`・`repository`・`lane` を持つ）、`ticket_comments`、`ticket_pull_requests`（そのチケットを参照する、コードホストの PR）を、`member pr read` は PR の `pull_requests`、`pull_request_comments`（会話コメント）、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`、`review_thread_comments`、`pull_request_readiness` を読みます。いずれも `--subject` にチケットまたは PR の URL を指定します。コメント・レビュー・スレッドは、項目の URL と組で意味を持つ不透明な文字列の ID で指します。一覧は `page_size`（1〜100、既定 30）を受け取り、`review_thread_comments` は取得済みスレッドの `node` も必要です。個別のチケット・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536、既定 65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host がコードのホストを再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
 
 readiness は host サービス自身の通信を使うため、内部の compare 応答には参照ページ用の受信上限を適用しません。返すページの上限は維持し、JSON のエスケープと付帯情報を除いた残りを失敗ログで分け合います。短くしたログは `truncated=true` と `tail_limit_bytes` で分かります。GitHub の権限エラーは必要な権限名を示し、HTTP が成功でも GraphQL の権限不足・レート制限はエラーとして案内します。
 
-共通のサービスは `runtime/code_hosting_service.py` に、リソースの一覧と各リソースの項目の形は `runtime/code_hosting_resources.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
+共通のサービスは `runtime/code_hosting_service.py` と `runtime/ticket_service.py` に、リソースの一覧と各リソースの項目の形は `runtime/resources.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います（コマンドの環境ではチケットを読めますが、書き込みとボードの操作はできません）。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
 
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。
@@ -776,18 +776,18 @@ async def main(context: Context):
 
 ```python
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.chat_service import ChatServiceError
+from guildbotics.runtime.port import ServiceError
 
 
 async def main(context, channel_id):
     chat = context.get_chat_service()
     try:
         await chat.post_message(channel_id, "Report is ready.")
-    except ChatServiceError as exc:
+    except ServiceError as exc:
         raise CommandError(str(exc)) from exc
 ```
 
-`context.get_chat_service()` で得たサービスの `post_message` などの呼び出しが `ChatServiceError` を投げます。これを `CommandError` に変換すると、Desktop には理由が、CLI には `Error: <理由>` が表示されます。ほかの想定内の失敗でも、利用者に見せてよい本文で `CommandError` を投げてください。
+コマンドが使うサービス（チャット・コードホスト・チケット）は、想定内の失敗を `ServiceError` で報告します（対象が無いときは `ServiceNotFound`、サービスがその操作をそもそもできないときは `ServiceUnsupported`）。これを `CommandError` に変換すると、Desktop には理由が、CLI には `Error: <理由>` が表示されます。ほかの想定内の失敗でも、利用者に見せてよい本文で `CommandError` を投げてください。
 
 API キーを使う推論の失敗は、例外名と取得できた「報告されたステータス」を表示し、プロバイダのエラー本文は表示しません。ステータスは HTTP 応答が無くても SDK の既定値の場合があります（例えば Agno の既定値は502です）。窓口の時間切れや結果サイズ超過は、それぞれの理由をそのまま表示します。同梱の `examples/reports/tools/fetch_ai_news` は通信に失敗すると、`intelligences/agent_environment.yml` で `news.google.com` への通信許可を確認するよう案内します。
 

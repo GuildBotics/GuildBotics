@@ -13,27 +13,41 @@ from guildbotics.app_api.models import ActivityHistoryLink
 def test_github_link_kind_comes_from_provider_attributes_not_url_path() -> None:
     links = links_from_attributes(
         {
-            "github.kind": "issue",
-            "github.number": "8",
+            "github.kind": "ticket",
+            "github.label": "#8",
             "github.url": "https://github.com/owner/repo/pull/8",
         }
     )
 
     assert [(link.kind, link.label, link.url) for link in links] == [
-        ("issue", "Issue #8", "https://github.com/owner/repo/pull/8")
+        ("issue", "Ticket #8", "https://github.com/owner/repo/pull/8")
     ]
 
 
-def test_unknown_github_link_kind_is_external() -> None:
+def test_link_label_is_the_label_the_service_shows() -> None:
+    # A local ticket's label is not GitHub's "#n"; the link shows it as is.
     links = links_from_attributes(
         {
-            "github.number": "8",
-            "github.url": "https://github.com/owner/repo/pull/8",
+            "github.kind": "ticket",
+            "github.label": "T-1",
+            "github.url": "local://tickets/acme/team/demo/T-1",
         }
     )
 
+    assert [(link.kind, link.label) for link in links] == [("issue", "Ticket T-1")]
+
+
+def test_unknown_github_link_kind_is_external_and_named_by_its_url() -> None:
+    links = links_from_attributes(
+        {"github.url": "https://github.com/owner/repo/pull/8"}
+    )
+
     assert [(link.kind, link.label, link.url) for link in links] == [
-        ("external", "GitHub #8", "https://github.com/owner/repo/pull/8")
+        (
+            "external",
+            "https://github.com/owner/repo/pull/8",
+            "https://github.com/owner/repo/pull/8",
+        )
     ]
 
 
@@ -77,11 +91,11 @@ def test_inspected_github_work_target_yields_no_links() -> None:
     # Reading a PR / issue declares the trace's work target for diagnostics
     # but is not the session's work, like a memory read.
     links = links_from_record(
-        {"pull_request": {"number": 544, "title": "Show the target"}},
+        {"pull_request": {"label": "#544", "title": "Show the target"}},
         {
             "github.action": "inspected",
             "github.kind": "pull_request",
-            "github.number": "544",
+            "github.label": "#544",
             "github.url": "https://github.com/o/r/pull/544",
         },
     )
@@ -91,10 +105,10 @@ def test_inspected_github_work_target_yields_no_links() -> None:
 
 def test_worked_github_target_yields_its_link() -> None:
     links = links_from_record(
-        {"pull_request": {"number": 544, "title": "Show the target"}},
+        {"pull_request": {"label": "#544", "title": "Show the target"}},
         {
             "github.kind": "pull_request",
-            "github.number": "544",
+            "github.label": "#544",
             "github.url": "https://github.com/o/r/pull/544",
         },
     )

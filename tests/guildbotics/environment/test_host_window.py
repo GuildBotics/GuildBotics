@@ -84,10 +84,10 @@ from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import (
     diagnostics_events,
 )
-from guildbotics.runtime.chat_service import ChatPostResult, ChatServiceError
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.runtime.chat_service import ChatPostResult
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.correlation import (
     SpanContext,
     trace_scope,
@@ -1282,7 +1282,7 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
         ) as command:
             service = WindowChatService(command.client, "aiko")
             general = await service.resolve_channel_id("general")
-            with pytest.raises(ChatServiceError) as refused:
+            with pytest.raises(ServiceError) as refused:
                 await service.post_message(chat, "Good morning!")
     finally:
         lease.release()
@@ -1300,7 +1300,7 @@ async def test_read_only_repository_read_uses_the_member_grant(
     from guildbotics.integrations.factory import (
         ServiceIntegrationFactory,
     )
-    from guildbotics.integrations.github import pull_requests as provider
+    from guildbotics.integrations.github import async_client, github_utils
 
     context, person = member_cli.resolve_member_context("aiko")
     context.team.project.services["code_hosting_service"] = {"name": "github"}
@@ -1316,13 +1316,19 @@ async def test_read_only_repository_read_uses_the_member_grant(
         requests.append(request)
         return httpx.Response(200, json=[{"number": 42, "state": "open"}])
 
-    # Let the service own/close the mocked client, just as in production.
-    async def get_client(*_args, **_kwargs):
-        return httpx.AsyncClient(
-            base_url="https://api.github.com", transport=httpx.MockTransport(respond)
+    # Let the service own/close the member's client, with only its transport
+    # replaced, just as in production.
+    async def get_client(_person, base_url, owner):
+        client = async_client.get_async_client(
+            base_url, github_utils.GitHubTokenAuth("token"), owner
         )
+        client._transport = httpx.MockTransport(respond)
+        client._mounts = {}
+        return client
 
-    monkeypatch.setattr(provider, "create_github_client", get_client)
+    monkeypatch.setattr(
+        "guildbotics.integrations.github.api.create_github_client", get_client
+    )
     lease = PersonExecutionLease("aiko")
     lease.acquire(source="manual", command="test", work_id="work")
     try:
@@ -1334,24 +1340,26 @@ async def test_read_only_repository_read_uses_the_member_grant(
             )
             # The member command's own refusal is a read failure the command
             # reports; the grant's refusal of another person is not.
-            for person, resource, refusal in [
-                ("other", "dependency_alerts", MemberCommandError),
-                ("aiko", "secrets", RepositoryReadError),
+            for person, parameters, refusal in [
+                ("other", {}, MemberCommandError),
+                ("aiko", {"bogus": 1}, ServiceError),
             ]:
                 with pytest.raises(refusal):
                     await WindowCodeHostingService(command.client, person).read(
-                        resource, "GuildBotics/GuildBotics"
+                        "dependency_alerts",
+                        "GuildBotics/GuildBotics",
+                        parameters=parameters,
                     )
             refused = await command.client.acall(
                 "member",
                 arguments=[
-                    "repository",
+                    "repo-info",
                     "read",
                     "--person",
                     "aiko",
                     "--resource",
                     "dependency_alerts",
-                    "--repo",
+                    "--subject",
                     "GuildBotics/GuildBotics",
                     "--method",
                     "PATCH",

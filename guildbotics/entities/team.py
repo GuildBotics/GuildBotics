@@ -21,7 +21,7 @@ class Service(Enum):
     Enum representing different services used in the project.
     """
 
-    TICKET_MANAGER = "ticket_manager"
+    TICKET_SERVICE = "ticket_service"
     CODE_HOSTING_SERVICE = "code_hosting_service"
     CHAT_SERVICE = "chat_service"
 

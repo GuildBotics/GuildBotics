@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from guildbotics.observability.trace_title import (
-    github_reference_label,
     is_read_only_record,
     resolve_trace_title,
+    target_reference_label,
 )
 from guildbotics.utils.i18n_tool import set_language, t
 
@@ -27,7 +27,7 @@ def _title(
 def test_target_title_wins_over_everything_else() -> None:
     title = _title(
         [{"payload": {"title": "PR #544 の作業記録"}}],
-        {"github.title": ISSUE_TITLE, "github.kind": "issue", "github.number": "544"},
+        {"github.title": ISSUE_TITLE, "github.kind": "ticket", "github.label": "#544"},
         command="workflows/ticket_driven_workflow",
         completion_summary=lambda _attributes, _person_id: "Issue #544 を修正\n詳細",
     )
@@ -72,8 +72,11 @@ def test_completion_summary_is_looked_up_only_when_no_target_names_the_trace() -
 
 
 def test_target_reference_is_used_when_the_title_is_unknown() -> None:
-    assert _title(attributes={"github.kind": "pull_request", "github.number": "7"}) == (
+    assert _title(attributes={"github.kind": "pull_request", "github.label": "#7"}) == (
         "PR #7"
+    )
+    assert _title(attributes={"github.kind": "ticket", "github.label": "T-1"}) == (
+        "Ticket T-1"
     )
 
 
@@ -111,8 +114,11 @@ def test_inspected_github_target_is_read_only() -> None:
     assert is_read_only_record({"attributes": {"memory.action": "touch"}})
 
 
-def test_github_reference_label_names_pull_requests_and_issues() -> None:
-    assert github_reference_label("pull_request", "7") == "PR #7"
-    assert github_reference_label("issue", "42") == "Issue #42"
-    assert github_reference_label("", "9") == "GitHub #9"
-    assert github_reference_label("issue", "") == ""
+def test_target_reference_label_prefixes_the_label_the_service_shows() -> None:
+    # The label is the provider's own short reference; only the kind word is
+    # added, so a local ticket and a GitHub PR read the same way.
+    assert target_reference_label("pull_request", "#7") == "PR #7"
+    assert target_reference_label("pull_request", "!3") == "PR !3"
+    assert target_reference_label("ticket", "#42") == "Ticket #42"
+    assert target_reference_label("ticket", "T-1") == "Ticket T-1"
+    assert target_reference_label("ticket", "") == ""

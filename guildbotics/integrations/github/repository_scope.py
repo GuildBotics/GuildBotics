@@ -152,8 +152,8 @@ async def check_request(
         client: The client sending it, which reads where a node it writes lives.
 
     Raises:
-        RepositoryScopeError: If the request goes to another host or writes
-            outside the configured owner.
+        ServiceError: If the request goes to another host or writes outside
+            the configured owner.
     """
     if (request.url.scheme, request.url.netloc) != (base_url.scheme, base_url.netloc):
         refuse(scope, f"{request.method} {request.url.scheme}://{request.url.host}")
@@ -172,7 +172,7 @@ async def check_request(
         permitted = (
             len(segments) >= _REPOSITORY_PATH_MIN_SEGMENTS
             and segments[:2] == ["", "repos"]
-            and in_scope(scope, segments[2], segments[3])
+            and in_scope(scope, f"{segments[2]}/{segments[3]}")
         )
     if not permitted:
         refuse(scope, f"{request.method} {path}")
@@ -206,5 +206,5 @@ async def _node_in_scope(scope: str, node: str, client: httpx.AsyncClient) -> bo
     return (
         isinstance(owner, str)
         and isinstance(name, str)
-        and in_scope(scope, owner, name)
+        and in_scope(scope, f"{owner}/{name}")
     )

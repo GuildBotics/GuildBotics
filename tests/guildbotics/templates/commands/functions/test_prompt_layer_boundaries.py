@@ -351,13 +351,13 @@ def test_skill_excludes_workflow_run_contract():
     assert "--workspace-mode member" not in body
 
 
-def test_chat_prompt_supports_code_work_without_an_issue():
+def test_chat_prompt_supports_code_work_without_a_ticket():
     english = _prompt_body("handle_chat_event", "en")
     japanese = _prompt_body("handle_chat_event", "ja")
     for body in (english, japanese):
-        assert "--repo <owner/repo> --branch <branch>" in body
-    assert "no issue has to be created first" in english
-    assert "issue を先に作る必要はありません" in japanese
+        assert "--repo <repository> --branch <branch>" in body
+    assert "no ticket has to be created first" in english
+    assert "チケットを先に作る必要はありません" in japanese
 
 
 def test_ticket_prompt_requires_issue_comment_on_pr_work():

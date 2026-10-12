@@ -1,7 +1,7 @@
 """Unit tests for `guildbotics.runtime.context.Context`.
 
 This suite verifies:
-- `get_ticket_manager` caching behavior.
+- `get_ticket_service` caching behavior.
 - `clone_for` independence for person and cache.
 - `get_brain` delegates to the provided `BrainFactory` with language code.
 - every context, a clone included, reads the team anew.
@@ -19,34 +19,42 @@ from guildbotics.runtime.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
 from guildbotics.runtime.chat_service import ChatIdentity
 from guildbotics.runtime.integration_factory import IntegrationFactory
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.import_utils import ClassResolver
 from tests.guildbotics.runtime.configured_team import CONFIGURED_TEAM, make_context
 
 # ---- Test doubles ---------------------------------------------------------------------------
 
 
-class DummyTicketManager(TicketManager):
-    """Concrete TicketManager test double with no-op async methods."""
+class DummyTicketService(TicketService):
+    """Concrete TicketService test double with no-op async methods."""
 
-    async def get_task_candidates(self) -> list[Task]:
-        """Return no candidate tasks."""
+    async def read(self, resource, subject, *, parameters=None, continuation=""):
+        raise NotImplementedError
+
+    async def comment(self, url, body, *, status=None):
+        raise NotImplementedError
+
+    async def create_ticket(self, tracker, title, body, labels):
+        raise NotImplementedError
+
+    async def update_ticket(self, url, **_changes):
+        raise NotImplementedError
+
+    async def add_reaction(self, url, target_id, reaction):
+        raise NotImplementedError
+
+    async def candidates(self) -> list:
         return []
 
-    async def refresh_task(self, task: Task) -> Task | None:
-        """Return no refreshed task."""
+    async def refresh(self, task):
         return None
 
-    async def move_ticket(self, task: Task, new_status: str) -> bool:
-        """No-op move ticket."""
+    async def move(self, task, lane) -> bool:
         return False
 
-    async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
-        """No-op get URL."""
-        return ""
-
-    async def add_ticket(self, issue_url: str) -> str | None:
-        return None
+    async def add(self, ticket_url: str) -> bool:
+        return False
 
     async def closed_since(self, start, end) -> list:
         return []
@@ -56,21 +64,21 @@ class DummyTicketManager(TicketManager):
 
 
 class DummyIntegrationFactory(IntegrationFactory):
-    """IntegrationFactory stub capturing calls and returning DummyTicketManager."""
+    """IntegrationFactory stub capturing calls and returning DummyTicketService."""
 
     def __init__(self):
-        self.ticket_manager_calls: list[tuple[Person, Team]] = []
+        self.ticket_service_calls: list[tuple[Person, Team]] = []
         self.chat_service_calls: list[tuple[Person, Team]] = []
 
     def create_code_hosting_service(self, logger, person, team):
         return self.create_chat_service(logger, person, team)
 
-    def create_ticket_manager(
+    def create_ticket_service(
         self, logger: logging.Logger, person: Person, team: Team
-    ) -> TicketManager:
-        """Return a new DummyTicketManager and record the call."""
-        self.ticket_manager_calls.append((person, team))
-        return DummyTicketManager(logger, person, team)
+    ) -> TicketService:
+        """Return a new DummyTicketService and record the call."""
+        self.ticket_service_calls.append((person, team))
+        return DummyTicketService(logger, person, team)
 
     def create_chat_service(self, logger: logging.Logger, person: Person, team: Team):
         """Record the call and return a minimal chat service stub."""
@@ -132,8 +140,8 @@ def _make_team(language: str = "en") -> Team:
 pytestmark = pytest.mark.usefixtures("configured_team")
 
 
-def test_get_ticket_manager_is_cached(monkeypatch):
-    """Context.get_ticket_manager returns a cached instance and uses factory once."""
+def test_get_ticket_service_is_cached(monkeypatch):
+    """Context.get_ticket_service returns a cached instance and uses factory once."""
     team = _make_team(language="en")
     integration_factory = DummyIntegrationFactory()
     brain_factory = DummyBrainFactory()
@@ -144,11 +152,11 @@ def test_get_ticket_manager_is_cached(monkeypatch):
         team, integration_factory, brain_factory, "Initial message", person
     )
 
-    tm1 = ctx.get_ticket_manager()
-    tm2 = ctx.get_ticket_manager()
+    tm1 = ctx.get_ticket_service()
+    tm2 = ctx.get_ticket_service()
 
-    assert tm1 is tm2, "TicketManager should be cached per Context instance"
-    assert len(integration_factory.ticket_manager_calls) == 1, "Factory called once"
+    assert tm1 is tm2, "TicketService should be cached per Context instance"
+    assert len(integration_factory.ticket_service_calls) == 1, "Factory called once"
 
 
 def test_clone_for_independence_person_and_cache():
@@ -165,15 +173,15 @@ def test_clone_for_independence_person_and_cache():
     )
 
     # Prime cache in original context to ensure clone has its own cache
-    _ = ctx1.get_ticket_manager()
+    _ = ctx1.get_ticket_service()
 
     ctx2 = ctx1.clone_for(person2)
 
     assert ctx2 is not ctx1
     assert ctx2.person is person2
     assert ctx1.person is person1
-    # Cached ticket manager must not be carried over
-    assert ctx2.ticket_manager is None
+    # Cached ticket service must not be carried over
+    assert ctx2.ticket_service is None
     # Message is copied
     assert ctx2.pipe == "Initial message"
 
@@ -251,12 +259,12 @@ def test_every_context_reads_the_team_anew():
 async def test_closing_the_context_closes_the_board_it_made():
     closed: list[str] = []
 
-    class _Board(DummyTicketManager):
+    class _Board(DummyTicketService):
         async def aclose(self) -> None:
             closed.append("board")
 
     class _Factory(DummyIntegrationFactory):
-        def create_ticket_manager(self, logger, person, team):
+        def create_ticket_service(self, logger, person, team):
             return _Board(logger, person, team)
 
     context = make_context(
@@ -266,9 +274,9 @@ async def test_closing_the_context_closes_the_board_it_made():
         "",
         Person(person_id="p1", name="Tester"),
     )
-    first = context.get_ticket_manager()
+    first = context.get_ticket_service()
 
     await context.aclose()
 
     assert closed == ["board"]
-    assert context.get_ticket_manager() is not first
+    assert context.get_ticket_service() is not first

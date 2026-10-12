@@ -3,8 +3,8 @@
 
 A channel ``<channel_id>`` is the file ``<channel_id>.jsonl``, one JSON object
 per line, appended and never rewritten: a message (``message_id``,
-``thread_id``, ``occurred_at``, ``author``, ``text``, and ``bot`` and
-``metadata`` when they apply) or a reaction to one (``reaction``,
+``thread_id``, ``occurred_at``, ``author``, ``text``, and ``bot`` and the
+workflow ``status`` it carries when they apply) or a reaction to one (``reaction``,
 ``message_id``, ``author``). Reading a channel folds its reactions into the
 messages they react to. A thread is named by its first message, so a message
 that starts one has its own id as ``thread_id``.
@@ -32,21 +32,23 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
 from guildbotics.integrations.event_listener import EventListener
 from guildbotics.runtime.chat_service import (
-    SEMANTIC_REACTIONS,
     ChatEvent,
     ChatEventPage,
     ChatIdentity,
     ChatMessageRef,
     ChatPostResult,
     ChatService,
-    ChatServiceError,
-    ChatThreadNotFoundError,
     CredentialCheck,
+)
+from guildbotics.runtime.port import (
+    SEMANTIC_REACTIONS,
+    SemanticReaction,
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
 )
 from guildbotics.utils.fileio import get_workspace_local_path
 
@@ -63,10 +65,10 @@ def root() -> Path:
 
 def channel_path(channel_id: str) -> Path:
     """Raises:
-    ChatServiceError: If ``channel_id`` cannot name a channel.
+    ServiceNotFound: If ``channel_id`` cannot name a channel.
     """
     if not _CHANNEL.fullmatch(channel_id) or channel_id in {".", ".."}:
-        raise ChatServiceError(f"Unsupported local chat channel: {channel_id}")
+        raise ServiceNotFound(f"Unsupported local chat channel: {channel_id}")
     return root() / f"{channel_id}.jsonl"
 
 
@@ -74,7 +76,7 @@ def append(channel_id: str, line: dict[str, Any]) -> None:
     """Add one line to the channel, creating it.
 
     Raises:
-        ChatServiceError: If the channel cannot be written.
+        ServiceError: If the channel cannot be written.
     """
     path = channel_path(channel_id)
     try:
@@ -82,7 +84,7 @@ def append(channel_id: str, line: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(line, ensure_ascii=False) + "\n")
     except OSError as exc:
-        raise ChatServiceError(f"Local chat channel cannot be written: {exc}") from exc
+        raise ServiceError(f"Local chat channel cannot be written: {exc}") from exc
 
 
 def message_url(channel_id: str, message_id: str, thread_id: str = "") -> str:
@@ -109,7 +111,7 @@ def _event(channel_id: str, line: dict[str, Any]) -> ChatEvent:
         mentions=mentions(text),
         is_bot_message=bool(line.get("bot", False)),
         is_thread_reply=thread_id != message_id,
-        metadata=normalize_workflow_status_metadata(line.get("metadata")),
+        status=WorkflowStatus.from_payload(line.get("status")),
     )
 
 
@@ -137,7 +139,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
     channel nothing was written to yet.
 
     Raises:
-        ChatServiceError: If the file cannot be read: a channel that cannot be
+        ServiceError: If the file cannot be read: a channel that cannot be
             read is not an empty one.
     """
     try:
@@ -145,7 +147,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
     except FileNotFoundError:
         return []
     except OSError as exc:
-        raise ChatServiceError(f"Local chat channel cannot be read: {exc}") from exc
+        raise ServiceError(f"Local chat channel cannot be read: {exc}") from exc
     return [
         record for line in raw.splitlines() if (record := _record(line)) is not None
     ]
@@ -168,10 +170,10 @@ def _messages(channel_id: str) -> list[dict[str, Any]]:
 
 def _page(events: list[ChatEvent], cursor: str | None, limit: int) -> ChatEventPage:
     """Raises:
-    ChatServiceError: If ``cursor`` is not one a page gave.
+    ServiceError: If ``cursor`` is not one a page gave.
     """
     if not (cursor or "0").isdecimal():
-        raise ChatServiceError(f"Invalid local chat cursor: {cursor}")
+        raise ServiceError(f"Invalid local chat cursor: {cursor}")
     start = int(cursor or 0)
     end = start + limit
     return ChatEventPage(
@@ -202,7 +204,7 @@ class LocalChatService(ChatService):
         parsed = urlparse(url)
         channel_id, _, message_id = parsed.path.strip("/").partition("/")
         if parsed.scheme != _SCHEME or parsed.netloc != "chat" or not message_id:
-            raise ChatServiceError(f"Unsupported local chat URL: {url}")
+            raise ServiceNotFound(f"Unsupported local chat URL: {url}")
         channel_path(channel_id)
         thread = parse_qs(parsed.query).get("thread", [message_id])[0]
         return ChatMessageRef(
@@ -244,7 +246,7 @@ class LocalChatService(ChatService):
             if str(m.get("thread_id") or m["message_id"]) == thread_id
         ]
         if not any(event.message_id == thread_id for event in events):
-            raise ChatThreadNotFoundError(
+            raise ServiceNotFound(
                 f"Local chat thread was not found: {channel_id}/{thread_id}"
             )
         return _page(events, cursor, limit)
@@ -253,7 +255,7 @@ class LocalChatService(ChatService):
         name = channel_name.strip().lstrip("#")
         try:
             return name if channel_path(name).exists() else None
-        except ChatServiceError:
+        except ServiceNotFound:
             return None
 
     async def post_message(
@@ -262,7 +264,7 @@ class LocalChatService(ChatService):
         text: str,
         *,
         thread_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        status: WorkflowStatus | None = None,
     ) -> ChatPostResult:
         message_id = uuid4().hex
         # A channel names each message by a time of its own, after all before
@@ -283,8 +285,8 @@ class LocalChatService(ChatService):
             "text": text,
             "bot": True,
         }
-        if metadata:
-            line["metadata"] = metadata
+        if status is not None:
+            line["status"] = status.payload()
         append(channel_id, line)
         return ChatPostResult(
             channel_id=channel_id,
@@ -294,15 +296,15 @@ class LocalChatService(ChatService):
         )
 
     async def add_reaction(
-        self, channel_id: str, message_id: str, reaction: str
+        self, channel_id: str, message_id: str, reaction: SemanticReaction
     ) -> None:
         if reaction not in SEMANTIC_REACTIONS:
-            raise ChatServiceError(f"Unsupported semantic reaction: {reaction}")
+            raise ServiceUnsupported(f"Unsupported semantic reaction: {reaction}")
         target = next(
             (m for m in _messages(channel_id) if m["message_id"] == message_id), None
         )
         if target is None:
-            raise ChatServiceError(
+            raise ServiceNotFound(
                 f"Local chat message was not found: {channel_id}/{message_id}"
             )
         mine = {"reaction": reaction, "author": self._person.person_id}

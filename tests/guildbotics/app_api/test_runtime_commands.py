@@ -99,7 +99,7 @@ def _make_context(
     # exactly as it does in production; only the context wrapper is a stub.
     services: dict = (
         {
-            "ticket_manager": {"name": "GitHub", "owner": "acme"},
+            "ticket_service": {"name": "GitHub", "owner": "acme"},
             "code_hosting_service": {"name": "GitHub", "owner": "acme"},
         }
         if github_enabled
@@ -527,7 +527,7 @@ def test_command_options_detect_github_and_slack_requirements(
         config_dir / "commands/integrations.py",
         "\n".join(
             [
-                "from guildbotics.runtime.ticket_manager import TicketManager",
+                "from guildbotics.runtime.ticket_service import TicketService",
                 "from guildbotics.runtime.chat_service import ChatService",
                 "",
                 "async def main(context):",
@@ -855,7 +855,7 @@ def test_routine_command_options_localize_builtin_python_metadata(
     assert ticket.label == "チケット駆動ワークフロー"
     assert (
         ticket.description
-        == "対応可能な issue または PR を1件取得し、AI CLIツールへ委譲します。"
+        == "対応可能なチケットまたは PR を1件取得し、AI CLIツールへ委譲します。"
     )
 
 
@@ -1900,7 +1900,7 @@ def test_run_command_rejects_missing_requirement(
         config_dir / "commands/needs_github.py",
         "\n".join(
             [
-                "from guildbotics.runtime.ticket_manager import TicketManager",
+                "from guildbotics.runtime.ticket_service import TicketService",
                 "",
                 "async def main(context):",
                 "    return ''",

@@ -1,11 +1,5 @@
-"""Workflow status comment for GitHub issue comments.
-
-Generates and parses hidden ``guildbotics-workflow-status-v1`` HTML comments
-embedded in GitHub issue comment bodies.  The ticket selection logic in
-:mod:`~guildbotics.integrations.github.github_ticket_manager` uses
-:func:`parse_workflow_status_comment` and
-:func:`suppresses_ticket_selection` to decide whether a ticket should
-be re-selected after a workflow error or rate limit.
+"""The workflow status a GitHub comment carries, as a hidden
+``guildbotics-workflow-status-v1`` HTML comment in its body.
 
 This module does **not** call the GitHub API; it only builds and parses
 markdown strings.
@@ -15,13 +9,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from guildbotics.integrations.chat_workflow_status import (
-    WORKFLOW_STATUS_KIND,
-    WORKFLOW_STATUS_ROUTING_SUPPRESS,
-)
+from guildbotics.runtime.port import WorkflowStatus
 
 WORKFLOW_STATUS_MARKER = "guildbotics-workflow-status-v1"
 
@@ -31,93 +20,20 @@ _COMMENT_PATTERN = re.compile(
 )
 
 
-@dataclass(frozen=True)
-class WorkflowStatusComment:
-    """Parsed workflow status extracted from a GitHub comment body."""
-
-    reason: str
-    routing: str
-    person_id: str
-    run_id: str
-    subject_id: str = ""
-    retry_after_at: str = ""
-    retry_after_text: str = ""
-
-
-def render_workflow_status_comment(*, body: str, payload: dict[str, object]) -> str:
-    """Render a human-readable comment with a hidden status marker."""
+def render_workflow_status_comment(body: str, status: WorkflowStatus) -> str:
+    """``body`` with the hidden marker of ``status`` before it."""
     json_line = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        status.payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return f"<!-- {WORKFLOW_STATUS_MARKER}\n{json_line}\n-->\n\n{body}"
 
 
-def parse_workflow_status_comment(body: str) -> WorkflowStatusComment | None:
-    """Extract a :class:`WorkflowStatusComment` from a comment body.
-
-    Returns ``None`` if the body does not contain a valid hidden status marker,
-    or if the JSON is malformed or has ``kind`` other than
-    :data:`WORKFLOW_STATUS_KIND`.
-    """
+def parse_workflow_status_comment(body: str) -> WorkflowStatus | None:
+    """The status a comment body carries; ``None`` when it carries none."""
     match = _COMMENT_PATTERN.search(body)
     if match is None:
         return None
     try:
-        data = json.loads(match.group(1).strip())
-    except (json.JSONDecodeError, ValueError):
+        return WorkflowStatus.from_payload(json.loads(match.group(1).strip()))
+    except ValueError:
         return None
-    if not isinstance(data, dict):
-        return None
-    if data.get("kind") != WORKFLOW_STATUS_KIND:
-        return None
-    reason = data.get("reason")
-    routing = data.get("routing")
-    person_id = data.get("person_id")
-    run_id = data.get("run_id")
-    if not isinstance(reason, str) or not isinstance(routing, str):
-        return None
-    return WorkflowStatusComment(
-        reason=reason,
-        routing=routing,
-        person_id=str(person_id) if person_id is not None else "",
-        run_id=str(run_id) if run_id is not None else "",
-        subject_id=str(data.get("subject_id", "")),
-        retry_after_at=str(data.get("retry_after_at", "")),
-        retry_after_text=str(data.get("retry_after_text", "")),
-    )
-
-
-def suppresses_ticket_selection(
-    status: WorkflowStatusComment,
-    *,
-    now: datetime | None = None,
-) -> bool:
-    """Decide whether *status* should prevent a ticket from being selected.
-
-    Rules:
-
-    * ``reason == "rate_limited"`` with a future or missing
-      ``retry_after_at`` → suppress.
-    * ``reason == "rate_limited"`` with a past ``retry_after_at`` → do
-      **not** suppress (rate limit has expired).
-    * ``reason == "failed"`` → suppress (until a human comments).
-    * Any other reason → do not suppress.
-    """
-    if status.routing != WORKFLOW_STATUS_ROUTING_SUPPRESS:
-        return False
-
-    if status.reason == "rate_limited":
-        if not status.retry_after_at:
-            return True
-        try:
-            retry_at = datetime.fromisoformat(status.retry_after_at)
-        except (ValueError, TypeError):
-            # Un-parseable → treat as unknown reset time → suppress.
-            return True
-        if retry_at.tzinfo is None:
-            # Offset-naive → treat as parse failure → suppress.
-            return True
-        current = now or datetime.now(UTC)
-        return retry_at > current
-
-    return status.reason == "failed"

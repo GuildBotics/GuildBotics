@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
-from guildbotics.integrations.github.async_client import raise_for_status_with_text
 from guildbotics.integrations.github.github_utils import (
     create_github_app_jwt,
     paginated_items,
@@ -154,3 +153,16 @@ def _api_client(transport: httpx.AsyncBaseTransport | None) -> httpx.AsyncClient
             "User-Agent": "GuildBotics/1.0",
         },
     )
+
+
+async def raise_for_status_with_text(response: httpx.Response) -> None:
+    """Raise for an error answer with what GitHub said, which the setup
+    screens show to the user creating the app."""
+    if response.is_error:
+        await response.aread()
+        raise httpx.HTTPStatusError(
+            f"HTTP {response.status_code} Error for {response.url}\n"
+            f"Response text: {response.text}",
+            request=response.request,
+            response=response,
+        )

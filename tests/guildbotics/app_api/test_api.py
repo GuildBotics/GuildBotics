@@ -699,7 +699,7 @@ def test_app_runtime_command_options_describe_workspace_commands(
     command_file.write_text(
         "\n".join(
             [
-                "from guildbotics.runtime.ticket_manager import TicketManager",
+                "from guildbotics.runtime.ticket_service import TicketService",
                 "",
                 "async def main(context, title, *, dry_run='False'):",
                 '    """Run a demo workflow."""',
@@ -1517,7 +1517,7 @@ def test_config_project_endpoints_read_and_update_non_destructively(
                 "repositories:",
                 "  - name: GuildBotics",
                 "services:",
-                "  ticket_manager:",
+                "  ticket_service:",
                 "    name: GitHub",
                 "    owner: GuildBotics",
                 "    project_id: '7'",

@@ -1,31 +1,30 @@
 """Every code host of the factory keeps the same contract.
 
 The same steps run against each provider: what a member writes reads back
-the same way, a write outside the configured owner is refused before it is
-made, a pull request whose head is current with passing CI is ready (and one
-whose base cannot be read is not judged at all), and the git remote names the
-repository it is the remote of.
+the same way and is named by the URL and the ids the reads give, a write
+outside the configured scope is refused before it is made, a review or an
+inline comment lands only on the head the member read, a pull request whose
+head is current with passing CI is ready (and one whose base cannot be read
+is not judged at all), and the git remote names the repository it is the
+remote of. What a provider cannot do at all it refuses as unsupported.
 """
 
 from __future__ import annotations
 
-import httpx
 import pytest
 import pytest_asyncio
 
 from guildbotics.entities.message import Message
 from guildbotics.integrations.factory import PROVIDERS
-from guildbotics.integrations.repository_scope import RepositoryScopeError
-from guildbotics.runtime.code_hosting_resources import (
-    RESOURCES_BY_SUBJECT,
-    RepositoryReadError,
-)
 from guildbotics.runtime.code_hosting_service import CodeHostingService
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+)
+from guildbotics.runtime.resources import RESOURCES_BY_SUBJECT, TICKET_RESOURCES
 from tests.guildbotics.integrations.contracts.providers import (
-    OWNER,
-    REPO,
-    THEIRS,
+    FOREIGN_TICKET,
     Harness,
     harness,
 )
@@ -39,7 +38,7 @@ _OPERATIONS = sorted(
 
 
 @pytest_asyncio.fixture(
-    params=sorted(name for name, p in PROVIDERS.items() if p.code_hosting)
+    params=sorted(name for name, p in PROVIDERS.items() if p.code_hosting_service)
 )
 async def host(request, tmp_path, monkeypatch):
     provided = harness(request.param, tmp_path, monkeypatch)
@@ -56,98 +55,27 @@ def test_every_code_host_answers_every_operation_of_the_port(host: Harness):
     ] == []
 
 
-@pytest.mark.asyncio
-async def test_an_issue_reads_back_as_it_was_written(host: Harness):
-    code = host.code
-    created = await code.create_issue(REPO, "Fix login", "It fails.", [])
-    assert (created.repo, created.issue_title) == (REPO, "Fix login")
-    assert (
-        created.target.kind == "issue" and created.target.html_url == created.issue_url
+async def _pull_request(host: Harness, branch: str = "feature", **fields):
+    host.branch(branch)
+    return await host.code.create_pull_request(
+        host.repository,
+        branch,
+        fields.pop("base", "main"),
+        branch,
+        fields.pop("body", ""),
+        draft=False,
+        ticket_url=fields.pop("ticket_url", ""),
+        closes=fields.pop("closes", False),
     )
 
-    updated = await code.update_issue(
-        created.issue_url,
-        body="It still fails.",
-        title="Fix the login",
-        add_labels=(),
-        remove_labels=(),
-        state=None,
-        state_reason=None,
-    )
-    written = await code.comment(created.issue_url, "Looking into it.", kind="issue")
-    page = await code.read("issues", REPO, identifier=str(created.issue_number))
-    comments = await code.read(
-        "issue_comments", REPO, identifier=str(created.issue_number)
-    )
 
-    assert (updated.title, updated.body, updated.state_changed) == (
-        "Fix the login",
-        "It still fails.",
-        False,
-    )
-    [issue] = page.items
-    assert (issue["title"], issue["body"], issue["state"]) == (
-        "Fix the login",
-        "It still fails.",
-        "open",
-    )
-    assert page.target == updated.target
-    assert written.target.number == created.issue_number
-    assert [(c["id"], c["body"], c["author_type"]) for c in comments.items] == [
-        (written.comment_id, "Looking into it.", Message.ASSISTANT)
-    ]
-    reaction = await code.add_reaction(
-        created.issue_url, "comment", written.comment_id or 0, "eyes"
-    )
-    assert (reaction.content, reaction.comment_id) == ("eyes", written.comment_id)
+async def _ticket(host: Harness, title: str = "Fix login") -> str:
+    created = await host.tickets.create_ticket(host.tracker, title, "", [])
+    return created.target.url
 
 
-@pytest.mark.asyncio
-async def test_an_issue_closes_once(host: Harness):
-    created = await host.code.create_issue(REPO, "Done soon", "", [])
-    close = {
-        "body": None,
-        "title": None,
-        "add_labels": (),
-        "remove_labels": (),
-        "state": "closed",
-        "state_reason": "completed",
-    }
-
-    first = await host.code.update_issue(created.issue_url, **close)
-    again = await host.code.update_issue(created.issue_url, **close)
-
-    assert (first.state, first.state_changed) == ("closed", True)
-    assert (again.state, again.state_changed) == ("closed", False)
-
-
-@pytest.mark.asyncio
-async def test_writes_outside_the_configured_owner_are_refused(host: Harness):
-    elsewhere = THEIRS
-    before = len(host.writes)
-
-    with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.create_issue(elsewhere, "T", "B", [])
-    with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.create_pull_request(
-            elsewhere,
-            "feature",
-            "main",
-            "T",
-            "B",
-            draft=False,
-            issue_url="",
-            closes_issue=False,
-        )
-    with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.add_reaction(host.theirs.url or "", "comment", 1, "eyes")
-    with pytest.raises(RepositoryScopeError, match=f"'{OWNER}'"):
-        await host.code.comment(host.theirs.url or "", "Hi")
-
-    # None of them reached the provider; reads are not limited by owner.
-    assert host.writes[before:] == []
-    await host.code.create_issue(REPO, "Ours", "", [])
-    assert len(host.writes) > before
+async def _head(host: Harness, url: str) -> str:
+    return (await host.code.read("pull_requests", url)).items[0]["head_sha"]
 
 
 @pytest.mark.asyncio
@@ -155,43 +83,50 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
     host: Harness,
 ):
     code = host.code
-    issue = await code.create_issue(REPO, "Fix login", "", [])
-    host.branch("ticket/1")
+    ticket = await _ticket(host)
+    host.branch("feature")
 
     created = await code.create_pull_request(
-        REPO,
-        "ticket/1",
+        host.repository,
+        "feature",
         "",
         "Fix login",
         "Body",
         draft=False,
-        issue_url=issue.issue_url,
-        closes_issue=True,
+        ticket_url=ticket,
+        closes=True,
     )
     again = await code.create_pull_request(
-        REPO,
-        "ticket/1",
+        host.repository,
+        "feature",
         "main",
         "Fix login",
         "Body",
         draft=False,
-        issue_url=issue.issue_url,
-        closes_issue=True,
+        ticket_url=ticket,
+        closes=True,
     )
-    readiness = await code.readiness(created.pr_url)
-    page = await code.read("pull_requests", REPO, identifier=str(created.pr_number))
+    readiness = await code.readiness(created.target.url)
+    page = await code.read("pull_requests", created.target.url)
 
     assert (created.created, again.created) == (True, False)
-    assert (created.base, again.pr_number) == ("main", created.pr_number)
+    assert (created.base, again.target) == ("main", created.target)
+    assert (created.target.kind, created.target.title) == ("pull_request", "Fix login")
+    assert created.target.label
     assert readiness.readiness == "ready" and readiness.completion_blockers == []
     assert readiness.target == created.target
     [pull] = page.items
+    assert page.target == created.target
     assert (pull["head"], pull["base"], pull["author_type"]) == (
-        "ticket/1",
+        "feature",
         "main",
         Message.ASSISTANT,
     )
-    assert code.locate(created.pr_url, "pull_request").url == created.pr_url
+    assert (pull["repository"], pull["head_repository"]) == (host.repository,) * 2
+    referring = await code.read("ticket_pull_requests", ticket)
+    assert [(p["url"], p["label"]) for p in referring.items] == [
+        (created.target.url, created.target.label)
+    ]
 
 
 @pytest.mark.asyncio
@@ -199,220 +134,287 @@ async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
     """Readiness answers only from a base it read: a base it cannot read is no
     base without commits ahead of the head."""
     host.branch("release")
-    host.branch("ticket/1")
-    created = await host.code.create_pull_request(
-        REPO,
-        "ticket/1",
-        "release",
-        "Fix",
-        "",
-        draft=False,
-        issue_url="",
-        closes_issue=False,
-    )
+    created = await _pull_request(host, "feature", base="release")
     host.delete_branch("release")
     host.branch("release/next")  # a branch below the base's name is not the base
 
-    # GitHub's client raises the HTTP error its response hook makes.
-    with pytest.raises((MemberCapabilityError, httpx.HTTPStatusError)):
-        await host.code.readiness(created.pr_url)
+    with pytest.raises(ServiceError):
+        await host.code.readiness(created.target.url)
 
 
 @pytest.mark.asyncio
 async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harness):
     code = host.code
-    host.branch("feature")
-    created = await code.create_pull_request(
-        REPO,
-        "feature",
-        "main",
-        "Feature",
-        "",
-        draft=False,
-        issue_url="",
-        closes_issue=False,
-    )
+    created = await _pull_request(host)
+    url = created.target.url
+    head = await _head(host, url)
 
-    review = await code.review(created.pr_url, "Looks good.", "approve")
+    review = await code.review(url, "Looks good.", "approve", head)
     inline = await code.review_comment(
-        created.pr_url, "Rename this.", "a.py", 3, "RIGHT", None, None
+        url, "Rename this.", head, "a.py", 3, "RIGHT", None, None
     )
-    reply = await code.reply(created.pr_url, inline.review_comment_id or 0, "Done.")
-    written = await code.comment(created.pr_url, "Thanks!", kind="pull_request")
+    reply = await code.reply(url, inline.id, "Done.")
+    written = await code.comment(url, "Thanks!")
 
-    assert review.commit_id == (await code.readiness(created.pr_url)).head_sha
+    assert (review.verdict, review.commit) == ("approve", head)
     assert (inline.path, inline.line, inline.side) == ("a.py", 3, "RIGHT")
-    assert reply.reply_comment_id not in (None, inline.review_comment_id)
+    assert reply.id not in (inline.id, written.id)
     assert [review.target, inline.target, reply.target, written.target] == [
         created.target
     ] * 4
-    conversation = await code.read(
-        "pull_request_comments", REPO, identifier=str(created.pr_number)
-    )
-    assert [c["id"] for c in conversation.items] == [written.comment_id]
-    reactions = [
-        await code.add_reaction(created.pr_url, target, comment_id or 0, "eyes")
-        for target, comment_id in (
-            ("comment", written.comment_id),
-            ("review-comment", inline.review_comment_id),
-            ("review", review.review_id),
-        )
-    ]
-    assert [reaction.content for reaction in reactions] == ["eyes"] * 3
-
-
-async def _two_pull_requests(code: CodeHostingService, host: Harness):
-    created = []
-    for branch in ("feature", "other"):
-        host.branch(branch)
-        created.append(
-            await code.create_pull_request(
-                REPO,
-                branch,
-                "main",
-                branch,
-                "",
-                draft=False,
-                issue_url="",
-                closes_issue=False,
-            )
-        )
-    return created
+    conversation = await code.read("pull_request_comments", url)
+    reviews = await code.read("pull_request_reviews", url)
+    assert [c["id"] for c in conversation.items] == [written.id]
+    [read_review] = reviews.items
+    assert (read_review["verdict"], read_review["commit"]) == ("approve", head)
+    for target_id in (written.id, inline.id, read_review["id"]):
+        reaction = await code.add_reaction(url, target_id, "ack")
+        assert (reaction.reaction, reaction.id) == ("ack", target_id)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["issue", "pull_request", "review-comment", "review"])
-async def test_a_reaction_reaches_only_a_comment_of_the_item_it_names(
+async def test_a_verdict_lands_only_on_the_head_the_member_read(host: Harness):
+    """A head that moved since the member read it has commits the member has
+    not read: neither a verdict nor an inline comment is written on it."""
+    created = await _pull_request(host)
+    url = created.target.url
+    read = await _head(host, url)
+    host.advance("feature")
+    before = len(host.writes)
+
+    with pytest.raises(ServiceError, match="head"):
+        await host.code.review(url, "Looks good.", "approve", read)
+    with pytest.raises(ServiceError, match="head"):
+        await host.code.review_comment(
+            url, "Here.", read, "a.py", 1, "RIGHT", None, None
+        )
+
+    assert host.writes[before:] == []
+    current = await _head(host, url)
+    assert current != read
+    assert (
+        await host.code.review(url, "Looks good.", "approve", current)
+    ).commit == current
+
+
+@pytest.mark.asyncio
+async def test_request_changes_is_given_or_refused_as_unsupported(host: Harness):
+    created = await _pull_request(host)
+    url = created.target.url
+    head = await _head(host, url)
+
+    if "request_changes" in host.features:
+        submitted = await host.code.review(url, "Fix it.", "request_changes", head)
+        assert submitted.verdict == "request_changes"
+    else:
+        with pytest.raises(ServiceUnsupported):
+            await host.code.review(url, "Fix it.", "request_changes", head)
+
+
+@pytest.mark.asyncio
+async def test_writes_outside_the_configured_scope_are_refused(host: Harness):
+    before = len(host.writes)
+
+    with pytest.raises(ServiceError, match="refused"):
+        await host.code.create_pull_request(
+            host.elsewhere,
+            "feature",
+            "main",
+            "T",
+            "B",
+            draft=False,
+            ticket_url="",
+            closes=False,
+        )
+    with pytest.raises(ServiceError, match="refused"):
+        host.code.check_push(host.elsewhere)
+
+    # None of them reached the provider; reads are not limited by scope.
+    assert host.writes[before:] == []
+    host.code.check_push(host.repository)
+    # The writes that are the member's do reach the provider.
+    await _pull_request(host)
+    assert host.writes[before:] != []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["conversation", "inline", "review"])
+async def test_a_reaction_reaches_only_what_the_item_it_names_holds(
     host: Harness, kind: str
 ):
-    """Comments are named inside the issue or pull request ``url`` names: an id
-    of another item of the same repository is refused before anything is
-    written."""
+    """A comment or review is named inside the pull request ``url`` names: an
+    id of another pull request is refused before anything is written."""
     code = host.code
-    if kind == "issue":
-        first, second = [
-            (await code.create_issue(REPO, title, "", [])).issue_url
-            for title in ("A", "B")
-        ]
-        written = await code.comment(first, "Hi", kind="issue")
-        target, comment_id = "comment", written.comment_id
+    first = (await _pull_request(host, "feature")).target.url
+    second = (await _pull_request(host, "other")).target.url
+    head = await _head(host, first)
+    if kind == "conversation":
+        target_id = (await code.comment(first, "Hi")).id
+    elif kind == "inline":
+        target_id = (
+            await code.review_comment(
+                first, "Here.", head, "a.py", 1, "RIGHT", None, None
+            )
+        ).id
     else:
-        first_pr, second_pr = await _two_pull_requests(code, host)
-        first, second = first_pr.pr_url, second_pr.pr_url
-        if kind == "pull_request":
-            written = await code.comment(first, "Hi", kind="pull_request")
-            target, comment_id = "comment", written.comment_id
-        elif kind == "review":
-            review = await code.review(first, "Looks good.", "approve")
-            target, comment_id = "review", review.review_id
-        else:
-            inline = await code.review_comment(
-                first, "Rename this.", "a.py", 3, "RIGHT", None, None
-            )
-            target, comment_id = "review-comment", inline.review_comment_id
+        await code.review(first, "Looks good.", "approve", head)
+        target_id = (await code.read("pull_request_reviews", first)).items[0]["id"]
     before = len(host.writes)
 
-    with pytest.raises(MemberCapabilityError):
-        await code.add_reaction(second, target, comment_id or 0, "eyes")
+    with pytest.raises(ServiceNotFound):
+        await code.add_reaction(second, target_id, "agree")
+    with pytest.raises(ServiceNotFound):
+        await code.reply(second, target_id, "Hi")
 
-    assert len(host.writes) == before
-    reaction = await code.add_reaction(first, target, comment_id or 0, "eyes")
-    assert reaction.comment_id == comment_id
-
-
-def _as(host: Harness, kind: str, number: int) -> str:
-    """The URL of ``kind`` ``number`` of the repository."""
-    owner, name = REPO.split("/")
-    return host.url(owner, name, kind, number)
+    assert host.writes[before:] == []
+    assert (await code.add_reaction(first, target_id, "agree")).id == target_id
 
 
 @pytest.mark.asyncio
-async def test_an_issue_operation_reaches_no_pull_request(host: Harness):
-    """An issue's URL names an issue only: one with a pull request's number is
-    refused before anything is written, whether the code host numbers both
-    together or each on its own."""
-    code = host.code
-    [created, _] = await _two_pull_requests(code, host)
-    written = await code.comment(created.pr_url, "Hi", kind="pull_request")
-    issue_url = _as(host, "issue", created.pr_number)
+async def test_a_pull_request_names_no_ticket(host: Harness):
+    """A pull request's URL is no ticket for another pull request to link."""
+    first = (await _pull_request(host, "feature")).target.url
     before = len(host.writes)
 
-    for kind in ("issue", None):
-        with pytest.raises(MemberCapabilityError):
-            await code.comment(issue_url, "Hi", kind=kind)
-    with pytest.raises(MemberCapabilityError):
-        await code.linked_pull_requests(issue_url)
-    with pytest.raises(MemberCapabilityError):
-        await code.update_issue(
-            issue_url,
-            body=None,
-            title="Renamed",
-            add_labels=[],
-            remove_labels=[],
-            state="closed",
-            state_reason=None,
-        )
-    with pytest.raises(MemberCapabilityError):
-        await code.add_reaction(issue_url, "comment", written.comment_id or 0, "eyes")
+    for closes in (True, False):
+        with pytest.raises(ServiceNotFound):
+            await _pull_request(
+                host, f"other-{closes}", ticket_url=first, closes=closes
+            )
+    with pytest.raises(ServiceNotFound):
+        await host.code.read("ticket_pull_requests", first)
 
-    assert len(host.writes) == before
+    assert host.writes[before:] == []
 
 
 @pytest.mark.asyncio
-async def test_a_pull_request_links_only_an_issue_of_its_repository(host: Harness):
-    code = host.code
-    [created, other] = await _two_pull_requests(code, host)
-    host.branch("third")
+async def test_a_reaction_of_no_meaning_is_refused_before_anything_is_written(
+    host: Harness,
+):
+    url = (await _pull_request(host)).target.url
+    written = await host.code.comment(url, "Hi")
     before = len(host.writes)
 
-    for issue_url in (
-        _as(host, "issue", created.pr_number),
-        other.pr_url,
-        host.theirs.url or "",
-    ):
-        with pytest.raises(MemberCapabilityError):
-            await code.create_pull_request(
-                REPO,
-                "third",
-                "main",
-                "Third",
-                "",
-                draft=False,
-                issue_url=issue_url,
-                closes_issue=True,
-            )
+    with pytest.raises(ServiceUnsupported):
+        await host.code.add_reaction(url, written.id, "eyes")
 
-    assert len(host.writes) == before
+    assert host.writes[before:] == []
 
 
-#: Every resource a code host reads of one issue or one pull request, but
-#: those GitHub answers through GraphQL (its schema types issue and pull
-#: request apart), which the double does not serve.
-_ITEM_RESOURCES = [
-    (subject, resource)
-    for subject in ("issue", "pull_request")
-    for resource in RESOURCES_BY_SUBJECT[subject]
-    if resource
-    not in {"issue_projects", "pull_request_threads", "review_thread_comments"}
+@pytest.mark.asyncio
+async def test_a_pull_request_operation_reaches_no_ticket(host: Harness):
+    """A ticket's URL names no pull request, whatever the service numbers or
+    spells: each operation refuses it before anything is written."""
+    code = host.code
+    ticket = await _ticket(host)
+    before = len(host.writes)
+
+    with pytest.raises(ServiceNotFound):
+        await code.comment(ticket, "Hi")
+    with pytest.raises(ServiceNotFound):
+        await code.review(ticket, "Hi", "approve", "sha")
+    with pytest.raises(ServiceNotFound):
+        await code.readiness(ticket)
+    with pytest.raises(ServiceNotFound):
+        await code.pull_request_head(ticket)
+
+    assert host.writes[before:] == []
+
+
+#: Every resource the code host reads of one pull request.
+_PULL_REQUEST_RESOURCES = [
+    resource
+    for resource in RESOURCES_BY_SUBJECT["pull_request"]
+    if resource not in {"pull_request_threads", "review_thread_comments"}
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("subject", "resource"), _ITEM_RESOURCES)
-async def test_a_resource_is_read_only_of_an_item_of_its_subject(
-    host: Harness, subject: str, resource: str
+@pytest.mark.parametrize("resource", _PULL_REQUEST_RESOURCES)
+async def test_a_pull_requests_resource_is_read_only_of_a_pull_request(
+    host: Harness, resource: str
 ):
-    """An issue's resource is read of an issue and a pull request's of a pull
-    request: the other kind's number reads nothing."""
-    code = host.code
-    if subject == "issue":
-        [created, _] = await _two_pull_requests(code, host)
-        number = created.pr_number
-    else:
-        number = (await code.create_issue(REPO, "Only", "", [])).issue_number
+    ticket = await _ticket(host)
 
-    with pytest.raises(RepositoryReadError):
-        await code.read(resource, REPO, identifier=str(number))
+    with pytest.raises(ServiceNotFound):
+        await host.code.read(resource, ticket)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource", sorted(TICKET_RESOURCES))
+async def test_a_tickets_own_resource_is_the_ticket_services(
+    host: Harness, resource: str
+):
+    with pytest.raises(ServiceError):
+        await host.code.read(resource, await _ticket(host))
+
+
+@pytest.mark.asyncio
+async def test_the_pull_requests_of_another_services_ticket_are_unsupported(
+    host: Harness,
+):
+    with pytest.raises(ServiceUnsupported):
+        await host.code.read("ticket_pull_requests", FOREIGN_TICKET)
+
+
+@pytest.mark.asyncio
+async def test_a_merge_closes_only_a_ticket_the_code_host_can_close(host: Harness):
+    before = len(host.writes)
+
+    with pytest.raises(ServiceUnsupported):
+        await _pull_request(host, "feature", ticket_url=FOREIGN_TICKET, closes=True)
+    # A ticket of another repository, though this service's, is not the
+    # merge's to close.
+    with pytest.raises(ServiceUnsupported):
+        await _pull_request(host, "other", ticket_url=host.theirs.url, closes=True)
+    with pytest.raises(ServiceNotFound):
+        await _pull_request(host, "fourth", ticket_url=host.missing_ticket)
+
+    assert host.writes[before:] == []
+    refers = await _pull_request(host, "third", ticket_url=FOREIGN_TICKET)
+    assert refers.created
+
+
+@pytest.mark.asyncio
+async def test_an_artifact_is_only_the_current_heads(host: Harness):
+    created = await _pull_request(host)
+    url = created.target.url
+    head = await _head(host, url)
+    host.artifact(head, "report", b"zip")
+
+    async with host.code.artifact(url, "report", 1024) as (ref, archive):
+        assert (ref.name, archive.read()) == ("report", b"zip")
+    with pytest.raises(ServiceError):
+        async with host.code.artifact(url, "report", 1):
+            pass
+    host.advance("feature")
+    with pytest.raises(ServiceNotFound):
+        async with host.code.artifact(url, "report", 1024):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_dependency_alerts_are_read_or_refused_as_unsupported(host: Harness):
+    if "dependency_alerts" in host.features:
+        page = await host.code.read("dependency_alerts", host.repository)
+        assert page.items == []
+    else:
+        with pytest.raises(ServiceUnsupported):
+            await host.code.read("dependency_alerts", host.repository)
+
+
+@pytest.mark.asyncio
+async def test_the_callers_git_environment_does_not_reach_the_service(
+    host: Harness, monkeypatch, tmp_path
+):
+    """The member's git runs with variables naming its own repository and
+    configuration; what the service answers of the remote does not follow
+    them."""
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
+    remote = await host.code.clone_url(host.repository)
+
+    assert host.code.repository_from_remote(remote) == host.repository
+    assert await host.code.default_branch(host.repository) == "main"
 
 
 @pytest.mark.asyncio
@@ -420,25 +422,14 @@ async def test_the_git_remote_names_its_repository_and_its_open_pull_requests(
     host: Harness,
 ):
     code = host.code
-    host.branch("feature")
-    created = await code.create_pull_request(
-        REPO,
-        "feature",
-        "main",
-        "Feature",
-        "",
-        draft=False,
-        issue_url="",
-        closes_issue=False,
-    )
-    owner, repo = REPO.split("/")
-    remote = await code.clone_url(owner, repo)
+    created = await _pull_request(host)
+    remote = await code.clone_url(host.repository)
 
-    assert code.repository_from_remote(remote) == (owner, repo)
-    assert await code.default_branch(owner, repo) == "main"
-    assert await code.open_pull_requests(remote, "feature") == [created.pr_url]
-    assert await code.open_pull_requests(remote, "other") == []
-    head = await code.pull_request_head(created.pr_url)
-    assert (head.full_repo, head.branch) == (REPO, "feature")
-    other = host.url("other-owner", "demo", "issue", 1)
-    assert code.locate(other).full_repo == "other-owner/demo"
+    assert code.repository_from_remote(remote) == host.repository
+    assert await code.default_branch(host.repository) == "main"
+    assert await code.open_pull_requests(host.repository, "feature") == [
+        created.target.url
+    ]
+    assert await code.open_pull_requests(host.repository, "other") == []
+    head = await code.pull_request_head(created.target.url)
+    assert (head.repository, head.branch) == (host.repository, "feature")

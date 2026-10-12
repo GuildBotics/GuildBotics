@@ -5,7 +5,7 @@ import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from logging import Logger
-from typing import Any, cast
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -22,18 +22,22 @@ from guildbotics.integrations.slack.message_events import (
     time_ts,
     ts_time,
 )
+from guildbotics.integrations.slack.workflow_status import status_metadata
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.chat_service import (
-    ChatCredentialsError,
     ChatEventPage,
     ChatIdentity,
     ChatMessageRef,
     ChatPostResult,
     ChatService,
-    ChatServiceError,
-    ChatThreadNotFoundError,
     CredentialCheck,
+)
+from guildbotics.runtime.port import (
     SemanticReaction,
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
 )
 
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
@@ -65,7 +69,7 @@ def _record_slack_auth_failure(code: str) -> None:
     )
 
 
-class SlackApiError(ChatServiceError):
+class SlackApiError(ServiceError):
     """Raised when Slack returns ok=false for a Web API method."""
 
     def __init__(
@@ -85,7 +89,7 @@ class SlackApiError(ChatServiceError):
         super().__init__(message)
 
 
-class SlackUnreachableError(ChatServiceError):
+class SlackUnreachableError(ServiceError):
     """Slack gave no answer to a Web API call: it could not be reached, or it
     answered with an HTTP error or something that is no Slack answer.
 
@@ -181,10 +185,10 @@ class SlackChatService(ChatService):
         parsed = urlparse(url)
         parts = parsed.path.strip("/").split("/")
         if len(parts) < _PERMALINK_PARTS or parts[-3] != "archives":
-            raise ChatServiceError("Slack message URL must be an /archives/... URL.")
+            raise ServiceNotFound("Slack message URL must be an /archives/... URL.")
         digits = parts[-1].removeprefix("p")
         if not digits.isdigit() or len(digits) <= _PERMALINK_FRACTION_DIGITS:
-            raise ChatServiceError("Slack message URL contains an invalid message id.")
+            raise ServiceNotFound("Slack message URL contains an invalid message id.")
         message_id = (
             f"{digits[:-_PERMALINK_FRACTION_DIGITS]}."
             f"{digits[-_PERMALINK_FRACTION_DIGITS:]}"
@@ -242,7 +246,7 @@ class SlackChatService(ChatService):
             payload = await self._post_form("conversations.replies", form)
         except SlackApiError as exc:
             if exc.error == "thread_not_found":
-                raise ChatThreadNotFoundError(str(exc)) from exc
+                raise ServiceNotFound(str(exc)) from exc
             raise
         return _page("conversations.replies", channel_id, payload)
 
@@ -303,13 +307,15 @@ class SlackChatService(ChatService):
         text: str,
         *,
         thread_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        status: WorkflowStatus | None = None,
     ) -> ChatPostResult:
         form: dict[str, str] = {"channel": channel_id, "text": text}
         if thread_id:
             form["thread_ts"] = thread_id
-        if metadata:
-            form["metadata"] = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        if status is not None:
+            form["metadata"] = json.dumps(
+                status_metadata(status), ensure_ascii=False, sort_keys=True
+            )
         method = "chat.postMessage"
         ts = _named(method, await self._post_form(method, form), "ts")
         try:
@@ -324,13 +330,13 @@ class SlackChatService(ChatService):
         )
 
     async def add_reaction(
-        self, channel_id: str, message_id: str, reaction: str
+        self, channel_id: str, message_id: str, reaction: SemanticReaction
     ) -> None:
         if reaction not in _SLACK_REACTION_MAP:
-            raise ChatServiceError(
+            raise ServiceUnsupported(
                 f"Unsupported semantic reaction for Slack: {reaction}"
             )
-        reaction_name = _SLACK_REACTION_MAP[cast(SemanticReaction, reaction)]
+        reaction_name = _SLACK_REACTION_MAP[reaction]
         try:
             await self._post_form(
                 "reactions.add",
@@ -405,7 +411,7 @@ class SlackChatService(ChatService):
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             if not self._token:
-                raise ChatCredentialsError(
+                raise ServiceError(
                     f"Slack bot token is not configured: set {self._token_name}."
                 )
             headers = {}
@@ -474,7 +480,7 @@ async def _check(
         return CredentialCheck(name=name, status="unconfigured")
     try:
         await probe()
-    except ChatServiceError as exc:
+    except ServiceError as exc:
         return CredentialCheck(name=name, status="failed", error=str(exc))
     return CredentialCheck(name=name, status="ok")
 

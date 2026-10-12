@@ -534,12 +534,12 @@ class SimpleProjectSetupService:
         )
 
         services = project_data.get("services", {})
-        ticket_manager = services.get("ticket_manager", {}) if services else {}
-        owner = str(ticket_manager.get("owner", ""))
-        project_id = str(ticket_manager.get("project_id", ""))
-        github_project_url = str(ticket_manager.get("url", ""))
+        tickets = services.get("ticket_service", {}) if services else {}
+        owner = str(tickets.get("owner", ""))
+        project_id = str(tickets.get("project_id", ""))
+        github_project_url = str(tickets.get("url", ""))
         github_enabled = bool(owner and project_id and github_project_url)
-        lane_map = LaneMapInput.from_config(ticket_manager.get("lane_map"))
+        lane_map = LaneMapInput.from_config(tickets.get("lane_map"))
 
         from guildbotics.intelligences.llm_providers import provider_env_keys
 
@@ -717,7 +717,7 @@ class SimpleProjectSetupService:
             services = {}
 
         if config.github_enabled:
-            services["ticket_manager"] = {
+            services["ticket_service"] = {
                 "name": "GitHub",
                 "owner": config.owner,
                 "project_id": str(config.project_id),
@@ -729,7 +729,7 @@ class SimpleProjectSetupService:
                 "owner": config.owner,
             }
         else:
-            services.pop("ticket_manager", None)
+            services.pop("ticket_service", None)
             services.pop("code_hosting_service", None)
         # Slack is the one hosted chat these screens set up.
         services.setdefault("chat_service", {"name": "slack"})
@@ -800,7 +800,7 @@ class SimpleProjectSetupService:
         project["services"] = {"chat_service": {"name": "slack"}}
         if config.github_project_url:
             project["services"] |= {
-                "ticket_manager": {
+                "ticket_service": {
                     "name": "GitHub",
                     "owner": config.owner,
                     "project_id": str(config.project_id),

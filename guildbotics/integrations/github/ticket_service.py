@@ -1,25 +1,32 @@
+"""GitHub as a member's tickets: the issues of the configured owner's
+repositories, and the Projects V2 board they are taken from."""
+
 import re
 from collections.abc import Sequence
+from contextlib import suppress
 from datetime import datetime
 from functools import cached_property
 from logging import Logger
 from typing import Any, ClassVar, cast
-from urllib.parse import urlparse
-
-from httpx import AsyncClient, HTTPError, HTTPStatusError
+from urllib.parse import quote
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
+from guildbotics.integrations.github.api import GitHubApi, GitHubItem
+from guildbotics.integrations.github.async_client import GitHubNotFound
 from guildbotics.integrations.github.github_utils import (
-    create_github_client,
     get_agent_token,
     get_author_type,
     get_github_username,
     get_person_name,
     normalize_login,
-    paginated_items,
     parse_timestamp,
+)
+from guildbotics.integrations.github.reads import (
+    read_collection,
+    reading,
+    request_of,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
@@ -29,24 +36,52 @@ from guildbotics.integrations.github.repository_scope import (
 )
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
-    suppresses_ticket_selection,
 )
-from guildbotics.integrations.repository_scope import configured_owner
-from guildbotics.runtime.code_hosting_service import ClosedItem
-from guildbotics.runtime.integration_factory import MemberCapabilityError
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.port import (
+    SemanticReaction,
+    ServiceError,
+    WorkflowStatus,
+)
+from guildbotics.runtime.resources import (
+    TICKET_RESOURCES,
+    CommentWritten,
+    Lane,
+    ReactionAdded,
+    ReadPage,
+    Ticket,
+    read_conditions,
+)
+from guildbotics.runtime.ticket_service import (
+    ClosedItem,
+    MoveLane,
+    TicketCreated,
+    TicketService,
+    TicketUpdated,
+)
 from guildbotics.utils.i18n_tool import t
 
-HTTP_BAD_REQUEST = 400
-_ISSUE_PATH_PARTS = 4
+#: The project items of an issue, with their Status.
+_ISSUE_PROJECT_ITEMS = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      projectItems(first: 100) {
+        nodes {
+          project { id }
+          fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
 
 
-class _IncompleteGitHubCollection(RuntimeError):
-    """A best-effort GitHub collection stopped before all pages were read."""
-
-
-class GitHubTicketManager(TicketManager):
-    """GitHub Projects V2 ticket manager using GraphQL and REST APIs."""
+class GitHubTicketService(GitHubApi, TicketService):
+    """GitHub Projects V2 ticket service using GraphQL and REST APIs."""
 
     FIELD_AGENT: ClassVar[str] = "Agent"
     LANE_READY: ClassVar[str] = "ready"
@@ -59,33 +94,20 @@ class GitHubTicketManager(TicketManager):
     }
 
     def __init__(self, logger: Logger, person: Person, team: Team):
-        """
-        Initialize GitHubTicketManager with authentication and project settings.
-
-        Args:
-            person (Person): The user performing operations.
-            team (Team): The team whose GitHub project will be used.
-        """
-        super().__init__(logger, person, team)
-        config = team.project.get_service_config(Service.TICKET_MANAGER)
-        self.base_url = str(config.get("base_url", "https://api.github.com"))
-        self.owner = config["owner"]
+        TicketService.__init__(self, logger, person, team)
+        GitHubApi.__init__(self, person, team, Service.TICKET_SERVICE)
+        config = team.project.get_service_config(Service.TICKET_SERVICE)
         self.project_id = str(config["project_id"])
-        self.url = str(config["url"])
-        self.client: AsyncClient | None = None
+        self.project_url = str(config["url"])
         self._mention_token = get_agent_token(person)
 
         self.lane_map = self._load_lane_map(cast(dict | None, config.get("lane_map")))
 
-        # caches populated in get_board()
+        # What the board's reads fill in.
         self._project_node_id: str | None = None
-        self._status_field_id: str | None = None
         self.columns: dict[str, str] = {}  # Task status -> option_id
         self._status_positions: dict[str, int] = {}  # Status option name -> position
         self.custom_fields: dict[str, dict[str, Any]] = {}  # field_name -> field_info
-        self.role_usernames: dict[
-            str, list[str]
-        ] = {}  # role_name -> list of user_node_id
 
         #: Custom field definitions
         agents = []
@@ -99,11 +121,171 @@ class GitHubTicketManager(TicketManager):
                 )
 
         self._custom_field_definitions: dict[str, dict] = {
-            GitHubTicketManager.FIELD_AGENT: {
+            GitHubTicketService.FIELD_AGENT: {
                 "dataType": "SINGLE_SELECT",
                 "options": agents,
             },
         }
+
+    # --------------------------------------------------------------------- #
+    #   Tickets                                                             #
+    # --------------------------------------------------------------------- #
+
+    async def read(
+        self,
+        resource: str,
+        subject: str,
+        *,
+        parameters: dict[str, Any] | None = None,
+        continuation: str = "",
+    ) -> ReadPage:
+        conditions = read_conditions(resource, parameters, continuation)
+        if resource not in TICKET_RESOURCES:
+            raise ServiceError(t("integrations.resources.resource"))
+        item = self.item(subject, "ticket")
+        with reading(resource):
+            if resource == "tickets":
+                data = await self.fetch(item, bounded=True)
+                ticket = Ticket(
+                    **self.target(item, data).model_dump(),
+                    key=str(item.number),
+                    tracker=item.repository,
+                    repository=item.repository,
+                    body=data.get("body") or "",
+                    state=data["state"],
+                    assignees=[user["login"] for user in data.get("assignees") or []],
+                    labels=[label["name"] for label in data.get("labels") or []],
+                    lane=await self._lane(item),
+                )
+                return ReadPage.of(resource, [ticket], target=self.target(item, data))
+            request = request_of(self, resource, subject, conditions)
+            return await read_collection(self, resource, item, request, continuation)
+
+    async def comment(
+        self, url: str, body: str, *, status: WorkflowStatus | None = None
+    ) -> CommentWritten:
+        return await self.post_comment(self.item(url, "ticket"), body, status)
+
+    async def create_ticket(
+        self, tracker: str, title: str, body: str, labels: Sequence[str]
+    ) -> TicketCreated:
+        repository = self.repository(tracker)
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = await self._defined_labels(repository, labels)
+        client = await self.client()
+        data = (await client.post(f"/repos/{repository}/issues", json=payload)).json()
+        item = self.item(str(data["html_url"]), "ticket")
+        return TicketCreated(labels=_label_names(data), target=self.target(item, data))
+
+    async def update_ticket(
+        self,
+        url: str,
+        *,
+        body: str | None,
+        title: str | None,
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+        state: str | None,
+        state_reason: str | None,
+    ) -> TicketUpdated:
+        item = self.item(url, "ticket")
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if title is not None:
+            payload["title"] = title
+        if state is not None:
+            payload["state"] = state
+            if state_reason is not None:
+                payload["state_reason"] = state_reason
+        # Label additions are validated up front so an undefined label aborts
+        # before any write; the label endpoints are called only after the field
+        # PATCH succeeded so a failed PATCH leaves the labels untouched.
+        additions = await self._defined_labels(item.repository, add_labels)
+        data = await self.fetch(item)
+        state_changed = state is not None and data.get("state") != state
+        client = await self.client()
+        if payload:
+            data = (await client.patch(item.api, json=payload)).json()
+        # The label endpoints change only the labels they name, so labels a
+        # human sets meanwhile survive; a PATCH of the whole set would not.
+        labels = f"{item.api}/labels"
+        for name in remove_labels:
+            # One the issue does not carry is already removed.
+            with suppress(GitHubNotFound):
+                await client.delete(f"{labels}/{quote(name, safe='')}")
+        if additions:
+            await client.post(labels, json={"labels": list(additions)})
+        if additions or remove_labels:
+            data = await self.fetch(item)
+        return TicketUpdated(
+            body=data.get("body") or "",
+            state=str(data.get("state") or ""),
+            state_changed=state_changed,
+            labels=_label_names(data),
+            target=self.target(item, data),
+        )
+
+    async def add_reaction(
+        self, url: str, target_id: str, reaction: SemanticReaction
+    ) -> ReactionAdded:
+        return await self.react(self.item(url, "ticket"), target_id, reaction)
+
+    async def _defined_labels(
+        self, repository: str, labels: Sequence[str]
+    ) -> list[str]:
+        """Map requested labels onto the labels the repository already defines.
+
+        Labels are a shared vocabulary, so a member picks from the repository's
+        own set and proposes a missing label to a human rather than creating
+        one as a side effect of an issue write.
+        """
+        if not labels:
+            return []
+        defined = [
+            name
+            async for found in self.paginated(f"/repos/{repository}/labels")
+            if (name := str(found.get("name") or ""))
+        ]
+        by_name = {name.casefold(): name for name in defined}
+        resolved: list[str] = []
+        for label in labels:
+            canonical = by_name.get(label.strip().casefold())
+            if canonical is None:
+                raise ServiceError(
+                    f"Label '{label}' is not defined in {repository}. "
+                    f"Defined labels: {', '.join(defined) or '(none)'}. "
+                    "Ask a human to add the label instead of introducing a new one."
+                )
+            if canonical not in resolved:
+                resolved.append(canonical)
+        return resolved
+
+    async def _lane(self, item: GitHubItem) -> Lane | None:
+        """The issue's lane on the configured board; ``None`` off it."""
+        owner, name = item.repository.split("/")
+        data = await self.graphql(
+            _ISSUE_PROJECT_ITEMS, {"owner": owner, "repo": name, "number": item.number}
+        )
+        items = data["repository"]["issue"]["projectItems"]
+        if items["pageInfo"]["hasNextPage"]:
+            raise ServiceError(t("integrations.github.response.response"))
+        project = await self._project_node()
+        on_board = [
+            node
+            for node in items["nodes"]
+            if (node.get("project") or {}).get("id") == project
+        ]
+        if not on_board:
+            return None
+        await self._sync_status_columns()
+        option = (on_board[0].get("fieldValueByName") or {}).get("name")
+        return cast(Lane, self._status_from_option(option) or Task.NEW)
+
+    # --------------------------------------------------------------------- #
+    #   The board                                                           #
+    # --------------------------------------------------------------------- #
 
     def _load_lane_map(self, raw: dict | None) -> dict[str, str | None]:
         if raw is None:
@@ -121,38 +303,13 @@ class GitHubTicketManager(TicketManager):
             self.LANE_WORKING: working or None,
         }
 
-    async def login(self) -> AsyncClient:
-        """Authenticate and create an HTTPX AsyncClient."""
-        if not self.client:
-            self.client = await create_github_client(
-                self.person, self.base_url, configured_owner(self.team.project)
-            )
-        return self.client
-
-    # --------------------------------------------------------------------- #
-    #   GraphQL helpers                                                     #
-    # --------------------------------------------------------------------- #
-
-    async def _graphql(self, query: str, variables: dict) -> dict:
-        """Send a GraphQL request and return JSON `data`."""
-        client = await self.login()
-        resp = await client.post(
-            "/graphql",
-            json={"query": query, "variables": variables},
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-        if "errors" in payload:
-            raise RuntimeError(payload["errors"])
-        return payload["data"]
-
     async def _project_node(self) -> str:
         """Return the node-ID of the configured Project V2."""
         if self._project_node_id:
             return self._project_node_id
 
-        # Determine if owner is an organization or user based on self.url
-        is_org = "/orgs/" in self.url
+        # Whether the owner is an organization or a user, as the board's URL says.
+        is_org = "/orgs/" in self.project_url
         query_type = "organization" if is_org else "user"
 
         query = f"""
@@ -162,13 +319,13 @@ class GitHubTicketManager(TicketManager):
             }}
         }}
         """
-        data = await self._graphql(
+        data = await self.graphql(
             query,
             {"owner": self.owner, "num": int(self.project_id)},
         )
         proj = data[query_type]["projectV2"]
         if not proj:
-            raise RuntimeError(
+            raise ServiceError(
                 f"ProjectV2 number={self.project_id} not found for {self.owner}"
             )
         self._project_node_id = proj["id"]
@@ -203,7 +360,7 @@ class GitHubTicketManager(TicketManager):
 
         after: str | None = None
         while True:
-            data = await self._graphql(
+            data = await self.graphql(
                 query, {"proj": proj_id, "first": 100, "after": after}
             )
             fields = data["node"]["fields"]
@@ -219,7 +376,7 @@ class GitHubTicketManager(TicketManager):
                 break
             after = fields["pageInfo"]["endCursor"]
 
-        raise RuntimeError("Status field not found (after paginating all fields)")
+        raise ServiceError("Status field not found (after paginating all fields)")
 
     def _cache_is_complete(self) -> bool:
         required = {Task.READY, Task.DONE}
@@ -278,7 +435,7 @@ class GitHubTicketManager(TicketManager):
         }
         """
         try:
-            resp = await self._graphql(query, {"login": username})
+            resp = await self.graphql(query, {"login": username})
         except Exception:
             return False
         user = resp.get("user") if isinstance(resp, dict) else None
@@ -291,13 +448,13 @@ class GitHubTicketManager(TicketManager):
         field if it is missing (an empty list is returned in that case).
         """
         fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT, {})
+        agent_field = fields.get(GitHubTicketService.FIELD_AGENT, {})
         options = agent_field.get("options", {})
         return list(options) if isinstance(options, dict) else []
 
     def _desired_agent_options(self) -> list[dict[str, str]]:
         """The Agent options expected from configured non-human members."""
-        config = self._custom_field_definitions[GitHubTicketManager.FIELD_AGENT]
+        config = self._custom_field_definitions[GitHubTicketService.FIELD_AGENT]
         return list(config.get("options", []))
 
     async def get_agent_field_state(self) -> dict[str, Any]:
@@ -310,7 +467,7 @@ class GitHubTicketManager(TicketManager):
         """
         self.custom_fields = {}  # force a fresh read
         fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT)
+        agent_field = fields.get(GitHubTicketService.FIELD_AGENT)
         desired = self._desired_agent_options()
         desired_by_name = {opt["name"]: opt.get("description", "") for opt in desired}
         if agent_field is None:
@@ -344,13 +501,13 @@ class GitHubTicketManager(TicketManager):
         """
         self.custom_fields = {}  # force a fresh read
         fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketManager.FIELD_AGENT)
+        agent_field = fields.get(GitHubTicketService.FIELD_AGENT)
         desired = self._desired_agent_options()
 
         if agent_field is None:
             await self._create_custom_field(
-                GitHubTicketManager.FIELD_AGENT,
-                self._custom_field_definitions[GitHubTicketManager.FIELD_AGENT],
+                GitHubTicketService.FIELD_AGENT,
+                self._custom_field_definitions[GitHubTicketService.FIELD_AGENT],
             )
         else:
             current = await self._fetch_single_select_options(agent_field["id"])
@@ -388,7 +545,7 @@ class GitHubTicketManager(TicketManager):
           }
         }
         """
-        data = await self._graphql(query, {"id": field_id})
+        data = await self.graphql(query, {"id": field_id})
         node = data.get("node") or {}
         return [opt for opt in (node.get("options") or []) if opt]
 
@@ -396,7 +553,7 @@ class GitHubTicketManager(TicketManager):
         self, field_id: str, options: list[dict[str, str]]
     ) -> None:
         """Overwrite a single-select field's option set (must include existing ids)."""
-        await self._graphql(
+        await self.graphql(
             UPDATE_PROJECT_FIELD_OPTIONS, {"field": field_id, "options": options}
         )
 
@@ -437,33 +594,6 @@ class GitHubTicketManager(TicketManager):
             return Task.IN_PROGRESS
         return None
 
-    async def _get_issue_number(self, issue_node_id: str) -> int:
-        """Convert a GraphQL issue node_id to its numeric REST issue number.
-
-        Args:
-            issue_node_id (str): The GraphQL global node ID of the issue.
-
-        Returns:
-            int: The numeric issue number in the repository.
-        """
-        query = """
-        query($id: ID!) {
-        node(id: $id) {
-            ... on Issue {
-            number
-            }
-        }
-        }
-        """
-        resp = await self._graphql(query, {"id": issue_node_id})
-        return resp["node"]["number"]
-
-    def _get_issue_path(self, repo: str | None) -> str:
-        """Return the REST API path for issues in the task's repository."""
-        if not repo:
-            raise ValueError("Task repository is required for issue operations.")
-        return f"/repos/{self.owner}/{repo}/issues"
-
     def _issue_to_task(
         self,
         issue: dict,
@@ -483,13 +613,11 @@ class GitHubTicketManager(TicketManager):
         """
         return Task(
             id=issue["id"],
-            number=issue.get("number"),
             url=issue.get("url"),
             title=issue["title"],
             description=issue.get("body", "") or "",
             status=status,
             created_at=issue["createdAt"],
-            repository=issue["repository"]["name"],
             assignee=assignee,
         )
 
@@ -612,7 +740,7 @@ class GitHubTicketManager(TicketManager):
             }}
             """
             variables = {"proj": proj_node, "cursor": cursor}
-            resp = await self._graphql(query, variables)
+            resp = await self.graphql(query, variables)
             payload = resp["node"]["items"]
             all_items.extend(payload["nodes"])
             if not payload["pageInfo"]["hasNextPage"]:
@@ -653,43 +781,20 @@ class GitHubTicketManager(TicketManager):
 
         return False
 
-    async def _load_issue_comments(
-        self, client: AsyncClient, task: Task, issue_number: int
-    ) -> list[Message]:
-        endpoint = f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
-
-        def parse_page(response: Any) -> list[dict[str, Any]]:
-            if response.status_code >= HTTP_BAD_REQUEST:
-                raise RuntimeError(
-                    f"GitHub issue comments request failed with status "
-                    f"{response.status_code}"
-                )
-            page_items = response.json()
-            if not isinstance(page_items, list):
-                raise RuntimeError("Unexpected GitHub issue comments response")
-            return [item for item in page_items if isinstance(item, dict)]
-
-        comments_data = [
-            item async for item in paginated_items(client.get, endpoint, parse_page)
-        ]
-        comments_data.sort(key=lambda c: c.get("created_at") or "")
-
+    async def _comments(self, item: GitHubItem) -> list[Message]:
         comments = []
-        for c in comments_data:
-            author_type = get_author_type(self.person, c["user"]["login"])
-            author = (
-                get_person_name(self.team.members, c["user"]["login"]) or author_type
-            )
+        async for found in self.paginated(f"{item.conversation}/comments"):
+            login = found["user"]["login"]
+            author_type = get_author_type(self.person, login)
             comments.append(
                 Message(
-                    content=c["body"],
-                    author=author,
+                    content=found["body"],
+                    author=get_person_name(self.team.members, login) or author_type,
                     author_type=author_type,
-                    timestamp=c["created_at"],
+                    timestamp=found["created_at"],
                 )
             )
-
-        return comments
+        return sorted(comments, key=lambda comment: comment.timestamp)
 
     def _pending_mention(self, description: str, comments: Sequence[Message]) -> bool:
         """Return True when a mention of this member is still unanswered.
@@ -705,84 +810,23 @@ class GitHubTicketManager(TicketManager):
                 pending = False
         return pending
 
-    def _parse_pull_request_url(self, url: str) -> tuple[str, str, int] | None:
-        match = re.search(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
-        if not match:
-            return None
-        owner, repo, number = match.groups()
-        return owner, repo, int(number)
-
-    async def _get_pull_request_from_url(self, url: str) -> dict[str, Any] | None:
-        parsed = self._parse_pull_request_url(url)
-        if parsed is None:
-            return None
-        owner, repo, number = parsed
-        client = await self.login()
-        resp = await client.get(f"/repos/{owner}/{repo}/pulls/{number}")
-        if resp.status_code >= HTTP_BAD_REQUEST:
-            return None
-        pull = resp.json()
-        state = "merged" if pull.get("merged_at") else pull.get("state")
-        return {
-            "url": pull.get("html_url", url),
-            "owner": owner,
-            "repo": repo,
-            "number": number,
-            "state": state,
-            "updated_at": pull.get("updated_at") or "",
-        }
-
-    async def _get_related_pull_requests(
-        self, task: Task, issue_number: int
-    ) -> list[dict[str, Any]]:
-        client = await self.login()
-        repo = task.repository
-        endpoint = f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline"
-        events: list[dict[str, Any]] = []
-
-        def parse_page(response: Any) -> list[dict[str, Any]]:
-            if response.status_code >= HTTP_BAD_REQUEST:
-                raise _IncompleteGitHubCollection
-            page_items = response.json()
-            if not isinstance(page_items, list):
-                raise _IncompleteGitHubCollection
-            return [item for item in page_items if isinstance(item, dict)]
-
-        try:
-            async for event in paginated_items(
-                client.get,
-                endpoint,
-                parse_page,
-                headers={"Accept": "application/vnd.github+json"},
-            ):
-                events.append(event)
-        except _IncompleteGitHubCollection:
-            pass
-
-        urls: list[str] = []
-        for event in events:
-            source = event.get("source", {})
-            issue = source.get("issue", {}) if isinstance(source, dict) else {}
-            if issue.get("pull_request") and issue.get("html_url"):
-                urls.append(issue["html_url"])
-
+    async def _related_pull_request_state(self, item: GitHubItem) -> str | None:
+        """The state of the pull request that refers to the issue -- ``merged``
+        for a merged one -- choosing an open one, and the latest updated; ``None``
+        when none does."""
         pulls = []
-        for url in dict.fromkeys(urls):
-            pull = await self._get_pull_request_from_url(url)
-            if pull:
-                pulls.append(pull)
-        return pulls
-
-    async def _select_related_pull_request(
-        self, task: Task, issue_number: int
-    ) -> dict[str, Any] | None:
-        pulls = await self._get_related_pull_requests(task, issue_number)
-        if not pulls:
-            return None
-
-        open_pulls = [pull for pull in pulls if pull.get("state") == "open"]
-        candidates = open_pulls or pulls
-        return max(candidates, key=lambda pull: str(pull.get("updated_at") or ""))
+        async for event in self.paginated(f"{item.conversation}/timeline"):
+            source = (event.get("source") or {}).get("issue") or {}
+            if event.get("event") == "cross-referenced" and "pull_request" in source:
+                merged = (source.get("pull_request") or {}).get("merged_at")
+                pulls.append(
+                    (
+                        "merged" if merged else str(source.get("state") or ""),
+                        str(source.get("updated_at") or ""),
+                    )
+                )
+        candidates = [pull for pull in pulls if pull[0] == "open"] or pulls
+        return max(candidates, key=lambda pull: pull[1])[0] if candidates else None
 
     def _latest_assigned_event_time(self, issue: dict[str, Any]) -> str:
         """Return when this member was last added to the issue's assignees.
@@ -876,7 +920,7 @@ class GitHubTicketManager(TicketManager):
             # member, and both can be set at once. Each active one carries its
             # own request time, so the most recent of them is the live request.
             by_assignee = any(self._is_me(str(a.get("login") or "")) for a in assignees)
-            agent_field = GitHubTicketManager.FIELD_AGENT
+            agent_field = GitHubTicketService.FIELD_AGENT
             by_agent_field = field_values.get(agent_field) == self._mention_token
             is_assigned = by_assignee or by_agent_field
             assignee = self.person.person_id if is_assigned else None
@@ -892,7 +936,6 @@ class GitHubTicketManager(TicketManager):
             tasks.append(task)
             assert task.id, "Task ID must be set"
             task_metadata[task.id] = {
-                "issue_number": issue["number"],
                 "assigned": is_assigned,
                 "assigned_at": assigned_at,
             }
@@ -903,14 +946,11 @@ class GitHubTicketManager(TicketManager):
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
-        issue_number = int(metadata["issue_number"])
-        assigned = bool(metadata["assigned"])
-        if not assigned:
+        if not metadata["assigned"]:
             return None
-
-        client = await self.login()
-        comments = await self._load_issue_comments(client, task, issue_number)
-        task.comments = sorted(comments, key=lambda m: m.timestamp)
+        assert task.url
+        item = self.item(task.url, "ticket")
+        task.comments = await self._comments(item)
         # The agent still receives the whole history on the task; only the
         # decision below is limited to what was said after the assignment.
         since_assignment = self._comments_since_assignment(
@@ -930,12 +970,12 @@ class GitHubTicketManager(TicketManager):
             task.trigger_reason = "ready_lane"
             return task
 
-        pull = await self._select_related_pull_request(task, issue_number)
-        if pull:
+        pull = await self._related_pull_request_state(item)
+        if pull is not None:
             # A merged PR finishes the ticket; an open one is followed on the
             # PR itself by the pull request patrol, never through the issue.
-            if pull.get("state") == "merged":
-                await self.move_ticket(task, Task.DONE)
+            if pull == "merged":
+                await self.move(task, "done")
             return None
 
         if _latest_workflow_status_suppresses_selection(since_assignment):
@@ -949,7 +989,7 @@ class GitHubTicketManager(TicketManager):
             return task
         return None
 
-    async def get_task_candidates(self) -> list[Task]:
+    async def candidates(self) -> list[Task]:
         """Return every currently actionable issue in patrol order."""
         candidates: list[Task] = []
         all_items = await self.get_all_tickets()
@@ -963,7 +1003,7 @@ class GitHubTicketManager(TicketManager):
                 candidates.append(selected)
         return candidates
 
-    async def refresh_task(self, candidate: Task) -> Task | None:
+    async def refresh(self, candidate: Task) -> Task | None:
         """Re-read one patrol candidate and apply the canonical work test."""
         all_items = await self.get_all_tickets()
         tasks, task_metadata = self._build_project_tasks(all_items)
@@ -977,34 +1017,25 @@ class GitHubTicketManager(TicketManager):
     async def _get_project_item_id(self, issue_node_id: str) -> str:
 
         project_id = await self._project_node()
-        data = await self._graphql(
+        data = await self.graphql(
             ADD_PROJECT_ITEM, {"proj": project_id, "content": issue_node_id}
         )
         return data["addProjectV2ItemById"]["item"]["id"]
 
-    async def move_ticket(self, task: Task, new_status: str) -> bool:
-        """
-        Move an existing ticket to a new Status column.
-
-        Args:
-            task (Task): The Task to move.
-            new_status (str): The target column name.
-
-        Returns:
-            bool: True if the Status column was updated, False when the target
-                lane has no resolvable option (e.g. the working lane is not
-                configured or absent from the board).
-        """
+    async def move(self, task: Task, lane: MoveLane) -> bool:
+        """Set the ticket's Status to the lane's option; ``False`` when the
+        lane has none (the working lane is not configured, or is not on the
+        board)."""
         proj_node = await self._project_node()
         # update ProjectV2 item field value
         assert task.id, "Task ID must be set before moving"
         item_id = await self._get_project_item_id(task.id)
         status_field_id, _ = await self._get_status_field()
-        option_id = await self.get_column_id(new_status)
+        option_id = await self.get_column_id(lane)
         if not option_id:
             return False
 
-        await self._graphql(
+        await self.graphql(
             UPDATE_PROJECT_ITEM_STATUS,
             {
                 "proj": proj_node,
@@ -1015,27 +1046,11 @@ class GitHubTicketManager(TicketManager):
         )
         return True
 
-    async def add_ticket(self, issue_url: str) -> str | None:
-        """Add the issue to the configured Project.
-
-        The member writes only to the configured owner's repositories, so an
-        issue URL names one of them as ``/<owner>/<repo>/issues/<n>``.
-        """
-        if not self.project_id:
-            return None
-        parts = urlparse(issue_url).path.strip("/").split("/")
-        if len(parts) != _ISSUE_PATH_PARTS or parts[2] != "issues":
-            raise ValueError(f"Not an issue URL: {issue_url}")
-        try:
-            client = await self.login()
-            resp = await client.get(f"/repos/{parts[0]}/{parts[1]}/issues/{parts[3]}")
-            resp.raise_for_status()
-            return await self._get_project_item_id(str(resp.json()["node_id"]))
-        except (RuntimeError, HTTPError, LookupError) as exc:
-            raise MemberCapabilityError(
-                f"{issue_url} was created, but it could not be added to the"
-                f" GitHub Project: {_reason(exc)}"
-            ) from exc
+    async def add(self, ticket_url: str) -> bool:
+        """Add the issue to the configured Project."""
+        data = await self.fetch(self.item(ticket_url, "ticket"))
+        await self._get_project_item_id(str(data["node_id"]))
+        return True
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
         """The Project's issues and pull requests closed in ``[start, end]``,
@@ -1043,7 +1058,7 @@ class GitHubTicketManager(TicketManager):
         items of: those reach the board only through their issue."""
         items = await self._project_contents()
         closed: list[ClosedItem] = []
-        for repository in sorted({_repository_name(item) for item in items} - {""}):
+        for repository in sorted({_repository_of(item) for item in items} - {""}):
             closed.extend(await self._closed_pull_requests(repository, start))
         closed.extend(
             item
@@ -1078,7 +1093,7 @@ class GitHubTicketManager(TicketManager):
         contents: list[dict[str, Any]] = []
         cursor: str | None = None
         while True:
-            data = await self._graphql(query, {"proj": project, "cursor": cursor})
+            data = await self.graphql(query, {"proj": project, "cursor": cursor})
             connection = data["node"]["items"]
             contents.extend(
                 item.get("content") or {} for item in connection.get("nodes") or []
@@ -1090,19 +1105,9 @@ class GitHubTicketManager(TicketManager):
     async def _closed_pull_requests(
         self, repository: str, start: datetime
     ) -> list[ClosedItem]:
-        def parse_page(response: Any) -> list[dict[str, Any]]:
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, list):
-                raise RuntimeError("Unexpected GitHub pull request response")
-            return [item for item in payload if isinstance(item, dict)]
-
-        client = await self.login()
         closed: list[ClosedItem] = []
-        async for pull_request in paginated_items(
-            client.get,
+        async for pull_request in self.paginated(
             f"/repos/{repository}/pulls",
-            parse_page,
             params={"state": "closed", "sort": "updated", "direction": "desc"},
         ):
             updated_at = parse_timestamp(str(pull_request.get("updated_at") or ""))
@@ -1124,36 +1129,6 @@ class GitHubTicketManager(TicketManager):
             if item is not None:
                 closed.append(item)
         return closed
-
-    async def aclose(self) -> None:
-        if self.client is not None:
-            await self.client.aclose()
-            self.client = None
-
-    async def get_ticket_url(self, task: Task, markdown: bool = True) -> str:
-        """
-        Get the URL for a specific ticket.
-
-        Promoted issues link to their issue page; draft tickets are not bound to a
-        repository and have no standalone issue URL, so they link to the Project
-        board instead.
-
-        Args:
-            task (Task): The Task instance.
-            markdown (bool): Wrap in Markdown link if True.
-
-        Returns:
-            str: The ticket URL.
-        """
-        assert task.id, "Task ID must be set before getting URL"
-        if task.url:
-            url = task.url
-        elif not task.repository:
-            url = self.url
-        else:
-            issue_id = await self._get_issue_number(task.id)
-            url = f"https://github.com/{self.owner}/{task.repository}/issues/{issue_id}"
-        return f"[{task.title}]({url})" if markdown else url
 
     async def _get_custom_fields(self) -> dict[str, dict[str, Any]]:
         """
@@ -1196,7 +1171,7 @@ class GitHubTicketManager(TicketManager):
         all_fields = {}
 
         while True:
-            data = await self._graphql(
+            data = await self.graphql(
                 query, {"proj": proj_id, "first": 100, "after": after}
             )
             fields = data["node"]["fields"]
@@ -1248,7 +1223,7 @@ class GitHubTicketManager(TicketManager):
             "options": options if options else None,
         }
 
-        data = await self._graphql(CREATE_PROJECT_FIELD, variables)
+        data = await self.graphql(CREATE_PROJECT_FIELD, variables)
         field = data["createProjectV2Field"]["projectV2Field"]
 
         # Format field info
@@ -1289,7 +1264,7 @@ class GitHubTicketManager(TicketManager):
 
                 if missing_options:
                     message = t(
-                        "integrations.github.github_ticket_manager.add_custom_field_options",
+                        "integrations.github.ticket_service.add_custom_field_options",
                         field=field_name,
                         options="\n"
                         + "\n".join(
@@ -1309,28 +1284,22 @@ class GitHubTicketManager(TicketManager):
 def _latest_workflow_status_suppresses_selection(
     comments: Sequence[Message],
 ) -> bool:
-    """Return True if the latest comment is an assistant workflow status that
-    should prevent ticket selection (rate_limited or failed)."""
-    if not comments:
+    """Whether the latest comment is the member's workflow status that keeps
+    the ticket out of selection (a failure, or a rate limit not yet reset)."""
+    if not comments or comments[-1].author_type != Message.ASSISTANT:
         return False
-    latest = comments[-1]
-    if latest.author_type != Message.ASSISTANT:
-        return False
-    status = parse_workflow_status_comment(latest.content)
-    if status is None:
-        return False
-    return suppresses_ticket_selection(status)
+    status = parse_workflow_status_comment(comments[-1].content)
+    return status is not None and status.holds_selection()
 
 
 def _closed_item(content: dict[str, Any]) -> ClosedItem | None:
     """The closed issue or pull request ``content`` names, if it is one."""
-    repo = _repository_name(content)
     number = content.get("number")
     url = str(content.get("url") or "")
     if (
         content.get("state") != "CLOSED"
         or not content.get("closedAt")
-        or not repo
+        or not _repository_of(content)
         or not isinstance(number, int)
         or number <= 0
         or not url
@@ -1338,17 +1307,16 @@ def _closed_item(content: dict[str, Any]) -> ClosedItem | None:
         return None
     merged_at = content.get("mergedAt")
     return ClosedItem(
-        kind="pull_request" if content.get("__typename") == "PullRequest" else "issue",
-        repo=repo,
-        number=number,
-        title=str(content.get("title") or ""),
+        kind="pull_request" if content.get("__typename") == "PullRequest" else "ticket",
         url=url,
+        title=str(content.get("title") or ""),
+        label=f"#{number}",
         closed_at=str(merged_at or content["closedAt"]),
         merged=bool(merged_at),
     )
 
 
-def _repository_name(content: dict[str, Any]) -> str:
+def _repository_of(content: dict[str, Any]) -> str:
     repository = content.get("repository") or {}
     owner = repository.get("owner") or {}
     return "/".join(
@@ -1358,8 +1326,5 @@ def _repository_name(content: dict[str, Any]) -> str:
     )
 
 
-def _reason(exc: Exception) -> str:
-    """Why a request failed, without the response body GitHub sent."""
-    if isinstance(exc, HTTPStatusError):
-        return f"GitHub API request failed with status {exc.response.status_code}."
-    return str(exc) or type(exc).__name__
+def _label_names(issue: dict[str, Any]) -> list[str]:
+    return [str(label.get("name", "")) for label in issue.get("labels") or []]

@@ -22,10 +22,8 @@ from guildbotics.integrations.github.repository_scope import (
     NODE_REPOSITORY,
     PROJECT_MUTATIONS,
 )
-from guildbotics.integrations.repository_scope import (
-    RepositoryScopeError,
-    check_repository,
-)
+from guildbotics.integrations.repository_scope import check_path
+from guildbotics.runtime.port import ServiceError
 
 API = "https://api.github.com"
 GHES = "https://ghe.example.com/api/v3"
@@ -70,15 +68,12 @@ def _client(
             return httpx.Response(200, json={"data": {"node": node}})
         return httpx.Response(200, json={})
 
-    client_type = httpx.AsyncClient
-    monkeypatch.setattr(
-        async_client.httpx,
-        "AsyncClient",
-        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
-    )
-    return async_client.get_async_client(
+    client = async_client.get_async_client(
         base_url, auth or github_utils.GitHubTokenAuth("token"), owner
     )
+    client._transport = httpx.MockTransport(respond)
+    client._mounts = {}
+    return client
 
 
 def _graphql(document: object) -> dict[str, Any]:
@@ -154,7 +149,7 @@ async def test_other_writes_are_refused_before_they_are_sent(
 ):
     client = _client(monkeypatch, sent)
     try:
-        with pytest.raises(RepositoryScopeError, match="'acme'"):
+        with pytest.raises(ServiceError, match="'acme'"):
             await client.request(method, path, **body)
     finally:
         await client.aclose()
@@ -183,7 +178,7 @@ async def test_nothing_is_sent_to_another_host_than_the_api(
     goes nowhere else, not even to read."""
     client = _client(monkeypatch, sent)
     try:
-        with pytest.raises(RepositoryScopeError):
+        with pytest.raises(ServiceError):
             await client.request(method, url, json={})
     finally:
         await client.aclose()
@@ -199,7 +194,7 @@ async def test_without_a_configured_owner_every_repository_write_is_refused(
     client = _client(monkeypatch, sent, owner="")
     try:
         await client.get("/repos/acme/demo")
-        with pytest.raises(RepositoryScopeError, match="No owner is configured"):
+        with pytest.raises(ServiceError, match="No scope is configured"):
             await client.post("/repos/acme/demo/issues", json={})
     finally:
         await client.aclose()
@@ -228,7 +223,7 @@ async def test_enterprise_server_paths_are_judged_below_the_api_base_path(
         if permitted:
             await client.request(method, path, **body)
         else:
-            with pytest.raises(RepositoryScopeError):
+            with pytest.raises(ServiceError):
                 await client.request(method, path, **body)
     finally:
         await client.aclose()
@@ -256,7 +251,7 @@ async def test_a_github_app_renews_its_token_through_the_gate(
     client = _client(monkeypatch, sent, auth=_github_app_auth())
     try:
         await client.post("/repos/acme/demo/issues", json={})
-        with pytest.raises(RepositoryScopeError):
+        with pytest.raises(ServiceError):
             await client.post("/repos/other/demo/issues", json={})
     finally:
         await client.aclose()
@@ -270,31 +265,43 @@ async def test_a_github_app_renews_its_token_through_the_gate(
 
 
 @pytest.mark.parametrize(
-    ("owner", "repository"),
-    [("acme", "demo"), ("Acme", "demo.js"), ("ACME", "a_b-c")],
+    ("scope", "path"),
+    [
+        ("acme", "acme/demo"),
+        ("acme", "Acme/demo.js"),
+        ("ACME", "acme/a_b-c"),
+        # A scope deeper than an owner, as another service spells one.
+        ("acme/team", "acme/team/demo"),
+    ],
 )
-def test_check_repository_admits_the_configured_owner(refusals, owner, repository):
-    check_repository("acme", owner, repository)
+def test_check_path_admits_what_lies_directly_in_the_scope(refusals, scope, path):
+    check_path(scope, path)
 
     assert refusals == []
 
 
 @pytest.mark.parametrize(
-    ("scope", "owner", "repository"),
+    ("scope", "path"),
     [
-        ("acme", "other-owner", "demo"),
-        ("acme", "acme", ".."),
-        ("acme", "acme", ""),
-        ("acme", "https://example.com/acme/demo.git", ""),
-        ("", "acme", "demo"),
+        ("acme", "other-owner/demo"),
+        ("acme", "acme-other/demo"),
+        ("acme", "acme/.."),
+        ("acme", "acme"),
+        ("acme", ""),
+        ("acme", "https://example.com/acme/demo.git"),
+        # No subgroups: only what lies directly in the scope.
+        ("acme", "acme/team/demo"),
+        ("acme/team", "acme/demo"),
+        ("", "acme/demo"),
     ],
 )
-def test_check_repository_refuses_anything_else(refusals, scope, owner, repository):
-    with pytest.raises(RepositoryScopeError):
-        check_repository(scope, owner, repository)
+def test_check_path_refuses_anything_else(refusals, scope, path):
+    with pytest.raises(ServiceError, match="refused"):
+        check_path(scope, path)
 
     [refusal] = refusals
     assert refusal["event_type"] == "github.scope_refused"
+    assert refusal["payload"] == {"target": path, "scope_owner": scope}
 
 
 def test_project_mutations_are_mutations_of_the_configured_project() -> None:
@@ -397,7 +404,7 @@ async def test_a_node_write_outside_the_owner_is_refused_before_it_is_sent(
 ):
     client = _client(monkeypatch, sent, node=node)
     try:
-        with pytest.raises(RepositoryScopeError, match="'acme'"):
+        with pytest.raises(ServiceError, match="'acme'"):
             await client.post(
                 "/graphql",
                 **_node_write(document, {"content": "EYES", variable: "N_1"}),
@@ -419,7 +426,7 @@ async def test_a_node_write_without_its_node_is_refused_unread(
     client = _client(monkeypatch, sent, node=_subject("acme"))
     try:
         for variables in ({}, {"other": "N_1"}, {variable: 1}, None, ["N_1"]):
-            with pytest.raises(RepositoryScopeError):
+            with pytest.raises(ServiceError):
                 await client.post("/graphql", **_node_write(document, variables))
     finally:
         await client.aclose()

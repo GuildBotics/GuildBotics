@@ -9,8 +9,11 @@ import httpx
 from guildbotics.integrations.slack.slack_socket_listener import (
     SlackSocketEventListener,
 )
+from guildbotics.integrations.slack.workflow_status import status_metadata
+from guildbotics.runtime.port import WorkflowStatus
 
 EXPECTED_RECONNECT_ATTEMPTS = 2
+_STATUS = WorkflowStatus(reason="failed", person_id="alice", run_id="run-1")
 
 
 class _FakeSocket:
@@ -92,13 +95,7 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
                             "user": "U1",
                             "text": "hello",
                             "ts": "100.1",
-                            "metadata": {
-                                "event_type": "guildbotics.workflow_status",
-                                "event_payload": {
-                                    "routing": "suppress",
-                                    "reason": "failed",
-                                },
-                            },
+                            "metadata": status_metadata(_STATUS),
                         }
                     },
                 }
@@ -142,7 +139,7 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert ws1.closed is True
     assert ws2.closed is True
     assert [item.event_id for item in drained] == ["C1:100.1"]
-    assert drained[0].metadata["event_type"] == "guildbotics.workflow_status"
+    assert drained[0].status == _STATUS
     assert any("env-1" in msg for msg in ws1.sent)
     assert activity[:2] == [True, True]  # Connected, then received an event.
     assert False in activity
