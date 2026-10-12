@@ -647,8 +647,7 @@ const resources = {
           payload: "Payload",
           attributeLabels: {
             eventProvider: "Event provider",
-            githubRepo: "GitHub repository",
-            githubNumber: "Ticket / PR number",
+            githubLabel: "Ticket / PR",
             githubKind: "GitHub item type",
             githubTitle: "Ticket / PR title",
             githubUrl: "GitHub URL",
@@ -3508,8 +3507,7 @@ const resources = {
           payload: "ペイロード",
           attributeLabels: {
             eventProvider: "イベント提供元",
-            githubRepo: "GitHub リポジトリ",
-            githubNumber: "チケット / PR 番号",
+            githubLabel: "チケット / PR",
             githubKind: "GitHub 種別",
             githubTitle: "チケット / PR タイトル",
             githubUrl: "GitHub URL",

@@ -59,15 +59,12 @@ def first_seen_attributes(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
     return merged
 
 
-def github_reference_label(kind: str, number: str) -> str:
-    """Return the short ``PR #n`` / ``Issue #n`` reference for a GitHub item."""
-    if not number:
+def target_reference_label(kind: str, label: str) -> str:
+    """Return the short reference of a work target, ``PR #n`` / ``Ticket T-1``,
+    from the label its service shows it by."""
+    if not label:
         return ""
-    if kind == "pull_request":
-        return f"PR #{number}"
-    if kind == "issue":
-        return f"Issue #{number}"
-    return f"GitHub #{number}"
+    return f"{'PR' if kind == 'pull_request' else 'Ticket'} {label}"
 
 
 #: ``(trace attributes, person_id) -> the run's recorded completion summary``.
@@ -110,9 +107,9 @@ def resolve_trace_title(
         ),
         lambda: attributes.get("memory.title"),
         lambda: _first_payload_text(records, "title"),
-        lambda: github_reference_label(
+        lambda: target_reference_label(
             str(attributes.get("github.kind") or ""),
-            str(attributes.get("github.number") or ""),
+            str(attributes.get("github.label") or ""),
         ),
         lambda: _trigger_label(attributes),
         lambda: _first_payload_field(records, "prompt"),

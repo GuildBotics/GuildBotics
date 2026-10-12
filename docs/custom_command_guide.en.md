@@ -345,28 +345,28 @@ async def main(context, repo):
     return [alert.package for alert in page.items]
 ```
 
-The member CLI equivalent is `guildbotics member repo-info read --person alice --resource dependency_alerts --repo org/repo --params '{"state":"open","page_size":10}'`. It returns normalized `items` and `continuation`. For one alert, supply `--identifier 42` and no parameters or continuation.
+The member CLI equivalent is `guildbotics member repo-info read --person alice --resource dependency_alerts --subject org/repo --params '{"state":"open","page_size":10}'`. It returns normalized `items` and `continuation`. For one alert, pass `--params '{"id":"42"}'` and no other condition or continuation. A code host that keeps no dependency alerts refuses the read as unsupported rather than answering with none.
 
-To inspect issues, pull requests, and CI without an LLM, run these bundled commands:
+To inspect tickets, pull requests, and CI without an LLM, run these bundled commands. A ticket and a pull request are named by their URLs:
 
 ```shell
-# Issue body, labels, assignees, comments, projects, and linked PRs
-guildbotics run repository/issue_inspect --person alice repo=org/repo number=42
+# Ticket body, labels, assignees, comments, lane on the board, and the PRs that refer to it
+guildbotics run repository/issue_inspect --person alice url=https://github.com/org/repo/issues/42
 # PR details, review verdicts and conversations, and commentable diff coordinates
-guildbotics run repository/pr_inspect --person alice repo=org/repo number=43 include_comments=true include_diff=true
-# Host-verified readiness and bounded failed Actions log tails
-guildbotics run repository/pr_checks --person alice repo=org/repo number=43 failed_logs=true log_tail_bytes=65536
+guildbotics run repository/pr_inspect --person alice url=https://github.com/org/repo/pull/43 include_comments=true include_diff=true
+# Host-verified readiness and bounded failed CI log tails
+guildbotics run repository/pr_checks --person alice url=https://github.com/org/repo/pull/43 failed_logs=true log_tail_bytes=65536
 ```
 
-These commands return JSON and require a ready execution environment. Inside an existing workflow or delegated command, use `python -m guildbotics.guest.entry repository/pr_inspect repo=org/repo number=43 include_comments=true` instead. This runs in the same microVM, as the same member, under the main command's access contract. Python commands can also use `context.invoke("repository/pr_inspect", repo="org/repo", number="43")`.
+These commands return JSON and require a ready execution environment. Inside an existing workflow or delegated command, use `python -m guildbotics.guest.entry repository/pr_inspect url=https://github.com/org/repo/pull/43 include_comments=true` instead. This runs in the same microVM, as the same member, under the main command's access contract. Python commands can also use `context.invoke("repository/pr_inspect", url="https://github.com/org/repo/pull/43")`.
 
-The inspections collect all pages, including additional comments in review threads. File diffs use five files per page because each patch also includes per-line comment coordinates. A failed page, repeated continuation, more than 100 pages per resource, or an oversized combined result fails the inspection; it never returns partial data as complete. Project fields are limited to 100 per item, with overflow reported as an error. A missing file patch is marked `patch_available=false`; a missing or truncated patch is marked `patch_complete=false` and makes `diff_complete=false`; a file count below the PR's `changed_files` fails the inspection. Each file holds its path and patch once; `commentable_lines` supplies line numbers and sides without repeating the path or text. For large results, use `member ticket read` or `member pr read` to retrieve individual pages.
+The inspections collect all pages, including additional comments in review threads. File diffs use five files per page because each patch also includes per-line comment coordinates. A failed page, repeated continuation, more than 100 pages per resource, or an oversized combined result fails the inspection; it never returns partial data as complete. A missing file patch is marked `patch_available=false`; a missing or truncated patch is marked `patch_complete=false` and makes `diff_complete=false`; a file count below the PR's `changed_files` fails the inspection. Each file holds its path and patch once; `commentable_lines` supplies line numbers and sides without repeating the path or text. For large results, use `member ticket read` or `member pr read` to retrieve individual pages.
 
-`member ticket read` reads an issue's `issues`, `issue_comments`, `issue_timeline`, and `issue_projects`; `member pr read` reads a PR's `pull_requests`, `pull_request_comments` (conversation comments), `pull_request_reviews`, `pull_request_files`, `pull_request_threads`, `review_thread_comments`, and `pull_request_readiness`. All require `identifier` (the issue or PR number). Collections accept `page_size` (1–100, default 30); `review_thread_comments` also requires `node` from a returned thread. Detail reads accept no conditions or continuation. `pull_request_readiness` accepts `failed_logs` and `log_tail_bytes` (1–65536, default 65536) and returns the same host service result used after push and at task completion. `repository/pr_inspect` includes that result under `checks`; `repository/pr_checks` returns it directly. Completion rechecks the code host itself, without trusting a command's output or starting another environment. Work targets are recorded from host reads as `inspected`, so they name traces without appearing as writes in Activity.
+`member ticket read` reads a ticket's `tickets` (the ticket itself, with its `key`, `tracker`, `repository`, and `lane`), `ticket_comments`, and `ticket_pull_requests` (the code host's pull requests that refer to it); `member pr read` reads a PR's `pull_requests`, `pull_request_comments` (conversation comments), `pull_request_reviews`, `pull_request_files`, `pull_request_threads`, `review_thread_comments`, and `pull_request_readiness`. Each takes `--subject`, the ticket's or PR's URL. Comments, reviews, and threads are named by opaque string ids that mean something only together with their item's URL. Collections accept `page_size` (1–100, default 30); `review_thread_comments` also requires `node` from a returned thread. Detail reads accept no conditions or continuation. `pull_request_readiness` accepts `failed_logs` and `log_tail_bytes` (1–65536, default 65536) and returns the same host service result used after push and at task completion. `repository/pr_inspect` includes that result under `checks`; `repository/pr_checks` returns it directly. Completion rechecks the code host itself, without trusting a command's output or starting another environment. Work targets are recorded from host reads as `inspected`, so they name traces without appearing as writes in Activity.
 
 Readiness uses the host service’s own requests, so an internal compare response is not subject to the resource-page receive limit. Its returned page remains bounded: failed logs share the space left after JSON-encoded metadata, including escaping. Reduced tails keep `truncated=true` and report their `tail_limit_bytes`. GitHub access failures name the required resource permissions; GraphQL permission and rate-limit errors are reported even when HTTP succeeds.
 
-`runtime/code_hosting_service.py` owns the common service, and `runtime/code_hosting_resources.py` its resources and the shape of each one's items. The host integration factory selects the configured implementation; commands use the same interface through their member grant. Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor (alerts) or `page` number (REST collections) is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
+`runtime/code_hosting_service.py` and `runtime/ticket_service.py` own the common services, and `runtime/resources.py` their resources and the shape of each one's items. The host integration factory selects the configured implementation; commands use the same interfaces through their member grant (a command's environment reads tickets but does not write them or reach the board). Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor (alerts) or `page` number (REST collections) is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
 
 ## 5. Using subcommands
 You can chain multiple subcommands to build a workflow.
@@ -766,18 +766,18 @@ When a chat operation reports an anticipated failure, preserve its reason so the
 
 ```python
 from guildbotics.commands.errors import CommandError
-from guildbotics.runtime.chat_service import ChatServiceError
+from guildbotics.runtime.port import ServiceError
 
 
 async def main(context, channel_id):
     chat = context.get_chat_service()
     try:
         await chat.post_message(channel_id, "Report is ready.")
-    except ChatServiceError as exc:
+    except ServiceError as exc:
         raise CommandError(str(exc)) from exc
 ```
 
-The service returned by `context.get_chat_service()` raises `ChatServiceError` from operations such as `post_message`. Converting it to `CommandError` makes Desktop show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
+Every service a command reaches -- the chat, the code host, the tickets -- reports an anticipated failure as `ServiceError` (`ServiceNotFound` when what it names is not there, `ServiceUnsupported` when the service cannot do it at all). Converting it to `CommandError` makes Desktop show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
 
 API-key inference failures show the exception type and the reported status when available, without the provider's raw error text. A reported status may be an SDK default even when no HTTP response was received; for example, Agno defaults to 502. Window failures retain their own reasons, such as a timeout or an oversized result. The bundled `examples/reports/tools/fetch_ai_news` command reports request failures with guidance to allow `news.google.com` in `intelligences/agent_environment.yml`.
 

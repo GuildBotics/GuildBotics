@@ -581,9 +581,11 @@ member modeの`member git prepare` / `commit` / `push` / `publish`は、cloneの
 置換用の値は渡しません。
 
 メンバーのGitHub tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
-の下に`owner/repo`ごとに持つhost専用のbare repository（どの環境にもmountしません）から、hostが
-導出したURLへ送ります。`prepare`はcloneがどれへpushするかを記録し（forkとupstreamは同じcloneの
-ディレクトリになり、最後の`prepare`が決めます）、`prepare`でcheckoutしていないcloneはpushしません。
+の下にコードホストのリポジトリごとに持つhost専用のbare repository（どの環境にもmountしません）から、
+hostが導出したURLへ送ります。`prepare`はcloneをリポジトリのパス全体の場所（GitHubなら
+`clones/<person_id>/<owner>/<repo>`）に置くので、名前空間が違う同名のリポジトリ（forkとupstreamも）は
+別々のcloneになります。`prepare`はcloneがどのリポジトリへpushするかを記録し、`prepare`でcheckout
+していないcloneはpushしません。
 両者の間は、processの標準入出力で少しずつ流すgit bundleで受け渡し、増分だけを送ります。hostは
 cloneから受け取るもののうち`refs/heads/<branch>`（gitがブランチ名として受け付ける名前。1 GiBまで）
 だけを取り込み、pushするcommitは自分のrepositoryから読み直し、完全形のrefspecでpushします。

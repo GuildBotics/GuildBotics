@@ -204,8 +204,8 @@ from guildbotics.observability.session_transcripts import (
 )
 from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
-from guildbotics.runtime.chat_service import ChatServiceError
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.port import ServiceError
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.setup.github_project import ProjectBoard, with_project_board
 from guildbotics.setup.setup_service import (
@@ -1275,7 +1275,7 @@ class AppRuntime:
         channels_reset = 0
         try:
             service = chat_provider_name(context.team)
-        except ChatServiceError:
+        except ServiceError:
             service = ""
         for member in context.team.members if service else []:
             if not getattr(member, "is_active", False):
@@ -1736,9 +1736,7 @@ class AppRuntime:
         whenever options cannot be read—incomplete identity, no member token,
         or a GitHub error—so the form falls back to manual lane entry.
         """
-        result = await self._with_setup_ticket_manager(
-            request, lambda tm: tm.get_statuses()
-        )
+        result = await self._with_setup_board(request, lambda tm: tm.get_statuses())
         if result is None:
             return ProjectStatusOptionsResponse(available=False)
         return ProjectStatusOptionsResponse(available=True, statuses=result)
@@ -1752,7 +1750,7 @@ class AppRuntime:
         :meth:`fetch_project_status_options`) and reports the registered and
         still-missing non-human members so the setup form can show them.
         """
-        result = await self._with_setup_ticket_manager(
+        result = await self._with_setup_board(
             request, lambda tm: tm.get_agent_field_state()
         )
         return self._to_agent_field_response(result)
@@ -1765,9 +1763,7 @@ class AppRuntime:
         Existing options are preserved (resubmitted with their ids) so ticket
         assignments are never cleared. Returns the refreshed field state.
         """
-        result = await self._with_setup_ticket_manager(
-            request, lambda tm: tm.sync_agent_field()
-        )
+        result = await self._with_setup_board(request, lambda tm: tm.sync_agent_field())
         return self._to_agent_field_response(result)
 
     @staticmethod
@@ -1783,7 +1779,7 @@ class AppRuntime:
             missing=[AgentFieldOption(**opt) for opt in result["missing"]],
         )
 
-    async def _with_setup_ticket_manager(
+    async def _with_setup_board(
         self,
         request: ProjectStatusOptionsRequest,
         action: Callable[[ProjectBoard], Awaitable[Any]],
@@ -1827,7 +1823,7 @@ class AppRuntime:
     def is_github_integration_enabled(self) -> bool:
         try:
             return self._get_context().team.project.is_available_service(
-                Service.TICKET_MANAGER
+                Service.TICKET_SERVICE
             )
         except Exception:
             return False
@@ -2229,12 +2225,12 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
 
     kinds: set[str] = set()
     if (
-        modules & {"guildbotics.runtime.ticket_manager"}
+        modules & {"guildbotics.runtime.ticket_service"}
         or names
         & {
-            "TicketManager",
+            "TicketService",
         }
-        or attrs & {"get_ticket_manager", "create_ticket_manager"}
+        or attrs & {"get_ticket_service", "create_ticket_service"}
     ):
         kinds.add("github")
     if (

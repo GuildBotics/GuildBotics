@@ -11,8 +11,8 @@ beyond the run it belongs to:
 - ``MEMBER``: the member's own authority bounds it (its memory, its clone,
   what the host does not read for it); the basis is the function that checks.
 - ``SERVICE``: the external service's permission for the member bounds it (the
-  GitHub token and the configured owner, the Slack bot's channels); the basis
-  is the function that checks, or why the service does.
+  member's credential and the service's configured scope, the chat bot's
+  channels); the basis is the function that checks, or why the service does.
 - ``CONTENT``: what the value says, its format, or a step of the procedure
   (``--human-approved`` among them); it chooses nothing to act on.
 
@@ -36,13 +36,16 @@ GRANT, MEMBER, SERVICE, CONTENT = "grant", "member", "service", "content"
 _BROKER = "guildbotics.environment.member_broker._rejection_reason"
 _HOST_PATH = "guildbotics.cli.member._HostPath"
 _MEMORY = "guildbotics.capabilities.member_memory.MemberMemoryService._scope_dir"
-_GITHUB = "guildbotics.integrations.github.repository_scope.check_request"
-_GITHUB_READ = (
-    "Reads go through the member's GitHub token, which bounds what they reach."
+#: Every provider passes each write through it, within the service's scope.
+_SCOPE = "guildbotics.integrations.repository_scope.check_path"
+_PUSH = "guildbotics.runtime.code_hosting_service.CodeHostingService.check_push"
+_SERVICE_READ = (
+    "Reads go through the member's credential for the service, which bounds "
+    "what they reach."
 )
 _CHAT = "The member's chat credential reaches only the channels it was given."
 #: Why a service bounds what no function of GuildBotics checks.
-_SERVICE_RATIONALES = frozenset({_GITHUB_READ, _CHAT})
+_SERVICE_RATIONALES = frozenset({_SERVICE_READ, _CHAT})
 _CONVERSATION = "guildbotics.environment.host_window.HostWindow._check_conversation"
 
 _CHAT_TARGETS = frozenset(
@@ -144,7 +147,11 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     ),
     "since": (SERVICE, frozenset({"chat inspect channel"}), _CHAT),
     "until": (SERVICE, frozenset({"chat inspect channel"}), _CHAT),
-    "reaction": (CONTENT, frozenset({"chat reaction add"}), ""),
+    "reaction": (
+        CONTENT,
+        frozenset({"chat reaction add", "ticket reaction add", "pr reaction add"}),
+        "",
+    ),
     "status": (CONTENT, frozenset({"chat complete", "task complete"}), ""),
     # Git: the member's clone, worked on in the command's environment.
     "repo_path": (MEMBER, _GIT_WRITES, _HOST_PATH),
@@ -153,38 +160,23 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         _GIT_WRITES,
         "guildbotics.cli.member._reject_current_workspace_mode_in_task_run",
     ),
-    "branch": (
-        SERVICE,
-        frozenset({"git prepare"}),
-        "guildbotics.integrations.repository_scope.check_repository",
-    ),
-    # The code host: what the member writes to, within the configured owner.
-    "repo": (
-        SERVICE,
-        frozenset(
-            {
-                "git prepare",
-                "ticket create",
-                "pr create",
-                "ticket read",
-                "pr read",
-                "repo-info read",
-            }
-        ),
-        _GITHUB,
-    ),
+    "branch": (SERVICE, frozenset({"git prepare"}), _PUSH),
+    # The code host and the tickets: what the member writes to, within the
+    # service's configured scope.
+    "repo": (SERVICE, frozenset({"git prepare", "pr create"}), _SCOPE),
+    "tracker": (SERVICE, frozenset({"ticket create"}), _SCOPE),
     "issue_url": (
         SERVICE,
         frozenset(
             {
                 "git prepare",
+                "pr create",
                 "ticket comment",
                 "ticket update",
                 "ticket reaction add",
-                "pr create",
             }
         ),
-        _GITHUB,
+        _SCOPE,
     ),
     "pr_url": (
         SERVICE,
@@ -199,30 +191,29 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
                 "pr reaction add",
             }
         ),
-        _GITHUB,
+        _SCOPE,
     ),
-    "base": (SERVICE, frozenset({"pr create"}), _GITHUB),
-    "head": (SERVICE, frozenset({"pr create"}), _GITHUB),
-    "reply_target_id": (SERVICE, frozenset({"pr reply"}), _GITHUB),
+    "base": (SERVICE, frozenset({"pr create"}), _SCOPE),
+    # The branch a pull request is opened from, or the head a review is on.
+    "head": (
+        SERVICE,
+        frozenset({"pr create", "pr review", "pr review-comment"}),
+        _SCOPE,
+    ),
+    "reply_target_id": (SERVICE, frozenset({"pr reply"}), _SCOPE),
     "comment_id": (
         SERVICE,
         frozenset({"ticket reaction add", "pr reaction add"}),
-        _GITHUB,
+        _SCOPE,
     ),
-    "target": (SERVICE, frozenset({"pr reaction add"}), _GITHUB),
-    "reaction_content": (
-        CONTENT,
-        frozenset({"ticket reaction add", "pr reaction add"}),
-        "",
-    ),
-    "target_url": (SERVICE, frozenset({"pr artifact download"}), _GITHUB_READ),
-    "name": (SERVICE, frozenset({"pr artifact download"}), _GITHUB_READ),
+    "target_url": (SERVICE, frozenset({"pr artifact download"}), _SERVICE_READ),
+    "name": (SERVICE, frozenset({"pr artifact download"}), _SERVICE_READ),
     "dest": (MEMBER, frozenset({"pr artifact download"}), _HOST_PATH),
     "resource": (CONTENT, frozenset({"ticket read", "pr read", "repo-info read"}), ""),
-    "identifier": (
+    "subject": (
         SERVICE,
         frozenset({"ticket read", "pr read", "repo-info read"}),
-        _GITHUB_READ,
+        _SERVICE_READ,
     ),
     "parameters": (
         CONTENT,
@@ -232,7 +223,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "continuation": (
         SERVICE,
         frozenset({"ticket read", "pr read", "repo-info read"}),
-        _GITHUB_READ,
+        _SERVICE_READ,
     ),
     "human_approved": (
         CONTENT,
@@ -242,7 +233,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "labels": (CONTENT, frozenset({"ticket create"}), ""),
     "add_labels": (CONTENT, frozenset({"ticket update"}), ""),
     "remove_labels": (CONTENT, frozenset({"ticket update"}), ""),
-    "add_to_project": (CONTENT, frozenset({"ticket create"}), ""),
+    "add_to_board": (CONTENT, frozenset({"ticket create"}), ""),
     "state": (CONTENT, frozenset({"ticket update"}), ""),
     "state_reason": (CONTENT, frozenset({"ticket update"}), ""),
     "closes_issue": (CONTENT, frozenset({"pr create"}), ""),

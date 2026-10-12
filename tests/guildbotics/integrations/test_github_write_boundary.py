@@ -43,7 +43,7 @@ from guildbotics.integrations.github.repository_scope import (
     NODE_REPOSITORY,
     PROJECT_MUTATIONS,
 )
-from guildbotics.integrations.repository_scope import RepositoryScopeError
+from guildbotics.runtime.port import ServiceError
 
 PACKAGE = Path(guildbotics.__file__).parent
 SCOPE_MODULE = "integrations/github/repository_scope.py"
@@ -55,23 +55,9 @@ GRAPHQL = "gated: GraphQL"
 
 #: ``(module, function, method)`` of every write, and what judges it.
 WRITES = {
-    ("integrations/github/code_hosting_service.py", "_read_resource", "post"): GRAPHQL,
-    ("integrations/github/code_hosting_service.py", "create_issue", "post"): REPOSITORY,
-    (
-        "integrations/github/code_hosting_service.py",
-        "update_issue",
-        "patch",
-    ): REPOSITORY,
-    (
-        "integrations/github/code_hosting_service.py",
-        "_apply_label_changes",
-        "delete",
-    ): REPOSITORY,
-    (
-        "integrations/github/code_hosting_service.py",
-        "_apply_label_changes",
-        "post",
-    ): REPOSITORY,
+    ("integrations/github/api.py", "graphql", "post"): GRAPHQL,
+    ("integrations/github/api.py", "post_comment", "post"): REPOSITORY,
+    ("integrations/github/reads.py", "_graph_page", "post"): GRAPHQL,
     (
         "integrations/github/code_hosting_service.py",
         "create_pull_request",
@@ -89,13 +75,10 @@ WRITES = {
         "post",
     ): REPOSITORY,
     ("integrations/github/code_hosting_service.py", "reply", "post"): REPOSITORY,
-    ("integrations/github/code_hosting_service.py", "_graphql", "post"): GRAPHQL,
-    (
-        "integrations/github/code_hosting_service.py",
-        "_post_comment",
-        "post",
-    ): REPOSITORY,
-    ("integrations/github/github_ticket_manager.py", "_graphql", "post"): GRAPHQL,
+    ("integrations/github/ticket_service.py", "create_ticket", "post"): REPOSITORY,
+    ("integrations/github/ticket_service.py", "update_ticket", "patch"): REPOSITORY,
+    ("integrations/github/ticket_service.py", "update_ticket", "post"): REPOSITORY,
+    ("integrations/github/ticket_service.py", "update_ticket", "delete"): REPOSITORY,
     ("integrations/github/repository_scope.py", "_node_in_scope", "post"): GRAPHQL,
     (
         "integrations/github/github_utils.py",
@@ -113,21 +96,17 @@ WRITES = {
 CLIENTS = {
     ("integrations/github/async_client.py", "get_async_client"): "the gated client",
     (
-        "integrations/github/github_utils.py",
-        "create_github_app_installation_token",
-    ): "issues the App's installation token; its one request is that",
+        "integrations/github/async_client.py",
+        "get_app_client",
+    ): "the GitHub App itself, which only renews an installation's token",
     (
         "integrations/github/app_manifest.py",
         "_api_client",
     ): "setup of the GitHub App, before any member credential",
     (
         "integrations/github/actions_client.py",
-        "_download_without_credentials",
-    ): "GETs a short-lived download URL without credentials",
-    (
-        "integrations/github/actions_client.py",
-        "_download_tail_without_credentials",
-    ): "GETs a short-lived log URL without credentials",
+        "_anonymous",
+    ): "GETs a short-lived download or log URL without credentials",
 }
 
 #: ``(module, function)`` of every use of a member's credential for git, in
@@ -142,7 +121,7 @@ GITHUB_TOKENS = {("integrations/github/code_hosting_service.py", "push_credentia
 _READS = {"GET", "HEAD"}
 _WRITE_METHODS = {"post", "patch", "put", "delete"}
 _METHOD_ARGUMENT = {"request", "stream"}
-_CLIENT_TYPES = {"AsyncClient", "Client"}
+_HTTPX_CLIENTS = {"AsyncClient", "Client"}
 _MUTATION = re.compile(r"(?m)^\s*mutation\b")
 
 
@@ -179,6 +158,19 @@ def _callee(call: ast.Call) -> str:
     return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
+def _client_types() -> set[str]:
+    """httpx's clients, and every class of the modules that extends one."""
+    return _HTTPX_CLIENTS | {
+        node.name
+        for _, tree in _modules()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        and any(
+            ast.unparse(base).split(".")[-1] in _HTTPX_CLIENTS for base in node.bases
+        )
+    }
+
+
 def _writes() -> dict[tuple[str, str, str], ast.Call]:
     found = {}
     for module, tree in _modules():
@@ -201,11 +193,13 @@ def test_every_write_to_github_is_classified() -> None:
 
 
 def test_every_http_client_is_classified() -> None:
+    client_types = _client_types()
+    assert "_MemberClient" in client_types
     found = {
         (module, function)
         for module, tree in _modules()
         for function, call, _ in _calls(tree)
-        if _callee(call) in _CLIENT_TYPES
+        if _callee(call) in client_types
     }
 
     assert found == set(CLIENTS)
@@ -221,9 +215,7 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
         configured = {
             target.attr
             for node in ast.walk(tree)
-            if isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call)
-            and _callee(node.value) == "configured_owner"
+            if isinstance(node, ast.Assign) and _reads_configured_owner(node.value)
             for target in node.targets
             if isinstance(target, ast.Attribute)
         }
@@ -237,19 +229,26 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
                 (kw.value for kw in call.keywords if kw.arg == "owner"), None
             )
             assert owner is not None, (module, function)
-            assert (
-                isinstance(owner, ast.Call) and _callee(owner) == "configured_owner"
-            ) or (isinstance(owner, ast.Attribute) and owner.attr in configured), (
+            assert isinstance(owner, ast.Attribute) and owner.attr in configured, (
                 module,
                 function,
                 ast.unparse(owner),
             )
             callers.add((module, function))
 
-    assert callers == {
-        ("integrations/github/pull_requests.py", "_get_client"),
-        ("integrations/github/github_ticket_manager.py", "login"),
-    }
+    assert callers == {("integrations/github/api.py", "client")}
+
+
+def _reads_configured_owner(value: ast.expr) -> bool:
+    """Whether ``value`` reads ``owner`` of the service's configuration."""
+    return any(
+        isinstance(node, ast.Call)
+        and _callee(node) == "get"
+        and isinstance(node.func, ast.Attribute)
+        and ast.unparse(node.func.value) == "config"
+        and [ast.unparse(arg) for arg in node.args] == ["'owner'"]
+        for node in ast.walk(value)
+    )
 
 
 def test_every_git_push_is_checked_before_git_is_given_the_token() -> None:
@@ -286,7 +285,7 @@ def test_git_is_given_the_token_only_where_its_destination_is_checked() -> None:
 
 
 def _checked_before(call: ast.Call, ancestors: list[ast.AST]) -> bool:
-    """Whether ``check_repository`` runs in a statement before ``call``'s,
+    """Whether ``check_push`` runs in a statement before ``call``'s,
     in its block or a block around it."""
     child: ast.AST = call
     for parent in ancestors:
@@ -297,7 +296,7 @@ def _checked_before(call: ast.Call, ancestors: list[ast.AST]) -> bool:
         ):
             for statement in body[: body.index(child)]:
                 if any(
-                    isinstance(node, ast.Call) and _callee(node) == "check_repository"
+                    isinstance(node, ast.Call) and _callee(node) == "check_push"
                     for node in ast.walk(statement)
                 ):
                     return True
@@ -326,53 +325,71 @@ def test_every_graphql_mutation_is_one_the_gate_knows() -> None:
     }
 
 
-@pytest.mark.asyncio
-async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_sent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``reaction add --target review`` names the review by repository, but
-    the mutation names only its node: the gate reads where the node lives."""
-    sent: list[dict[str, object]] = []
+def _service(monkeypatch, respond) -> GitHubCodeHostingService:
+    """The member's code host, its client gated for ``acme`` and answered by
+    ``respond``."""
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/reviews/55"):
-            return httpx.Response(
-                200,
-                json={
-                    "id": 55,
-                    "node_id": "PRR_55",
-                    "pull_request_url": "https://api.github.com/repos/other-owner/demo/pulls/7",
-                },
-            )
-        body = json.loads(request.content)
-        sent.append(body)
-        repository = {"name": "demo", "owner": {"login": "other-owner"}}
-        return httpx.Response(200, json={"data": {"node": {"repository": repository}}})
+    async def create(person, base_url, owner):
+        client = async_client.get_async_client(
+            base_url, github_utils.GitHubTokenAuth("token"), owner
+        )
+        client._transport = httpx.MockTransport(respond)
+        client._mounts = {}
+        return client
 
-    client_type = httpx.AsyncClient
     monkeypatch.setattr(
-        async_client.httpx,
-        "AsyncClient",
-        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+        "guildbotics.integrations.github.api.create_github_client", create
     )
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        person_type="agent",
+        account_info={"github_username": "aiko-gh"},
+    )
     project = Project(
         name="demo",
         services={"code_hosting_service": {"name": "github", "owner": "acme"}},
     )
-    service = GitHubCodeHostingService(person, Team(project=project, members=[person]))
-    service._client = async_client.get_async_client(
-        "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
-    )
+    return GitHubCodeHostingService(person, Team(project=project, members=[person]))
+
+
+def _in_other_owner(request: httpx.Request) -> httpx.Response:
+    """GraphQL placing every node in ``other-owner/demo``."""
+    repository = {"name": "demo", "owner": {"login": "other-owner"}}
+    return httpx.Response(200, json={"data": {"node": {"repository": repository}}})
+
+
+@pytest.mark.asyncio
+async def test_a_reaction_on_a_review_outside_the_owner_is_refused_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A review is named by its pull request, but the mutation names only its
+    node: the gate reads where the node lives."""
+    pull = "https://api.github.com/repos/other-owner/demo/pulls/7"
+    sent: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/other-owner/demo/pulls/7":
+            return httpx.Response(200, json={"number": 7, "url": pull})
+        if request.url.path == "/repos/other-owner/demo/pulls/7/reviews/55":
+            return httpx.Response(
+                200, json={"id": 55, "node_id": "PRR_55", "pull_request_url": pull}
+            )
+        sent.append(json.loads(request.content))
+        return _in_other_owner(request)
+
+    service = _service(monkeypatch, respond)
     try:
-        with pytest.raises(RepositoryScopeError, match="'acme'"):
+        with pytest.raises(ServiceError, match="'acme'"):
             await service.add_reaction(
-                "https://github.com/other-owner/demo/pull/7", "review", 55, "eyes"
+                "https://github.com/other-owner/demo/pull/7",
+                "pullrequestreview-55",
+                "ack",
             )
     finally:
         await service.aclose()
 
-    assert [body["query"] for body in sent] == [NODE_REPOSITORY]
+    assert sent == [{"query": NODE_REPOSITORY, "variables": {"id": "PRR_55"}}]
 
 
 @pytest.mark.asyncio
@@ -385,32 +402,12 @@ async def test_a_draft_conversion_outside_the_owner_is_refused_before_it_is_sent
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
-        repository = {"name": "demo", "owner": {"login": "other-owner"}}
-        return httpx.Response(200, json={"data": {"node": {"repository": repository}}})
+        return _in_other_owner(request)
 
-    client_type = httpx.AsyncClient
-    monkeypatch.setattr(
-        async_client.httpx,
-        "AsyncClient",
-        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
-    )
-    person = Person(
-        person_id="aiko",
-        name="Aiko",
-        person_type="agent",
-        account_info={"github_username": "aiko-gh"},
-    )
-    project = Project(
-        name="demo",
-        services={"code_hosting_service": {"name": "github", "owner": "acme"}},
-    )
-    service = GitHubCodeHostingService(person, Team(project=project, members=[person]))
-    service._client = async_client.get_async_client(
-        "https://api.github.com", github_utils.GitHubTokenAuth("token"), "acme"
-    )
+    service = _service(monkeypatch, respond)
     try:
-        with pytest.raises(RepositoryScopeError, match="'acme'"):
-            await service._graphql(
+        with pytest.raises(ServiceError, match="'acme'"):
+            await service.graphql(
                 CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": "PR_1"}
             )
     finally:

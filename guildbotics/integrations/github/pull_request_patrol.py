@@ -4,7 +4,7 @@ The project board only knows issues, so pull requests reach a member through
 the two roles GitHub records on the PR itself: the member wrote it, or the
 member reviews it. This module holds the GraphQL shape of one PR, its parsing,
 and the decision made from that snapshot; fetching and dispatching live in
-:class:`~guildbotics.integrations.github.github_ticket_manager.GitHubTicketManager`.
+:class:`~guildbotics.integrations.github.code_hosting_service.GitHubCodeHostingService`.
 
 Both roles read everything someone else says before deciding what it asks
 for, so the patrol does not judge a statement by its kind. A statement is an
@@ -21,7 +21,7 @@ Reviewer role (``pull_request_review``): the member is a requested reviewer,
 new commits landed after the member's last review, or, once the member has
 spoken on the PR, there is a statement the member has not answered (threads
 only those the member took part in). Re-reviews not driven by a request stop
-after :data:`MAX_REVIEW_ROUNDS` rounds (``REVIEW_LIMIT``): the manager makes
+after :data:`MAX_REVIEW_ROUNDS` rounds (``REVIEW_LIMIT``): the code host makes
 the PR a draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
 counted from the last time a human marked the PR ready for review, as GitHub
 records it, so every reviewer starts a new count; nothing else is stored. A
@@ -33,8 +33,8 @@ statements nor answers: they only suppress selection or mark the limit. A
 human marking the PR ready for review also ends every earlier hold.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
-PR into their own hands, and the manager's search excludes drafts before any
-snapshot is loaded. Besides humans, only the manager changes it, and only to
+PR into their own hands, and the code host's search excludes drafts before any
+snapshot is loaded. Besides humans, only the code host changes it, and only to
 hand a PR over at the review limit; a member's turn cannot.
 """
 
@@ -45,13 +45,13 @@ from dataclasses import dataclass
 from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
-    suppresses_ticket_selection,
 )
+from guildbotics.runtime.port import WorkflowStatusReason
 
 FEEDBACK = "pull_request_feedback"
 REVIEW = "pull_request_review"
 REVIEW_LIMIT = "pull_request_review_limit"
-REVIEW_LIMIT_REASON = "review_limit"
+REVIEW_LIMIT_REASON: WorkflowStatusReason = "review_limit"
 MAX_REVIEW_ROUNDS = 3
 
 PULL_REQUEST_FEEDBACK_SOURCE_QUERIES = {
@@ -62,7 +62,7 @@ PULL_REQUEST_FEEDBACK_SOURCE_QUERIES = {
 PULL_REQUEST_FEEDBACK_SOURCES = frozenset(PULL_REQUEST_FEEDBACK_SOURCE_QUERIES)
 
 # A query names the fields it reads, and a pull request is identified by the
-# same ones an issue is (the ticket manager's project query reads them too).
+# same ones an issue is (the ticket service's project query reads them too).
 # The selection sets of two queries of different types are not shared logic.
 # pylint: disable=duplicate-code
 PULL_REQUEST_QUERY = """
@@ -365,7 +365,7 @@ def _is_suppressed(pr: PullRequest, me: str) -> bool:
         return False
     latest = mine[-1]
     status = parse_workflow_status_comment(latest.body)
-    if status is None or not suppresses_ticket_selection(status):
+    if status is None or not status.holds_selection():
         return False
     lifted_at = max(_latest_activity_by_others(pr, me), pr.ready_at)
     return lifted_at <= latest.created_at

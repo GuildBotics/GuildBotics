@@ -1,29 +1,31 @@
-"""What a code host's repository reads return, whichever provider answers.
+"""What the ticket service and the code host read and write, whichever
+provider answers.
+
+Tickets and pull requests are named by their URLs, and the comments, reviews,
+threads, and jobs in them by opaque ids that mean something only together
+with the item's URL. A repository is named by its path, which its provider
+checks and spells (``owner/repo`` on GitHub, ``group/sub/project`` on GitLab).
 
 Each resource name maps to the schema of one item. A provider translates its
-own responses into these shapes, and :meth:`RepositoryReadPage.of` holds every
-item to its resource's schema, so the bundled inspections and the agents
-reading the member CLI see one shape from every provider.
+own responses into these shapes, and :meth:`ReadPage.of` holds every item to
+its resource's schema, so the bundled inspections and the agents reading the
+member CLI see one shape from every provider.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from guildbotics.runtime.port import SemanticReaction, ServiceError
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 # Room for JSON escaping in CLI, member result, and host envelope.
 MAX_PAGE_BYTES = STREAM_READ_LIMIT // 16
 MAX_LOG_TAIL_BYTES = MAX_PAGE_BYTES // 10
-
-
-class RepositoryReadError(RuntimeError):
-    """A safe repository read failure, without upstream bodies or credentials."""
 
 
 class ReadModel(BaseModel):
@@ -41,40 +43,65 @@ class ReadinessQuery(ReadModel):
 
 
 class DependencyAlertQuery(ReadModel):
+    """A page of a repository's alerts, or with ``id`` the one alert alone."""
+
     state: Literal["open", "resolved", "dismissed"] = "open"
     page_size: int = Field(default=30, ge=1, le=100)
+    id: str = Field(default="", max_length=256)
 
 
 class PageQuery(ReadModel):
     page_size: int = Field(default=30, ge=1, le=100)
+    #: The thread whose comments ``review_thread_comments`` reads.
     node: str = Field(default="", max_length=256)
 
 
+WorkKind = Literal["ticket", "pull_request"]
+
+
 class WorkTarget(ReadModel):
-    """The issue or pull request a command worked on, in one shape for every
+    """The ticket or pull request a command worked on, in one shape for every
     command: the member CLI records it as the work target of its trace."""
 
-    kind: Literal["issue", "pull_request"]
-    repo: str
-    number: int
+    kind: WorkKind
+    url: str
     title: str
-    html_url: str
+    #: The short reference the service shows it by where it is kept (GitHub
+    #: ``#12``, a GitLab merge request ``!12``, Jira ``PROJ-123``).
+    label: str
 
 
-class Issue(WorkTarget):
+Lane = Literal["new", "ready", "in_progress", "done"]
+
+
+class Ticket(WorkTarget):
+    #: What names the ticket in its service, short enough for a branch name
+    #: (``ticket/<key>``): ``123``, ``PROJ-123``.
+    key: str
+    #: Where the ticket is kept: a repository on GitHub, a project on Jira.
+    tracker: str
+    #: The code host's repository the ticket belongs to; ``None`` in a
+    #: service whose tickets belong to none.
+    repository: str | None
     body: str
     state: str
     assignees: list[str]
     labels: list[str]
+    #: The ticket's lane on the board; ``None`` when it is not on it.
+    lane: Lane | None
 
 
-class PullRequest(Issue):
+class PullRequest(WorkTarget):
+    repository: str
+    body: str
+    state: str
+    assignees: list[str]
+    labels: list[str]
     #: ``assistant`` when the member wrote it, as for comments.
     author_type: str
     head: str
-    head_repo: str
-    head_owner: str
-    head_repo_name: str
+    #: The repository the head branch is on.
+    head_repository: str
     head_sha: str
     base: str
     merged: bool
@@ -83,50 +110,42 @@ class PullRequest(Issue):
 
 
 class Comment(ReadModel):
-    id: int | None
+    id: str
     body: str
     author: str
     author_type: str
     created_at: str | None
-    html_url: str | None
+    url: str | None
 
 
 class ThreadComment(Comment):
-    reply_to_id: int | None
+    reply_to_id: str | None
 
 
-class PullRequestLink(ReadModel):
-    repo: str
-    number: int
+class TicketPullRequest(ReadModel):
+    """A pull request of the code host that refers to a ticket."""
+
+    url: str
+    label: str
+    title: str
+    state: str
+    merged: bool
 
 
-class TimelineEvent(ReadModel):
-    event: str | None
-    pull_request: PullRequestLink | None
-
-
-class ProjectField(ReadModel):
-    field: str
-    value: str | int | float | None
-
-
-class ProjectItem(ReadModel):
-    item_id: str | None
-    project_title: str | None
-    project_number: int | None
-    project_url: str | None
-    fields: list[ProjectField]
+ReviewVerdict = Literal["approve", "request_changes", "comment"]
 
 
 class Review(ReadModel):
-    id: int | None
+    id: str
     body: str
     author: str
     author_type: str
-    state: str
+    #: What the reviewer decided; ``dismissed`` when the decision was set aside.
+    verdict: ReviewVerdict | Literal["dismissed"]
+    #: The commit the review was given on.
+    commit: str | None
     submitted_at: str | None
-    html_url: str | None
-    commit_id: str | None
+    url: str | None
 
 
 class CommentableLine(ReadModel):
@@ -151,8 +170,9 @@ class FileChange(ReadModel):
 
 class ReviewThread(ReadModel):
     id: str
-    resolved: bool
-    outdated: bool
+    #: ``None`` where the service does not keep it.
+    resolved: bool | None
+    outdated: bool | None
     comments: list[ThreadComment]
     comments_complete: bool
 
@@ -162,7 +182,6 @@ class Check(ReadModel):
     status: str
     conclusion: str | None
     details_url: str
-    source: str
 
 
 class CompletionBlocker(ReadModel):
@@ -172,12 +191,11 @@ class CompletionBlocker(ReadModel):
 
 
 class FailedLog(ReadModel):
-    run_id: int
-    run_attempt: int
-    job_id: int
+    #: The job's attempt, as the CI names it: a run and its attempt are in it.
+    job_id: str
     name: str
     conclusion: str
-    html_url: str
+    url: str
     artifact_names: list[str]
     log: str
     log_bytes: int
@@ -188,9 +206,6 @@ class FailedLog(ReadModel):
 class Readiness(ReadModel):
     """Whether a pull request's head may be reported complete."""
 
-    repo: str
-    pr_number: int
-    pr_url: str
     target: WorkTarget
     base_sha: str | None
     head_sha: str
@@ -231,17 +246,30 @@ class DependencyAlert(ReadModel):
     updated_at: str | None = None
 
 
-#: What a resource is part of: one issue, one pull request, or the repository.
-ReadSubject = Literal["issue", "pull_request", "repository"]
+class CommentWritten(ReadModel):
+    id: str
+    url: str | None
+    author: str
+    created_at: str | None
+    target: WorkTarget
 
-#: Every resource a code host reads, by what it is part of, with the schema of
-#: one of its items.
+
+class ReactionAdded(ReadModel):
+    reaction: SemanticReaction
+    #: What was reacted to, by the id its item's read gave it.
+    id: str
+
+
+#: What a resource is part of, which its subject names: a ticket or a pull
+#: request by its URL, a repository by its path.
+ReadSubject = Literal["ticket", "pull_request", "repository"]
+
+#: Every resource, by what it is part of, with the schema of one of its items.
 RESOURCES_BY_SUBJECT: dict[ReadSubject, dict[str, type[ReadModel]]] = {
-    "issue": {
-        "issues": Issue,
-        "issue_comments": Comment,
-        "issue_timeline": TimelineEvent,
-        "issue_projects": ProjectItem,
+    "ticket": {
+        "tickets": Ticket,
+        "ticket_comments": Comment,
+        "ticket_pull_requests": TicketPullRequest,
     },
     "pull_request": {
         "pull_requests": PullRequest,
@@ -264,12 +292,16 @@ RESOURCE_SUBJECTS: dict[str, ReadSubject] = {
     for subject, resources in RESOURCES_BY_SUBJECT.items()
     for name in resources
 }
+#: The resources the ticket service reads; the code host reads the others,
+#: the pull requests of a ticket among them.
+TICKET_RESOURCES = frozenset({"tickets", "ticket_comments"})
 #: The resources that are one item, read without pagination.
-DETAIL_RESOURCES = frozenset({"issues", "pull_requests", "pull_request_readiness"})
+DETAIL_RESOURCES = frozenset({"tickets", "pull_requests", "pull_request_readiness"})
 
 
-class RepositoryReadPage(ReadModel):
-    """One bounded resource page, with a host-observed work target when present."""
+class ReadPage(ReadModel):
+    """One bounded resource page, with the work target it was read of when
+    that is one ticket or pull request."""
 
     items: list[dict[str, Any]]
     continuation: str | None = None
@@ -283,7 +315,7 @@ class RepositoryReadPage(ReadModel):
         *,
         continuation: str | None = None,
         target: WorkTarget | None = None,
-    ) -> RepositoryReadPage:
+    ) -> ReadPage:
         """A page of ``resource``, each item held to its schema.
 
         Raises:
@@ -303,49 +335,41 @@ class RepositoryReadPage(ReadModel):
 
 
 def read_conditions(
-    resource: str, repo: str, identifier: str, parameters: dict[str, Any] | None
+    resource: str, parameters: dict[str, Any] | None, continuation: str
 ) -> dict[str, Any]:
     """The conditions of a read, checked before any provider is asked.
 
-    dependency_alerts follows DependencyAlertQuery (no conditions with an
-    identifier). Every other resource requires its number as identifier;
-    collections take page_size (1-100), and thread comments also take the
-    node identifier of their thread. Readiness accepts failed_logs and
-    log_tail_bytes.
+    dependency_alerts follows DependencyAlertQuery: with an ``id`` it reads
+    that one alert, with no other condition and no continuation. Readiness
+    accepts failed_logs and log_tail_bytes. Other collections take page_size
+    (1-100), and thread comments also the ``node`` id of their thread. One
+    item is read without conditions or continuation.
 
     Raises:
-        RepositoryReadError: If the read is not one a code host answers.
+        ServiceError: If the read is not one a service answers.
     """
     if resource not in RESOURCES:
-        raise RepositoryReadError(t("integrations.repository.resource"))
-    if not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", repo
-    ) or repo.rsplit("/", maxsplit=1)[-1] in {".", ".."}:
-        raise RepositoryReadError(t("integrations.repository.repository"))
-    if identifier and not re.fullmatch(r"[1-9][0-9]{0,19}", identifier):
-        raise RepositoryReadError(t("integrations.repository.identifier"))
-    if resource != "dependency_alerts" and not identifier:
-        raise RepositoryReadError(t("integrations.repository.identifier"))
+        raise ServiceError(t("integrations.resources.resource"))
+    if continuation and resource in DETAIL_RESOURCES:
+        raise ServiceError(t("integrations.resources.continuation"))
+    given = {} if parameters is None else parameters
     try:
-        if parameters is not None and not isinstance(parameters, dict):
+        if not isinstance(given, dict):
             raise ValueError
         if resource == "dependency_alerts":
-            if not identifier:
-                return DependencyAlertQuery.model_validate(
-                    parameters or {}
-                ).model_dump()
-        elif resource == "pull_request_readiness":
-            return ReadinessQuery.model_validate(parameters or {}).model_dump()
-        elif resource not in DETAIL_RESOURCES:
-            conditions = PageQuery.model_validate(parameters or {}).model_dump()
-            if resource == "review_thread_comments":
-                if not re.fullmatch(r"[A-Za-z0-9_=-]{1,256}", conditions["node"]):
-                    raise ValueError
-            elif conditions["node"]:
+            query = DependencyAlertQuery.model_validate(given)
+            if query.id and (query.model_fields_set != {"id"} or continuation):
                 raise ValueError
-            return conditions
-        if parameters not in (None, {}):
+            return query.model_dump()
+        if resource == "pull_request_readiness":
+            return ReadinessQuery.model_validate(given).model_dump()
+        if resource in DETAIL_RESOURCES:
+            if given:
+                raise ValueError
+            return {}
+        conditions = PageQuery.model_validate(given).model_dump()
+        if bool(conditions["node"]) != (resource == "review_thread_comments"):
             raise ValueError
-        return {}
-    except ValueError:
-        raise RepositoryReadError(t("integrations.repository.parameters")) from None
+        return conditions
+    except (ValueError, ValidationError):
+        raise ServiceError(t("integrations.resources.parameters")) from None

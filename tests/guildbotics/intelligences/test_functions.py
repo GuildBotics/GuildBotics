@@ -79,10 +79,11 @@ def test_handle_chat_event_prompt_keeps_only_trigger_specific_contract():
     assert "member chat complete" in body
     assert "chat inspect thread" in body
     assert "reply / reaction-only / no-op / asking / blocked" in body
-    # Chat-originated code work needs no pre-existing issue: prepare runs from a
-    # repo and branch, and issue/PR anchors are only for explicit references.
-    assert "--repo <owner/repo> --branch <branch>" in body
-    assert "no issue has to be created first" in body
+    # Chat-originated code work needs no pre-existing ticket: prepare runs from
+    # a repository and branch, and ticket/PR anchors are only for explicit
+    # references.
+    assert "--repo <repository> --branch <branch>" in body
+    assert "no ticket has to be created first" in body
     # Envelope and shared-procedure content lives in the injected contract and
     # the member capability reference only.
     assert "--workspace-mode" not in body

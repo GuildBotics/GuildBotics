@@ -20,15 +20,15 @@ def test_project_service_names_and_availability():
     project = Project(
         name="p",
         services={
-            Service.TICKET_MANAGER.value: {"name": "Jira"},
+            Service.TICKET_SERVICE.value: {"name": "Jira"},
             # Intentionally leave CODE_HOSTING_SERVICE missing
         },
     )
 
-    assert project.is_available_service(Service.TICKET_MANAGER)
+    assert project.is_available_service(Service.TICKET_SERVICE)
     assert not project.is_available_service(Service.CODE_HOSTING_SERVICE)
     # Name is lower-cased by implementation
-    assert project.get_service_name(Service.TICKET_MANAGER) == "jira"
+    assert project.get_service_name(Service.TICKET_SERVICE) == "jira"
 
 
 @pytest.mark.parametrize(

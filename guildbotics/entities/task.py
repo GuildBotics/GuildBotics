@@ -18,19 +18,8 @@ DAY_OF_WEEK_FIELD_INDEX = 4
 
 
 class Task(BaseModel):
-    """
-    A class representing a task.
-
-    Attributes:
-        id (Optional[str]): The unique identifier for the task.
-        title (str): The title of the task.
-        description (str): A description of the task.
-        comments (list[Message]): Comments associated with the task.
-        status (str): The current status of the task (default is "new").
-        owner (str | None): The owner of the task.
-        created_at (Optional[datetime]): The date and time when the task was created.
-        repository (Optional[str]): The git repository associated with the task.
-    """
+    """A piece of work a member is selected for: a ticket of the board, or a
+    pull request that asks something of the member."""
 
     # Status constant definitions
     NEW: ClassVar[str] = "new"
@@ -41,6 +30,9 @@ class Task(BaseModel):
     id: str | None = Field(
         default=None, description="The unique identifier for the task."
     )
+    url: str | None = Field(
+        default=None, description="The URL of the ticket or pull request."
+    )
     title: str = Field(..., description="The title of the task.")
     description: str = Field(..., description="A description of the task.")
     comments: list[Message] = Field(
@@ -48,13 +40,6 @@ class Task(BaseModel):
     )
     status: str = Field(
         default=NEW, description='The current status of the task (default is "new").'
-    )
-    owner: str | None = Field(default=None, description="The owner of the task.")
-    created_at: datetime.datetime | None = Field(
-        default=None, description="The date and time when the task was created."
-    )
-    repository: str | None = Field(
-        default=None, description="The git repository associated with the task."
     )
     assignee: str | None = Field(
         default=None,
@@ -64,17 +49,12 @@ class Task(BaseModel):
         default=None,
         description="The related pull request URL when the task is triggered by PR review state.",
     )
-    number: int | None = Field(
-        default=None,
-        description="The issue/PR number, when the task originates from one.",
-    )
-    url: str | None = Field(
-        default=None,
-        description="The issue/PR URL, when the task originates from one.",
-    )
     trigger_reason: str | None = Field(
         default=None,
         description="Short reason why the task was selected for the workflow.",
+    )
+    created_at: datetime.datetime | None = Field(
+        default=None, description="The date and time when the task was created."
     )
 
     def trace_attributes(self) -> dict[str, str]:
@@ -82,19 +62,16 @@ class Task(BaseModel):
 
         The patrol opens the run's trace with them and the ticket selector
         sets them on a trace opened before selection, so the run names its
-        PR / issue on every device.
+        ticket / PR on every device.
         """
-        attributes: dict[str, str] = {}
-        if self.repository:
-            attributes["github.repo"] = self.repository
+        attributes = {
+            "github.kind": "pull_request" if self.pull_request_url else "ticket"
+        }
         if self.title:
             attributes["github.title"] = self.title
         url = self.pull_request_url or self.url
-        attributes["github.kind"] = "pull_request" if self.pull_request_url else "issue"
         if url:
             attributes["github.url"] = url
-        if self.number is not None:
-            attributes["github.number"] = str(self.number)
         return attributes
 
     def __lt__(self, other: "Task") -> bool:

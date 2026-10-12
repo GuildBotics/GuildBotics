@@ -25,7 +25,7 @@ from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language
-from tests.guildbotics.local_code_host import issue, item, local_member
+from tests.guildbotics.local_code_host import item, local_member, ticket
 
 ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
 PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"
@@ -45,7 +45,7 @@ class _Person:
 
 
 class _Context:
-    """Holds the host's invocation; it has no ticket manager to reach for."""
+    """Holds the host's invocation; it has no ticket service to reach for."""
 
     def __init__(self, pull_request_url: str = "", trigger_reason: str = "") -> None:
         self.person = _Person()
@@ -91,9 +91,9 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
     assert kwargs["person_id"] == "aiko"
     assert kwargs["ticket_url"] == ISSUE_URL
     assert kwargs["pull_request_url"] == ""
-    assert kwargs["work_type"] == "issue"
+    assert kwargs["work_type"] == "ticket"
     assert kwargs["trigger_reason"] == ""
-    # The workflow does not read or pass issue content; the agent inspects it.
+    # The workflow does not read or pass ticket content; the agent inspects it.
     assert "issue_title" not in kwargs
     assert "issue_description" not in kwargs
     assert kwargs["language"] == "English"
@@ -101,7 +101,7 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
         Path(tmp_path) / ".guildbotics" / "local" / "clones" / "aiko"
     )
     assert kwargs["cwd"] == Path(kwargs["member_workspace"])
-    # Issue trigger: prepare command has no --pr-url.
+    # Ticket trigger: prepare command has no --pr-url.
     assert kwargs["prepare_command"] == (
         f"guildbotics member git prepare --person aiko --issue-url {ISSUE_URL}"
     )
@@ -133,7 +133,7 @@ async def test_workflow_passes_pull_request_work_type(trigger_reason, work_type)
     # The patrol names the member's role on the PR; the prompt branches on it.
     assert kwargs["work_type"] == work_type
     # Pull request work anchors on --pr-url so the agent checks out the PR head
-    # branch instead of a fresh ticket/<n> branch.
+    # branch instead of a fresh ticket/<key> branch.
     assert kwargs["prepare_command"].endswith(f"--pr-url {PR_URL}")
     assert "--issue-url" not in kwargs["prepare_command"]
 
@@ -148,7 +148,7 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
     accepted against the ticket."""
     member_cli = importlib.import_module("guildbotics.cli.member")
     member = local_member()
-    url = issue(1, title="Fix login", lane=Task.READY, assignees=["aiko"])
+    url = ticket(1, title="Fix login", lane=Task.READY, assignees=["aiko"])
     monkeypatch.setattr(
         member_cli, "resolve_member_context", lambda _: (member, member.person)
     )
@@ -164,8 +164,8 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
         def clone_for(self, person):
             return self
 
-        def get_ticket_manager(self):
-            return member.board
+        def get_ticket_service(self):
+            return member.tickets
 
         def get_code_hosting_service(self):
             return member.code
@@ -223,4 +223,4 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
     assert [c["body"] for c in item(url)["comments"]] == ["Done."]
     assert RunStore().status("run-1").to_dict()["status"] == "done"
     # Answered by the member, the ticket waits for someone else.
-    assert await member.board.get_task_candidates() == []
+    assert await member.tickets.candidates() == []

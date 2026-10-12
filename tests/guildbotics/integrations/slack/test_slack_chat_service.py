@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from urllib.parse import parse_qs
 
@@ -16,11 +17,17 @@ from guildbotics.integrations.slack.slack_chat_service import (
     SlackChatService,
     SlackUnreachableError,
 )
-from guildbotics.runtime.chat_service import (
-    ChatMessageRef,
-    ChatServiceError,
-    ChatThreadNotFoundError,
-    CredentialCheck,
+from guildbotics.integrations.slack.workflow_status import status_metadata
+from guildbotics.runtime.chat_service import ChatMessageRef, CredentialCheck
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
+
+_STATUS = WorkflowStatus(
+    reason="failed", person_id="alice", run_id="run-1", subject="C1:99.9"
 )
 
 
@@ -78,10 +85,7 @@ async def test_list_channel_events_normalizes_messages():
                     "user": "UUSER1",
                     "text": "<@UBOT123> hi",
                     "ts": "100.1",
-                    "metadata": {
-                        "event_type": "guildbotics.workflow_status",
-                        "event_payload": {"routing": "suppress", "reason": "failed"},
-                    },
+                    "metadata": status_metadata(_STATUS),
                 },
                 {
                     "type": "message",
@@ -136,9 +140,10 @@ async def test_list_channel_events_normalizes_messages():
     assert len(page.events) == expected_event_count
     assert page.events[0].event_id == "C1:100.1"
     assert page.events[0].mentions == ["UBOT123"]
-    assert page.events[0].metadata["event_type"] == "guildbotics.workflow_status"
+    assert page.events[0].status == _STATUS
     assert page.events[0].is_thread_reply is False
     assert page.events[1].is_bot_message is True
+    assert page.events[1].status is None
     assert page.events[2].event_id == "C1:102.1"
     assert page.events[2].text == "please check this file"
     assert "oldest=90.000000" in seen_body
@@ -173,13 +178,7 @@ async def test_list_thread_events_uses_conversations_replies():
                         "text": "reply",
                         "ts": "100.2",
                         "thread_ts": "100.1",
-                        "metadata": {
-                            "event_type": "guildbotics.workflow_status",
-                            "event_payload": {
-                                "routing": "suppress",
-                                "reason": "failed",
-                            },
-                        },
+                        "metadata": status_metadata(_STATUS),
                     },
                 ],
             },
@@ -195,7 +194,8 @@ async def test_list_thread_events_uses_conversations_replies():
     assert "include_all_metadata=true" in seen_body
     assert [event.text for event in page.events] == ["root", "reply"]
     assert page.events[1].is_thread_reply is True
-    assert page.events[1].metadata["event_type"] == "guildbotics.workflow_status"
+    assert page.events[0].status is None
+    assert page.events[1].status == _STATUS
     await client.aclose()
 
 
@@ -262,10 +262,7 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
         "C1",
         "hello",
         thread_id="100.1",
-        metadata={
-            "event_type": "guildbotics.workflow_status",
-            "event_payload": {"routing": "suppress"},
-        },
+        status=_STATUS,
     )
     await svc.add_reaction("C1", "100.1", "ack")
     assert res.message_id == "200.1"
@@ -277,7 +274,7 @@ async def test_post_message_and_add_reaction_send_expected_payloads():
     )
     post_body = next(body for path, body in seen if path.endswith("/chat.postMessage"))
     metadata_json = parse_qs(post_body)["metadata"][0]
-    assert "guildbotics.workflow_status" in metadata_json
+    assert json.loads(metadata_json) == status_metadata(_STATUS)
     assert any(
         path.endswith("/reactions.add") and "name=white_check_mark" in body
         for path, body in seen
@@ -291,7 +288,7 @@ async def test_add_reaction_raises_for_unknown_semantic_reaction():
     svc = SlackChatService(
         logging.getLogger("test"), client=client, base_url="https://x.test"
     )
-    with pytest.raises(ChatServiceError, match="Unsupported semantic reaction"):
+    with pytest.raises(ServiceUnsupported, match="Unsupported semantic reaction"):
         await svc.add_reaction("C1", "100.1", "eyes")
     await client.aclose()
 
@@ -474,7 +471,7 @@ def test_a_permalink_names_its_message_and_thread(url, ref):
     ],
 )
 def test_a_url_that_is_no_permalink_is_refused(url):
-    with pytest.raises(ChatServiceError):
+    with pytest.raises(ServiceNotFound):
         SlackChatService(logging.getLogger("test")).parse_message_url(url)
 
 
@@ -485,7 +482,7 @@ async def test_a_missing_thread_is_the_ports_thread_not_found():
 
     async with _client_for(handler) as client:
         service = SlackChatService(logging.getLogger("test"), client=client)
-        with pytest.raises(ChatThreadNotFoundError):
+        with pytest.raises(ServiceNotFound):
             await service.list_thread_events("C1", thread_id="1.0")
 
 
@@ -558,7 +555,6 @@ async def test_a_credential_that_gets_no_slack_answer_failed():
 async def test_a_member_without_a_bot_token_is_told_where_it_goes():
     from guildbotics.capabilities.member_chat import MemberChatCapabilityService
     from guildbotics.entities.team import Person
-    from guildbotics.runtime.integration_factory import MemberCapabilityError
 
     service = SlackChatService(
         logging.getLogger("test"), token_name="AIKO_SLACK_BOT_TOKEN"
@@ -567,7 +563,7 @@ async def test_a_member_without_a_bot_token_is_told_where_it_goes():
         Person(person_id="aiko", name="Aiko"), service, "slack"
     )
 
-    with pytest.raises(MemberCapabilityError, match="set AIKO_SLACK_BOT_TOKEN"):
+    with pytest.raises(ServiceError, match="set AIKO_SLACK_BOT_TOKEN"):
         await chat.identity()
 
 

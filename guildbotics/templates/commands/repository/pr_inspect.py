@@ -17,13 +17,12 @@ COMMAND_METADATA = {
 
 async def main(
     context: Any,
-    repo: str,
-    number: str,
+    url: str,
     include_comments: str = "false",
     include_diff: str = "false",
 ) -> str:
     comments, diff = flag(include_comments), flag(include_diff)
-    reader = RepositoryReader(context, repo, number)
+    reader = RepositoryReader(context, url)
     result = await reader.one("pull_requests")
     result["checks"] = await reader.one("pull_request_readiness")
     if comments:

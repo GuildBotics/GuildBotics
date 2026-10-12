@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
+from pydantic import ValidationError
+
 from guildbotics.runtime.chat_service import ChatEvent, ChatMessage
+from guildbotics.runtime.port import WorkflowStatus
 
 
 @dataclass(slots=True)
@@ -107,6 +107,16 @@ class PendingChatEvent:
         mentions = item.get("mentions") or []
         if not isinstance(mentions, list):
             mentions = []
+        try:
+            status = (
+                WorkflowStatus.model_validate(item["status"])
+                if item.get("status")
+                else None
+            )
+        except ValidationError:
+            raise PendingEventRecordError(
+                f"Pending event {index}{suffix} carries an invalid status."
+            ) from None
         return cls(
             event=ChatEvent(
                 event_id=required["event_id"] or "",
@@ -119,7 +129,7 @@ class PendingChatEvent:
                 mentions=[str(value) for value in mentions if str(value)],
                 is_bot_message=bool(item.get("is_bot_message", False)),
                 is_thread_reply=bool(item.get("is_thread_reply", False)),
-                metadata=normalize_workflow_status_metadata(item.get("metadata")),
+                status=status,
             ),
             chat_participation=str(
                 item.get("chat_participation", "strict") or "strict"
@@ -146,7 +156,7 @@ class PendingChatEvent:
             "mentions": [str(value) for value in event.mentions if str(value)],
             "is_bot_message": bool(event.is_bot_message),
             "is_thread_reply": bool(event.is_thread_reply),
-            "metadata": normalize_workflow_status_metadata(event.metadata),
+            "status": None if event.status is None else event.status.model_dump(),
             "chat_participation": self.chat_participation,
             "attempt_count": max(0, int(self.attempt_count)),
             "max_attempts": max(1, int(self.max_attempts)),

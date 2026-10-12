@@ -1,69 +1,69 @@
-"""The local code host: repositories whose issues and pull requests are files
-of the workspace (:mod:`.store`), and whose remote is a bare repository.
+"""The local code host: repositories whose pull requests are files of the
+workspace (:mod:`.store`), and whose remote is a bare repository.
 
 Whether a pull request's CI passes is the project's setting
 ``services.code_hosting_service.checks`` (``success``, the default, or
-``failure``).
+``failure``): its one job, ``local``, runs once (attempt 1) on every head.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, Any, cast
-from urllib.parse import urlparse
+from typing import IO, Any
+from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
-from guildbotics.integrations.local import store
-from guildbotics.runtime.code_hosting_resources import (
-    DETAIL_RESOURCES,
-    RESOURCE_SUBJECTS,
-    CompletionBlocker,
-    Readiness,
-    ReadinessQuery,
-    RepositoryReadError,
-    RepositoryReadPage,
-    WorkTarget,
-    read_conditions,
-)
+from guildbotics.integrations.diff_lines import file_change
+from guildbotics.integrations.local import items, store
+from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
     CodeHostingService,
-    CommentWritten,
-    IssueCreated,
-    IssueUpdated,
-    ItemKind,
-    ItemRef,
     PullRequestCreated,
     PullRequestHead,
     PullRequestUpdated,
-    ReactionAdded,
-    ReactionTarget,
     ReplyWritten,
     ReviewCommentWritten,
-    ReviewEvent,
     ReviewSubmitted,
 )
-from guildbotics.runtime.integration_factory import MemberCapabilityError
+from guildbotics.runtime.port import (
+    SemanticReaction,
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
+from guildbotics.runtime.resources import (
+    TICKET_RESOURCES,
+    CommentWritten,
+    ReactionAdded,
+    Readiness,
+    ReadinessQuery,
+    ReadPage,
+    ReviewVerdict,
+    read_conditions,
+)
 from guildbotics.utils.i18n_tool import t
 
-_REVIEW_STATES = {
-    "approve": "APPROVED",
-    "request-changes": "CHANGES_REQUESTED",
-    "comment": "COMMENTED",
-}
 _FEEDBACK = "pull_request_feedback"
 _REVIEW = "pull_request_review"
+#: The one job of a head's CI, and its one attempt.
+_JOB = "local"
+_ATTEMPT = 1
 
 
 class LocalCodeHostingService(CodeHostingService):
     def __init__(self, person: Person, team: Team) -> None:
+        config = team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
         self.person = person
-        self.team = team
+        #: The namespace the member writes in.
+        self.scope = str(config.get("owner") or "")
+        self._checks = str(config.get("checks") or "success")
 
     async def aclose(self) -> None:
         """The files are opened per operation."""
@@ -73,103 +73,85 @@ class LocalCodeHostingService(CodeHostingService):
     async def read(
         self,
         resource: str,
-        repo: str,
+        subject: str,
         *,
-        identifier: str = "",
         parameters: dict[str, Any] | None = None,
         continuation: str = "",
-    ) -> RepositoryReadPage:
-        conditions = read_conditions(resource, repo, identifier, parameters)
-        owner, name = store.split(repo)
+    ) -> ReadPage:
+        conditions = read_conditions(resource, parameters, continuation)
+        if resource in TICKET_RESOURCES:
+            raise ServiceError(t("integrations.resources.resource"))
         if resource == "dependency_alerts":
-            return RepositoryReadPage.of(resource, [])
-        if continuation and (
-            resource in DETAIL_RESOURCES or not continuation.isdigit()
-        ):
-            raise RepositoryReadError(t("integrations.repository.continuation"))
-        try:
-            item = store.load(
-                owner,
-                name,
-                cast(ItemKind, RESOURCE_SUBJECTS[resource]),
-                int(identifier),
+            raise ServiceUnsupported("The local code host keeps no dependency alerts.")
+        if resource == "ticket_pull_requests":
+            return items.page(
+                resource,
+                await self._ticket_pull_requests(subject),
+                conditions,
+                continuation,
             )
-        except MemberCapabilityError as exc:
-            raise RepositoryReadError(str(exc)) from None
-        target = _target(owner, name, item)
+        ref = store.locate(subject, "pull_request")
+        item = store.load(ref)
         if resource == "pull_request_readiness":
-            result = await self.readiness(target.html_url, **conditions)
-            return RepositoryReadPage.of(resource, [result], target=target)
-        if resource in DETAIL_RESOURCES:
-            return RepositoryReadPage.of(
-                resource, [self._detail(owner, name, item)], target=target
+            readiness = await self.readiness(subject, **conditions)
+            return ReadPage.of(resource, [readiness], target=readiness.target)
+        if resource == "pull_requests":
+            return ReadPage.of(
+                resource, [self._detail(ref, item)], target=items.target(ref, item)
             )
-        entries = self._entries(resource, owner, name, item, conditions)
-        start = int(continuation or 0)
-        end = start + conditions["page_size"]
-        return RepositoryReadPage.of(
+        return items.page(
             resource,
-            entries[start:end],
-            continuation=str(end) if end < len(entries) else None,
+            self._entries(resource, ref, item, conditions),
+            conditions,
+            continuation,
         )
 
-    def _detail(self, owner: str, repo: str, item: dict[str, Any]) -> dict[str, Any]:
-        detail = {
-            **_target(owner, repo, item).model_dump(),
+    async def _ticket_pull_requests(self, ticket_url: str) -> list[dict[str, Any]]:
+        ticket = _local_ticket(ticket_url)
+        if ticket is None:
+            raise ServiceUnsupported(
+                f"The local code host knows only local tickets, not {ticket_url}."
+            )
+        store.load(ticket)
+        return [
+            {
+                "url": ref.url,
+                "label": ref.label,
+                "title": pull["title"],
+                "state": pull["state"],
+                "merged": pull["merged"],
+            }
+            for ref, pull in store.items("pull_request")
+            if pull["ticket"] == ticket.url
+        ]
+
+    def _detail(self, ref: store.Ref, item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **items.target(ref, item).model_dump(),
+            "repository": ref.place,
             "body": item["body"],
             "state": item["state"],
-            "assignees": item.get("assignees", []),
-            "labels": item.get("labels", []),
+            "assignees": item["assignees"],
+            "labels": item["labels"],
+            "author_type": self._author_type(item["author"]),
+            "head": item["head"],
+            "head_repository": item["head_repository"],
+            "head_sha": _head_sha(item),
+            "base": item["base"],
+            "merged": item["merged"],
+            "draft": item["draft"],
+            "changed_files": None,
         }
-        if item["kind"] == "pull_request":
-            head_owner, head_repo = store.split(
-                item.get("head_repo") or f"{owner}/{repo}"
-            )
-            detail.update(
-                author_type=self._author_type(item["author"]),
-                head=item["head"],
-                head_repo=f"{head_owner}/{head_repo}",
-                head_owner=head_owner,
-                head_repo_name=head_repo,
-                head_sha=_head_sha(owner, repo, item),
-                base=item["base"],
-                merged=item.get("merged", False),
-                draft=item.get("draft", False),
-                changed_files=None,
-            )
-        return detail
 
     def _entries(
         self,
         resource: str,
-        owner: str,
-        repo: str,
+        ref: store.Ref,
         item: dict[str, Any],
         conditions: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        if resource in {"issue_comments", "pull_request_comments"}:
-            return [self._comment(comment) for comment in item.get("comments", [])]
-        if resource == "issue_timeline":
-            return [
-                {
-                    "event": "cross-referenced",
-                    "pull_request": {"repo": f"{owner}/{repo}", "number": pr["number"]},
-                }
-                for pr in store.items(owner, repo)
-                if pr["kind"] == "pull_request" and pr.get("issue") == item["number"]
-            ]
-        if resource == "issue_projects":
-            if not item.get("lane"):
-                return []
-            return [
-                {
-                    "item_id": _target(owner, repo, item).html_url,
-                    "project_title": "local",
-                    "project_number": None,
-                    "project_url": None,
-                    "fields": [{"field": "Status", "value": item["lane"]}],
-                }
-            ]
+        if resource == "pull_request_comments":
+            return [self._comment(comment) for comment in item["comments"]]
         if resource == "pull_request_reviews":
             return [
                 {
@@ -177,33 +159,39 @@ class LocalCodeHostingService(CodeHostingService):
                     "body": review["body"],
                     "author": review["author"],
                     "author_type": self._author_type(review["author"]),
-                    "state": review["state"],
-                    "submitted_at": review["submitted_at"],
-                    "html_url": None,
-                    "commit_id": review["commit_id"],
+                    "verdict": review["verdict"],
+                    "commit": review["commit"],
+                    "submitted_at": review["created_at"],
+                    "url": None,
                 }
-                for review in item.get("reviews", [])
+                for review in item["reviews"]
             ]
         if resource == "pull_request_files":
-            return []
+            return _files(ref.place, item)
         threads = _threads(item)
         if resource == "pull_request_threads":
             return [
                 {
-                    "id": str(root["id"]),
-                    "resolved": False,
-                    "outdated": False,
+                    "id": root["id"],
+                    # Kept by no local file.
+                    "resolved": None,
+                    "outdated": None,
                     "comments": [self._thread_comment(c) for c in comments],
                     "comments_complete": True,
                 }
                 for root, comments in threads
             ]
-        return [
-            self._thread_comment(comment)
-            for root, comments in threads
-            if str(root["id"]) == conditions["node"]
-            for comment in comments
-        ]
+        thread = next(
+            (
+                comments
+                for root, comments in threads
+                if root["id"] == conditions["node"]
+            ),
+            None,
+        )
+        if thread is None:
+            raise ServiceNotFound(f"'{conditions['node']}' is no thread of {ref.url}.")
+        return [self._thread_comment(comment) for comment in thread]
 
     def _comment(self, comment: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -212,150 +200,73 @@ class LocalCodeHostingService(CodeHostingService):
             "author": comment["author"],
             "author_type": self._author_type(comment["author"]),
             "created_at": comment["created_at"],
-            "html_url": None,
+            "url": None,
         }
 
     def _thread_comment(self, comment: dict[str, Any]) -> dict[str, Any]:
-        return {**self._comment(comment), "reply_to_id": comment.get("in_reply_to")}
+        return {**self._comment(comment), "reply_to_id": comment["in_reply_to"]}
 
     def _author_type(self, author: str) -> str:
         return Message.ASSISTANT if author == self.person.person_id else Message.USER
 
-    def locate(self, url: str, kind: ItemKind | None = None) -> ItemRef:
-        return store.locate(url, kind)
-
     async def identity(self, *, check: bool = False) -> dict[str, str]:
         return {}
 
-    # -- issues -------------------------------------------------------------
+    # -- pull requests ------------------------------------------------------
 
     async def comment(
-        self,
-        url: str,
-        body: str,
-        *,
-        kind: ItemKind | None = None,
-        status: dict[str, object] | None = None,
+        self, url: str, body: str, *, status: WorkflowStatus | None = None
     ) -> CommentWritten:
-        ref, item = self._item(url, kind)
-        comment = self._entry(item, {"body": body.rstrip(), "status": status})
-        item.setdefault("comments", []).append(comment)
-        store.save(self.team.project, ref.owner, ref.repo, item)
-        return CommentWritten(
-            comment_id=comment["id"],
-            html_url=f"{ref.url}#comment-{comment['id']}",
-            author=self.person.person_id,
-            created_at=comment["created_at"],
-            target=_target(ref.owner, ref.repo, item),
-        )
-
-    async def create_issue(
-        self, repo: str, title: str, body: str, labels: Sequence[str]
-    ) -> IssueCreated:
-        owner, name = store.split(repo)
-        item = self._new_item(owner, name, "issue", title, body)
-        item["labels"] = self._defined_labels(owner, name, labels)
-        store.save(self.team.project, owner, name, item)
-        target = _target(owner, name, item)
-        return IssueCreated(
-            issue_number=item["number"],
-            issue_title=title,
-            repo=repo,
-            issue_url=target.html_url,
-            labels=item["labels"],
-            target=target,
-        )
-
-    async def update_issue(
-        self,
-        url: str,
-        *,
-        body: str | None,
-        title: str | None,
-        add_labels: Sequence[str],
-        remove_labels: Sequence[str],
-        state: str | None,
-        state_reason: str | None,
-    ) -> IssueUpdated:
-        ref, item = self._item(url, "issue")
-        additions = self._defined_labels(ref.owner, ref.repo, add_labels)
-        state_changed = state is not None and item["state"] != state
-        for key, value in (("body", body), ("title", title), ("state", state)):
-            if value is not None:
-                item[key] = value
-        if state_changed:
-            item["closed_at"] = store.now() if state == "closed" else None
-        labels = [label for label in item["labels"] if label not in remove_labels]
-        item["labels"] = labels + [label for label in additions if label not in labels]
-        store.save(self.team.project, ref.owner, ref.repo, item)
-        return IssueUpdated(
-            issue_number=ref.number,
-            issue_url=ref.url,
-            repo=ref.full_repo,
-            title=item["title"],
-            state=item["state"],
-            state_changed=state_changed,
-            labels=item["labels"],
-            body=item["body"],
-            target=_target(ref.owner, ref.repo, item),
-        )
-
-    async def linked_pull_requests(self, issue_url: str) -> list[str]:
-        ref, _ = self._item(issue_url, "issue")
-        return [
-            store.url(ref.owner, ref.repo, "pull_request", item["number"])
-            for item in store.items(ref.owner, ref.repo)
-            if item["kind"] == "pull_request" and item.get("issue") == ref.number
-        ]
-
-    # -- pull requests ------------------------------------------------------
+        ref = store.locate(url, "pull_request")
+        return items.comment(self.scope, ref, self.person.person_id, body, status)
 
     async def create_pull_request(
         self,
-        repo: str,
+        repository: str,
         head: str,
         base: str,
         title: str,
         body: str,
         *,
         draft: bool,
-        issue_url: str,
-        closes_issue: bool,
+        ticket_url: str,
+        closes: bool,
     ) -> PullRequestCreated:
-        owner, name = store.split(repo)
-        base = base.strip() or await self.default_branch(owner, name)
-        item = next(
+        base = base.strip() or await self.default_branch(repository)
+        found = next(
             (
-                pr
-                for pr in store.items(owner, name)
-                if pr["kind"] == "pull_request"
-                and pr["state"] == "open"
-                and (pr["head"], pr["base"]) == (head, base)
+                (ref, pull)
+                for ref, pull in store.items("pull_request", repository)
+                if pull["state"] == "open"
+                and (pull["head"], pull["base"]) == (head, base)
             ),
             None,
         )
-        created = item is None
-        if item is None:
-            item = self._new_item(owner, name, "pull_request", title, body)
-            item.update(
-                head=head,
-                base=base,
-                draft=draft,
-                merged=False,
-                reviewers=[],
-                reviews=[],
-                review_comments=[],
-                issue=self._linked_issue(owner, name, issue_url),
-            )
-            store.save(self.team.project, owner, name, item)
+        if found is None:
+            ticket = _linked(ticket_url, repository, closes)
+            ref, number = store.new_ref("pull_request", repository)
+            item = {
+                **items.new_item(number, title, body, self.person.person_id),
+                "head": head,
+                "head_repository": repository,
+                "base": base,
+                "draft": draft,
+                "merged": False,
+                "reviewers": [],
+                "reviews": [],
+                "review_comments": [],
+                "ticket": ticket,
+                "closes": closes and ticket is not None,
+            }
+            store.save(self.scope, ref, item)
+        else:
+            ref, item = found
         return PullRequestCreated(
-            pr_number=item["number"],
-            pr_url=_target(owner, name, item).html_url,
-            created=created,
+            created=found is None,
             draft=item["draft"],
             head=head,
             base=base,
-            target=_target(owner, name, item),
+            target=items.target(ref, item),
         )
 
     async def update_pull_request(
@@ -364,130 +275,103 @@ class LocalCodeHostingService(CodeHostingService):
         *,
         body: str | None,
         title: str | None,
-        drop_issue_links: bool,
+        drop_ticket_links: bool,
     ) -> PullRequestUpdated:
-        ref, item = self._item(url, "pull_request")
-        if drop_issue_links:
-            item["issue"] = None
+        ref = store.locate(url, "pull_request")
+        item = store.load(ref)
+        if drop_ticket_links:
+            item.update(ticket=None, closes=False)
         for key, value in (("body", body), ("title", title)):
             if value is not None:
                 item[key] = value
-        store.save(self.team.project, ref.owner, ref.repo, item)
-        return PullRequestUpdated(
-            pr_number=ref.number,
-            pr_url=ref.url,
-            title=item["title"],
-            body=item["body"],
-            target=_target(ref.owner, ref.repo, item),
-        )
+        store.save(self.scope, ref, item)
+        return PullRequestUpdated(body=item["body"], target=items.target(ref, item))
 
-    async def review(self, url: str, body: str, event: ReviewEvent) -> ReviewSubmitted:
-        ref, item = self._item(url, "pull_request")
-        review = self._entry(
-            item,
-            {
-                "body": body.rstrip(),
-                "state": _REVIEW_STATES[event],
-                "commit_id": self._head_sha(ref, item),
-            },
+    async def review(
+        self, url: str, body: str, verdict: ReviewVerdict, head: str
+    ) -> ReviewSubmitted:
+        ref, item = _at_head(url, head)
+        review = items.entry(
+            item, "review", self.person.person_id, body, verdict=verdict, commit=head
         )
-        review["submitted_at"] = review.pop("created_at")
         item["reviews"].append(review)
-        store.save(self.team.project, ref.owner, ref.repo, item)
+        store.save(self.scope, ref, item)
         return ReviewSubmitted(
-            review_id=review["id"],
-            html_url=None,
-            state=review["state"],
-            commit_id=review["commit_id"],
-            submitted_at=review["submitted_at"],
-            target=_target(ref.owner, ref.repo, item),
+            verdict=verdict, commit=head, url=None, target=items.target(ref, item)
         )
 
     async def review_comment(
         self,
         url: str,
         body: str,
+        head: str,
         path: str,
         line: int,
         side: str,
         start_line: int | None,
         start_side: str | None,
     ) -> ReviewCommentWritten:
-        ref, item = self._item(url, "pull_request")
-        comment = self._entry(
+        ref, item = _at_head(url, head)
+        comment = items.entry(
             item,
-            {
-                "body": body.rstrip(),
-                "path": path,
-                "line": line,
-                "side": side,
-                "start_line": start_line,
-                "start_side": start_side,
-                "commit_id": self._head_sha(ref, item),
-                "in_reply_to": None,
-            },
+            "inline",
+            self.person.person_id,
+            body,
+            path=path,
+            line=line,
+            side=side,
+            start_line=start_line,
+            start_side=start_side,
+            commit=head,
+            in_reply_to=None,
         )
         item["review_comments"].append(comment)
-        store.save(self.team.project, ref.owner, ref.repo, item)
+        store.save(self.scope, ref, item)
         return ReviewCommentWritten(
-            review_comment_id=comment["id"],
-            html_url=None,
+            id=comment["id"],
+            url=None,
             created_at=comment["created_at"],
             path=path,
             line=line,
             side=side,
-            target=_target(ref.owner, ref.repo, item),
+            target=items.target(ref, item),
         )
 
-    async def reply(self, url: str, reply_target_id: int, body: str) -> ReplyWritten:
-        ref, item = self._item(url, "pull_request")
+    async def reply(self, url: str, reply_to: str, body: str) -> ReplyWritten:
+        ref = store.locate(url, "pull_request")
+        item = store.load(ref)
         root = next(
             (
                 comment
                 for comment in item["review_comments"]
-                if comment["id"] == reply_target_id and comment["in_reply_to"] is None
+                if comment["id"] == reply_to and comment["in_reply_to"] is None
             ),
             None,
         )
         if root is None:
-            raise MemberCapabilityError(
-                f"Review comment '{reply_target_id}' is not replyable for this PR."
-            )
-        reply = self._entry(
+            raise ServiceNotFound(f"'{reply_to}' roots no review thread of {url}.")
+        reply = items.entry(
             item,
-            {
-                **{key: root[key] for key in ("path", "line", "side", "commit_id")},
-                "body": body.rstrip(),
-                "in_reply_to": reply_target_id,
-            },
+            "inline",
+            self.person.person_id,
+            body,
+            **{key: root[key] for key in ("path", "line", "side", "commit")},
+            in_reply_to=reply_to,
         )
         item["review_comments"].append(reply)
-        store.save(self.team.project, ref.owner, ref.repo, item)
+        store.save(self.scope, ref, item)
         return ReplyWritten(
-            reply_comment_id=reply["id"],
-            html_url=None,
+            id=reply["id"],
+            url=None,
             created_at=reply["created_at"],
-            target=_target(ref.owner, ref.repo, item),
+            target=items.target(ref, item),
         )
 
     async def add_reaction(
-        self, url: str, target: ReactionTarget, comment_id: int, reaction: str
+        self, url: str, target_id: str, reaction: SemanticReaction
     ) -> ReactionAdded:
-        ref = store.locate(url, None if target == "comment" else "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
-        key = {
-            "comment": "comments",
-            "review-comment": "review_comments",
-            "review": "reviews",
-        }[target]
-        entry = next((e for e in item.get(key, []) if e["id"] == comment_id), None)
-        if entry is None:
-            raise MemberCapabilityError(f"{ref.url} has no {key} entry {comment_id}.")
-        entry.setdefault("reactions", []).append(
-            {"author": self.person.person_id, "content": reaction}
-        )
-        store.save(self.team.project, ref.owner, ref.repo, item)
-        return ReactionAdded(content=reaction, comment_id=comment_id)
+        ref = store.locate(url, "pull_request")
+        return items.react(self.scope, ref, self.person.person_id, target_id, reaction)
 
     async def readiness(
         self,
@@ -498,89 +382,97 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> Readiness:
         ReadinessQuery(failed_logs=failed_logs, log_tail_bytes=log_tail_bytes)
         ref = store.locate(url, "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
-        head_sha = self._head_sha(ref, item)
-        succeeds = self._checks() == "success"
+        item = store.load(ref)
+        head_sha = _head_sha(item)
+        if not head_sha:
+            raise ServiceError(f"{url} has no head commit.")
+        succeeds = self._checks == "success"
+        conclusion = "success" if succeeds else "failure"
         result: dict[str, Any] = {
-            "repo": ref.full_repo,
-            "pr_number": ref.number,
-            "pr_url": ref.url,
-            "target": _target(ref.owner, ref.repo, item),
+            "target": items.target(ref, item).model_dump(),
             "head_sha": head_sha,
             "current_head_sha": head_sha,
-            "rollup": "success" if succeeds else "failure",
+            "rollup": conclusion,
             "checks": [
                 {
-                    "name": "local",
+                    "name": _JOB,
                     "status": "completed",
-                    "conclusion": "success" if succeeds else "failure",
+                    "conclusion": conclusion,
                     "details_url": "",
-                    "source": "check_run",
                 }
             ],
             "checks_expected": False,
         }
         if failed_logs:
-            result["failed_logs"] = []
+            result["failed_logs"] = (
+                []
+                if succeeds
+                else [
+                    {
+                        "job_id": f"{_JOB}@{_ATTEMPT}",
+                        "name": _JOB,
+                        "conclusion": "failure",
+                        "url": "",
+                        "artifact_names": store.artifacts(ref.place, head_sha),
+                        "log": "",
+                        "log_bytes": 0,
+                        "tail_limit_bytes": log_tail_bytes,
+                        "truncated": False,
+                    }
+                ]
+            )
         if item["state"] != "open":
-            return Readiness(
-                **result,
-                base_sha=None,
-                behind_by=None,
-                out_of_date=None,
-                current_base_sha=None,
-                readiness="not_applicable",
-                completion_blockers=[],
+            return Readiness.model_validate(
+                {
+                    **result,
+                    "base_sha": None,
+                    "behind_by": None,
+                    "out_of_date": None,
+                    "current_base_sha": None,
+                    "readiness": "not_applicable",
+                    "completion_blockers": [],
+                }
             )
-        base_sha = store.branch_tip(ref.owner, ref.repo, item["base"])
+        base_sha = store.branch_tip(ref.place, item["base"])
         if not base_sha:
-            raise MemberCapabilityError(
-                f"Base branch '{item['base']}' not found for "
-                f"{ref.full_repo}#{ref.number}."
-            )
+            raise ServiceError(f"The base branch '{item['base']}' of {url} is gone.")
         behind_by = int(
-            store.git(
-                ref.owner, ref.repo, "rev-list", "--count", f"{head_sha}..{base_sha}"
-            )
+            store.git(ref.place, "rev-list", "--count", f"{head_sha}..{base_sha}")
         )
         blockers = []
         if behind_by:
             blockers.append(
-                CompletionBlocker(
-                    code="base_out_of_date",
-                    message=f"The PR head is {behind_by} commit(s) behind its base.",
-                    next_action="Merge or rebase the base branch, push, and check again.",
-                )
+                {
+                    "code": "base_out_of_date",
+                    "message": f"The PR head is {behind_by} commit(s) behind its base.",
+                    "next_action": "Merge or rebase the base branch, push, and check again.",
+                }
             )
         if not succeeds:
             blockers.append(
-                CompletionBlocker(
-                    code="checks_failed",
-                    message="CI checks are failing.",
-                    next_action="Fix the failures and check again.",
-                )
+                {
+                    "code": "checks_failed",
+                    "message": "CI checks are failing.",
+                    "next_action": "Fix the failures and check again.",
+                }
             )
-        return Readiness(
-            **result,
-            base_sha=base_sha,
-            behind_by=behind_by,
-            out_of_date=behind_by > 0,
-            current_base_sha=base_sha,
-            readiness="blocked" if blockers else "ready",
-            completion_blockers=blockers,
+        return Readiness.model_validate(
+            {
+                **result,
+                "base_sha": base_sha,
+                "behind_by": behind_by,
+                "out_of_date": behind_by > 0,
+                "current_base_sha": base_sha,
+                "readiness": "blocked" if blockers else "ready",
+                "completion_blockers": blockers,
+            }
         )
 
-    async def open_pull_requests(self, remote_url: str, branch: str) -> list[str]:
-        repository = self.repository_from_remote(remote_url)
-        if repository is None:
-            return []
-        owner, repo = repository
+    async def open_pull_requests(self, repository: str, branch: str) -> list[str]:
         return [
-            store.url(owner, repo, "pull_request", item["number"])
-            for item in store.items(owner, repo)
-            if item["kind"] == "pull_request"
-            and item["state"] == "open"
-            and item["head"] == branch
+            ref.url
+            for ref, pull in store.items("pull_request", repository)
+            if pull["state"] == "open" and pull["head"] == branch
         ]
 
     @asynccontextmanager
@@ -588,198 +480,147 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, name: str, limit: int
     ) -> AsyncIterator[tuple[ArtifactRef, IO[bytes]]]:
         ref = store.locate(url, "pull_request")
-        path = store.artifact(ref.owner, ref.repo, ref.number, name)
-        if not path.is_file():
-            raise MemberCapabilityError(f"Artifact '{name}' was not found for {url}.")
+        head_sha = _head_sha(store.load(ref))
+        path = store.artifact(ref.place, head_sha, name)
+        if not head_sha or not path.is_file():
+            raise ServiceNotFound(f"The head of {url} has no artifact '{name}'.")
         if path.stat().st_size > limit:
-            raise MemberCapabilityError(
-                f"Artifact '{name}' is above the {limit} byte limit."
-            )
+            raise ServiceError(f"Artifact '{name}' is above the {limit} byte limit.")
         with path.open("rb") as archive:
-            yield (
-                ArtifactRef(
-                    repo=ref.full_repo,
-                    run_id=None,
-                    artifact_id=ref.number,
-                    artifact_name=name,
-                ),
-                archive,
-            )
+            yield ArtifactRef(name=name, id=f"{head_sha}/{name}"), archive
 
     # -- the git remote -----------------------------------------------------
 
-    async def clone_url(self, owner: str, repo: str) -> str:
-        return store.bare(owner, repo).as_uri()
+    async def clone_url(self, repository: str) -> str:
+        store.git(repository, "rev-parse", "--git-dir")
+        return store.bare(repository).as_uri()
 
-    async def default_branch(self, owner: str, repo: str) -> str:
-        return store.git(owner, repo, "symbolic-ref", "--short", "HEAD")
+    async def default_branch(self, repository: str) -> str:
+        return store.git(repository, "symbolic-ref", "--short", "HEAD")
 
     async def pull_request_head(self, url: str) -> PullRequestHead:
-        ref = store.locate(url, "pull_request")
-        item = store.load(ref.owner, ref.repo, ref.kind, ref.number)
-        owner, repo = store.split(item.get("head_repo") or ref.full_repo)
-        return PullRequestHead(owner=owner, repo=repo, branch=item["head"])
+        item = store.load(store.locate(url, "pull_request"))
+        return PullRequestHead(repository=item["head_repository"], branch=item["head"])
 
     async def push_credential(self) -> str:
         return ""
 
-    def commit_url(self, remote_url: str, sha: str) -> str:
+    def check_push(self, repository: str) -> None:
+        check_path(self.scope, repository)
+
+    def commit_url(self, repository: str, sha: str) -> str:
         return ""
 
-    def repository_from_remote(self, remote_url: str) -> tuple[str, str] | None:
+    def repository_from_remote(self, remote_url: str) -> str | None:
         parsed = urlparse(remote_url)
         if parsed.scheme != "file":
             return None
         path = Path(url2pathname(parsed.path))
-        if path.parent.parent != store.root() or path.suffix != ".git":
+        repository = unquote(path.parent.name)
+        if path.name != "repository.git" or store.bare(repository) != path:
             return None
-        return path.parent.name, path.stem
-
-    def remote_host(self, remote_url: str) -> str:
-        parsed = urlparse(remote_url)
-        if parsed.hostname:
-            return parsed.hostname
-        if "://" not in remote_url and ":" in remote_url:
-            return remote_url.split(":", 1)[0].rsplit("@", 1)[-1]
-        return "unrecognized remote"
+        return repository
 
     # -- the pull request patrol --------------------------------------------
 
     async def pull_request_candidates(self) -> list[Task]:
         return [
             task
-            for owner, repo in store.repositories()
-            for item in store.items(owner, repo)
-            if (task := self._pull_request_work(owner, repo, item)) is not None
+            for ref, pull in store.items("pull_request")
+            if (task := self._pull_request_work(ref, pull)) is not None
         ]
 
     async def refresh_pull_request(self, task: Task) -> Task | None:
         assert task.pull_request_url
         ref = store.locate(task.pull_request_url, "pull_request")
-        return self._pull_request_work(
-            ref.owner, ref.repo, store.load(ref.owner, ref.repo, ref.kind, ref.number)
-        )
+        return self._pull_request_work(ref, store.load(ref))
 
-    def _pull_request_work(
-        self, owner: str, repo: str, item: dict[str, Any]
-    ) -> Task | None:
+    def _pull_request_work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
         """Feedback the author has not answered, or a requested review of a
         head the member has not reviewed."""
-        if item["kind"] != "pull_request" or item["state"] != "open" or item["draft"]:
+        if item["state"] != "open" or item["draft"]:
             return None
         me = self.person.person_id
         said = sorted(
             (
                 entry
                 for key in ("comments", "reviews", "review_comments")
-                for entry in item.get(key, [])
+                for entry in item[key]
             ),
-            key=lambda entry: entry.get("created_at") or entry["submitted_at"],
+            key=lambda said: said["created_at"],
         )
         if item["author"] == me:
             work = _FEEDBACK if said and said[-1]["author"] != me else None
         else:
-            head = _head_sha(owner, repo, item)
-            reviewed = {r["commit_id"] for r in item["reviews"] if r["author"] == me}
-            work = _REVIEW if me in item["reviewers"] and head not in reviewed else None
+            reviewed = {r["commit"] for r in item["reviews"] if r["author"] == me}
+            needed = me in item["reviewers"] and _head_sha(item) not in reviewed
+            work = _REVIEW if needed else None
         if work is None:
             return None
-        return store.task(
-            owner,
-            repo,
+        return items.task(
+            ref,
             item,
-            Task.IN_PROGRESS,
+            status=Task.IN_PROGRESS,
             assignee=me,
-            pull_request_url=_target(owner, repo, item).html_url,
+            pull_request_url=ref.url,
             trigger_reason=work,
         )
 
-    # -- writes -------------------------------------------------------------
 
-    def _item(self, url: str, kind: ItemKind | None) -> tuple[ItemRef, dict[str, Any]]:
-        ref = store.locate(url, kind)
-        return ref, store.load(ref.owner, ref.repo, ref.kind, ref.number)
+def _local_ticket(url: str) -> store.Ref | None:
+    """The local ticket ``url`` names; ``None`` for another service's URL.
 
-    def _linked_issue(self, owner: str, repo: str, issue_url: str) -> int | None:
-        """The number of the issue of ``owner/repo`` a new pull request links.
-
-        Raises:
-            MemberCapabilityError: If ``issue_url`` names no issue of the
-                repository.
-        """
-        if not issue_url:
-            return None
-        ref = store.locate(issue_url, "issue")
-        if (ref.owner, ref.repo) != (owner, repo):
-            raise MemberCapabilityError(
-                f"{issue_url} is not an issue of {owner}/{repo}."
-            )
-        return store.load(owner, repo, "issue", ref.number)["number"]
-
-    def _new_item(
-        self, owner: str, repo: str, kind: ItemKind, title: str, body: str
-    ) -> dict[str, Any]:
-        return {
-            "kind": kind,
-            "number": store.next_number(owner, repo, kind),
-            "title": title,
-            "body": body,
-            "state": "open",
-            "author": self.person.person_id,
-            "labels": [],
-            "assignees": [],
-            "lane": None,
-            "created_at": store.now(),
-            "closed_at": None,
-            "comments": [],
-        }
-
-    def _entry(self, item: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "id": store.next_id(item),
-            "author": self.person.person_id,
-            "created_at": store.now(),
-            **fields,
-        }
-
-    def _defined_labels(
-        self, owner: str, repo: str, labels: Sequence[str]
-    ) -> list[str]:
-        defined = store.repository(owner, repo).get("labels", [])
-        undefined = [label for label in labels if label not in defined]
-        if undefined:
-            raise MemberCapabilityError(
-                f"Label '{undefined[0]}' is not defined in {owner}/{repo}. "
-                f"Defined labels: {', '.join(defined) or '(none)'}. "
-                "Ask a human to add the label instead of introducing a new one."
-            )
-        return list(dict.fromkeys(labels))
-
-    def _head_sha(self, ref: ItemRef, item: dict[str, Any]) -> str:
-        sha = _head_sha(ref.owner, ref.repo, item)
-        if not sha:
-            raise MemberCapabilityError(
-                f"Pull request head commit not found for {ref.full_repo}#{ref.number}."
-            )
-        return sha
-
-    def _checks(self) -> str:
-        config = self.team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
-        return str(config.get("checks") or "success")
+    Raises:
+        ServiceNotFound: If it is a local URL that names no ticket.
+    """
+    if urlparse(url).scheme != store.SCHEME:
+        return None
+    return store.locate(url, "ticket")
 
 
-def _target(owner: str, repo: str, item: dict[str, Any]) -> WorkTarget:
-    return WorkTarget(
-        kind=item["kind"],
-        repo=f"{owner}/{repo}",
-        number=item["number"],
-        title=item["title"],
-        html_url=store.url(owner, repo, item["kind"], item["number"]),
-    )
+def _linked(ticket_url: str, repository: str, closes: bool) -> str | None:
+    """The ticket a new pull request of ``repository`` refers to, as it keeps
+    it. A merge closes only a ticket of the repository's own.
+
+    Raises:
+        ServiceNotFound: If it is a local ticket that is not there, or a local
+            URL of no ticket.
+        ServiceUnsupported: If it is another repository's or another
+            service's ticket, to be closed.
+    """
+    if not ticket_url:
+        return None
+    ticket = _local_ticket(ticket_url)
+    if ticket is not None:
+        store.load(ticket)
+    if closes and (
+        ticket is None or store.tracker(ticket.place).get("repository") != repository
+    ):
+        raise ServiceUnsupported(
+            f"A merge into {repository} closes only a ticket of it, not {ticket_url}."
+        )
+    return ticket_url if ticket is None else ticket.url
+
+
+def _at_head(url: str, head: str) -> tuple[store.Ref, dict[str, Any]]:
+    """The pull request, if its head is still ``head``.
+
+    Raises:
+        ServiceError: If it is not.
+    """
+    ref = store.locate(url, "pull_request")
+    item = store.load(ref)
+    current = _head_sha(item)
+    if current != head:
+        raise ServiceError(
+            f"The head of {url} is now {current or 'gone'}, not {head}: read the"
+            " new commits, then submit again on that head."
+        )
+    return ref, item
 
 
 def _threads(item: dict[str, Any]) -> list[tuple[dict, list[dict]]]:
-    comments = item.get("review_comments", [])
+    comments = item["review_comments"]
     return [
         (root, [root, *(c for c in comments if c["in_reply_to"] == root["id"])])
         for root in comments
@@ -787,7 +628,35 @@ def _threads(item: dict[str, Any]) -> list[tuple[dict, list[dict]]]:
     ]
 
 
-def _head_sha(owner: str, repo: str, item: dict[str, Any]) -> str:
+def _head_sha(item: dict[str, Any]) -> str:
     """The commit the pull request's head branch is at; empty if it is gone."""
-    head_owner, head_repo = store.split(item.get("head_repo") or f"{owner}/{repo}")
-    return store.branch_tip(head_owner, head_repo, item["head"])
+    return store.branch_tip(item["head_repository"], item["head"])
+
+
+def _files(repository: str, item: dict[str, Any]) -> list[dict[str, Any]]:
+    """What the head changes since it left the base, a file at a time."""
+    base, head = store.branch_tip(repository, item["base"]), _head_sha(item)
+    if not base or not head:
+        raise ServiceError(f"{repository} has no diff of {item['head']}.")
+    span = f"{base}...{head}"
+    listed = store.git(repository, "diff", "--name-status", "-z", "--no-renames", span)
+    names = listed.split("\0")
+    statuses = {"A": "added", "D": "removed", "M": "modified"}
+    changes = []
+    for status, path in zip(names[::2], names[1::2], strict=False):
+        diff = store.git(repository, "diff", "--no-color", span, "--", path)
+        hunks = diff[diff.find("\n@@") + 1 :] if "\n@@" in diff else None
+        lines = (hunks or "").splitlines()
+        added = sum(line.startswith("+") for line in lines)
+        deleted = sum(line.startswith("-") for line in lines)
+        changes.append(
+            file_change(
+                path,
+                statuses.get(status, "changed"),
+                hunks,
+                additions=added,
+                deletions=deleted,
+                changes=added + deleted,
+            )
+        )
+    return changes

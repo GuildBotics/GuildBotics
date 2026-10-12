@@ -46,12 +46,13 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member git prepare --person <person> "
-                "(--issue-url <url> [--pr-url <url>] | --pr-url <url> "
-                "| --repo <owner/repo> --branch <name>)",
+                "(--issue-url <url> [--pr-url <url> | --repo <repository>] | --pr-url <url> "
+                "| --repo <repository> --branch <name>)",
                 "Clone/checkout an isolated member workspace: a ticket branch "
-                "(--issue-url), a PR head (--pr-url, alone or together with "
+                "`ticket/<key>` (--issue-url, with --repo for a ticket that belongs to "
+                "no repository), a PR head (--pr-url, alone or together with "
                 "--issue-url, which checks out the PR head), or an ad-hoc branch "
-                "(--repo --branch). --repo cannot be combined with the URL options. "
+                "(--repo --branch). A repository is named by its path. "
                 "Member workspaces are worked on only inside a running GuildBotics "
                 "command, whose isolated environment runs every git of them.",
             ),
@@ -80,42 +81,43 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Ticket",
         [
             (
-                "guildbotics run repository/issue_inspect --person <person> repo=<owner/repo> number=<n>",
-                "Read an issue and its comments.",
+                "guildbotics run repository/issue_inspect --person <person> url=<ticket_url>",
+                "Read a ticket, its comments, its lane on the board, and the pull "
+                "requests that refer to it.",
             ),
             (
                 "guildbotics member ticket read --person <person> --resource <name> "
-                "--repo <repository> --identifier <number> [--params <json>] "
-                "[--continuation <value>]",
-                "Read one bounded page of an issue's resource through the configured "
-                "code_hosting_service: issues, issue_comments, issue_timeline, or "
-                "issue_projects. Collections accept page_size (1-100). "
-                "Results contain normalized items and continuation; reuse identical "
-                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
-                "are not accepted.",
+                "--subject <ticket_url> [--params <json>] [--continuation <value>]",
+                "Read one bounded page of a ticket's resource: tickets (the ticket "
+                "itself: key, tracker, repository, lane, ...), ticket_comments, or "
+                "ticket_pull_requests (the code host's pull requests that refer to "
+                "it). Collections accept page_size (1-100). Results contain "
+                "normalized items and continuation; reuse identical conditions for the "
+                "next page. HTTP methods, headers, and GraphQL are not accepted.",
             ),
             (
-                "guildbotics member ticket comment --person <person> --url <issue_url> --content-file <file>",
-                "Comment on an issue in the member voice.",
+                "guildbotics member ticket comment --person <person> --url <ticket_url> --content-file <file>",
+                "Comment on a ticket in the member voice.",
             ),
             (
-                "guildbotics member ticket create --person <person> --repo <owner/repo> "
+                "guildbotics member ticket create --person <person> --tracker <tracker> "
                 "--title <title> --content-file <file> [--label <name> ...] "
-                "[--add-to-project|--no-add-to-project] --human-approved",
-                "Open a follow-up issue a human asked for.",
+                "[--add-to-board|--no-add-to-board] --human-approved",
+                "Open a follow-up ticket a human asked for, in the tracker a ticket's "
+                "read names (`tracker`).",
             ),
             (
-                "guildbotics member ticket update --person <person> --url <issue_url> "
+                "guildbotics member ticket update --person <person> --url <ticket_url> "
                 "[--content-file <file>] [--title <title>] [--add-label <name> ...] "
                 "[--remove-label <name> ...] "
                 "[--state open|closed [--state-reason completed|not_planned] --human-approved]",
-                "Change an issue's body, title, labels, or state; empty content "
+                "Change a ticket's body, title, labels, or state; empty content "
                 "removes the body.",
             ),
             (
-                "guildbotics member ticket reaction add --person <person> --url <issue_url> "
-                "--comment-id <id> --reaction <reaction>",
-                "React to a comment of the issue.",
+                "guildbotics member ticket reaction add --person <person> --url <ticket_url> "
+                "--comment-id <id> --reaction ack|agree|celebrate|support",
+                "React to a comment of the ticket, by the id its read gave it.",
             ),
         ],
     ),
@@ -123,13 +125,13 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Pull request",
         [
             (
-                "guildbotics run repository/pr_inspect --person <person> repo=<owner/repo> number=<n> "
+                "guildbotics run repository/pr_inspect --person <person> url=<pr_url> "
                 "[include_comments=true] [include_diff=true]",
                 "Read a PR, optionally including conversation comments, review summaries, "
                 "review threads, and diff comment coordinates.",
             ),
             (
-                "guildbotics run repository/pr_checks --person <person> repo=<owner/repo> number=<n> "
+                "guildbotics run repository/pr_checks --person <person> url=<pr_url> "
                 "[failed_logs=true] [log_tail_bytes=<n>]",
                 "Read a PR head's CI rollup, base freshness, completion readiness, "
                 "and optional failed CI job log tails (65536 bytes per job by default, "
@@ -137,37 +139,35 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr read --person <person> --resource <name> "
-                "--repo <repository> --identifier <number> [--params <json>] "
-                "[--continuation <value>]",
-                "Read one bounded page of a PR's resource through the configured "
-                "code_hosting_service: pull_requests, pull_request_comments "
-                "(conversation comments), pull_request_reviews, pull_request_files, "
-                "pull_request_threads, review_thread_comments, or "
+                "--subject <pr_url> [--params <json>] [--continuation <value>]",
+                "Read one bounded page of a PR's resource: pull_requests, "
+                "pull_request_comments (conversation comments), pull_request_reviews, "
+                "pull_request_files, pull_request_threads, review_thread_comments, or "
                 "pull_request_readiness. Collections accept page_size (1-100); "
                 "review_thread_comments also requires node from pull_request_threads. "
                 "Readiness accepts failed_logs (boolean) and log_tail_bytes "
                 "(1-65536, default 65536). "
                 "Results contain normalized items and continuation; reuse identical "
-                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
+                "conditions for the next page. HTTP methods, headers, and GraphQL "
                 "are not accepted.",
             ),
             (
-                "guildbotics member pr create --person <person> --repo <owner/repo> --head <branch> "
+                "guildbotics member pr create --person <person> --repo <repository> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
                 "[--issue-url <url> [--closes-issue|--refs-issue]] [--draft true|false]",
                 "Open a PR, or return the existing open PR for the same head and base branches. "
-                "--issue-url appends Refs #<n> unless --closes-issue is set.",
+                "--issue-url links the ticket in the PR body as a reference, or with "
+                "--closes-issue so that merging the PR closes it; a code host that cannot "
+                "close that ticket on a merge refuses --closes-issue.",
             ),
             (
                 "guildbotics member pr update --person <person> --url <pr_url> "
                 "[--content-file <file>] [--title <title>] [--drop-issue-links]",
-                "Change a PR's body or title. Body replacement preserves existing "
-                "standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or "
-                "list items; new standalone links to the same issue take precedence. "
-                "Code, quotes, HTML blocks, prose, colon-separated and cross-repository "
-                "links are excluded. Inline HTML and multiline reference labels are "
-                "outside this convention. Empty content keeps only the links. "
-                "--drop-issue-links requires content and disables preservation.",
+                "Change a PR's body or title. Body replacement preserves the ticket "
+                "links the existing body carries as the code host reads them; new "
+                "links to the same ticket take precedence. Empty content keeps only "
+                "the links. --drop-issue-links requires content and disables "
+                "preservation.",
             ),
             (
                 "guildbotics member pr comment --person <person> --url <pr_url> --content-file <file>",
@@ -175,16 +175,20 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr review --person <person> --url <pr_url> "
-                "--event approve|request-changes|comment --content-file <file>",
-                "Submit a review verdict on the PR head as a review; a "
-                "conversation comment does not consume a review request or make "
-                "the member a reviewer.",
+                "--event approve|request_changes|comment --head <sha> --content-file <file>",
+                "Submit a review verdict as a review on the head the member read "
+                "(`head_sha` of the PR's read); a conversation comment does not consume "
+                "a review request or make the member a reviewer. When the head has "
+                "moved, nothing is written: read the new commits, then submit again on "
+                "the new head. A code host without request_changes refuses it.",
             ),
             (
                 "guildbotics member pr review-comment --person <person> --url <pr_url> "
-                "--path <file> --line <n> [--side LEFT|RIGHT] [--start-line <n> --start-side LEFT|RIGHT] "
-                "--content-file <file>",
-                "Create a new inline review comment on a PR diff line.",
+                "--head <sha> --path <file> --line <n> [--side LEFT|RIGHT] "
+                "[--start-line <n> --start-side LEFT|RIGHT] --content-file <file>",
+                "Create a new inline review comment on a diff line of the head the "
+                "member read; when the head has moved, read the new commits and "
+                "comment again.",
             ),
             (
                 "guildbotics member pr reply --person <person> --url <pr_url> "
@@ -193,10 +197,9 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr reaction add --person <person> --url <pr_url> "
-                "--target comment|review-comment|review --comment-id <id> "
-                "--reaction <reaction>",
+                "--comment-id <id> --reaction ack|agree|celebrate|support",
                 "React to a conversation comment, a review thread comment, or a "
-                "review's body of the PR.",
+                "review's body of the PR, by the id its read gave it.",
             ),
             (
                 "guildbotics member pr artifact download --person <person> "
@@ -211,16 +214,16 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member repo-info read --person <person> --resource "
-                "dependency_alerts --repo <repository> [--identifier <id>] "
-                "[--params <json>] [--continuation <value>]",
-                "Read one bounded page of the repository's dependency_alerts through "
-                "the configured code_hosting_service. It accepts state (open by "
-                "default, resolved, dismissed) and page_size (1-100, default 30). "
-                "With an identifier, it returns one alert and accepts no conditions "
+                "dependency_alerts --subject <repository> [--params <json>] "
+                "[--continuation <value>]",
+                "Read one bounded page of the repository's dependency_alerts, the "
+                "repository named by its path. It accepts state (open by default, "
+                "resolved, dismissed) and page_size (1-100, default 30). With an id "
+                "condition, it returns that one alert and accepts no other condition "
                 "or continuation. For formatted or JSON alerts, run "
                 "repository/security_alerts in a ready command environment. "
                 "Results contain normalized items and continuation; reuse identical "
-                "conditions for the next page. URLs, HTTP methods, headers, and GraphQL "
+                "conditions for the next page. HTTP methods, headers, and GraphQL "
                 "are not accepted.",
             ),
         ],
@@ -346,19 +349,19 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 
 _STANDARD_WORK_PROCEDURE: list[str] = [
     "Run bundled inspections on the host with `guildbotics run repository/issue_inspect "
-    "--person <person> repo=<owner/repo> number=<n>` (or repository/pr_inspect, "
-    "repository/pr_checks). Inside a workflow or delegated command's isolated "
-    "environment, use `python -m guildbotics.guest.entry "
-    "repository/issue_inspect repo=<owner/repo> number=<n>` instead: it runs inside "
+    "--person <person> url=<ticket_url>` (or repository/pr_inspect, "
+    "repository/pr_checks with url=<pr_url>). Inside a workflow or delegated command's "
+    "isolated environment, use `python -m guildbotics.guest.entry "
+    "repository/issue_inspect url=<ticket_url>` instead: it runs inside "
     "the existing environment, inherits the main command's access contract and "
     "member, and uses its member broker. Do not start a host run from there. "
     "Commands return JSON. A failed or incomplete read is not an empty result.",
-    "Inspect first: read the current issue / PR / thread with the bundled repository inspections or member chat inspect "
+    "Inspect first: read the current ticket / PR / thread with the bundled repository inspections or member chat inspect "
     "commands before acting. Fields owned by the code host or the chat (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
     "inspect output.",
     "Ground repository judgments in the repository's own guidelines: before "
-    "drafting or creating an issue for a repository, or settling a design or "
+    "drafting or creating a ticket for a repository, or settling a design or "
     "implementation policy for one, read its agent and contributor guidelines "
     "(AGENTS.md, CLAUDE.md, CONTRIBUTING, or equivalents) and align the outcome "
     "with them. The version on the origin default branch is canonical: with an "
@@ -374,22 +377,24 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "the requester for a decision instead of registering it or fixing it yourself.",
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
-    "When issue work changed code, open or reuse a PR with `member pr "
-    "create`. Pass `--issue-url`, and add `--closes-issue` only when the issue is "
+    "When ticket work changed code, open or reuse a PR with `member pr "
+    "create`. Pass `--issue-url`, and add `--closes-issue` only when the ticket is "
     "complete once this PR merges into the branch that receives its work. "
-    "A child issue can therefore use `Closes` in a PR to its parent's feature "
-    "branch: pass the child with `--issue-url <child> --closes-issue` and put "
-    "`Refs #<parent>` on a standalone line in the body. A PR from that feature "
-    "branch to the default branch uses `Closes` for the parent issue. Keep the "
-    "default `Refs` for stacked PRs, partial steps, and tracking or parent issues "
+    "A child ticket can therefore be closed by a PR to its parent's feature "
+    "branch: pass the child with `--issue-url <child> --closes-issue` and refer to "
+    "the parent ticket on a standalone line in the body. A PR from that feature "
+    "branch to the default branch closes the parent ticket. Keep the default "
+    "reference for stacked PRs, partial steps, and tracking or parent tickets "
     "that the merge does not complete. A merge into a branch other than the default "
-    "branch closes no issue automatically, so after a human merges a child "
-    "PR into a feature branch, follow the manual-close rule below. `Closes` only "
-    "states intent and does not by itself authorize closing the issue.",
+    "branch closes no ticket automatically, so after a human merges a child "
+    "PR into a feature branch, follow the manual-close rule below. A closing link "
+    "only states intent and does not by itself authorize closing the ticket.",
     "When creating new PR inline feedback, first inspect the PR with "
     "`repository/pr_inspect include_diff=true`, then use `member pr "
-    "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
-    "(`line`, `side`, and optional `--start-line` / `--start-side`); take `path` from the containing file.",
+    "review-comment --head <head_sha>` with explicit diff coordinates from "
+    "`files[].commentable_lines` (`line`, `side`, and optional `--start-line` / "
+    "`--start-side`); take `path` from the containing file and `head_sha` from the "
+    "same read.",
     "When addressing existing PR review threads, reply with `member pr reply` "
     "using the `reply_target_id` from `repository/pr_inspect include_comments=true`.",
     "After opening or updating a PR, inspect its CI and completion readiness with "
@@ -406,7 +411,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "check blocks completion, follow the failure-handling rule above and report that blocker.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
-    "originating issue or PR for issue-driven work, the review thread or PR "
+    "originating ticket or PR for ticket-driven work, the review thread or PR "
     "conversation for PR review work, the chat thread for chat-driven work. "
     "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
@@ -457,35 +462,35 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
 }
 
 _CROSS_CUTTING_RULES: list[str] = [
-    "Issue and pull request inspections use the bundled repository commands. All "
-    "underlying code-host and chat access, reads and writes alike, goes through the "
+    "Ticket and pull request inspections use the bundled repository commands. All "
+    "underlying ticket, code-host, and chat access, reads and writes alike, goes through the "
     "corresponding `guildbotics member ...` commands. Never use a service's own CLI "
     "such as `gh`, raw service tokens or APIs, or raw HTTP calls to those services. "
     "When a needed read "
     "has no member command, ask a human for the information instead of using a "
     "service's CLI or a raw API. Publishing git commits and pushes also goes through member "
     "commands; never use raw `git commit` or `git push`.",
-    "Opening an issue and closing or reopening one stay human decisions. Pass "
+    "Opening a ticket and closing or reopening one stay human decisions. Pass "
     "`--human-approved` only when a human in the originating conversation asked for or "
-    "approved that specific issue, never on the member's own judgment and never because "
+    "approved that specific ticket, never on the member's own judgment and never because "
     "another member asked for it. The one exception is a human's merge outside the default "
-    "branch: if the code host does not close an issue after a human merges its PR there, inspect "
-    "the current PR and issue and verify that the merge completed the issue's whole scope. "
-    "If it did, post a completion comment and close the issue with `ticket update "
+    "branch: if the code host does not close a ticket after a human merges its PR there, inspect "
+    "the current PR and ticket and verify that the merge completed the ticket's whole scope. "
+    "If it did, post a completion comment and close the ticket with `ticket update "
     "--state closed --state-reason completed --human-approved`. If it did not, leave "
-    "the issue open and comment on what remains.",
-    "Labels come from the labels the target repository already defines; `ticket create "
+    "the ticket open and comment on what remains.",
+    "Labels come from the labels the target tracker already defines; `ticket create "
     "--label` and `ticket update --add-label` reject anything else. When the defined "
-    "labels do not cover what the issue needs, propose the new label to a human instead "
+    "labels do not cover what the ticket needs, propose the new label to a human instead "
     "of inventing one or writing the distinction into the body.",
     "Priority is a human triage decision, so the member proposes it and never records it: "
-    "do not express urgency by adding a label or setting a project or issue field for it. "
-    "Say what the member thinks the priority should be, and why, in the issue comment, PR "
+    "do not express urgency by adding a label or setting a board or ticket field for it. "
+    "Say what the member thinks the priority should be, and why, in the ticket comment, PR "
     "comment, or thread where the work was requested, and leave the recording to a human.",
     "What the inspect commands read maps to writes like this: `ticket update` writes body, "
-    "title, labels, and state, and `pr update` writes body and title. Assignees are "
-    "read-only on purpose, because who takes an issue is assigned by a human on the "
-    "project board; PR state, draft, and base are read-only for the same reason (the "
+    "title, labels, and state, and `pr update` writes body and title. Assignees and the "
+    "lane are read-only on purpose, because who takes a ticket is assigned by a human on "
+    "the board; PR state, draft, and base are read-only for the same reason (the "
     "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
     "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "
@@ -505,9 +510,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",
     "Apply `communication_style` by output kind: `interactive_replies` for interactive "
-    "progress updates and final replies to the user; `comments` for issue comments, "
+    "progress updates and final replies to the user; `comments` for ticket comments, "
     "PR conversation comments, inline review comments, and review thread replies; "
-    "`neutral_documents` for issue/PR "
+    "`neutral_documents` for ticket/PR "
     "titles and bodies, commit messages, and task summaries; `machine_outputs` for command "
     "output, command arguments, IDs, paths, workflow completion JSON, and workflow "
     "`AgentResponse.message`.",
@@ -520,7 +525,7 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Memory can carry prior context, rationale, and progress, but it is not the canonical current "
     "state of the code host, the chat, or code. Reality-check every memory you read against the current "
     "owning system, and when sources differ prefer the owning system for canonical fields such "
-    "as issue and PR state, assignees, labels, PR links, chat thread contents, and code behavior.",
+    "as ticket and PR state, assignees, labels, PR links, chat thread contents, and code behavior.",
     "When the requester asks what the member remembers, recorded, learned, or previously "
     "discussed, use memory as the primary basis for the answer, then verify freshness against "
     "the owning system when current state matters.",

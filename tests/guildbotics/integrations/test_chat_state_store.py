@@ -14,6 +14,7 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.runtime.chat_service import ChatMessage
+from guildbotics.runtime.port import WorkflowStatus
 from tests.guildbotics.local_chat import at, chat_event
 
 EXPECTED_BACKFILL_ERROR_COUNT = 2
@@ -343,8 +344,15 @@ def test_pending_events_roundtrip_dedupe_and_remove(tmp_path):
     assert [pe.event.event_id for pe in loaded2] == ["C1:100.2"]
 
 
-def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
+def test_pending_event_status_and_retry_state_roundtrip(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
+    status = WorkflowStatus(
+        reason="rate_limited",
+        person_id="alice",
+        run_id="run-0",
+        subject="C1:99.9",
+        retry_after_at="2026-07-04T02:30:00+00:00",
+    )
     event = chat_event(
         event_id="C1:100.1",
         channel_id="C1",
@@ -352,10 +360,7 @@ def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
         thread_id="100.1",
         author_id="U1",
         text="hello",
-        metadata={
-            "event_type": "guildbotics.workflow_status",
-            "event_payload": {"routing": "suppress"},
-        },
+        status=status,
     )
     store.upsert_pending_event("slack", "alice", "C1", event, "social")
     pending = store.load_pending_events("slack", "alice", "C1")[0]
@@ -367,7 +372,11 @@ def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
 
     loaded = store.load_pending_events("slack", "alice", "C1")[0]
 
-    assert loaded.event.metadata["event_type"] == "guildbotics.workflow_status"
+    assert loaded.event.status == status
+    stored = json.loads(
+        store._pending_events_file("slack", "alice", "C1").read_text(encoding="utf-8")
+    )
+    assert stored["events"][0]["status"] == status.model_dump()
     assert loaded.chat_participation == "social"
     assert loaded.attempt_count == EXPECTED_ATTEMPT_COUNT
     assert loaded.max_attempts == EXPECTED_MAX_ATTEMPTS
@@ -395,6 +404,47 @@ def test_pending_event_reader_does_not_drop_missing_identity_fields(
     path.write_text(json.dumps({"events": [item]}), encoding="utf-8")
 
     with pytest.raises(PendingEventRecordError, match=missing):
+        store.load_pending_events("slack", "alice", "C1")
+
+
+def test_a_pending_event_without_a_status_reads_back_without_one(tmp_path) -> None:
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", chat_event("100.1"))
+
+    stored = json.loads(
+        store._pending_events_file("slack", "alice", "C1").read_text(encoding="utf-8")
+    )
+
+    assert stored["events"][0]["status"] is None
+    assert store.load_pending_events("slack", "alice", "C1")[0].event.status is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"reason": "unknown", "person_id": "alice", "run_id": "r1"},
+        {"reason": "failed", "run_id": "r1"},
+        {"reason": "failed", "person_id": "alice", "run_id": "r1", "extra": "x"},
+        "failed",
+    ],
+)
+def test_a_pending_event_with_an_invalid_status_is_a_record_error(
+    tmp_path, status
+) -> None:
+    store = FileConversationStateStore(base_dir=tmp_path)
+    item = {
+        "event_id": "C1:100.1",
+        "message_id": "100.1",
+        "thread_id": "100.1",
+        "occurred_at": at(100.1).isoformat(),
+        "text": "hello",
+        "status": status,
+    }
+    path = store._pending_events_file("slack", "alice", "C1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"events": [item]}), encoding="utf-8")
+
+    with pytest.raises(PendingEventRecordError, match="invalid status"):
         store.load_pending_events("slack", "alice", "C1")
 
 

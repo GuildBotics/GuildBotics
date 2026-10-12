@@ -1,0 +1,6 @@
+en:
+  unsupported: "Configure a supported %{service} in project.services to use it; '%{name}' is not one."
+  too_large: "The response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
+  resource: "Unsupported read resource. See member help for the supported names."
+  parameters: "Invalid resource conditions. See member help for the supported parameters."
+  continuation: "Invalid pagination response or continuation. Reuse the same resource, subject, and conditions."

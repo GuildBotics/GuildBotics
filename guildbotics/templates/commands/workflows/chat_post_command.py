@@ -5,7 +5,8 @@ from typing import Any
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.utils import stringify_output
-from guildbotics.runtime.chat_service import ChatService, ChatServiceError
+from guildbotics.runtime.chat_service import ChatService
+from guildbotics.runtime.port import ServiceError
 
 
 async def main(
@@ -41,7 +42,7 @@ async def main(
 
     try:
         await chat_service.post_message(resolved_channel_id, text)
-    except ChatServiceError as exc:
+    except ServiceError as exc:
         raise CommandError(str(exc)) from exc
     return text
 
@@ -55,7 +56,7 @@ async def _resolve_channel_id(
         raise CommandError("Either channel_id or channel_name is required.")
     try:
         resolved = await chat_service.resolve_channel_id(channel_name)
-    except ChatServiceError as exc:
+    except ServiceError as exc:
         raise CommandError(str(exc)) from exc
     if not resolved:
         raise CommandError(

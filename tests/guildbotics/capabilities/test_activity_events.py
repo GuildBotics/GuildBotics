@@ -17,7 +17,7 @@ from tests.guildbotics.integrations.contracts.providers import (
     GitHubDouble,
     serve,
 )
-from tests.guildbotics.local_code_host import write
+from tests.guildbotics.local_code_host import pull_request, ticket
 
 START = datetime(2026, 7, 10, tzinfo=UTC)
 END = datetime(2026, 7, 11, tzinfo=UTC)
@@ -25,34 +25,22 @@ END = datetime(2026, 7, 11, tzinfo=UTC)
 
 def _team(board: str = "local") -> Team:
     return Team(
-        project=Project(services={"ticket_manager": {"name": board}}),
+        project=Project(services={"ticket_service": {"name": board}}),
         members=[Person(person_id="aiko", name="Aiko")],
     )
 
 
-def _closed(number: int, kind: str, closed_at: str, merged: bool = False) -> None:
-    write(
-        "acme",
-        "demo",
-        {
-            "kind": kind,
-            "number": number,
-            "title": f"Item {number}",
-            "body": "",
-            "state": "closed",
-            "author": "aiko",
-            "created_at": "2026-07-01T00:00:00+00:00",
-            "closed_at": closed_at,
-            "merged": merged,
-        },
-    )
+def _closed(closed_at: str) -> dict:
+    return {"state": "closed", "closed_at": closed_at}
 
 
 @pytest.mark.asyncio
 async def test_closed_board_work_is_recorded_once_with_its_activity():
-    _closed(7, "pull_request", "2026-07-10T01:00:00+00:00", merged=True)
-    _closed(8, "issue", "2026-07-10T02:00:00+00:00")
-    _closed(9, "issue", "2026-07-12T00:00:00+00:00")
+    merged_url = pull_request(
+        7, "feature", merged=True, **_closed("2026-07-10T01:00:00+00:00")
+    )
+    closed_url = ticket(8, **_closed("2026-07-10T02:00:00+00:00"))
+    ticket(9, **_closed("2026-07-12T00:00:00+00:00"))
 
     assert await refresh_activity_events(_team(), START, END) == 2
     assert await refresh_activity_events(_team(), START, END) == 0
@@ -62,13 +50,22 @@ async def test_closed_board_work_is_recorded_once_with_its_activity():
         (record["timestamp"], record["attributes"]["github.activity_id"])
         for record in records
     ) == [
-        ("2026-07-10T01:00:00+00:00", "pull_request:acme/demo:7:merged"),
-        ("2026-07-10T02:00:00+00:00", "issue:acme/demo:8:closed"),
+        ("2026-07-10T01:00:00+00:00", f"pull_request:{merged_url}:merged"),
+        ("2026-07-10T02:00:00+00:00", f"ticket:{closed_url}:closed"),
     ]
-    merged = next(r for r in records if r["attributes"]["github.number"] == "7")
-    assert merged["payload"]["pull_request"]["merged"] is True
-    assert merged["attributes"]["github.url"] == "local://acme/demo/pull/7"
+    merged = next(r for r in records if r["attributes"]["github.label"] == "!7")
+    assert merged["type"] == "github.pull_request"
+    assert merged["payload"]["pull_request"] == {
+        "label": "!7",
+        "title": "Pull request 7",
+        "url": merged_url,
+        "merged": True,
+    }
+    assert merged["attributes"]["github.url"] == merged_url
     assert merged["person_id"] == ""
+    closed = next(r for r in records if r["attributes"]["github.label"] == "T-8")
+    assert closed["type"] == "github.issue"
+    assert closed["attributes"]["github.kind"] == "ticket"
 
 
 @pytest.mark.asyncio
@@ -84,7 +81,7 @@ async def test_the_github_board_is_read_with_a_credential_alone(monkeypatch):
     team = Team(
         project=Project(
             services={
-                "ticket_manager": {
+                "ticket_service": {
                     "name": "github",
                     "owner": OWNER,
                     "project_id": "1",
@@ -100,7 +97,9 @@ async def test_the_github_board_is_read_with_a_credential_alone(monkeypatch):
 
     assert await refresh_activity_events(team, START, END) == 1
     [record] = ActivityEventStore().records_between(START, END)
-    assert record["attributes"]["github.activity_id"] == f"issue:{REPO}:1:closed"
+    assert record["attributes"]["github.activity_id"] == (
+        f"ticket:https://github.com/{REPO}/issues/1:closed"
+    )
 
 
 @pytest.mark.asyncio
@@ -110,7 +109,7 @@ async def test_without_a_board_nothing_is_read(board):
 
 
 def test_existing_activity_ids_reads_shared_activity_events():
-    activity_id = "issue:acme/demo:8:closed"
+    activity_id = "ticket:local://tickets/acme/team/demo-tickets/T-8:closed"
     events = ActivityEventStore()
     events.record(
         {
@@ -131,7 +130,9 @@ def test_existing_activity_ids_reads_shared_activity_events():
         {
             "type": "github.issue.closed",
             "timestamp": "2026-07-12T01:00:00Z",
-            "attributes": {"github.activity_id": "issue:acme/demo:9:closed"},
+            "attributes": {
+                "github.activity_id": "ticket:local://tickets/acme/team/demo-tickets/T-9:closed"
+            },
         }
     )
 
@@ -139,4 +140,4 @@ def test_existing_activity_ids_reads_shared_activity_events():
 
     assert activity_id in existing
     # Out-of-range events do not count as existing.
-    assert "issue:acme/demo:9:closed" not in existing
+    assert "ticket:local://tickets/acme/team/demo-tickets/T-9:closed" not in existing

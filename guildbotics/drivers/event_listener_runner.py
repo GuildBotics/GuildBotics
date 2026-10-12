@@ -17,7 +17,6 @@ from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ThreadConversationState,
 )
-from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
 from guildbotics.integrations.event_listener import EventListener
 from guildbotics.integrations.factory import (
     ServiceIntegrationFactory,
@@ -27,10 +26,9 @@ from guildbotics.integrations.file_chat_state_store import FileConversationState
 from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatService,
-    ChatServiceError,
-    ChatThreadNotFoundError,
 )
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
 SubscriptionSignature = tuple[tuple[tuple[str, str], ...], ...]
@@ -356,7 +354,7 @@ class EventListenerRunner:
         team = self.context.team
         try:
             self._service = chat_provider_name(team)
-        except ChatServiceError:
+        except ServiceError:
             return grouped
         for person in team.members:
             if self._stop_event.is_set():
@@ -371,7 +369,7 @@ class EventListenerRunner:
                 continue
             try:
                 key = self._factory.listener_key(person, team)
-            except ChatServiceError as e:
+            except ServiceError as e:
                 self._log_warning(
                     "event listener runner skipped person=%s: %s", person.person_id, e
                 )
@@ -516,7 +514,7 @@ class EventListenerRunner:
         args = (self._service, person.person_id, event.channel_id)
         if self._state_store.is_processed_event(*args, event.event_id):
             return 0
-        if is_suppressed_chat_event(event):
+        if event.status is not None:
             self._state_store.mark_processed_event(*args, event.event_id)
             return 0
         self._state_store.upsert_pending_event(*args, event, participation)
@@ -575,7 +573,7 @@ class EventListenerRunner:
                         policy,
                         cutoff,
                     )
-                except ChatThreadNotFoundError:
+                except ServiceNotFound:
                     await self._write_backfill(
                         scope,
                         partial(

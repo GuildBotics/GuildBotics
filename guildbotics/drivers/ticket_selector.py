@@ -24,10 +24,9 @@ from guildbotics.capabilities.workflow_rate_limits import (
 )
 from guildbotics.entities import Person, Task
 from guildbotics.entities.team import Service
-from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.port import WorkflowStatus
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WorkflowInvocation,
@@ -52,13 +51,12 @@ class TicketSelector:
         first, then the board's tickets."""
         context = self._context.clone_for(person)
         try:
-            ticket_manager = context.get_ticket_manager()
             pull_requests = (
                 await context.get_code_hosting_service().pull_request_candidates()
                 if _has_code_host(context)
                 else []
             )
-            return [*pull_requests, *await ticket_manager.get_task_candidates()]
+            return [*pull_requests, *await context.get_ticket_service().candidates()]
         finally:
             await context.aclose()
 
@@ -68,15 +66,14 @@ class TicketSelector:
         """Re-read a candidate and rebuild its invocation if work remains."""
         context = self._context.clone_for(person)
         try:
-            ticket_manager = context.get_ticket_manager()
             task = await (
                 context.get_code_hosting_service().refresh_pull_request(candidate)
                 if candidate.pull_request_url
-                else ticket_manager.refresh_task(candidate)
+                else context.get_ticket_service().refresh(candidate)
             )
             if task is None:
                 return None
-            return await self._invocation(person, ticket_manager, task)
+            return self._invocation(person, task)
         finally:
             await context.aclose()
 
@@ -125,10 +122,9 @@ class TicketSelector:
         run_id = require_trace().trace_id
         context = self._context.clone_for(person)
         try:
-            ticket_manager = context.get_ticket_manager()
             try:
                 if task.status == Task.READY and task.id is not None:
-                    await ticket_manager.move_ticket(task, Task.IN_PROGRESS)
+                    await context.get_ticket_service().move(task, "in_progress")
                 return await run_workflow(
                     replace(
                         invocation,
@@ -165,26 +161,27 @@ class TicketSelector:
         ticket_url = str(invocation.payload["ticket_url"])
         if rate_limit is None:
             body = await _task_error_message(context)
-            payload = workflow_status_fields(
-                reason="failed",
-                person_id=person_id,
-                run_id=run_id,
-                subject_id=ticket_url,
+            status = WorkflowStatus(
+                reason="failed", person_id=person_id, run_id=run_id, subject=ticket_url
             )
         else:
             body = workflow_rate_limit_notice_text(rate_limit, workflow="ticket")
-            payload = workflow_status_fields(
+            status = WorkflowStatus(
                 reason="rate_limited",
                 person_id=person_id,
                 run_id=run_id,
-                subject_id=ticket_url,
+                subject=ticket_url,
                 retry_after_at=rate_limit.retry_after_at,
                 retry_after_text=rate_limit.retry_after_text,
             )
+        # The status is said where the work came from: a pull request on the
+        # code host, a ticket on the ticket service.
         with suppress(Exception):
-            await context.get_code_hosting_service().comment(
-                ticket_url, body, status=payload
-            )
+            await (
+                context.get_code_hosting_service()
+                if invocation.payload["pull_request_url"]
+                else context.get_ticket_service()
+            ).comment(ticket_url, body, status=status)
         if rate_limit is None:
             return None
         record_workflow_rate_limited(
@@ -197,10 +194,9 @@ class TicketSelector:
         )
         return body
 
-    async def _invocation(
-        self, person: Person, ticket_manager: TicketManager, task: Task
-    ) -> WorkflowInvocation:
-        ticket_url = await ticket_manager.get_ticket_url(task, markdown=False)
+    def _invocation(self, person: Person, task: Task) -> WorkflowInvocation:
+        assert task.url
+        ticket_url = task.url
         payload = {
             "task": task.model_dump(),
             "ticket_url": ticket_url,

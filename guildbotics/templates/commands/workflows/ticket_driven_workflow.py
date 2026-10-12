@@ -12,10 +12,10 @@ COMMAND_METADATA = {
     },
     "description": {
         "en": (
-            "Poll the ticket manager for one actionable issue or PR and "
+            "Poll the board for one actionable ticket or PR and "
             "delegate it to the AI CLI tool."
         ),
-        "ja": ("対応可能な issue または PR を1件取得し、AI CLIツールへ委譲します。"),
+        "ja": ("対応可能なチケットまたは PR を1件取得し、AI CLIツールへ委譲します。"),
     },
     "routine": True,
 }
@@ -27,8 +27,8 @@ def _prepare_command(person_id: str, ticket_url: str, pull_request_url: str) -> 
     The workflow already knows whether this is pull request work
     (``pull_request_url`` is set), so it hands the agent a ready-to-run
     command. Pull request work anchors on ``--pr-url`` so the PR head branch
-    is checked out; without it ``prepare`` would work on a new ``ticket/<n>``
-    branch instead of the PR.
+    is checked out; without it ``prepare`` would work on a new
+    ``ticket/<key>`` branch instead of the PR.
     """
     if pull_request_url:
         return (
@@ -41,7 +41,7 @@ def _prepare_command(person_id: str, ticket_url: str, pull_request_url: str) -> 
 
 
 async def main(context: Context) -> Any:
-    """Work on the issue or PR the host selected, with an AI CLI turn.
+    """Work on the ticket or PR the host selected, with an AI CLI turn.
 
     The host has already selected the ticket, moved it to the working lane,
     and settles how the run ends; this workflow asks for the turn, which the
@@ -63,9 +63,11 @@ async def main(context: Context) -> Any:
         ),
         ticket_url=ticket_url,
         pull_request_url=pull_request_url,
-        # ``issue``, or the pull request role the host selected the ticket for.
+        # ``ticket``, or the pull request role the host selected the ticket for.
         work_type=(
-            (trigger_reason or "pull_request_feedback") if pull_request_url else "issue"
+            (trigger_reason or "pull_request_feedback")
+            if pull_request_url
+            else "ticket"
         ),
         trigger_reason=trigger_reason,
         language=context.language_name,

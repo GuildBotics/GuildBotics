@@ -282,7 +282,7 @@ def _has_work_target_attributes(attributes: dict[str, Any]) -> bool:
     return any(
         _attribute_has_value(attributes, key)
         for key in (
-            "github.number",
+            "github.label",
             "github.url",
             "github.kind",
             "memory.doc_id",

@@ -1,0 +1,12 @@
+ja:
+  too_large: "GitHub の応答がページ上限を超えました。一覧では page_size を減らしてください。個別項目が上限を超える場合は返せません。"
+  response: "GitHub の応答形式が不正です。"
+  rate_limit: "GitHub がリクエストを制限しました。時間をおいて再試行してください。"
+  authentication: "GitHub が認証を拒否しました。メンバーの GitHub 認証情報を確認してください。"
+  forbidden: "GitHub がアクセスを拒否しました。この応答だけでは原因は確定できません。"
+  not_found: "GitHub に該当するリソースが無いか、メンバーの認証情報からは見えません。"
+  permission: "メンバーの GitHub App または fine-grained PAT に、承認済みの %{permission} の権限と、このリポジトリへのアクセスがあるか確認してください。"
+  alerts_disabled: "リポジトリで Dependabot alerts が無効になっている可能性もあります。"
+  rejected: "GitHub が要求を拒否したか、この取得先を一時的に制限しています。要求を確認し、時間をおいて再試行してください。"
+  http: "GitHub への要求が失敗しました（HTTP %{status}）。"
+  transport: "GitHub への要求を完了できませんでした。接続を確認して再試行してください。"

@@ -2,9 +2,10 @@
 inside its isolated environment reaches them.
 
 The member's credentials never leave the host, so the services a command's
-code uses (:class:`ChatService`, :class:`TicketManager`) are the member's own
-commands, run by the host through the command's window as an agent's are:
-the command can do with them only what may be handed to an agent. The
+code uses (:class:`ChatService`, :class:`CodeHostingService`,
+:class:`TicketService`) are the member's own commands, run by the host
+through the command's window as an agent's are: the command can do with them
+only what may be handed to an agent. The
 external inference calls (:class:`WindowInference`) go to the host the same
 way, where the keys are.
 """
@@ -12,12 +13,13 @@ way, where the keys are.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from logging import Logger
 from typing import Any
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.entities import Person, Team
+from guildbotics.entities import Person, Task, Team
 from guildbotics.guest.host_client import HostClient
 from guildbotics.intelligences.agent_runtime.wire import HostCallError
 from guildbotics.intelligences.brains.inference import AgnoAnswer, AgnoCall, JevCall
@@ -27,18 +29,25 @@ from guildbotics.runtime.chat_service import (
     ChatMessageRef,
     ChatPostResult,
     ChatService,
-    ChatServiceError,
     CredentialCheck,
-)
-from guildbotics.runtime.code_hosting_resources import (
-    RESOURCE_SUBJECTS,
-    ReadSubject,
-    RepositoryReadError,
-    RepositoryReadPage,
 )
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.integration_factory import IntegrationFactory
-from guildbotics.runtime.ticket_manager import TicketManager
+from guildbotics.runtime.port import ServiceError, WorkflowStatus
+from guildbotics.runtime.resources import (
+    RESOURCE_SUBJECTS,
+    CommentWritten,
+    ReactionAdded,
+    ReadPage,
+    ReadSubject,
+)
+from guildbotics.runtime.ticket_service import (
+    ClosedItem,
+    MoveLane,
+    TicketCreated,
+    TicketService,
+    TicketUpdated,
+)
 from guildbotics.utils.i18n_tool import t
 
 
@@ -48,14 +57,53 @@ class MemberCommandError(RuntimeError):
 
 #: The member command group that reads each subject's resources.
 _READ_GROUPS: dict[ReadSubject, str] = {
-    "issue": "ticket",
+    "ticket": "ticket",
     "pull_request": "pr",
     "repository": "repo-info",
 }
 
 
+async def _read(
+    client: HostClient,
+    person_id: str,
+    resource: str,
+    subject: str,
+    parameters: dict[str, Any] | None,
+    continuation: str,
+) -> ReadPage:
+    """A page of ``resource``, read by the member's read command of it."""
+    if resource not in RESOURCE_SUBJECTS:
+        raise ServiceError(t("integrations.resources.resource"))
+    result = await _member_result(
+        client,
+        [
+            _READ_GROUPS[RESOURCE_SUBJECTS[resource]],
+            "read",
+            "--person",
+            person_id,
+            "--resource",
+            resource,
+            "--subject",
+            subject,
+            "--params",
+            json.dumps(parameters if parameters is not None else {}),
+            "--continuation",
+            continuation,
+            "--format",
+            "json",
+        ],
+        failure=ServiceError,
+    )
+    page = ReadPage.model_validate(result)
+    # What the host answered is held to the resource's schema here too: a
+    # command reads each item in its full shape, defaults included.
+    return ReadPage.of(
+        resource, page.items, continuation=page.continuation, target=page.target
+    )
+
+
 class WindowCodeHostingService(CodeHostingService):
-    """The same repository contract, via the command's member grant."""
+    """The code host's reads, via the command's member grant."""
 
     def __init__(self, client: HostClient, person_id: str) -> None:
         self._client = client
@@ -64,42 +112,71 @@ class WindowCodeHostingService(CodeHostingService):
     async def read(
         self,
         resource: str,
-        repo: str,
+        subject: str,
         *,
-        identifier: str = "",
         parameters: dict[str, Any] | None = None,
         continuation: str = "",
-    ) -> RepositoryReadPage:
-        if resource not in RESOURCE_SUBJECTS:
-            raise RepositoryReadError(t("integrations.repository.resource"))
-        result = await _member_result(
+    ) -> ReadPage:
+        return await _read(
+            self._client, self._person_id, resource, subject, parameters, continuation
+        )
+
+    async def aclose(self) -> None:
+        """The command owns the shared host client."""
+
+
+class WindowTicketService(TicketService):
+    """The tickets' reads, via the command's member grant. Their writes and
+    the board are the host's: each is the host's ticket selection, or has no
+    member command that does the same."""
+
+    def __init__(self, client: HostClient, person: Person, team: Team) -> None:
+        super().__init__(logging.getLogger(__name__), person, team)
+        self._client = client
+
+    async def read(
+        self,
+        resource: str,
+        subject: str,
+        *,
+        parameters: dict[str, Any] | None = None,
+        continuation: str = "",
+    ) -> ReadPage:
+        return await _read(
             self._client,
-            [
-                _READ_GROUPS[RESOURCE_SUBJECTS[resource]],
-                "read",
-                "--person",
-                self._person_id,
-                "--resource",
-                resource,
-                "--repo",
-                repo,
-                "--identifier",
-                identifier,
-                "--params",
-                json.dumps(parameters if parameters is not None else {}),
-                "--continuation",
-                continuation,
-                "--format",
-                "json",
-            ],
-            failure=RepositoryReadError,
+            self.person.person_id,
+            resource,
+            subject,
+            parameters,
+            continuation,
         )
-        page = RepositoryReadPage.model_validate(result)
-        # What the host answered is held to the resource's schema here too: a
-        # command reads each item in its full shape, defaults included.
-        return RepositoryReadPage.of(
-            resource, page.items, continuation=page.continuation, target=page.target
-        )
+
+    async def comment(self, url: str, body: str, **_: Any) -> CommentWritten:
+        raise _unavailable("Commenting on a ticket")
+
+    async def create_ticket(self, tracker: str, *_: Any) -> TicketCreated:
+        raise _unavailable("Creating a ticket")
+
+    async def update_ticket(self, url: str, **_: Any) -> TicketUpdated:
+        raise _unavailable("Updating a ticket")
+
+    async def add_reaction(self, url: str, *_: Any) -> ReactionAdded:
+        raise _unavailable("Reacting on a ticket")
+
+    async def candidates(self) -> list[Task]:
+        raise _unavailable("The board's candidates")
+
+    async def refresh(self, task: Task) -> Task | None:
+        raise _unavailable("The board's candidates")
+
+    async def move(self, task: Task, lane: MoveLane) -> bool:
+        raise _unavailable("Moving a ticket")
+
+    async def add(self, ticket_url: str) -> bool:
+        raise _unavailable("Putting a ticket on the board")
+
+    async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
+        raise _unavailable("The board's closed work")
 
     async def aclose(self) -> None:
         """The command owns the shared host client."""
@@ -173,10 +250,10 @@ class WindowChatService(ChatService):
         text: str,
         *,
         thread_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        status: WorkflowStatus | None = None,
     ) -> ChatPostResult:
-        if metadata:
-            raise _unavailable("Posting with message metadata")
+        if status is not None:
+            raise _unavailable("Posting a workflow status")
         where = ("reply", "--thread-id", thread_id) if thread_id else ("post",)
         posted = await self._member(
             *where, "--channel-id", channel_id, "--content-stdin", stdin=text
@@ -215,7 +292,7 @@ class WindowChatService(ChatService):
                 "json",
             ],
             stdin=stdin,
-            failure=ChatServiceError,
+            failure=ServiceError,
         )
 
 
@@ -231,12 +308,10 @@ class WindowIntegrationFactory(IntegrationFactory):
     ) -> CodeHostingService:
         return WindowCodeHostingService(self._client, person.person_id)
 
-    def create_ticket_manager(
+    def create_ticket_service(
         self, logger: Logger, person: Person, team: Team
-    ) -> TicketManager:
-        # Each of its operations is the host's ticket selection or has no
-        # member command that does the same.
-        raise _unavailable("The ticket manager")
+    ) -> TicketService:
+        return WindowTicketService(self._client, person, team)
 
     def create_chat_service(
         self, logger: Logger, person: Person, team: Team

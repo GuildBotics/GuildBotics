@@ -25,6 +25,7 @@ from guildbotics.capabilities.chat_updates import (
     noop_payload,
 )
 from guildbotics.capabilities.command_failures import command_failure_payload
+from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
     record_member_issue_comment_event,
@@ -65,7 +66,6 @@ from guildbotics.commands.errors import (
 from guildbotics.drivers.context import resolve_member_context
 from guildbotics.entities.team import Person
 from guildbotics.integrations.factory import chat_provider_name
-from guildbotics.integrations.repository_scope import RepositoryScopeError
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
@@ -74,15 +74,7 @@ from guildbotics.observability.interactive_sessions import (
     interactive_host,
     interactive_thread_key,
 )
-from guildbotics.runtime.chat_service import ChatServiceError
-from guildbotics.runtime.code_hosting_resources import (
-    RESOURCES_BY_SUBJECT,
-    ReadSubject,
-    RepositoryReadError,
-)
-from guildbotics.runtime.code_hosting_service import ReactionTarget, ReviewEvent
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.integration_factory import MemberCapabilityError
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
@@ -92,6 +84,12 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
+)
+from guildbotics.runtime.port import SEMANTIC_REACTIONS, SemanticReaction, ServiceError
+from guildbotics.runtime.resources import (
+    RESOURCES_BY_SUBJECT,
+    ReadSubject,
+    ReviewVerdict,
 )
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
@@ -722,7 +720,7 @@ async def _context_cmd(
     finally:
         await context.aclose()
     if check_credentials:
-        with suppress(ChatServiceError):
+        with suppress(ServiceError):
             result["chat_credentials"] = await _chat(
                 person, lambda chat: chat.check_credentials()
             )
@@ -735,7 +733,7 @@ async def _chat(
     """What ``use`` makes of the member's chat, the project's chat service.
 
     Raises:
-        ChatServiceError: If the project has no chat service.
+        ServiceError: If the project has no chat service.
     """
     context, member_person = _resolve(person)
     try:
@@ -981,7 +979,7 @@ def chat_reaction() -> None:
 @click.option(
     "--reaction",
     required=True,
-    type=click.Choice(["ack", "agree", "celebrate", "support"]),
+    type=click.Choice(SEMANTIC_REACTIONS),
     help="Semantic reaction to add.",
 )
 @_json_format_option
@@ -991,7 +989,7 @@ def chat_reaction_add(
     channel_name: str,
     message_id: str,
     message_url: str,
-    reaction: str,
+    reaction: SemanticReaction,
     output_format: str,
 ) -> _CommandWork:
     return _chat(
@@ -1065,11 +1063,16 @@ def git() -> None:
 
 @git.command(name="prepare")
 @_person_option
-@click.option(
-    "--issue-url", default="", help="Ticket issue URL to prepare a workspace for."
-)
+@click.option("--issue-url", default="", help="Ticket URL to prepare a workspace for.")
 @click.option("--pr-url", default="", help="PR URL whose head branch to check out.")
-@click.option("--repo", default="", help="Target repository as <owner>/<repo>.")
+@click.option(
+    "--repo",
+    default="",
+    help=(
+        "Repository path (owner/repo on GitHub): with --branch, or with"
+        " --issue-url for a ticket that belongs to no repository."
+    ),
+)
 @click.option(
     "--branch", default="", help="Branch to create or check out (with --repo)."
 )
@@ -1097,12 +1100,12 @@ def _validate_prepare_anchor(
         raise click.UsageError(
             "Provide --issue-url, --pr-url, or --repo with --branch."
         )
-    if repo and (issue_url or pr_url):
-        raise click.UsageError(
-            "--repo cannot be combined with --issue-url or --pr-url."
-        )
-    if repo and not branch:
-        raise click.UsageError("--repo requires --branch.")
+    if repo and pr_url:
+        raise click.UsageError("--repo cannot be combined with --pr-url.")
+    if branch and issue_url:
+        raise click.UsageError("--branch cannot be combined with --issue-url.")
+    if repo and not (branch or issue_url):
+        raise click.UsageError("--repo requires --branch or --issue-url.")
 
 
 async def _git_prepare(
@@ -1320,13 +1323,17 @@ async def _code_hosting(
 
 def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
     return MemberGitWorkspaceService(
-        person, context.team, context.get_code_hosting_service, context.logger
+        person,
+        context.team,
+        context.get_code_hosting_service,
+        context.get_ticket_service,
+        context.logger,
     )
 
 
 @member.group()
 def ticket() -> None:
-    """Read, create, update, and comment on issues, and react to their comments."""
+    """Read, create, update, and comment on tickets, and react to their comments."""
 
 
 @member.group()
@@ -1340,8 +1347,8 @@ def repo_info() -> None:
     """Read information about the repository as a whole."""
 
 
-def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
-    """Give ``group`` the read of the code host's resources of ``subject``."""
+def _add_read_command(group: click.Group, kind: ReadSubject) -> None:
+    """Give ``group`` the read of the resources of a ``kind``."""
 
     @group.command(name="read")
     @_read_only_member_command
@@ -1349,16 +1356,16 @@ def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
     @click.option(
         "--resource",
         required=True,
-        type=click.Choice(list(RESOURCES_BY_SUBJECT[subject])),
+        type=click.Choice(list(RESOURCES_BY_SUBJECT[kind])),
         help="Resource to read; see member help for its conditions.",
     )
     @click.option(
-        "--repo",
+        "--subject",
         required=True,
-        help="Repository identifier for the configured service.",
-    )
-    @click.option(
-        "--identifier", default="", help="Resource identifier for an individual item."
+        help=(
+            "What the resource is part of: the ticket's or pull request's URL,"
+            " or the repository's path."
+        ),
     )
     @click.option(
         "--params",
@@ -1375,8 +1382,7 @@ def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
     def read(
         person: str,
         resource: str,
-        repo: str,
-        identifier: str,
+        subject: str,
         parameters: str,
         continuation: str,
         output_format: str,
@@ -1391,36 +1397,35 @@ def _add_read_command(group: click.Group, subject: ReadSubject) -> None:
             ) from None
         return _code_hosting(
             person,
-            lambda context: member_repository.read_repository(
+            lambda context: member_repository.read_resource(
                 context,
                 resource,
-                repo,
-                identifier=identifier,
+                subject,
                 parameters=conditions,
                 continuation=continuation,
             ),
         )
 
 
-_add_read_command(ticket, "issue")
+_add_read_command(ticket, "ticket")
 _add_read_command(pr, "pull_request")
 _add_read_command(repo_info, "repository")
 
 
 @ticket.command(name="comment")
 @_person_option
-@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@click.option("--url", "issue_url", required=True, help="Ticket URL.")
 @_required_content_stdin_option
 @_json_format_option
-def issue_comment(
+def ticket_comment(
     person: str,
     issue_url: str,
     output_format: str,
 ) -> _CommandWork:
-    body = _read_stdin("issue comment body")
+    body = _read_stdin("ticket comment body")
     return _code_hosting(
         person,
-        lambda context: member_repository.issue_comment(context, issue_url, body),
+        lambda context: member_repository.ticket_comment(context, issue_url, body),
         evidence="issue_comment",
         then=record_member_issue_comment_event,
     )
@@ -1428,37 +1433,41 @@ def issue_comment(
 
 @ticket.command(name="create")
 @_person_option
-@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
-@click.option("--title", required=True, help="Issue title.")
+@click.option(
+    "--tracker",
+    required=True,
+    help="Where the ticket is kept: a repository path (owner/repo) on GitHub.",
+)
+@click.option("--title", required=True, help="Ticket title.")
 @_required_content_stdin_option
 @click.option(
     "--label",
     "labels",
     multiple=True,
-    help="Label already defined in the repository. Repeat for several labels.",
+    help="Label already defined in the tracker. Repeat for several labels.",
 )
 @click.option(
-    "--add-to-project/--no-add-to-project",
+    "--add-to-board/--no-add-to-board",
     default=True,
-    help="Add the created issue to the configured project board.",
+    help="Put the created ticket on the configured board.",
 )
 @_human_approved_option
 @_json_format_option
-def issue_create(
+def ticket_create(
     person: str,
-    repo: str,
+    tracker: str,
     title: str,
     labels: tuple[str, ...],
-    add_to_project: bool,
+    add_to_board: bool,
     human_approved: bool,
     output_format: str,
 ) -> _CommandWork:
     title = _validate_title(title)
-    body = _read_stdin("issue body")
+    body = _read_stdin("ticket body")
     return _code_hosting(
         person,
-        lambda context: member_repository.issue_create(
-            context, repo, title, body, add_to_project, labels, human_approved
+        lambda context: member_repository.ticket_create(
+            context, tracker, title, body, add_to_board, labels, human_approved
         ),
         evidence="issue_create",
         then=record_member_issue_create_event,
@@ -1467,34 +1476,34 @@ def issue_create(
 
 @ticket.command(name="update")
 @_person_option
-@click.option("--url", "issue_url", required=True, help="Issue URL.")
+@click.option("--url", "issue_url", required=True, help="Ticket URL.")
 @_optional_content_stdin_option
-@click.option("--title", default=None, help="Replace the issue title.")
+@click.option("--title", default=None, help="Replace the ticket title.")
 @click.option(
     "--add-label",
     "add_labels",
     multiple=True,
-    help="Add a label already defined in the repository. Repeat for several labels.",
+    help="Add a label already defined in the tracker. Repeat for several labels.",
 )
 @click.option(
     "--remove-label",
     "remove_labels",
     multiple=True,
-    help="Remove a label from the issue. Repeat for several labels.",
+    help="Remove a label from the ticket. Repeat for several labels.",
 )
 @click.option(
     "--state",
     type=click.Choice(["open", "closed"]),
-    help="Close or reopen the issue; requires --human-approved.",
+    help="Close or reopen the ticket; requires --human-approved.",
 )
 @click.option(
     "--state-reason",
     type=click.Choice(["completed", "not_planned"]),
-    help="Why the issue is closed; requires --state closed.",
+    help="Why the ticket is closed; requires --state closed.",
 )
 @_human_approved_option
 @_json_format_option
-def issue_update(
+def ticket_update(
     person: str,
     issue_url: str,
     content_stdin: bool,
@@ -1510,14 +1519,14 @@ def issue_update(
         raise click.UsageError("--state-reason requires --state closed.")
     if not (content_stdin or title is not None or add_labels or remove_labels or state):
         raise click.UsageError(
-            "issue update needs --content-stdin/--content-file, --title, --add-label, "
+            "ticket update needs --content-stdin/--content-file, --title, --add-label, "
             "--remove-label, or --state."
         )
-    body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
+    body = _read_stdin("ticket body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
     return _code_hosting(
         person,
-        lambda context: member_repository.issue_update(
+        lambda context: member_repository.ticket_update(
             context,
             issue_url,
             body=body,
@@ -1535,7 +1544,9 @@ def issue_update(
 
 @pr.command(name="create")
 @_person_option
-@click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
+@click.option(
+    "--repo", required=True, help="Target repository path (owner/repo on GitHub)."
+)
 @click.option("--head", required=True, help="Head branch containing the changes.")
 @click.option(
     "--base",
@@ -1548,14 +1559,15 @@ def issue_update(
     help="Pull request title.",
 )
 @_required_content_stdin_option
-@click.option("--issue-url", default="", help="Related issue URL to link to the PR.")
+@click.option("--issue-url", default="", help="Related ticket URL to link to the PR.")
 @click.option(
     "--closes-issue/--refs-issue",
     "closes_issue",
     default=False,
     help=(
-        "When --issue-url is set, append Closes #<n> or Refs #<n> to the PR "
-        "body. Defaults to Refs."
+        "When --issue-url is set, link the ticket so that merging the PR closes"
+        " it, or only refer to it. Defaults to referring; a code host that"
+        " cannot close the ticket on a merge refuses --closes-issue."
     ),
 )
 @click.option(
@@ -1586,9 +1598,7 @@ def pr_create(
             context, repo, head, base, title, body, issue_url, draft, closes_issue
         ),
         evidence="pr_create",
-        then=lambda member, result: record_member_pr_create_event(
-            member, repo, title, result
-        ),
+        then=record_member_pr_create_event,
     )
 
 
@@ -1601,13 +1611,11 @@ def pr_create(
     "--drop-issue-links",
     is_flag=True,
     help=(
-        "Do not carry existing standalone Closes/Fixes/Resolves/Refs #<n> lines "
-        "in paragraphs or list items into the "
-        "replacement body. Requires --content-stdin/--content-file. By default, "
-        "these lines are preserved, even with empty content; new standalone "
-        "links to the same issue take precedence. Code, quotes, HTML blocks, "
-        "prose, colon-separated and cross-repository links are excluded. "
-        "Inline HTML and multiline reference labels are outside this convention."
+        "Do not carry the ticket links of the existing body into the"
+        " replacement body. Requires --content-stdin/--content-file. By default,"
+        " they are preserved, even with empty content; new links to the same"
+        " ticket take precedence. See member help for what the code host"
+        " counts as a link."
     ),
 )
 @_json_format_option
@@ -1636,7 +1644,7 @@ def pr_update(
             pr_url,
             body=body,
             title=new_title,
-            drop_issue_links=drop_issue_links,
+            drop_ticket_links=drop_issue_links,
         ),
         evidence="pr_update",
     )
@@ -1656,23 +1664,36 @@ def pr_comment(person: str, pr_url: str, output_format: str) -> _CommandWork:
     )
 
 
+_head_option = click.option(
+    "--head",
+    required=True,
+    help=(
+        "The head commit (head_sha) the member read; refused when the PR's head"
+        " has moved since."
+    ),
+)
+
+
 @pr.command(name="review")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
 @click.option(
     "--event",
     required=True,
-    type=click.Choice(["approve", "request-changes", "comment"]),
-    help="Review verdict submitted on the current PR head.",
+    type=click.Choice(["approve", "request_changes", "comment"]),
+    help="Review verdict submitted on the head --head names.",
 )
+@_head_option
 @_required_content_stdin_option
 @_json_format_option
-def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _CommandWork:
+def pr_review(
+    person: str, pr_url: str, event: str, head: str, output_format: str
+) -> _CommandWork:
     body = _read_stdin("pull request review body")
     return _code_hosting(
         person,
         lambda context: member_repository.pr_review(
-            context, pr_url, body, cast(ReviewEvent, event)
+            context, pr_url, body, cast(ReviewVerdict, event), head
         ),
         evidence="pr_review",
     )
@@ -1681,6 +1702,7 @@ def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _Comm
 @pr.command(name="review-comment")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@_head_option
 @click.option("--path", "file_path", required=True, help="File path in the PR diff.")
 @click.option(
     "--line",
@@ -1711,6 +1733,7 @@ def pr_review(person: str, pr_url: str, event: str, output_format: str) -> _Comm
 def pr_review_comment(
     person: str,
     pr_url: str,
+    head: str,
     file_path: str,
     line: int,
     side: str,
@@ -1726,7 +1749,7 @@ def pr_review_comment(
     return _code_hosting(
         person,
         lambda context: member_repository.pr_review_comment(
-            context, pr_url, body, file_path, line, side, start_line, start_side
+            context, pr_url, body, head, file_path, line, side, start_line, start_side
         ),
         evidence="pr_review_comment",
     )
@@ -1738,7 +1761,6 @@ def pr_review_comment(
 @click.option(
     "--reply-target-id",
     required=True,
-    type=int,
     help="reply_target_id from repository/pr_inspect include_comments=true.",
 )
 @_required_content_stdin_option
@@ -1746,7 +1768,7 @@ def pr_review_comment(
 def pr_reply(
     person: str,
     pr_url: str,
-    reply_target_id: int,
+    reply_target_id: str,
     output_format: str,
 ) -> _CommandWork:
     body = _read_stdin("pull request reply body")
@@ -1794,50 +1816,45 @@ def artifact_download(
     )
 
 
-_reaction_option = click.option(
-    "--reaction",
-    "reaction_content",
-    required=True,
-    type=click.Choice(
-        ["+1", "eyes", "heart", "hooray", "rocket", "laugh", "confused", "-1"]
+_reaction_options = (
+    click.option(
+        "--comment-id",
+        required=True,
+        help="The id the item's read gave the comment (or review) to react to.",
     ),
-    help="Reaction to add.",
+    click.option(
+        "--reaction",
+        required=True,
+        type=click.Choice(SEMANTIC_REACTIONS),
+        help="Semantic reaction to add.",
+    ),
 )
-
-
-def _add_reaction(
-    person: str, url: str, target: ReactionTarget, comment_id: int, reaction: str
-) -> _CommandWork:
-    return _code_hosting(
-        person,
-        lambda context: member_repository.reaction_add(
-            context, url, target, comment_id, reaction
-        ),
-        evidence="reaction_add",
-    )
 
 
 @ticket.group(name="reaction")
 def ticket_reaction() -> None:
-    """Reactions to issue comments."""
+    """Reactions to ticket comments."""
 
 
 @ticket_reaction.command(name="add")
 @_person_option
-@click.option("--url", "issue_url", required=True, help="Issue URL.")
-@click.option(
-    "--comment-id", required=True, type=int, help="Numeric id of the comment."
-)
-@_reaction_option
+@click.option("--url", "issue_url", required=True, help="Ticket URL.")
+@_with_options(*_reaction_options)
 @_json_format_option
 def ticket_reaction_add(
     person: str,
     issue_url: str,
-    comment_id: int,
-    reaction_content: str,
+    comment_id: str,
+    reaction: SemanticReaction,
     output_format: str,
 ) -> _CommandWork:
-    return _add_reaction(person, issue_url, "comment", comment_id, reaction_content)
+    return _code_hosting(
+        person,
+        lambda context: member_repository.ticket_reaction(
+            context, issue_url, comment_id, reaction
+        ),
+        evidence="reaction_add",
+    )
 
 
 @pr.group(name="reaction")
@@ -1848,33 +1865,21 @@ def pr_reaction() -> None:
 @pr_reaction.command(name="add")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@click.option(
-    "--target",
-    required=True,
-    type=click.Choice(["comment", "review-comment", "review"]),
-    help=(
-        "What to react to: a conversation comment, an inline review comment, "
-        "or a review's body."
-    ),
-)
-@click.option(
-    "--comment-id",
-    required=True,
-    type=int,
-    help="Numeric id of the comment, or of the review with --target review.",
-)
-@_reaction_option
+@_with_options(*_reaction_options)
 @_json_format_option
 def pr_reaction_add(
     person: str,
     pr_url: str,
-    target: str,
-    comment_id: int,
-    reaction_content: str,
+    comment_id: str,
+    reaction: SemanticReaction,
     output_format: str,
 ) -> _CommandWork:
-    return _add_reaction(
-        person, pr_url, cast(ReactionTarget, target), comment_id, reaction_content
+    return _code_hosting(
+        person,
+        lambda context: member_repository.pr_reaction(
+            context, pr_url, comment_id, reaction
+        ),
+        evidence="reaction_add",
     )
 
 
@@ -2073,15 +2078,13 @@ def _run(coro, *, output_format: str) -> Any:
                 result = _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
-        ChatServiceError,
-        RepositoryReadError,
+        ServiceError,
         MemberMemoryError,
         ChatUpdatesRequired,
         TaskRunError,
-        RepositoryScopeError,
         KeyError,
     ) as exc:
-        raise click.ClickException(_safe_error(exc)) from exc
+        raise click.ClickException(str(exc) or type(exc).__name__) from exc
     except SyncRepositoryBusyError as exc:
         raise click.ClickException(str(exc)) from exc
     except BaseException:
@@ -2408,14 +2411,6 @@ def _to_markdown(payload: dict[str, Any]) -> str:
             rendered = str(value)
         lines.append(f"- **{key}**: {rendered}")
     return "\n".join(lines)
-
-
-def _safe_error(exc: Exception) -> str:
-    text = str(exc)
-    for marker in ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY"):
-        if marker in text.upper():
-            return "Member credential could not be resolved or used safely."
-    return text or "Member capability command failed."
 
 
 def _fill_help_from_catalog(group: click.Group, path: tuple[str, ...] = ()) -> None:

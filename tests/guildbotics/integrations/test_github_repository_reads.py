@@ -1,26 +1,55 @@
 """GitHub reads keep their approved destination and bounded authenticated client."""
 
 import json
+import logging
+import re
+from types import SimpleNamespace
 
 import httpx
 import pytest
 import pytest_asyncio
 
 from guildbotics.entities import Person, Project, Team
+from guildbotics.entities.message import Message
 from guildbotics.integrations.github import code_hosting_service as hosting
+from guildbotics.integrations.github import api, reads
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
-from guildbotics.runtime.code_hosting_resources import RepositoryReadError
+from guildbotics.integrations.github.pull_requests import _fit_log_tails
+from guildbotics.integrations.github.ticket_service import GitHubTicketService
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+)
+from guildbotics.runtime.resources import (
+    MAX_LOG_TAIL_BYTES,
+    MAX_PAGE_BYTES,
+    ReadPage,
+    WorkTarget,
+)
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 REPO = "GuildBotics/GuildBotics"
 BASE = "https://github.example.test/api/v3/"
+WEB = "https://github.example.test"
 PATH = f"/api/v3/repos/{REPO}/dependabot/alerts"
+PULL = f"{WEB}/{REPO}/pull/7"
+ISSUE = f"{WEB}/{REPO}/issues/7"
 #: Issue #7 and pull request #7, as GitHub answers each at its own address.
 NAMED_ITEMS = {
     f"/api/v3/repos/{REPO}/issues/7": {"number": 7, "state": "open"},
     f"/api/v3/repos/{REPO}/pulls/7": {"number": 7, "state": "open"},
 }
+_RESPONSE = "integrations.github.response"
+
+
+def _refused(key: str, permission: str, status: int = 0) -> str:
+    """What a read refused with ``key`` says, naming the permission it needs."""
+    message = t(f"{_RESPONSE}.{key}", status=status)
+    if key in {"forbidden", "not_found"}:
+        message += " " + t(f"{_RESPONSE}.permission", permission=permission)
+    return message
 
 
 @pytest.fixture(params=["en", "ja"])
@@ -33,12 +62,63 @@ def read_language(request):
         set_language(previous)
 
 
+@pytest_asyncio.fixture
+async def reader(monkeypatch):
+    """The member's code host and tickets on a GitHub Enterprise Server,
+    answered by ``state["respond"]``; the items the shared routes read first
+    are answered from ``state["items"]`` and not kept in ``requests``."""
+    requests = []
+    state = {"respond": lambda _: httpx.Response(200, json=[]), "items": {}}
+
+    def respond(request):
+        if request.url.path in state["items"]:
+            return httpx.Response(200, json=state["items"][request.url.path])
+        requests.append(request)
+        return state["respond"](request)
+
+    async def create(_person, base_url, owner):
+        client = get_async_client(base_url, GitHubTokenAuth("secret-value"), owner)
+        client._transport = httpx.MockTransport(respond)
+        client._mounts = {}
+        return client
+
+    monkeypatch.setattr(
+        "guildbotics.integrations.github.api.create_github_client", create
+    )
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        account_info={"github_username": "aiko", "github_account_type": "machine_user"},
+    )
+    team = Team(
+        project=Project(
+            name="demo",
+            services={
+                "code_hosting_service": {"name": "github", "api_base_url": BASE},
+                "ticket_service": {
+                    "name": "github",
+                    "api_base_url": BASE,
+                    "project_id": "1",
+                    "url": f"{WEB}/orgs/GuildBotics/projects/1",
+                },
+            },
+        ),
+        members=[person],
+    )
+    code = hosting.GitHubCodeHostingService(person, team)
+    tickets = GitHubTicketService(logging.getLogger(), person, team)
+    yield SimpleNamespace(code=code, tickets=tickets, state=state, requests=requests)
+    await code.aclose()
+    await tickets.aclose()
+
+
 def readiness_payloads():
     return {
         "pulls/7": {
             "number": 7,
             "title": "PR",
             "state": "open",
+            "html_url": PULL,
             "head": {"sha": "head", "ref": "topic", "repo": {"full_name": REPO}},
             "base": {"ref": "main"},
         },
@@ -61,9 +141,6 @@ def readiness_payloads():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("large_path", [*readiness_payloads(), "actions/jobs/1/logs"])
 async def test_readiness_uses_host_transport_for_all_internal_reads(reader, large_path):
-    from guildbotics.runtime.code_hosting_resources import MAX_PAGE_BYTES
-
-    service, state, requests = reader
     payloads = readiness_payloads()
 
     def respond(request):
@@ -80,17 +157,22 @@ async def test_readiness_uses_host_transport_for_all_internal_reads(reader, larg
             payload["unused_large_field"] = "x" * (MAX_PAGE_BYTES + 1)
         return httpx.Response(200, json=payload)
 
-    state["respond"] = respond
-    page = await service.read(
-        "pull_request_readiness", REPO, identifier="7", parameters={"failed_logs": True}
+    reader.state["respond"] = respond
+    page = await reader.code.read(
+        "pull_request_readiness", PULL, parameters={"failed_logs": True}
     )
-    expected = await service.readiness(
-        f"https://github.example.test/{REPO}/pull/7", failed_logs=True
-    )
+    expected = await reader.code.readiness(PULL, failed_logs=True)
     assert page.items == [expected.model_dump()]
+    assert (
+        page.target
+        == expected.target
+        == WorkTarget(kind="pull_request", url=PULL, title="PR", label="#7")
+    )
     assert page.items[0]["readiness"] == "blocked"
+    # A job is named by its run, the run's attempt, and its own id.
+    assert [log["job_id"] for log in page.items[0]["failed_logs"]] == ["1/1/1"]
     assert len(json.dumps(page.model_dump()).encode()) <= MAX_PAGE_BYTES
-    assert all("max_response_bytes" not in r.extensions for r in requests)
+    assert all("max_response_bytes" not in r.extensions for r in reader.requests)
 
 
 @pytest.mark.asyncio
@@ -100,7 +182,6 @@ async def test_readiness_uses_host_transport_for_all_internal_reads(reader, larg
 async def test_readiness_actions_errors_keep_structured_diagnostics(
     reader, key, headers
 ):
-    service, state, _ = reader
     payloads = readiness_payloads()
 
     def respond(request):
@@ -111,85 +192,62 @@ async def test_readiness_actions_errors_keep_structured_diagnostics(
             else httpx.Response(200, json=payloads[path])
         )
 
-    state["respond"] = respond
-    with pytest.raises(RepositoryReadError) as error:
-        await service.read("pull_request_readiness", REPO, identifier="7")
-    assert str(error.value) == t(
-        f"integrations.github.read.{key}",
-        permission="Pull requests / Contents / Checks / Commit statuses / Actions",
+    reader.state["respond"] = respond
+    with pytest.raises(ServiceError) as error:
+        await reader.code.read("pull_request_readiness", PULL)
+    assert str(error.value) == _refused(
+        key, "Pull requests / Contents / Checks / Commit statuses / Actions"
     )
     assert "secret-value" not in str(error.value)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resource", ["pull_request_threads", "review_thread_comments"])
 @pytest.mark.parametrize(
-    "resource,permission",
+    "kind,key,error_type",
     [
-        ("issue_projects", "Projects"),
-        ("pull_request_threads", "Pull requests"),
-        ("review_thread_comments", "Pull requests"),
-    ],
-)
-@pytest.mark.parametrize(
-    "kind,key",
-    [
-        ("FORBIDDEN", "forbidden"),
-        ("INSUFFICIENT_SCOPES", "forbidden"),
-        ("NOT_FOUND", "not_found"),
-        ("RATE_LIMITED", "rate_limit"),
-        ("UNKNOWN", "response"),
+        ("FORBIDDEN", "forbidden", ServiceError),
+        ("INSUFFICIENT_SCOPES", "forbidden", ServiceError),
+        ("NOT_FOUND", "not_found", ServiceNotFound),
+        ("RATE_LIMITED", "rate_limit", ServiceError),
+        ("UNKNOWN", "response", ServiceError),
     ],
 )
 async def test_graphql_errors_are_safe_resource_diagnostics(
-    reader, resource, permission, kind, key, read_language
+    reader, resource, kind, key, error_type, read_language
 ):
-    service, state, _ = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
         json={
             "data": {"partial": "ignored"},
             "errors": [{"type": kind, "message": "secret-value"}],
         },
     )
-    with pytest.raises(RepositoryReadError) as error:
-        await service.read(
+    with pytest.raises(error_type) as error:
+        await reader.code.read(
             resource,
-            REPO,
-            identifier="7",
+            PULL,
             parameters={"node": "thread"}
             if resource == "review_thread_comments"
             else {},
         )
-    assert str(error.value) == t(
-        f"integrations.github.read.{key}", permission=permission
-    )
+    assert str(error.value) == t(f"{_RESPONSE}.{key}")
     assert "secret-value" not in str(error.value)
 
 
 @pytest.mark.parametrize("text", ["\x1b[31m\x00\n", "日本語🙂"])
 @pytest.mark.parametrize("state", ["open", "closed"])
 def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
-    from guildbotics.integrations.github.pull_requests import _fit_log_tails
-    from guildbotics.runtime.code_hosting_resources import (
-        MAX_PAGE_BYTES,
-        RepositoryReadPage,
-    )
-
+    target = WorkTarget(kind="pull_request", url=PULL, title="PR", label="#7")
     result = {
-        "target": {
-            "kind": "pull_request",
-            "repo": REPO,
-            "number": 7,
-            "title": "PR",
-            "html_url": f"https://github.com/{REPO}/pull/7",
-        },
+        "target": target.model_dump(),
         "readiness": "blocked" if state == "open" else "not_applicable",
         "checks": [{"name": "test"}],
         "failed_logs": [
             {
                 "log": text * 10000,
                 "log_bytes": len((text * 10000).encode()),
-                "tail_limit_bytes": 65536,
+                "tail_limit_bytes": MAX_LOG_TAIL_BYTES,
                 "truncated": False,
                 "artifact_names": ["artifact" * 1000],
                 "name": "job" + str(i),
@@ -199,11 +257,7 @@ def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
     }
     _fit_log_tails(result)
     assert (
-        len(
-            json.dumps(
-                RepositoryReadPage(items=[result], target=result["target"]).model_dump()
-            ).encode()
-        )
+        len(json.dumps(ReadPage(items=[result], target=target).model_dump()).encode())
         <= MAX_PAGE_BYTES
     )
     assert len(result["failed_logs"]) == 12
@@ -225,124 +279,246 @@ def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
 async def test_missing_or_truncated_patch_is_not_complete(
     reader, patch, additions, deletions, complete
 ):
-    service, state, _ = reader
     item = {"filename": "file", "additions": additions, "deletions": deletions}
     if patch is not None:
         item["patch"] = patch
-    state["respond"] = lambda _: httpx.Response(200, json=[item])
-    result = await service.read("pull_request_files", REPO, identifier="7")
+    reader.state["respond"] = lambda _: httpx.Response(200, json=[item])
+    result = await reader.code.read("pull_request_files", PULL)
     assert result.items[0]["patch_complete"] is complete
     assert result.items[0]["patch_available"] is (patch is not None)
 
 
+_COMMENT = {
+    "id": 1,
+    "body": "comment",
+    "user": {"login": "aiko"},
+    "created_at": "2026-01-01T00:00:00Z",
+    "html_url": f"{PULL}#issuecomment-1",
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resource,suffix,item",
+    "service,resource,subject,suffix,item,read",
     [
         (
-            "issue_comments",
+            "code",
+            "pull_request_comments",
+            PULL,
             "issues/7/comments",
-            {"id": 1, "body": "comment", "user": {"login": "aiko"}},
+            _COMMENT,
+            {
+                "id": "issuecomment-1",
+                "body": "comment",
+                "author": "aiko",
+                "author_type": Message.ASSISTANT,
+                "created_at": "2026-01-01T00:00:00Z",
+                "url": f"{PULL}#issuecomment-1",
+            },
         ),
         (
+            "tickets",
+            "ticket_comments",
+            ISSUE,
+            "issues/7/comments",
+            {**_COMMENT, "user": {"login": "someone"}},
+            {
+                "id": "issuecomment-1",
+                "body": "comment",
+                "author": "someone",
+                "author_type": Message.USER,
+                "created_at": "2026-01-01T00:00:00Z",
+                "url": f"{PULL}#issuecomment-1",
+            },
+        ),
+        (
+            "code",
             "pull_request_reviews",
+            PULL,
             "pulls/7/reviews",
-            {"id": 1, "body": "review", "state": "APPROVED"},
+            {
+                "id": 1,
+                "body": "review",
+                "state": "CHANGES_REQUESTED",
+                "commit_id": "abc",
+                "user": {"login": "someone"},
+            },
+            {
+                "id": "pullrequestreview-1",
+                "body": "review",
+                "author": "someone",
+                "author_type": Message.USER,
+                "verdict": "request_changes",
+                "commit": "abc",
+                "submitted_at": None,
+                "url": None,
+            },
         ),
         (
+            "code",
             "pull_request_files",
+            PULL,
             "pulls/7/files",
             {"filename": "a.py", "patch": "@@ -1 +1 @@\n-old\n+new"},
+            None,
         ),
         (
-            "issue_timeline",
+            "code",
+            "ticket_pull_requests",
+            ISSUE,
             "issues/7/timeline",
             {
+                "event": "cross-referenced",
                 "source": {
                     "issue": {
-                        "pull_request": {},
-                        "html_url": "https://github.com/fork/repo/pull/9",
+                        "pull_request": {"merged_at": "2026-01-02T00:00:00Z"},
+                        "html_url": f"{WEB}/fork/repo/pull/9",
+                        "title": "Fix",
+                        "state": "closed",
                     }
-                }
+                },
+            },
+            {
+                "url": f"{WEB}/fork/repo/pull/9",
+                "label": "fork/repo#9",
+                "title": "Fix",
+                "state": "closed",
+                "merged": True,
             },
         ),
     ],
 )
 async def test_inspection_rest_pages_rebuild_original_routes(
-    reader, resource, suffix, item
+    reader, service, resource, subject, suffix, item, read
 ):
-    service, state, requests = reader
-    state["items"] = NAMED_ITEMS
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["items"] = NAMED_ITEMS
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
         json=[item],
         headers={"Link": '<https://evil.test/secret?page=2&method=DELETE>; rel="next"'},
     )
-    first = await service.read(resource, REPO, identifier="7")
-    state["respond"] = lambda _: httpx.Response(200, json=[])
-    second = await service.read(
-        resource, REPO, identifier="7", continuation=first.continuation
+    first = await getattr(reader, service).read(resource, subject)
+    reader.state["respond"] = lambda _: httpx.Response(200, json=[])
+    second = await getattr(reader, service).read(
+        resource, subject, continuation=first.continuation
     )
     assert not second.items and not second.continuation
     assert all(
         r.method == "GET"
         and r.url.host == "github.example.test"
         and r.url.path == f"/api/v3/repos/{REPO}/{suffix}"
-        for r in requests
+        for r in reader.requests
     )
-    assert requests[-1].url.params["page"] == "2"
+    assert reader.requests[-1].url.params["page"] == "2"
+    if read is not None:
+        assert first.items == [read]
     if resource == "pull_request_files":
         assert first.items[0]["commentable_lines"] == [
-            {
-                "line": 1,
-                "side": "LEFT",
-                "left_line": 1,
-            },
-            {
-                "line": 1,
-                "side": "RIGHT",
-                "right_line": 1,
-            },
+            {"line": 1, "side": "LEFT", "left_line": 1},
+            {"line": 1, "side": "RIGHT", "right_line": 1},
         ]
-    if resource == "issue_timeline":
-        assert first.items[0]["pull_request"] == {"repo": "fork/repo", "number": 9}
+
+
+@pytest.mark.asyncio
+async def test_an_unsubmitted_review_and_an_event_that_is_no_pull_request_are_left_out(
+    reader,
+):
+    reader.state["items"] = NAMED_ITEMS
+    reader.state["respond"] = lambda request: httpx.Response(
+        200,
+        json=[{"id": 2, "state": "PENDING"}, {"id": 3, "state": "DISMISSED"}]
+        if request.url.path.endswith("/reviews")
+        else [
+            {"event": "labeled"},
+            {"event": "cross-referenced", "source": {"issue": {"html_url": ISSUE}}},
+            # A pull request of another GitHub.
+            {
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "pull_request": {},
+                        "html_url": "https://github.com/other/repo/pull/1",
+                    }
+                },
+            },
+            {
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "pull_request": {},
+                        "html_url": f"{WEB}/{REPO.upper()}/pull/8",
+                        "title": "Same repository",
+                        "state": "open",
+                    }
+                },
+            },
+        ],
+    )
+
+    reviews = await reader.code.read("pull_request_reviews", PULL)
+    referring = await reader.code.read("ticket_pull_requests", ISSUE)
+
+    assert [(r["id"], r["verdict"]) for r in reviews.items] == [
+        ("pullrequestreview-3", "dismissed")
+    ]
+    # One of the same repository is labeled as GitHub shows it there.
+    assert referring.items == [
+        {
+            "url": f"{WEB}/{REPO.upper()}/pull/8",
+            "label": "#8",
+            "title": "Same repository",
+            "state": "open",
+            "merged": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_pull_requests_of_a_ticket_elsewhere_are_unsupported(reader):
+    with pytest.raises(ServiceUnsupported):
+        await reader.code.read(
+            "ticket_pull_requests", "https://tickets.example.com/browse/OPS-7"
+        )
+    # A pull request is not a ticket.
+    with pytest.raises(ServiceNotFound):
+        await reader.code.read("ticket_pull_requests", PULL)
+    assert reader.requests == []
 
 
 @pytest.mark.asyncio
 async def test_every_page_of_a_shared_route_reads_its_items_kind(reader):
     """A continuation names no more than the request it continues: the page
     it asks for is of an issue only while the number is still an issue's."""
-    service, state, _ = reader
-    state["items"] = dict(NAMED_ITEMS)
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["items"] = dict(NAMED_ITEMS)
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
-        json=[{"id": 1, "body": "comment", "user": {"login": "aiko"}}],
+        json=[_COMMENT],
         headers={"Link": f'<{BASE}repos/{REPO}/issues/7/comments?page=2>; rel="next"'},
     )
-    first = await service.read("issue_comments", REPO, identifier="7")
-    state["items"][f"/api/v3/repos/{REPO}/issues/7"] = {
+    first = await reader.tickets.read("ticket_comments", ISSUE)
+    reader.state["items"][f"/api/v3/repos/{REPO}/issues/7"] = {
         "number": 7,
         "pull_request": {},
     }
 
-    with pytest.raises(RepositoryReadError, match="is a pull request"):
-        await service.read(
-            "issue_comments", REPO, identifier="7", continuation=first.continuation
+    with pytest.raises(ServiceNotFound, match="is a pull request"):
+        await reader.tickets.read(
+            "ticket_comments", ISSUE, continuation=first.continuation
         )
+    assert len(reader.requests) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resource", ["issues", "pull_requests"])
-async def test_detail_names_host_observed_target_and_fork_head(reader, resource):
-    service, state, _ = reader
-    state["respond"] = lambda _: httpx.Response(
+async def test_detail_names_host_observed_target_and_fork_head(reader):
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
         json={
             "number": 7,
             "title": "Target",
             "body": None,
             "state": "open",
-            "html_url": "https://github.example.test/a/b/pull/7",
+            "html_url": f"{WEB}/a/b/pull/7",
+            "user": {"login": "aiko"},
             "head": {
                 "sha": "head",
                 "ref": "feature",
@@ -351,35 +527,67 @@ async def test_detail_names_host_observed_target_and_fork_head(reader, resource)
             "base": {"ref": "main"},
             "assignees": [{"login": "aiko"}],
             "labels": [{"name": "bug"}],
+            "merged_at": None,
+            "draft": True,
+            "changed_files": 3,
         },
     )
-    page = await service.read(resource, REPO, identifier="7")
-    assert page.target is not None
-    assert (page.target.title, page.target.number) == ("Target", 7)
-    assert page.items[0]["assignees"] == ["aiko"] and page.items[0]["labels"] == ["bug"]
-    if resource == "pull_requests":
-        assert page.items[0]["head_repo"] == "fork/repo"
+    page = await reader.code.read("pull_requests", PULL)
+    target = WorkTarget(
+        kind="pull_request", url=f"{WEB}/a/b/pull/7", title="Target", label="#7"
+    )
+    assert page.target == target
+    assert page.items == [
+        {
+            **target.model_dump(),
+            "repository": REPO,
+            "body": "",
+            "state": "open",
+            "assignees": ["aiko"],
+            "labels": ["bug"],
+            "author_type": Message.ASSISTANT,
+            "head": "feature",
+            "head_repository": "fork/repo",
+            "head_sha": "head",
+            "base": "main",
+            "merged": False,
+            "draft": True,
+            "changed_files": 3,
+        }
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resource,parameters",
+    "resource,subject,parameters",
     [
-        ("issues", {"page_size": 1}),
-        ("pull_requests", {"query": "mutation {}"}),
-        ("pull_request_threads", {"node": "thread"}),
-        ("review_thread_comments", {}),
-        ("pull_request_readiness", {"failed_logs": "true"}),
-        ("pull_request_readiness", {"log_tail_bytes": 65537}),
+        ("pull_requests", PULL, {"page_size": 1}),
+        ("pull_requests", PULL, {"query": "mutation {}"}),
+        ("pull_request_threads", PULL, {"node": "thread"}),
+        ("review_thread_comments", PULL, {}),
+        ("pull_request_readiness", PULL, {"failed_logs": "true"}),
+        ("pull_request_readiness", PULL, {"log_tail_bytes": MAX_LOG_TAIL_BYTES + 1}),
+        # The ticket service's reads are not the code host's.
+        ("tickets", ISSUE, {}),
+        ("ticket_comments", ISSUE, {}),
+        ("secrets", PULL, {}),
+        # A pull request's resources are named by its URL on this GitHub.
+        ("pull_requests", ISSUE, {}),
+        ("pull_requests", REPO, {}),
+        ("pull_requests", f"{PULL}?x=1", {}),
+        ("pull_requests", f"{PULL}#discussion_r1", {}),
+        ("pull_requests", f"https://github.com/{REPO}/pull/7", {}),
+        ("pull_requests", f"{WEB}/{REPO}/pull/0", {}),
+        ("pull_requests", f"{WEB}/{REPO}/pull/7/files", {}),
+        ("pull_requests", f"{WEB}/a/../pull/7", {}),
     ],
 )
 async def test_resource_conditions_rejected_before_network(
-    reader, resource, parameters
+    reader, resource, subject, parameters
 ):
-    service, _, requests = reader
-    with pytest.raises(RepositoryReadError):
-        await service.read(resource, REPO, identifier="7", parameters=parameters)
-    assert requests == []
+    with pytest.raises(ServiceError):
+        await reader.code.read(resource, subject, parameters=parameters)
+    assert reader.requests == []
 
 
 def _connection(nodes, cursor=None):
@@ -390,37 +598,31 @@ def _connection(nodes, cursor=None):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "resource,kind,connection",
-    [
-        ("issue_projects", "issue", "projectItems"),
-        ("pull_request_threads", "pullRequest", "reviewThreads"),
-    ],
-)
-async def test_fixed_graphql_pages_are_bound_to_the_same_conditions(
-    reader, resource, kind, connection
-):
-    service, state, requests = reader
-    state["respond"] = lambda _: httpx.Response(
-        200,
-        json={"data": {"repository": {kind: {connection: _connection([], "next")}}}},
-    )
-    page = await service.read(
-        resource, REPO, identifier="7", parameters={"page_size": 2}
-    )
-    import json
+async def test_fixed_graphql_pages_are_bound_to_the_same_conditions(reader):
+    def threads(cursor=None):
+        return lambda _: httpx.Response(
+            200,
+            json={
+                "data": {
+                    "repository": {
+                        "pullRequest": {"reviewThreads": _connection([], cursor)}
+                    }
+                }
+            },
+        )
 
-    state["respond"] = lambda _: httpx.Response(
-        200, json={"data": {"repository": {kind: {connection: _connection([])}}}}
+    reader.state["respond"] = threads("next")
+    page = await reader.code.read(
+        "pull_request_threads", PULL, parameters={"page_size": 2}
     )
-    await service.read(
-        resource,
-        REPO,
-        identifier="7",
+    reader.state["respond"] = threads()
+    await reader.code.read(
+        "pull_request_threads",
+        PULL,
         parameters={"page_size": 2},
         continuation=page.continuation,
     )
-    sent = [json.loads(r.content) for r in requests]
+    sent = [json.loads(r.content) for r in reader.requests]
     assert sent[0]["query"] == sent[1]["query"] and "mutation" not in sent[0]["query"]
     assert sent[1]["variables"] == {
         "owner": "GuildBotics",
@@ -430,28 +632,25 @@ async def test_fixed_graphql_pages_are_bound_to_the_same_conditions(
         "size": 2,
     }
     for changed in (
-        {"identifier": "8"},
-        {"repo": "other/repo"},
+        {"subject": f"{WEB}/{REPO}/pull/8"},
+        {"subject": f"{WEB}/other/repo/pull/7"},
         {"parameters": {"page_size": 3}},
     ):
-        with pytest.raises(RepositoryReadError):
-            await service.read(
+        with pytest.raises(ServiceError):
+            await reader.code.read(
                 **{
-                    "resource": resource,
-                    "repo": REPO,
-                    "identifier": "7",
+                    "resource": "pull_request_threads",
+                    "subject": PULL,
                     "parameters": {"page_size": 2},
                     "continuation": page.continuation,
                     **changed,
                 }
             )
-    assert len(requests) == 2
+    assert len(reader.requests) == 2
 
 
 @pytest.mark.asyncio
 async def test_nested_thread_comments_verify_parent_and_paginate(reader):
-    service, state, _ = reader
-
     def payload(parent="pr7", cursor=None):
         return {
             "data": {
@@ -459,47 +658,53 @@ async def test_nested_thread_comments_verify_parent_and_paginate(reader):
                 "node": {
                     "pullRequest": {"id": parent},
                     "comments": _connection(
-                        [{"databaseId": 10, "body": "root", "replyTo": None}], cursor
+                        [
+                            {"databaseId": 10, "body": "root", "replyTo": None},
+                            {
+                                "databaseId": 11,
+                                "body": "reply",
+                                "replyTo": {"databaseId": 10},
+                            },
+                        ],
+                        cursor,
                     ),
                 },
             }
         }
 
-    state["respond"] = lambda _: httpx.Response(200, json=payload(cursor="more"))
-    first = await service.read(
-        "review_thread_comments", REPO, identifier="7", parameters={"node": "thread1"}
+    reader.state["respond"] = lambda _: httpx.Response(200, json=payload(cursor="more"))
+    first = await reader.code.read(
+        "review_thread_comments", PULL, parameters={"node": "thread1"}
     )
-    assert first.items[0]["reply_to_id"] is None and first.items[0]["id"] == 10
-    state["respond"] = lambda _: httpx.Response(200, json=payload())
-    last = await service.read(
+    assert [(c["id"], c["reply_to_id"]) for c in first.items] == [
+        ("discussion_r10", None),
+        ("discussion_r11", "discussion_r10"),
+    ]
+    reader.state["respond"] = lambda _: httpx.Response(200, json=payload())
+    last = await reader.code.read(
         "review_thread_comments",
-        REPO,
-        identifier="7",
+        PULL,
         parameters={"node": "thread1"},
         continuation=first.continuation,
     )
     assert not last.continuation
-    state["respond"] = lambda _: httpx.Response(200, json=payload(parent="other-pr"))
-    with pytest.raises(RepositoryReadError):
-        await service.read(
-            "review_thread_comments",
-            REPO,
-            identifier="7",
-            parameters={"node": "other-thread"},
+    reader.state["respond"] = lambda _: httpx.Response(
+        200, json=payload(parent="other-pr")
+    )
+    with pytest.raises(ServiceNotFound):
+        await reader.code.read(
+            "review_thread_comments", PULL, parameters={"node": "other-thread"}
         )
 
 
 @pytest.mark.asyncio
 async def test_large_thread_returns_metadata_before_comment_pagination(reader):
-    import re
-
-    service, state, _ = reader
-
     def respond(request):
         query = json.loads(request.content)["query"]
         size = int(re.search(r"comments\(first:(\d+)\)", query)[1])
         comments = [
-            {"databaseId": i, "body": "x" * 60000, "replyTo": None} for i in range(size)
+            {"databaseId": i + 1, "body": "x" * 60000, "replyTo": None}
+            for i in range(size)
         ]
         thread = {
             "id": "thread",
@@ -518,9 +723,9 @@ async def test_large_thread_returns_metadata_before_comment_pagination(reader):
             },
         )
 
-    state["respond"] = respond
-    page = await service.read(
-        "pull_request_threads", REPO, identifier="7", parameters={"page_size": 1}
+    reader.state["respond"] = respond
+    page = await reader.code.read(
+        "pull_request_threads", PULL, parameters={"page_size": 1}
     )
     assert page.items[0]["comments_complete"] is False
     assert len(page.items[0]["comments"]) == 1
@@ -541,9 +746,9 @@ def test_reads_and_writes_use_the_configured_code_host_endpoint(code_url, expect
             name="demo",
             services={
                 "code_hosting_service": {"name": "github", "api_base_url": code_url},
-                "ticket_manager": {
+                "ticket_service": {
                     "name": "github",
-                    "base_url": "https://old.test/api/v3",
+                    "api_base_url": "https://old.test/api/v3",
                 },
             },
         ),
@@ -552,74 +757,18 @@ def test_reads_and_writes_use_the_configured_code_host_endpoint(code_url, expect
 
 
 @pytest.mark.asyncio
-async def test_graphql_partial_data_and_project_field_overflow_fail_explicitly(reader):
-    service, state, _ = reader
-    project = {
-        "id": "item",
-        "project": {"title": "Board"},
-        "fieldValues": _connection([], "more"),
-    }
-    for payload in [
-        {"errors": [{"message": "private upstream detail"}], "data": {}},
-        {"data": {"repository": {"issue": {"projectItems": _connection([project])}}}},
-    ]:
-        state["respond"] = lambda _, p=payload: httpx.Response(200, json=p)
-        with pytest.raises(RepositoryReadError) as error:
-            await service.read("issue_projects", REPO, identifier="7")
-        assert "private upstream detail" not in str(error.value)
-
-
-@pytest_asyncio.fixture
-async def reader(monkeypatch):
-    requests = []
-    state = {"respond": lambda _: httpx.Response(200, json=[]), "items": {}}
-
-    def respond(request):
-        # The item a shared route's first page is of, read for its kind.
-        if request.url.path in state["items"]:
-            return httpx.Response(200, json=state["items"][request.url.path])
-        requests.append(request)
-        return state["respond"](request)
-
-    async def create(_person, base_url, owner):
-        client = get_async_client(
-            base_url,
-            GitHubTokenAuth("secret-value"),
-            owner,
-        )
-        client._transport = httpx.MockTransport(respond)
-        client._mounts = {}
-        return client
-
-    monkeypatch.setattr(
-        "guildbotics.integrations.github.pull_requests.create_github_client", create
+async def test_graphql_partial_data_fails_explicitly(reader):
+    reader.state["respond"] = lambda _: httpx.Response(
+        200, json={"errors": [{"message": "private upstream detail"}], "data": {}}
     )
-    service = hosting.GitHubCodeHostingService(
-        Person(
-            person_id="aiko",
-            name="Aiko",
-            account_info={
-                "github_username": "aiko",
-                "github_account_type": "machine_user",
-            },
-        ),
-        Team(
-            project=Project(
-                name="demo",
-                services={
-                    "code_hosting_service": {"name": "github", "api_base_url": BASE}
-                },
-            ),
-            members=[],
-        ),
-    )
-    yield service, state, requests
-    await service.aclose()
+    with pytest.raises(ServiceError) as error:
+        await reader.code.read("pull_request_threads", PULL)
+    assert "private upstream detail" not in str(error.value)
 
 
 async def read(service, **overrides):
     return await service.read(
-        **{"resource": "dependency_alerts", "repo": REPO, **overrides}
+        **{"resource": "dependency_alerts", "subject": REPO, **overrides}
     )
 
 
@@ -629,32 +778,30 @@ async def read(service, **overrides):
     [
         {"resource": "secrets"},
         {"resource": "https://evil.test"},
-        {"repo": "https://github.com/a/b"},
-        {"repo": "a/.."},
-        {"repo": "a/b/../../secrets"},
-        {"repo": "a/b?path=x"},
-        {"repo": "a/b%2fsecret"},
-        {"repo": "a/b#fragment"},
-        {"identifier": "../secrets"},
-        {"identifier": "0"},
+        {"subject": "https://github.com/a/b"},
+        {"subject": "a/.."},
+        {"subject": "a/b/../../secrets"},
+        {"subject": "a/b/c"},
+        {"subject": "a/b?path=x"},
+        {"subject": "a/b%2fsecret"},
+        {"subject": "a/b#fragment"},
+        {"parameters": {"id": "../secrets"}},
+        {"parameters": {"id": "0"}},
         {"parameters": {"method": "PATCH"}},
         {"parameters": {"headers": {"Authorization": "x"}}},
         {"parameters": {"query": "mutation {}"}},
         {"parameters": {"after": "cursor"}},
         {"parameters": {"page_size": 0}},
         {"parameters": {"page_size": "30"}},
-        {"identifier": "1", "parameters": {"state": "open"}},
-        {"identifier": "1", "parameters": []},
-        {"identifier": "1", "parameters": False},
-        {"identifier": "1", "parameters": ""},
-        {"identifier": "1", "continuation": "cursor"},
+        {"parameters": {"id": "1", "state": "open"}},
+        {"parameters": ["id"]},
+        {"parameters": {"id": "1"}, "continuation": "cursor"},
     ],
 )
 async def test_unapproved_requests_never_reach_network(reader, overrides):
-    service, _, requests = reader
-    with pytest.raises(RepositoryReadError):
-        await read(service, **overrides)
-    assert not requests
+    with pytest.raises(ServiceError):
+        await read(reader.code, **overrides)
+    assert not reader.requests
 
 
 @pytest.mark.asyncio
@@ -670,28 +817,27 @@ async def test_unapproved_requests_never_reach_network(reader, overrides):
 async def test_link_contributes_only_cursor_to_original_route_and_conditions(
     reader, link
 ):
-    service, state, requests = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         200, json=[], headers={"Link": f'<{link}>; rel="next"'}
     )
-    first = await read(service, parameters={"state": "resolved", "page_size": 1})
-    assert len(requests) == 1
+    first = await read(reader.code, parameters={"state": "resolved", "page_size": 1})
+    assert len(reader.requests) == 1
     assert first.continuation
-    state["respond"] = lambda _: httpx.Response(200, json=[])
+    reader.state["respond"] = lambda _: httpx.Response(200, json=[])
     second = await read(
-        service,
+        reader.code,
         parameters={"state": "resolved", "page_size": 1},
         continuation=first.continuation,
     )
     assert second.items == [] and second.continuation is None
-    assert len(requests) == 2
+    assert len(reader.requests) == 2
     assert all(
         request.method == "GET"
         and request.url.host == "github.example.test"
         and request.url.path == PATH
-        for request in requests
+        for request in reader.requests
     )
-    assert dict(requests[1].url.params) == {
+    assert dict(reader.requests[1].url.params) == {
         "state": "fixed",
         "per_page": "1",
         "after": "cursor+1",
@@ -703,8 +849,7 @@ async def test_link_contributes_only_cursor_to_original_route_and_conditions(
     "query", ["page=2", "after=", "after=a&after=b", "after=" + "x" * 2049]
 )
 async def test_missing_ambiguous_or_oversized_link_cursor_is_rejected(reader, query):
-    service, state, _ = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
         json=[],
         headers={
@@ -712,9 +857,9 @@ async def test_missing_ambiguous_or_oversized_link_cursor_is_rejected(reader, qu
         },
     )
     with pytest.raises(
-        RepositoryReadError, match=t("integrations.repository.continuation")
+        ServiceError, match=re.escape(t("integrations.resources.continuation"))
     ):
-        await read(service)
+        await read(reader.code)
 
 
 @pytest.mark.asyncio
@@ -723,20 +868,18 @@ async def test_missing_ambiguous_or_oversized_link_cursor_is_rejected(reader, qu
     ["https://evil.test", "garbage", "e30=", "W10=", "bnVsbA==", "x" * 8193],
 )
 async def test_malformed_continuation_never_reaches_network(reader, continuation):
-    service, _, requests = reader
-    with pytest.raises(RepositoryReadError):
-        await read(service, continuation=continuation)
-    assert not requests
+    with pytest.raises(ServiceError):
+        await read(reader.code, continuation=continuation)
+    assert not reader.requests
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"repo": "other/repo"},
+        {"subject": "other/repo"},
         {"parameters": {"state": "resolved"}},
         {"parameters": {"page_size": 1}},
-        {"identifier": "1"},
         {"resource": "secrets"},
         {"api_base_url": "https://other.test/api/v3/"},
     ],
@@ -744,118 +887,115 @@ async def test_malformed_continuation_never_reaches_network(reader, continuation
 async def test_real_continuation_is_bound_to_original_request_and_api(
     reader, overrides
 ):
-    service, state, requests = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         200,
         json=[],
         headers={
             "Link": '<https://api.github.com/repositories/123/dependabot/alerts?after=cursor>; rel="next"'
         },
     )
-    first = await read(service)
+    first = await read(reader.code)
     overrides = dict(overrides)
     if "api_base_url" in overrides:
-        await service.aclose()
-        service.base_url = overrides.pop("api_base_url")
-    with pytest.raises(RepositoryReadError):
-        await read(service, continuation=first.continuation, **overrides)
-    assert len(requests) == 1
+        await reader.code.aclose()
+        reader.code.base_url = overrides.pop("api_base_url")
+    with pytest.raises(ServiceError):
+        await read(reader.code, continuation=first.continuation, **overrides)
+    assert len(reader.requests) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "headers", "key"),
+    ("status", "headers", "key", "error_type"),
     [
-        (401, {}, "authentication"),
-        (403, {}, "forbidden"),
-        (404, {}, "not_found"),
-        (422, {}, "rejected"),
-        (429, {}, "rate_limit"),
-        (403, {"x-ratelimit-remaining": "0"}, "rate_limit"),
-        (403, {"retry-after": "60"}, "rate_limit"),
-        (500, {}, "http"),
-        (302, {"location": "https://evil.test"}, "http"),
+        (401, {}, "authentication", ServiceError),
+        (403, {}, "forbidden", ServiceError),
+        (404, {}, "not_found", ServiceNotFound),
+        (422, {}, "rejected", ServiceError),
+        (429, {}, "rate_limit", ServiceError),
+        (403, {"x-ratelimit-remaining": "0"}, "rate_limit", ServiceError),
+        (403, {"retry-after": "60"}, "rate_limit", ServiceError),
+        (500, {}, "http", ServiceError),
+        # A redirect is not followed: its body is no page of alerts.
+        (302, {"location": "https://evil.test"}, "response", ServiceError),
     ],
 )
 async def test_production_hook_errors_are_sanitized_and_redirects_not_followed(
-    reader, status, headers, key, read_language
+    reader, status, headers, key, error_type, read_language
 ):
-    service, state, requests = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         status, text="secret-value", headers=headers
     )
-    with pytest.raises(RepositoryReadError) as error:
-        await read(service)
-    expected = t(
-        f"integrations.github.read.{key}", status=status, permission="Dependabot alerts"
-    )
+    with pytest.raises(error_type) as error:
+        await read(reader.code)
+    expected = _refused(key, "Dependabot alerts", status)
     if status == 404:
-        expected += " " + t("integrations.github.read.alerts_disabled")
+        expected += " " + t(f"{_RESPONSE}.alerts_disabled")
     assert str(error.value) == expected
     assert "secret-value" not in str(error.value)
-    assert len(requests) == 1
+    assert len(reader.requests) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", [b"bad json", b"null", b"{}", b"[null]"])
 async def test_bad_collection_shapes_fail(reader, body):
-    service, state, _ = reader
-    state["respond"] = lambda _: httpx.Response(200, content=body)
-    with pytest.raises(
-        RepositoryReadError, match=t("integrations.github.read.response")
-    ):
-        await read(service)
+    reader.state["respond"] = lambda _: httpx.Response(200, content=body)
+    with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.response"))):
+        await read(reader.code)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resource,identifier",
-    [("dependency_alerts", "")]
-    + [
-        (resource, "7")
-        for resource in (
-            "dependency_alerts",
-            *hosting.REST_RESOURCES,
-            *sorted(hosting.GRAPH_RESOURCES),
-        )
+    "service,resource,subject,parameters",
+    [
+        ("code", "dependency_alerts", REPO, {}),
+        ("code", "dependency_alerts", REPO, {"id": "7"}),
+        ("code", "pull_request_comments", PULL, {}),
+        ("code", "pull_request_reviews", PULL, {}),
+        ("code", "pull_request_files", PULL, {}),
+        ("code", "ticket_pull_requests", ISSUE, {}),
+        ("code", "pull_request_threads", PULL, {}),
+        ("code", "review_thread_comments", PULL, {"node": "thread"}),
+        ("tickets", "ticket_comments", ISSUE, {}),
     ],
 )
 async def test_raw_limit_is_enforced_by_authenticated_client(
-    reader, monkeypatch, resource, identifier
+    reader, monkeypatch, service, resource, subject, parameters
 ):
-    service, state, _ = reader
-    if resource in {"issue_comments", "issue_timeline", "pull_request_comments"}:
-        state["items"] = NAMED_ITEMS
-    monkeypatch.setattr(hosting, "MAX_PAGE_BYTES", 250)
-    state["respond"] = lambda _: httpx.Response(200, content=b"x" * 251)
-    with pytest.raises(
-        RepositoryReadError, match=t("integrations.github.read.too_large")
-    ):
-        await read(
-            service,
-            resource=resource,
-            identifier=identifier,
-            parameters={"node": "thread"}
-            if resource == "review_thread_comments"
-            else {},
-        )
+    reader.state["items"] = NAMED_ITEMS
+    monkeypatch.setattr(reads, "MAX_PAGE_BYTES", 250)
+    reader.state["respond"] = lambda _: httpx.Response(200, content=b"x" * 251)
+    with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.too_large"))):
+        await getattr(reader, service).read(resource, subject, parameters=parameters)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "service,resource,subject",
+    [("code", "pull_requests", PULL), ("tickets", "tickets", ISSUE)],
+)
+async def test_detail_read_limit_is_enforced_by_authenticated_client(
+    reader, monkeypatch, service, resource, subject
+):
+    monkeypatch.setattr(api, "MAX_PAGE_BYTES", 250)
+    reader.state["respond"] = lambda _: httpx.Response(200, json={"body": "x" * 251})
+    with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.too_large"))):
+        await getattr(reader, service).read(resource, subject)
 
 
 @pytest.mark.asyncio
 async def test_detail_and_transport_failure(reader):
-    service, state, requests = reader
-    state["respond"] = lambda _: httpx.Response(
+    reader.state["respond"] = lambda _: httpx.Response(
         200, json={"number": 42, "state": "open"}
     )
-    result = await read(service, identifier="42")
+    result = await read(reader.code, parameters={"id": "42"})
     assert result.items[0]["id"] == "42" and result.continuation is None
-    assert requests[0].url.path == PATH + "/42" and not requests[0].url.query
+    assert reader.requests[0].url.path == PATH + "/42"
+    assert not reader.requests[0].url.query
 
     def fail(request):
         raise httpx.ConnectError("secret-value", request=request)
 
-    state["respond"] = fail
-    with pytest.raises(
-        RepositoryReadError, match=t("integrations.github.read.transport")
-    ):
-        await read(service)
+    reader.state["respond"] = fail
+    with pytest.raises(ServiceError, match=re.escape(t(f"{_RESPONSE}.transport"))):
+        await read(reader.code)

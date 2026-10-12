@@ -9,7 +9,6 @@ from typing import Any
 from guildbotics.capabilities.chat_batch import chat_batch_event_ids
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
-from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.member_invocation import (
@@ -55,7 +54,7 @@ def _pending(
             if item.event.thread_id == subject.thread_id
             and item.event.event_id not in delivered
             and item.event.author_id != subject.self_user_id
-            and not is_suppressed_chat_event(item.event)
+            and item.event.status is None
             and item.event.event_id not in processed
         ),
         key=lambda event: event.position,

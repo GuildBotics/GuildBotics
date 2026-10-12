@@ -64,17 +64,38 @@ def test_github_issue_comment_uses_structured_target() -> None:
     presentation = normalize_trace_presentation(
         _event(
             "github.issue_comment",
-            payload={"action": "commented", "issue": {"number": 313}},
-            attributes={
-                "github.repo": "GuildBotics/GuildBotics",
-                "github.number": 313,
-            },
+            payload={"action": "commented", "issue": {"label": "#313"}},
+            attributes={"github.kind": "ticket", "github.label": "#313"},
         )
     )
 
     assert presentation.label_key.endswith("github_issue_comment")
-    assert presentation.message == "GuildBotics/GuildBotics#313"
+    assert presentation.message == "#313"
     assert presentation.message != "github.issue_comment"
+
+
+def test_github_target_label_falls_back_to_the_payload_entry() -> None:
+    # A local PR is shown by the label its service gives it, not a "#n".
+    presentation = normalize_trace_presentation(
+        _event(
+            "github.pull_request",
+            payload={"action": "opened", "pull_request": {"label": "!3"}},
+        )
+    )
+
+    assert presentation.message == "!3"
+
+
+def test_github_push_shows_the_branch_it_pushed() -> None:
+    presentation = normalize_trace_presentation(
+        _event(
+            "github.push",
+            payload={"ref": "refs/heads/ticket/T-1", "commits": []},
+            attributes={"github.label": "#9"},
+        )
+    )
+
+    assert presentation.message == "ticket/T-1"
 
 
 def test_agent_and_span_payloads_are_normalized_in_app_api() -> None:
@@ -303,10 +324,10 @@ def test_github_work_target_shows_the_title_it_declares() -> None:
     presentation = normalize_trace_presentation(
         _event(
             "github.work_target",
-            payload={"pull_request": {"number": 544}},
+            payload={"pull_request": {"label": "#544"}},
             attributes={
-                "github.repo": "GuildBotics/GuildBotics",
-                "github.number": 544,
+                "github.kind": "pull_request",
+                "github.label": "#544",
                 "github.title": "診断ログの実行タイトル",
                 "github.action": "inspected",
             },
@@ -314,9 +335,7 @@ def test_github_work_target_shows_the_title_it_declares() -> None:
     )
 
     assert presentation.label_key.endswith("github_work_target")
-    assert (
-        presentation.message == "GuildBotics/GuildBotics#544 · 診断ログの実行タイトル"
-    )
+    assert presentation.message == "#544 · 診断ログの実行タイトル"
 
 
 @pytest.mark.parametrize(
