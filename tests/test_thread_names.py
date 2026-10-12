@@ -91,45 +91,38 @@ def test_all_product_threads_have_the_isolation_prefix() -> None:
     assert offenders == [], f"Threads invisible to the isolation guard: {offenders}"
 
 
-_THREAD_CONSTRUCTORS = [
-    "import threading\nthreading.Thread({name})",
-    "import threading as th\nth.Thread({name})",
-    "from threading import Thread\nThread({name})",
-    "from threading import Thread as Worker\nWorker({name})",
-    "import threading\nclass Worker(threading.Thread):\n"
-    "    def __init__(self):\n        super().__init__({name})",
-    "from threading import Thread as Base\nclass Worker(Base):\n"
-    "    def __init__(self):\n        Base.__init__(self, {name})",
-]
+@pytest.mark.parametrize(
+    "constructor",
+    [
+        "import threading\nthreading.Thread({name})",
+        "import threading as th\nth.Thread({name})",
+        "from threading import Thread\nThread({name})",
+        "from threading import Thread as Worker\nWorker({name})",
+        "import threading\nclass Worker(threading.Thread):\n"
+        "    def __init__(self):\n        super().__init__({name})",
+        "from threading import Thread as Base\nclass Worker(Base):\n"
+        "    def __init__(self):\n        Base.__init__(self, {name})",
+    ],
+)
+def test_thread_population_includes_aliases_and_subclasses(constructor: str) -> None:
+    source = constructor.format(name='name="guildbotics-worker"')
+    assert [prefixed for _, prefixed in _thread_names(source)] == [True]
 
 
 @pytest.mark.parametrize(
-    ("constructor", "name", "prefixed"),
+    ("name", "prefixed"),
     [
-        # Recognize an explicitly named thread for every constructor spelling.
-        *(
-            (constructor, 'name="guildbotics-worker"', True)
-            for constructor in _THREAD_CONSTRUCTORS
-        ),
-        # Prefix evaluation is shared after discovery.
-        *(
-            (_THREAD_CONSTRUCTORS[0], name, prefixed)
-            for name, prefixed in [
-                ("", False),
-                ('name="worker"', False),
-                ("name=member_id", False),
-                ('name=f"guildbotics-scheduler-{member_id}"', True),
-                ('name=f"{member_id}-guildbotics-worker"', False),
-            ]
-        ),
+        ("", False),
+        ('name="worker"', False),
+        ("name=member_id", False),
+        ('name=f"guildbotics-scheduler-{member_id}"', True),
+        ('name=f"{member_id}-guildbotics-worker"', False),
     ],
 )
-def test_thread_population_includes_aliases_and_subclasses(
-    constructor: str, name: str, prefixed: bool
-) -> None:
-    assert [
-        result for _line, result in _thread_names(constructor.format(name=name))
-    ] == [prefixed]
+def test_thread_names_require_a_literal_prefix(name: str, prefixed: bool) -> None:
+    assert _thread_names(f"import threading\nthreading.Thread({name})") == [
+        (2, prefixed)
+    ]
 
 
 @pytest.mark.parametrize(

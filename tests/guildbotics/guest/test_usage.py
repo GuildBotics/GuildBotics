@@ -1283,15 +1283,8 @@ def test_usage_reader_registry_covers_supported_tools() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("name", "outcome"),
-    [
-        *((name, "windows") for name in CLI_AGENT_USAGE_READERS),
-        ("codex", "limit"),
-        ("codex", "empty"),
-        ("codex", "error"),
-    ],
-)
+@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
+@pytest.mark.parametrize("outcome", ["windows", "limit", "empty", "error"])
 async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     monkeypatch, name, outcome
 ):

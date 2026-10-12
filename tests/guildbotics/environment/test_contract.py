@@ -11,7 +11,6 @@ from pydantic import ValidationError
 from guildbotics.environment.contract import (
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
-    SENSITIVE_HOME_DIRECTORIES,
     AccessContract,
     AccessContractError,
     DocumentGrant,
@@ -53,23 +52,6 @@ _SENSITIVE_HOME_PATHS = (
     ".agents",
 )
 _PROTECTED_PATH_DEPTHS = [".ssh", ".config/gh", ".local/share/keyrings"]
-
-
-def test_sensitive_home_path_population_is_complete():
-    assert set(SENSITIVE_HOME_DIRECTORIES) == set(_SENSITIVE_HOME_PATHS)
-
-
-@pytest.mark.parametrize("name", _SENSITIVE_HOME_PATHS)
-def test_builtin_sensitive_paths_refuse_mounts(tmp_path, name):
-    from guildbotics.environment.contract import builtin_denied
-
-    home = tmp_path / "home"
-    home.mkdir()
-    denied = builtin_denied(home)
-    for source in (home / name, home / name / "new"):
-        with pytest.raises(AccessContractError):
-            validate_mount_source(source, denied, grant=True, missing=True)
-    assert validate_mount_source(tmp_path / "work", denied, grant=True, missing=True)
 
 
 @pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
@@ -640,11 +622,18 @@ def test_the_builtin_denies_include_absent_credential_directories(
     )
 
     assert [(d.path, d.builtin) for d in access.denied] == [
-        *((home / name, True) for name in SENSITIVE_HOME_DIRECTORIES),
+        *((home / name, True) for name in _SENSITIVE_HOME_PATHS),
         (tmp_path / ".guildbotics", True),
         (private, False),
         (home / ".local/share/some-app", False),
     ]
+    for name in _SENSITIVE_HOME_PATHS:
+        for source in (home / name, home / name / "new"):
+            with pytest.raises(AccessContractError):
+                validate_mount_source(source, access.denied, grant=True, missing=True)
+    assert validate_mount_source(
+        tmp_path / "work", access.denied, grant=True, missing=True
+    )
     too_broad = t(
         "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
     )
@@ -732,7 +721,7 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
         "denied": [
             *(
                 {"path": _native("$HOME/" + name), "builtin": True}
-                for name in SENSITIVE_HOME_DIRECTORIES
+                for name in _SENSITIVE_HOME_PATHS
             ),
             {"path": str(tmp_path / ".guildbotics"), "builtin": True},
             {"path": _native("$HOME/.local/share/x"), "builtin": False},

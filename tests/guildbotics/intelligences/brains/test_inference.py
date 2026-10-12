@@ -8,6 +8,7 @@ import json
 import logging
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -16,12 +17,15 @@ from agno.run.base import RunStatus
 from guildbotics.capabilities.decisions import engines
 from guildbotics.capabilities.decisions.chat_policy import QUESTIONS
 from guildbotics.capabilities.decisions.models import DecisionConfig
+from guildbotics.commands.errors import CommandError
 from guildbotics.environment import (
     inference_host,
     span_summary,
 )
 from guildbotics.environment.inference_host import DirectInference
+from guildbotics.guest.window import WindowInference
 from guildbotics.intelligences import functions
+from guildbotics.intelligences.agent_runtime.wire import HostCallError
 from guildbotics.intelligences.brains import (
     agno_agent,
     jev,
@@ -30,6 +34,7 @@ from guildbotics.intelligences.brains.factory import ConfiguredBrainFactory
 from guildbotics.intelligences.brains.inference import (
     AgnoCall,
     InferenceFailure,
+    JevCall,
 )
 from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.utils.fileio import get_workspace_config_dir
@@ -43,67 +48,45 @@ pytestmark = pytest.mark.usefixtures("direct_inference")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "category", "message", "details"),
+    ("method", "error"),
     [
-        # Each entry must use the shared conversion and preserve window errors.
         *(
-            (method, category, "The host call timed out.", {})
+            (method, HostCallError(category, "The host call timed out."))
             for method in ["agno", "jev"]
             for category in ["failed", "refused", "unavailable"]
         ),
-        # Other safe messages are independent of the entry and category.
-        ("agno", "failed", "The call's result is too large.", {}),
-        ("agno", "failed", "Host operation failed.", {}),
-        (
-            "agno",
-            "failed",
-            "The inference call failed (ProviderError).",
-            {"error_type": "ProviderError"},
-        ),
-        (
-            "agno",
-            "failed",
-            "The inference call failed (ProviderError, reported status 429).",
-            {"error_type": "ProviderError", "status_code": 429},
+        *(
+            ("agno", HostCallError("failed", message, details))
+            for message, details in [
+                ("The call's result is too large.", {}),
+                ("Host operation failed.", {}),
+                (
+                    "The inference call failed (ProviderError).",
+                    {"error_type": "ProviderError"},
+                ),
+                (
+                    "The inference call failed (ProviderError, reported status 429).",
+                    {"error_type": "ProviderError", "status_code": 429},
+                ),
+            ]
         ),
     ],
 )
-async def test_window_inference_failure_contract(method, category, message, details):
-    from unittest.mock import AsyncMock
-
-    from guildbotics.commands.errors import CommandError
-    from guildbotics.guest.window import WindowInference
-    from guildbotics.intelligences.agent_runtime.wire import (
-        HostCallError,
-    )
-    from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
-    from guildbotics.intelligences.effort import ResolvedEffort
-
-    error = HostCallError(category, message, details)
+async def test_window_inference_failure_contract(method, error):
     window = WindowInference(SimpleNamespace(acall=AsyncMock(side_effect=error)))
     call = (
-        window.agno(
-            "aiko",
-            AgnoCall(
-                brain="test",
-                slot="default",
-                effort=ResolvedEffort(),
-                description="",
-                message="hi",
-            ),
-        )
+        window.agno("aiko", _ask())
         if method == "agno"
         else window.jev(JevCall(state={}, questions={}, model="jev-latest"))
     )
     with pytest.raises(
-        CommandError if category == "failed" else HostCallError
+        CommandError if error.category == "failed" else HostCallError
     ) as caught:
         await call
-    if category == "failed":
-        assert str(caught.value) == message
-        assert caught.value.__cause__ is error
-    else:
-        assert caught.value is error
+    assert str(caught.value) == str(error)
+    assert (
+        caught.value.__cause__ if error.category == "failed" else caught.value
+    ) is error
 
 
 class _Model:
