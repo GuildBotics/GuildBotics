@@ -110,8 +110,8 @@ After project setup, configure the following in the desktop app:
 
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
-- **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
 - **Integrations**: choose the service for code hosting, tickets, and chat (each is optional) and configure the chosen one. For GitHub tickets, enter the GitHub Project URL, configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field. A member's account with a chosen service is set on that service's tab of the member
+- **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
 
 ### Quick Start

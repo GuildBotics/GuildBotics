@@ -627,6 +627,17 @@ describe("SetupPage", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
+  it("puts the integrations before the members whose accounts follow them", async () => {
+    renderSetupPage("/setup");
+
+    const integrations = await screen.findByRole("button", { name: t("setup.nav.integrations") });
+    const members = screen.getByRole("button", { name: t("setup.nav.members") });
+
+    expect(
+      integrations.compareDocumentPosition(members) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("allows sidebar navigation after opening a members deep link", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup?section=members&tab=patrol");
@@ -2905,6 +2916,25 @@ describe("MembersSection", () => {
       expect(lastMemberAddRequest().routine_commands).toEqual(routine);
     },
   );
+
+  it("adds an agent while there is no default routine to offer yet", async () => {
+    // Before the project is saved there are no commands to read a default
+    // from; the form must not ask for a routine the save will seed itself.
+    const user = userEvent.setup();
+    vi.mocked(getRoutineCommandOptions).mockResolvedValue({ options: [], default_command: "" });
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(lastMemberAddRequest().routine_commands).toEqual([]);
+  });
 
   it("syncs the project's Agent field after saving a GitHub-linked member", async () => {
     const user = userEvent.setup();

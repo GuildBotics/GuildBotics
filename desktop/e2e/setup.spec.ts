@@ -45,17 +45,6 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // "Configure OpenAI API key" action.
   await page.getByLabel("OpenAI API key", { exact: true }).fill("sk-e2e-test-key");
 
-  // Members section (now before GitHub): add one active member so the section is
-  // complete. The add form is shown by default and pre-filled with defaults.
-  await page.getByRole("button", { name: "Members", exact: true }).click();
-  await page.getByLabel("Member ID").fill("local-agent");
-  await page.getByLabel("Display name").fill("Local Agent");
-  await page.getByRole("combobox", { name: "Roles", exact: true }).click();
-  await page.getByRole("option", { name: "product" }).click();
-  await page.getByRole("button", { name: "Add member" }).click();
-  const memberList = page.getByRole("list", { name: "Members" });
-  await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
-
   // Integrations section: one provider per kind of service, chosen from what
   // the backend offers. The board is named by its URL; the backend cannot reach
   // GitHub here, so the status-options read reports unavailable and the lane
@@ -76,6 +65,17 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // The code host's owner starts as the board's.
   await expect(page.getByRole("textbox", { name: "Owner", exact: true })).toHaveValue("acme");
   await choose("Chat", "Slack");
+
+  // Members section: add one active member so the section is complete; its
+  // account tabs are those of the providers chosen above. The add form is shown by default and pre-filled with defaults.
+  await page.getByRole("button", { name: "Members", exact: true }).click();
+  await page.getByLabel("Member ID").fill("local-agent");
+  await page.getByLabel("Display name").fill("Local Agent");
+  await page.getByRole("combobox", { name: "Roles", exact: true }).click();
+  await page.getByRole("option", { name: "product" }).click();
+  await page.getByRole("button", { name: "Add member" }).click();
+  const memberList = page.getByRole("list", { name: "Members" });
+  await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
 
   // Create the initial settings.
   const createButton = page.getByRole("button", { name: "Create initial settings" });

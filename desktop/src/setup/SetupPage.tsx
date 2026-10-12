@@ -181,8 +181,10 @@ type IntelligenceDraftState = {
 const CORE_SETUP_SECTIONS_INITIAL = [
   "project",
   "intelligence",
-  "members",
+  // The integrations come first: a member's accounts are those of the
+  // providers they choose.
   "integrations",
+  "members",
   "verification",
   // Hosting a hub and this device's key belong to the machine rather than to a
   // workspace, so the section has to be reachable before there is one: a
@@ -193,8 +195,10 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   "project",
   "intelligence",
   "environment",
-  "members",
+  // The integrations come first: a member's accounts are those of the
+  // providers they choose.
   "integrations",
+  "members",
   // Hotkeys are an everyday convenience rather than part of getting running,
   // and sharing needs a workspace to share, so both are offered only once the
   // workspace is configured.
@@ -3522,6 +3526,9 @@ function MembersSection({
       formMode === "add" &&
       !isHumanMember &&
       shouldSeedDefaultRoutine &&
+      // Without a default to offer (no saved project to read commands from
+      // yet), the routine is left to the save, which seeds the same default.
+      routineDefaultCommand &&
       !routineDefaultDismissedRef.current &&
       (!routineOverrideEnabled || routineCommands.length === 0)
     ) {
@@ -3531,6 +3538,7 @@ function MembersSection({
     formMode,
     isHumanMember,
     shouldSeedDefaultRoutine,
+    routineDefaultCommand,
     routineOverrideEnabled,
     routineCommands.length,
     seedDefaultRoutineCommands,
