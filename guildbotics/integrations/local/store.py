@@ -23,6 +23,7 @@ writing service is configured with.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import Iterator
@@ -230,6 +231,9 @@ def git(repository: str, *args: str) -> str:
     ran = subprocess.run(
         ["git", *args],
         cwd=bare(repository),
+        # The caller's GIT_* variables name its own repository, index, and
+        # configuration, none of which is the service's.
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         capture_output=True,
         check=False,
         text=True,

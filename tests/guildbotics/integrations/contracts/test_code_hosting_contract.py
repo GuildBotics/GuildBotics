@@ -404,6 +404,20 @@ async def test_dependency_alerts_are_read_or_refused_as_unsupported(host: Harnes
 
 
 @pytest.mark.asyncio
+async def test_the_callers_git_environment_does_not_reach_the_service(
+    host: Harness, monkeypatch, tmp_path
+):
+    """The member's git runs with variables naming its own repository and
+    configuration; what the service answers of the remote does not follow
+    them."""
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
+    remote = await host.code.clone_url(host.repository)
+
+    assert host.code.repository_from_remote(remote) == host.repository
+    assert await host.code.default_branch(host.repository) == "main"
+
+
+@pytest.mark.asyncio
 async def test_the_git_remote_names_its_repository_and_its_open_pull_requests(
     host: Harness,
 ):
