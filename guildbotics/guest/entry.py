@@ -1,5 +1,5 @@
 """The command execution machinery's entry inside a command's isolated
-environment: ``python -m guildbotics.guest.entry``.
+environment: ``/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry``.
 
 The host starts it once per command, in the microVM it booted for the
 command, with the command's facts in the environment

@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.environment.snapshot import VENV
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
@@ -68,6 +69,35 @@ def _agent_facing_files() -> list[Path]:
         for path in ([root] if root.is_file() else sorted(root.rglob("*")))
         if path.is_file() and "__pycache__" not in path.parts
     ]
+
+
+def test_guest_entry_instructions_use_the_snapshot_interpreter():
+    sources = {
+        str(path): path.read_text(encoding="utf-8")
+        for path in (
+            *_agent_facing_files(),
+            Path("AGENTS.md"),
+            Path("docs/ARCHITECTURE.md"),
+            Path("docs/custom_command_guide.en.md"),
+            Path("docs/custom_command_guide.ja.md"),
+            Path("guildbotics/guest/entry.py"),
+        )
+    }
+    sources["member context/help"] = capability_reference_text()
+    interpreters = {
+        name: re.findall(r"([^\s`\"']+) -m guildbotics\.guest\.entry\b", text)
+        for name, text in sources.items()
+    }
+    for name in (
+        "member context/help",
+        *(
+            str(FUNCTIONS_DIR / f"handle_ticket.{language}.md")
+            for language in ("en", "ja")
+        ),
+    ):
+        assert interpreters[name], name
+    for name, paths in interpreters.items():
+        assert all(path == f"{VENV}/bin/python" for path in paths), (name, paths)
 
 
 def _prompt_body(name: str, language: str) -> str:
