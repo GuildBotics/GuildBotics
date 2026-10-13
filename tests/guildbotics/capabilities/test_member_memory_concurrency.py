@@ -39,13 +39,13 @@ def service() -> MemberMemoryService:
 
 
 @contextmanager
-def held_elsewhere(tmp_path: Path) -> Iterator[None]:
+def held_elsewhere(workspace: Path) -> Iterator[None]:
     """Hold the workspace's lock on another thread for the duration."""
     taken = threading.Event()
     release = threading.Event()
 
     def hold() -> None:
-        with shared_write_lock(tmp_path):
+        with shared_write_lock(workspace):
             taken.set()
             release.wait(30)
 
@@ -180,13 +180,13 @@ def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
     assert store.status("run-1").status == "done"
 
 
-def _another_thread_can_take_the_lock(tmp_path: Path) -> bool:
+def _another_thread_can_take_the_lock(workspace: Path) -> bool:
     """Whether a second thread could write shared files right now."""
     taken: list[bool] = []
 
     def attempt() -> None:
         try:
-            with shared_write_lock(tmp_path):
+            with shared_write_lock(workspace):
                 taken.append(True)
         except SharedWriteBusyError:
             taken.append(False)

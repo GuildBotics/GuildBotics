@@ -276,7 +276,7 @@ def _domain_event_field(record, field):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_member_data_root(monkeypatch):
+def _clear_workspace_markers(monkeypatch):
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
     monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 

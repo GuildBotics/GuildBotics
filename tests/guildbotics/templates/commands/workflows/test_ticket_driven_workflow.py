@@ -23,19 +23,10 @@ from guildbotics.runtime.workflow_invocation import (
 )
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.correlation import trace_scope
-from guildbotics.utils.i18n_tool import get_language, set_language
 from tests.guildbotics.local_code_host import item, local_member, ticket
 
 ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
 PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"
-
-
-@pytest.fixture(autouse=True)
-def _isolated_workspace_data():
-    previous_language = get_language()
-    set_language("en")
-    yield
-    set_language(previous_language)
 
 
 class _Person:

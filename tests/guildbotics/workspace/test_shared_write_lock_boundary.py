@@ -71,7 +71,7 @@ def brief_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @contextmanager
-def held_elsewhere(tmp_path: Path) -> Iterator[None]:
+def held_elsewhere(workspace: Path) -> Iterator[None]:
     """Hold the workspace's lock on another thread for the duration.
 
     Another thread rather than this one, because the lock re-enters within a
@@ -85,7 +85,7 @@ def held_elsewhere(tmp_path: Path) -> Iterator[None]:
 
     def hold() -> None:
         try:
-            with shared_write_lock(tmp_path):
+            with shared_write_lock(workspace):
                 taken.set()
                 release.wait(30)
         except BaseException as exc:  # pragma: no cover - surfaced below
@@ -143,8 +143,8 @@ class _RecordingPort:
         return False
 
 
-def _existing_shared_files(tmp_path: Path) -> Path:
-    shared = tmp_path / ".guildbotics"
+def _existing_shared_files(workspace: Path) -> Path:
+    shared = workspace / ".guildbotics"
     (shared / "state").mkdir(parents=True, exist_ok=True)
     (shared / "state/gone.json").write_text("{}\n", encoding="utf-8")
     (shared / "state/other.json").write_text("{}\n", encoding="utf-8")
@@ -553,7 +553,7 @@ HAND_DECLARED_SPANS: dict[str, Callable[[Path], object]] = {
 
 
 @contextmanager
-def recording_shared_reads(tmp_path: Path) -> Iterator[list[tuple[str, bool]]]:
+def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
     """Note every read of a shared file, and whether the lock was held for it.
 
     The port sees writes, so it takes the lock for one. It never sees a read --
@@ -562,7 +562,7 @@ def recording_shared_reads(tmp_path: Path) -> Iterator[list[tuple[str, bool]]]:
     from the test is what makes "the span starts at the read" checkable at all.
     """
     seen: list[tuple[str, bool]] = []
-    shared = tmp_path / ".guildbotics"
+    shared = workspace / ".guildbotics"
     originals = {
         name: getattr(Path, name) for name in ("read_text", "read_bytes", "open")
     }
@@ -573,7 +573,7 @@ def recording_shared_reads(tmp_path: Path) -> Iterator[list[tuple[str, bool]]]:
         except (OSError, ValueError):
             return
         if relative.parts and relative.parts[0] in {"config", "state"}:
-            seen.append((relative.as_posix(), shared_write_lock_is_held(tmp_path)))
+            seen.append((relative.as_posix(), shared_write_lock_is_held(workspace)))
 
     def wrap(name: str) -> Callable[..., object]:
         original = originals[name]

@@ -47,7 +47,7 @@ class _FakeContext:
 
 
 @pytest.fixture
-def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Use the temporary workspace as the working directory."""
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
@@ -71,7 +71,7 @@ def _write_project(config_dir: Path, body: str = "language: en\n") -> Path:
 
 
 def test_opening_workspace_inside_exchange_has_no_selection_side_effect(
-    isolated_home: Path,
+    working_directory: Path,
 ) -> None:
     from guildbotics.utils.safe_paths import UnsafePathError
     from guildbotics.utils.workspace_state import registered_workspaces
@@ -89,22 +89,22 @@ def test_opening_workspace_inside_exchange_has_no_selection_side_effect(
 
 
 def test_config_status_reports_workspace_when_workspace_config_present(
-    isolated_home: Path,
+    working_directory: Path,
 ) -> None:
-    _write_project(isolated_home / ".guildbotics" / "config")
+    _write_project(working_directory / ".guildbotics" / "config")
 
     status = AppRuntime(EventBus()).get_config_status()
 
     # The directory a command runs in when the screen names none.
-    assert status.cwd == isolated_home / "home/Documents/GuildBotics"
-    assert status.config_dir == isolated_home / ".guildbotics" / "config"
+    assert status.cwd == working_directory / "home/Documents/GuildBotics"
+    assert status.config_dir == working_directory / ".guildbotics" / "config"
     assert status.project_file_exists is True
 
 
 def test_config_status_uses_custom_config_dir_env(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    custom_config = isolated_home / "custom-config"
+    custom_config = working_directory / "custom-config"
     _write_project(custom_config)
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(custom_config))
 
@@ -115,17 +115,17 @@ def test_config_status_uses_custom_config_dir_env(
 
 
 def test_config_status_reports_missing_when_no_project_file(
-    isolated_home: Path,
+    working_directory: Path,
 ) -> None:
     status = AppRuntime(EventBus()).get_config_status()
 
     assert status.project_file_exists is False
-    assert status.workspace == isolated_home.resolve()
-    assert status.workspace_state_dir == isolated_home / ".guildbotics" / "state"
+    assert status.workspace == working_directory.resolve()
+    assert status.workspace_state_dir == working_directory / ".guildbotics" / "state"
 
 
 def test_config_status_never_falls_back_to_cwd_without_a_workspace(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """First launch: no workspace is selected, so none may be reported.
 
@@ -148,9 +148,9 @@ def test_config_status_never_falls_back_to_cwd_without_a_workspace(
 # --- set_workspace() --------------------------------------------------------
 
 
-def test_set_workspace_raises_for_missing_path(isolated_home: Path) -> None:
+def test_set_workspace_raises_for_missing_path(working_directory: Path) -> None:
     runtime = AppRuntime(EventBus())
-    missing = isolated_home / "does-not-exist"
+    missing = working_directory / "does-not-exist"
 
     with pytest.raises(AppApiError) as exc_info:
         runtime.set_workspace(missing)
@@ -160,9 +160,9 @@ def test_set_workspace_raises_for_missing_path(isolated_home: Path) -> None:
     assert exc_info.value.context == {"workspace_dir": str(missing.resolve())}
 
 
-def test_set_workspace_raises_for_file_path(isolated_home: Path) -> None:
+def test_set_workspace_raises_for_file_path(working_directory: Path) -> None:
     runtime = AppRuntime(EventBus())
-    file_path = isolated_home / "workspace-file"
+    file_path = working_directory / "workspace-file"
     file_path.write_text("not a dir")
 
     with pytest.raises(AppApiError) as exc_info:
@@ -173,7 +173,7 @@ def test_set_workspace_raises_for_file_path(isolated_home: Path) -> None:
 
 
 def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
     published_workspaces: list[Path] = []
@@ -186,7 +186,7 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     )
     monkeypatch.delenv("WORKSPACE_MARKER", raising=False)
 
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
 
@@ -202,9 +202,9 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     assert active_workspace_file().exists()
     # The process moved, but a command without a directory still runs in the
     # exchange directory: it is the user's, not the workspace's.
-    assert status.cwd == isolated_home / "home/Documents/GuildBotics"
+    assert status.cwd == working_directory / "home/Documents/GuildBotics"
     assert status.workspace == workspace.resolve()
-    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
+    assert status.machine_state_dir == working_directory / "home/.guildbotics/data"
     assert status.workspace_state_dir == (
         workspace.resolve() / ".guildbotics" / "state"
     )
@@ -216,16 +216,16 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
 
 
 def test_set_workspace_splits_system_session_with_same_service_run_id(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiagnosticsStore(isolated_home / "diagnostics.jsonl")
+    store = DiagnosticsStore(working_directory / "diagnostics.jsonl")
     runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
     monkeypatch.setattr(
         runtime,
         "stop_scheduler",
         lambda *, force=False: _idle_runtime_status(),
     )
-    workspace = isolated_home / "workspace-sessions"
+    workspace = working_directory / "workspace-sessions"
     workspace.mkdir()
     store.start_system_session(runtime.system_service_run_id)
 
@@ -252,7 +252,7 @@ def test_set_workspace_splits_system_session_with_same_service_run_id(
 
 
 def test_set_workspace_preserves_inherited_environment_variables(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Real environment variables outrank workspace secrets (README 7.2)."""
     runtime = AppRuntime(EventBus())
@@ -261,7 +261,7 @@ def test_set_workspace_preserves_inherited_environment_variables(
     )
     monkeypatch.setenv("WORKSPACE_MARKER", "from-parent-process")
 
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
     (workspace / ".env").write_text("WORKSPACE_MARKER=from-env-file\n")
@@ -273,7 +273,7 @@ def test_set_workspace_preserves_inherited_environment_variables(
 
 
 def test_set_workspace_updates_workspace_root_across_switches(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
@@ -281,18 +281,18 @@ def test_set_workspace_updates_workspace_root_across_switches(
     )
 
     for name in ("one", "two"):
-        workspace = isolated_home / name
+        workspace = working_directory / name
         workspace.mkdir()
         _write_project(workspace / ".guildbotics" / "config")
 
-    runtime.set_workspace(isolated_home / "one")
+    runtime.set_workspace(working_directory / "one")
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(
-        (isolated_home / "one").resolve()
+        (working_directory / "one").resolve()
     )
 
-    runtime.set_workspace(isolated_home / "two")
+    runtime.set_workspace(working_directory / "two")
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(
-        (isolated_home / "two").resolve()
+        (working_directory / "two").resolve()
     )
 
 
@@ -320,9 +320,9 @@ def _busy_runtime_status() -> RuntimeStatus:
     )
 
 
-def test_set_workspace_rejects_running_runtime(isolated_home: Path) -> None:
+def test_set_workspace_rejects_running_runtime(working_directory: Path) -> None:
     runtime = AppRuntime(EventBus())
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
 
     runtime.get_scheduler_status = _busy_runtime_status  # type: ignore[method-assign]
@@ -340,10 +340,10 @@ def test_set_workspace_rejects_running_runtime(isolated_home: Path) -> None:
 
 
 def test_set_workspace_aborts_when_force_stop_leaves_work_running(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
 
@@ -365,10 +365,10 @@ def test_set_workspace_aborts_when_force_stop_leaves_work_running(
 
 
 def test_set_workspace_env_does_not_override_home_state_root(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original_home = os.environ["HOME"]
-    original_userprofile = str(isolated_home / "userprofile")
+    original_userprofile = str(working_directory / "userprofile")
     original_homedrive = "C:"
     original_homepath = "\\Users\\Original"
     monkeypatch.setenv("USERPROFILE", original_userprofile)
@@ -380,7 +380,7 @@ def test_set_workspace_env_does_not_override_home_state_root(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
     )
 
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
     (workspace / ".env").write_text(
@@ -406,13 +406,13 @@ def test_set_workspace_env_does_not_override_home_state_root(
 
 
 def test_get_context_keeps_selected_workspace_root(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
     )
-    workspace = isolated_home / "workspace"
+    workspace = working_directory / "workspace"
     workspace.mkdir()
     _write_project(workspace / ".guildbotics" / "config")
     runtime.set_workspace(workspace)
@@ -428,7 +428,7 @@ def test_get_context_keeps_selected_workspace_root(
 
 
 def test_diagnostics_store_switches_with_workspace_data_root(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
@@ -438,11 +438,11 @@ def test_diagnostics_store_switches_with_workspace_data_root(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
     )
 
-    workspace_a = isolated_home / "workspace-a"
+    workspace_a = working_directory / "workspace-a"
     workspace_a.mkdir()
     _write_project(workspace_a / ".guildbotics" / "config")
 
-    workspace_b = isolated_home / "workspace-b"
+    workspace_b = working_directory / "workspace-b"
     workspace_b.mkdir()
     _write_project(workspace_b / ".guildbotics" / "config")
 
@@ -457,7 +457,7 @@ def test_diagnostics_store_switches_with_workspace_data_root(
 
 
 def test_set_workspace_clears_stale_secret_keys_from_previous_workspace(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from guildbotics.utils.secret_store import KeyringSecretStore
 
@@ -467,14 +467,14 @@ def test_set_workspace_clears_stale_secret_keys_from_previous_workspace(
     )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    workspace_a = isolated_home / "workspace-a"
+    workspace_a = working_directory / "workspace-a"
     workspace_a.mkdir()
     _write_project(workspace_a / ".guildbotics" / "config")
     KeyringSecretStore(workspace_a / ".guildbotics" / "config").set(
         "OPENAI_API_KEY", "secret-a"
     )
 
-    workspace_b = isolated_home / "workspace-b"
+    workspace_b = working_directory / "workspace-b"
     workspace_b.mkdir()
     _write_project(workspace_b / ".guildbotics" / "config")
 
@@ -607,7 +607,7 @@ def test_team_summary_leaves_default_person_empty_without_candidates(
 
 
 def test_transcript_settings_defaults_and_usage(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
 
@@ -623,7 +623,7 @@ def test_transcript_settings_defaults_and_usage(
 
 
 def test_update_transcript_settings_writes_config(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
 
@@ -633,7 +633,7 @@ def test_update_transcript_settings_writes_config(
 
     assert status.detail == "full"
     assert status.retention_days == 14
-    settings_file = isolated_home / ".guildbotics" / "config" / "transcripts.yml"
+    settings_file = working_directory / ".guildbotics" / "config" / "transcripts.yml"
     assert "full" in settings_file.read_text(encoding="utf-8")
     assert "14" in settings_file.read_text(encoding="utf-8")
 
@@ -642,7 +642,7 @@ def test_update_transcript_settings_writes_config(
 
 
 def test_runtime_debug_status_reads_debug_env(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from guildbotics.utils.env_loader import write_debug_env
 
@@ -659,7 +659,7 @@ def test_runtime_debug_status_reads_debug_env(
 
 
 def test_update_runtime_debug_writes_debug_env_and_logger_level(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("AGNO_DEBUG", raising=False)
@@ -676,7 +676,7 @@ def test_update_runtime_debug_writes_debug_env_and_logger_level(
         assert os.environ["AGNO_DEBUG"] == "true"
         assert logger.level == logging.DEBUG
         assert handler.level == logging.DEBUG
-        debug_file = isolated_home / ".guildbotics" / "local" / "debug.env"
+        debug_file = working_directory / ".guildbotics" / "local" / "debug.env"
         text = debug_file.read_text(encoding="utf-8")
         assert "LOG_LEVEL=DEBUG" in text
         assert "AGNO_DEBUG=true" in text
@@ -689,7 +689,7 @@ def test_update_runtime_debug_writes_debug_env_and_logger_level(
 
 
 def test_update_runtime_debug_disables_both_debug_flags(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("AGNO_DEBUG", "true")
@@ -699,7 +699,7 @@ def test_update_runtime_debug_disables_both_debug_flags(
 
     assert os.environ["LOG_LEVEL"] == "INFO"
     assert os.environ["AGNO_DEBUG"] == "false"
-    debug_file = isolated_home / ".guildbotics" / "local" / "debug.env"
+    debug_file = working_directory / ".guildbotics" / "local" / "debug.env"
     text = debug_file.read_text(encoding="utf-8")
     assert "LOG_LEVEL=INFO" in text
     assert "AGNO_DEBUG=false" in text
@@ -712,7 +712,7 @@ def test_update_runtime_debug_disables_both_debug_flags(
 
 
 def test_runtime_startup_never_adopts_cwd_as_workspace(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A sidecar started without a selected workspace must not publish cwd."""
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
@@ -724,9 +724,9 @@ def test_runtime_startup_never_adopts_cwd_as_workspace(
 
 
 def test_runtime_startup_keeps_explicit_workspace_root(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    explicit = isolated_home / "selected-workspace"
+    explicit = working_directory / "selected-workspace"
     explicit.mkdir()
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(explicit))
 

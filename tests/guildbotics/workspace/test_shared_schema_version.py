@@ -64,7 +64,7 @@ WITHOUT_A_GENERATION = {
 RECORD_SUFFIXES = {".json", ".jsonl", ".yml", ".yaml"}
 
 
-def _write_one_of_every_shared_record(tmp_path: Path) -> None:
+def _write_one_of_every_shared_record(workspace: Path) -> None:
     """Run the real writers, so the population comes from what they produce."""
     ensure_workspace_identity()
     publish_device_record()
@@ -122,13 +122,15 @@ def _write_one_of_every_shared_record(tmp_path: Path) -> None:
 AHEAD = SHARED_RECORD_SCHEMA_VERSION + 1
 
 
-def _write_with_a_foreign_generation(tmp_path: Path) -> dict[str, Path]:
+def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
     """Run each writer with a foreign generation in what it is handed."""
     store = FileConversationStateStore()
     # The pending-event writers read the file and hand the same mapping back,
     # so planting the generation on disk is how a caller-supplied one would
     # actually reach them on a later save.
-    pending = tmp_path / ".guildbotics/state/chat_state/slack/p1/pending_events/C1.json"
+    pending = (
+        workspace / ".guildbotics/state/chat_state/slack/p1/pending_events/C1.json"
+    )
     pending.parent.mkdir(parents=True, exist_ok=True)
     pending.write_text(
         json.dumps({"schema_version": AHEAD, "events": []}), encoding="utf-8"
@@ -160,7 +162,7 @@ def _write_with_a_foreign_generation(tmp_path: Path) -> dict[str, Path]:
     )
 
     RunStore().append("run-1", {"kind": "evidence", "schema_version": AHEAD})
-    sessions = tmp_path / ".guildbotics/state/sessions"
+    sessions = workspace / ".guildbotics/state/sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     (sessions / "trace-1.json").write_text(
         json.dumps({"schema_version": AHEAD, "trace_id": "trace-1"}), encoding="utf-8"
@@ -181,7 +183,7 @@ def _write_with_a_foreign_generation(tmp_path: Path) -> dict[str, Path]:
     return {
         "pending events": pending,
         "memory metadata": (
-            tmp_path / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
+            workspace / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
         ),
         "interactive session": sessions / "trace-1.json",
     }
@@ -242,10 +244,10 @@ def test_the_boundary_would_have_refused_the_supplied_generation(
         assert name
 
 
-def _shared_files(tmp_path: Path) -> dict[str, Path]:
-    state = tmp_path / ".guildbotics" / "state"
+def _shared_files(workspace: Path) -> dict[str, Path]:
+    state = workspace / ".guildbotics" / "state"
     return {
-        path.relative_to(tmp_path / ".guildbotics").as_posix(): path
+        path.relative_to(workspace / ".guildbotics").as_posix(): path
         for path in sorted(state.rglob("*"))
         if path.is_file()
     }
