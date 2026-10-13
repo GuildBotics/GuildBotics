@@ -17,11 +17,9 @@ import asyncio
 from logging import getLogger
 from typing import Any
 
-from guildbotics.guest.acp import (
-    AcpAdapterBase,
-    as_dict,
-)
+from guildbotics.guest.acp import AcpAdapterBase
 from guildbotics.guest.jsonrpc import RpcError
+from guildbotics.guest.provider_process import as_dict
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,

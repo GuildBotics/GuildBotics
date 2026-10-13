@@ -269,7 +269,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
 
 
 # --------------------------------------------------------------------------- #
-# GitHub services: lane_map defaults and the chat's own items
+# GitHub services: lane_map defaults
 # --------------------------------------------------------------------------- #
 
 
@@ -282,27 +282,6 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
         "ready": "Todo",
         "working": "In Progress",
         "done": "Done",
-    }
-
-
-def test_update_project_writes_the_chat_items_it_is_given(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-
-    SimpleProjectSetupService().update_project(
-        _project_input(
-            config_dir,
-            services={
-                "chat_service": {
-                    "name": "slack",
-                    "base_url": "https://proxy.example/api",
-                }
-            },
-        )
-    )
-
-    assert load_yaml_file(config_dir / "team/project.yml")["services"] == {
-        "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
     }
 
 
@@ -394,6 +373,23 @@ def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) ->
     service.set_default_person(config_dir=config_dir, person_id="")
 
     assert _default_person_id(config_dir) == ""
+
+
+def test_update_project_keeps_the_default_person(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    _seed_project(config_dir)
+    SimplePersonSetupService().write_person(_person_input(config_dir))
+    service = SimpleProjectSetupService()
+    service.set_default_person(config_dir=config_dir, person_id="alice")
+
+    service.update_project(
+        ProjectSetupInput(config_dir=config_dir, language="ja", description="Ops")
+    )
+
+    project_data = load_yaml_file(config_dir / "team/project.yml")
+    assert project_data["language"] == "ja"
+    assert project_data["description"] == "Ops"
+    assert _default_person_id(config_dir) == "alice"
 
 
 def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -> None:

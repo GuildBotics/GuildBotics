@@ -14,6 +14,7 @@ from guildbotics.app_api.command_files import (
     decode_file_id,
     encode_file_id,
     file_revision,
+    shadow_source,
 )
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import CommandAuthoringChange
@@ -79,21 +80,6 @@ def test_read_hides_subcommand_output_from_caller_arguments(
     )
 
     detail = _service().read_file(encode_file_id("system.md"))
-
-    assert detail.arguments == []
-
-
-@pytest.mark.parametrize("relative", ["child.md", "sub/child.md"])
-def test_editor_discovers_unnamed_subcommand_output(
-    env: SimpleNamespace, relative: str
-) -> None:
-    _write(
-        env.commands / relative,
-        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
-        "child saw {child__1}\n",
-    )
-
-    detail = _service().read_file(encode_file_id(relative))
 
     assert detail.arguments == []
 
@@ -197,8 +183,23 @@ def test_create_rejected_when_localized_template_shadows(
     with pytest.raises(AppApiError) as exc:
         _service("ja").create_file("review", "markdown")
     assert exc.value.code == "command_file_shadowed"
-    assert exc.value.context["shadow_source"] == "template"
+    assert exc.value.context == {"shadow_source": "template"}
     assert not (env.commands / "review.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("resolved", "source"),
+    [
+        (None, "workspace"),
+        ("config/commands/review.md", "workspace"),
+        ("templates/commands/review.md", "template"),
+        ("config/team/members/alice/commands/review.md", "member"),
+    ],
+)
+def test_shadow_source_names_where_the_command_resolves(
+    env: SimpleNamespace, tmp_path: Path, resolved: str | None, source: str
+) -> None:
+    assert shadow_source(None if resolved is None else tmp_path / resolved) == source
 
 
 def test_create_allowed_when_overriding_unsuffixed_template(
@@ -362,7 +363,11 @@ def test_update_saves_invalid_source_for_later_correction(env: SimpleNamespace) 
     _write(env.commands / "task.md", "---\nbrain: none\n---\nBody.\n")
     service = _service()
     detail = service.read_file(service.list_files().files[0].id)
-    invalid = "---\nargs:\n  - name: text\n---\nPolish the input text.\n"
+    # An argument cannot be both required and defaulted.
+    invalid = (
+        "---\nargs:\n  language:\n    required: true\n    default: English\n---\n"
+        "Use ${language}.\n"
+    )
 
     updated = service.update_file(detail.id, invalid, detail.revision)
 

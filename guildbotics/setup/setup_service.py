@@ -15,6 +15,7 @@ from guildbotics.environment.contract import (
     AccessContractError,
     validate_workspace_location,
 )
+from guildbotics.integrations.chat_profile import chat_participation
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.provider import MemberAccount, SetupError
 from guildbotics.intelligences.cli_agents import (
@@ -40,7 +41,6 @@ from guildbotics.utils.person_id import (
 )
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
-    SecretStore,
     resolve_secret_store,
 )
 from guildbotics.utils.shared_write_lock import shared_write_operation
@@ -50,7 +50,6 @@ BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
 SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
 CRON_FIELD_COUNT = 5
-CHAT_PARTICIPATION_VALUES = {"strict", "social", "muted"}
 #: The secrets a member may hold with any provider, by member-relative name.
 MEMBER_SECRET_NAMES = frozenset().union(
     *(provider.secret_keys for provider in PROVIDERS.values())
@@ -461,7 +460,10 @@ class SimpleProjectSetupService:
             get_template_path() / "intelligences/cli_agent_mapping.yml",
         )
 
-        from guildbotics.intelligences.llm_providers import provider_env_keys
+        from guildbotics.intelligences.llm_providers import (
+            provider_env_keys,
+            provider_of,
+        )
 
         store = resolve_secret_store(config_dir)
         provider_api_keys = {
@@ -472,8 +474,10 @@ class SimpleProjectSetupService:
             config_dir=config_dir,
             language=str(project_data.get("language", "en")),
             description=str(project_data.get("description", "")),
-            llm_api_type=self._infer_llm_api_type(model_mapping),
-            cli_agent=self._infer_cli_agent(cli_mapping),
+            llm_api_type=provider_of(str(model_mapping.get("default", ""))),
+            # The default path is ``cli_agents/<tool>/<slot>.yml``, so the tool
+            # is the directory (as the provider is read off a model path).
+            cli_agent=cli_agent_name_from_path(str(cli_mapping.get("default", ""))),
             # A provider's name, as the runtime reads it, is case-insensitive.
             services={
                 kind: {**item, "name": str(item.get("name", "")).lower()}
@@ -535,28 +539,6 @@ class SimpleProjectSetupService:
 
         inspect_host_path(config.config_dir, create=True)
 
-        project_config_file = _project_config_file(config.config_dir)
-        project_config_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(project_config_file, self.build_project_config(config))
-        files.append(CreatedFile(path=project_config_file, action="create"))
-
-        model_mapping_template = get_template_path() / "intelligences/model_mapping.yml"
-        model_mapping: dict = cast(dict, load_yaml_file(model_mapping_template))
-        self._set_default_model_mapping(model_mapping, config.llm_api_type)
-        model_mapping_file = config.config_dir / "intelligences/model_mapping.yml"
-        model_mapping_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(model_mapping_file, model_mapping)
-        files.append(CreatedFile(path=model_mapping_file, action="create"))
-
-        cli_mapping_template = (
-            get_template_path() / "intelligences/cli_agent_mapping.yml"
-        )
-        cli_mapping: dict = cast(dict, load_yaml_file(cli_mapping_template))
-        self._set_default_cli_mapping(cli_mapping, config.cli_agent)
-        cli_mapping_file = config.config_dir / "intelligences/cli_agent_mapping.yml"
-        save_yaml_file(cli_mapping_file, cli_mapping)
-        files.append(CreatedFile(path=cli_mapping_file, action="create"))
-
         # Tool definitions live at `cli_agents/<tool>/default.yml`, so the copy
         # walks one level down rather than the directory root. These templates
         # are copied as bytes rather than read and written as text: a text
@@ -573,23 +555,8 @@ class SimpleProjectSetupService:
             files.append(CreatedFile(path=dst_file, action="create"))
 
         files.extend(self.ensure_sample_commands(config.config_dir, config.language))
-
-        store = resolve_secret_store(config.config_dir, create_default=True)
-        files.append(CreatedFile(path=store.location, action="create"))
-        self._store_provider_api_keys(config, store)
-
+        files.extend(self._write_project_config(config, update=False))
         return ProjectSetupResult(files=files)
-
-    def _store_provider_api_keys(
-        self, config: ProjectSetupInput, store: SecretStore
-    ) -> None:
-        """Store non-empty provider API keys in the OS secret store."""
-        from guildbotics.intelligences.llm_providers import provider_env_keys
-
-        env_keys = provider_env_keys(config.config_dir)
-        for provider, value in config.provider_api_keys.items():
-            if value and provider in env_keys:
-                store.set(env_keys[provider], value)
 
     @shared_write_operation
     def ensure_sample_commands(
@@ -621,115 +588,84 @@ class SimpleProjectSetupService:
 
     @shared_write_operation
     def update_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
-        files: list[CreatedFile] = []
-        project_config_file = _project_config_file(config.config_dir)
-        if project_config_file.exists():
-            project_data = cast(dict, load_yaml_file(project_config_file))
-        else:
-            project_data = {}
-        project_data["language"] = config.language
-        if config.description:
-            project_data["description"] = config.description
-        else:
-            project_data.pop("description", None)
+        files = self._write_project_config(config, update=True)
+        files.extend(self.ensure_sample_commands(config.config_dir, config.language))
+        return ProjectSetupResult(files=files)
 
-        if config.services:
-            project_data["services"] = config.services
-        else:
-            project_data.pop("services", None)
+    def _write_project_config(
+        self, config: ProjectSetupInput, *, update: bool
+    ) -> list[CreatedFile]:
+        """Write ``project.yml``, the default mappings and the API keys.
 
-        project_config_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(project_config_file, project_data)
-        files.append(CreatedFile(path=project_config_file, action="update"))
-
-        model_mapping_file = config.config_dir / "intelligences/model_mapping.yml"
-        model_mapping = self._load_mapping(
-            model_mapping_file,
-            get_template_path() / "intelligences/model_mapping.yml",
-        )
-        self._set_default_model_mapping(model_mapping, config.llm_api_type)
-        model_mapping_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(model_mapping_file, model_mapping)
-        files.append(CreatedFile(path=model_mapping_file, action="update"))
-
-        cli_mapping_file = config.config_dir / "intelligences/cli_agent_mapping.yml"
-        cli_mapping = self._load_mapping(
-            cli_mapping_file,
-            get_template_path() / "intelligences/cli_agent_mapping.yml",
-        )
-        self._set_default_cli_mapping(cli_mapping, config.cli_agent)
-        cli_mapping_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(cli_mapping_file, cli_mapping)
-        files.append(CreatedFile(path=cli_mapping_file, action="update"))
-
+        A new project starts each file from nothing or its template and pins the
+        secret store; an update starts from the files already there and touches
+        the store only to store a key.
+        """
         from guildbotics.intelligences.llm_providers import provider_env_keys
 
+        action = "update" if update else "create"
+        project_file = _project_config_file(config.config_dir)
+        project = (
+            cast(dict, load_yaml_file(project_file))
+            if update and project_file.exists()
+            else {}
+        )
+        project["language"] = config.language
+        for key, value in (
+            ("description", config.description),
+            ("services", config.services),
+        ):
+            if value:
+                project[key] = value
+            else:
+                project.pop(key, None)
+        written = {project_file: project}
+        for name, choice, default in (
+            ("model_mapping.yml", config.llm_api_type, _model_default),
+            # A tool is named by its definition path, the same way a model is,
+            # so the catalog name selected during setup becomes its default.
+            (
+                "cli_agent_mapping.yml",
+                config.cli_agent,
+                lambda _mapping, agent: cli_agent_default_path(agent),
+            ),
+        ):
+            path = config.config_dir / "intelligences" / name
+            template = get_template_path() / "intelligences" / name
+            mapping = self._load_mapping(path if update else template, template)
+            if choice:
+                mapping["default"] = default(mapping, choice)
+            written[path] = mapping
+        files = []
+        for path, data in written.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_yaml_file(path, data)
+            files.append(CreatedFile(path=path, action=action))
+
         env_keys = provider_env_keys(config.config_dir)
-        env_updates = {
+        api_keys = {
             env_keys[provider]: value
             for provider, value in config.provider_api_keys.items()
             if value and provider in env_keys
         }
-        if env_updates:
-            store = resolve_secret_store(config.config_dir)
-            location_existed = store.location.exists()
-            for key, value in env_updates.items():
+        if api_keys or not update:
+            store = resolve_secret_store(config.config_dir, create_default=not update)
+            store_action = "update" if update and store.location.exists() else "create"
+            for key, value in api_keys.items():
                 store.set(key, value)
-            files.append(
-                CreatedFile(
-                    path=store.location,
-                    action="update" if location_existed else "create",
-                )
-            )
-
-        files.extend(self.ensure_sample_commands(config.config_dir, config.language))
-
-        return ProjectSetupResult(files=files)
-
-    def build_project_config(self, config: ProjectSetupInput) -> dict:
-        project: dict = {"language": config.language}
-        if config.description:
-            project["description"] = config.description
-        if config.services:
-            project["services"] = config.services
-        return project
+            files.append(CreatedFile(path=store.location, action=store_action))
+        return files
 
     def _load_mapping(self, file_path: Path, template_path: Path) -> dict:
         if file_path.exists():
             return cast(dict, load_yaml_file(file_path))
         return cast(dict, load_yaml_file(template_path))
 
-    def _set_default_model_mapping(self, mapping: dict, provider: str) -> None:
-        if provider:
-            mapping["default"] = self._resolve_model_default(mapping, provider)
 
-    def _set_default_cli_mapping(self, mapping: dict, agent: str) -> None:
-        # A tool is named by its definition path, the same way a model is, so
-        # the catalog name selected during setup becomes that tool's default.
-        if agent:
-            mapping["default"] = cli_agent_default_path(agent)
-
-    def _resolve_model_default(self, mapping: dict, provider: str) -> str:
-        # Honor an explicit per-provider slot when one exists, otherwise fall back
-        # to the provider's conventional ``models/<provider>/default.yml`` file.
-        # The mapping no longer keeps provider-named index entries, so a bare
-        # ``mapping[provider]`` lookup would raise ``KeyError``. The default file
-        # ships as a template (matching the desktop editor's slot convention), so
-        # swapping a provider's default model is just a data change to that file.
-        existing = mapping.get(provider)
-        if existing:
-            return str(existing)
-        return f"models/{provider}/default.yml"
-
-    def _infer_llm_api_type(self, mapping: dict) -> str:
-        from guildbotics.intelligences.llm_providers import provider_of
-
-        return provider_of(str(mapping.get("default", "")))
-
-    def _infer_cli_agent(self, mapping: dict) -> str:
-        # The default path is ``cli_agents/<tool>/<slot>.yml``, so the tool is
-        # the directory (matching how the provider is read off a model path).
-        return cli_agent_name_from_path(str(mapping.get("default", "")))
+def _model_default(mapping: dict, provider: str) -> str:
+    """The provider's own slot when the mapping has one, else its shipped
+    ``models/<provider>/default.yml``."""
+    return str(mapping.get(provider) or f"models/{provider}/default.yml")
 
 
 class SimplePersonSetupService:
@@ -795,13 +731,9 @@ class SimplePersonSetupService:
                 if not channel_name:
                     continue
                 channels.append(channel_name)
-                chat = channel.get("chat", {})
-                participation = (
-                    chat.get("participation", "strict")
-                    if isinstance(chat, dict)
-                    else "strict"
+                channel_participation[channel_name] = chat_participation(
+                    _config_mapping(channel.get("chat")).get("participation")
                 )
-                channel_participation[channel_name] = _chat_participation(participation)
 
         owned = _owned_secrets(config_dir, person_id)
         accounts = {
@@ -993,7 +925,7 @@ class SimplePersonSetupService:
                     chat_channel(channel),
                     channel,
                     person_id=config.person_id,
-                    participation=_chat_participation(
+                    participation=chat_participation(
                         config.chat_channel_participation.get(channel)
                     ),
                 )
@@ -1067,10 +999,3 @@ def _message_channel(
         ),
         "chat": {"enabled": True, "participation": participation, **chat},
     }
-
-
-def _chat_participation(value: object) -> str:
-    participation = str(value or "strict").strip().lower()
-    if participation in CHAT_PARTICIPATION_VALUES:
-        return participation
-    return "strict"

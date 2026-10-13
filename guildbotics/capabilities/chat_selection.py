@@ -11,8 +11,8 @@ runs the turn with the input selected here.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -42,6 +42,7 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_notice_text,
 )
 from guildbotics.entities.message import Message
+from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
     ThreadContextUnavailableError,
@@ -167,7 +168,6 @@ class ChatSelector:
         cached_thread_messages = self._state_store.load_thread_messages(
             service_name, person_id, channel_id, event.thread_id
         )
-        participation = _chat_participation(chat_participation)
         # One provider snapshot serves both the participation decision and the
         # agent prompt: a second fetch could fail and lose the very context the
         # decision was based on.
@@ -186,9 +186,9 @@ class ChatSelector:
             if recovered is None
             else [event]
         )
-        thread_has_mentioned_self = _events_mention_user(
-            snapshot_events, identity.user_id
-        ) or _thread_has_mentioned_user(cached_thread_messages, identity.user_id)
+        thread_has_mentioned_self = _mentions(
+            [*snapshot_events, *cached_thread_messages], identity.user_id
+        )
         if not snapshot_complete and recovered is None:
             raise ThreadContextUnavailableError(
                 "The current thread snapshot is unavailable; cached messages "
@@ -196,7 +196,7 @@ class ChatSelector:
             )
         if recovered is None and all(
             _should_skip_event(
-                participation=participation,
+                participation=chat_participation,
                 mentions=list(item.mentions),
                 latest_mentions_self=identity.user_id in item.mentions,
                 thread_has_mentioned_self=thread_has_mentioned_self,
@@ -216,7 +216,7 @@ class ChatSelector:
             channel_id=channel_id,
             event=event,
             self_user_id=identity.user_id,
-            participation=participation,
+            participation=chat_participation,
             thread_state=thread_state,
             cached_thread_messages=cached_thread_messages,
             snapshot_events=snapshot_events,
@@ -245,9 +245,7 @@ class ChatSelector:
                     attempt=attempt.attempt_count,
                     recovered=True,
                 )
-                _log(
-                    self._context,
-                    "info",
+                self._context.logger.info(
                     "chat run already completed; skipping agent re-invocation: "
                     "run=%s event=%s",
                     attempt.run_id,
@@ -265,9 +263,7 @@ class ChatSelector:
             if not await self._settle_failure(batch, attempt, exc):
                 raise
             return
-        _log(
-            self._context,
-            "info",
+        self._context.logger.info(
             "chat completion=%s evidence=%s channel=%s thread=%s event=%s",
             completion.status,
             completion.evidence_types,
@@ -329,7 +325,7 @@ class ChatSelector:
                 "member": {
                     "person_id": person_id,
                     "roles": _handoff_roles(self._context.person),
-                    "profile": getattr(self._context.person, "profile", {}),
+                    "profile": self._context.person.profile,
                 },
                 "service": batch.service_name,
                 "channel_id": batch.channel_id,
@@ -523,9 +519,7 @@ class ChatSelector:
             error=str(exc),
             error_category="failed",
         )
-        _log(
-            self._context,
-            "error",
+        self._context.logger.error(
             "chat event abandoned after final attempt: channel=%s event=%s error=%s",
             batch.channel_id,
             batch.event.event_id,
@@ -549,7 +543,11 @@ class ChatSelector:
         """Post a thread reply when the member could not complete the event."""
         thread_state = batch.thread_state
         source_event_id = batch.event.event_id
-        if _has_system_notice(thread_state, _WORKFLOW_STATUS_NOTICE, source_event_id):
+        if any(
+            notice.kind == _WORKFLOW_STATUS_NOTICE
+            and notice.source_event_id == source_event_id
+            for notice in thread_state.system_notices
+        ):
             return
         message = _workflow_status_notice_text(reason, retry_after_at, retry_after_text)
         try:
@@ -656,17 +654,8 @@ class ChatSelector:
             )
 
 
-def _has_system_notice(
-    thread_state: ThreadConversationState, kind: str, source_event_id: str
-) -> bool:
-    return any(
-        notice.kind == kind and notice.source_event_id == source_event_id
-        for notice in thread_state.system_notices
-    )
-
-
 def _workflow_status_notice_text(
-    reason: str, retry_after_at: str = "", retry_after_text: str = ""
+    reason: str, retry_after_at: str, retry_after_text: str
 ) -> str:
     if reason == "rate_limited":
         return workflow_rate_limit_notice_text(
@@ -709,7 +698,7 @@ def _collect_batch_events(
 
 async def _build_agent_prompt_payload(
     *,
-    context: Any,
+    context: Context,
     chat_service: ChatService,
     event: ChatEvent,
     thread_messages: list[ChatMessage],
@@ -721,13 +710,17 @@ async def _build_agent_prompt_payload(
 ) -> dict[str, Any]:
     person_labels = await _chat_user_to_person_labels(context, chat_service)
     author_labels = _build_author_labels(
-        context, self_user_id, event, thread_messages[-20:], person_labels
+        context.person.person_id,
+        self_user_id,
+        event,
+        thread_messages[-20:],
+        person_labels,
     )
 
     previous_thread_context = {
         "thread_topic": thread_state.thread_topic,
         "latest_focus": thread_state.latest_focus,
-        "handoffs": [_handoff_to_prompt_dict(item) for item in thread_state.handoffs],
+        "handoffs": [asdict(item) for item in thread_state.handoffs],
     }
     cached_thread_context = [
         _message_to_prompt_dict(
@@ -762,7 +755,7 @@ async def _build_agent_prompt_payload(
 
 async def _fetch_thread_events(
     *,
-    context: Any,
+    context: Context,
     chat_service: ChatService,
     event: ChatEvent,
 ) -> tuple[list[ChatEvent], bool]:
@@ -798,13 +791,13 @@ async def _fetch_thread_events(
             seen_cursors.add(next_cursor)
             cursor = next_cursor
     except Exception as exc:
-        _log(context, "warning", "live chat thread context unavailable: %s", exc)
+        context.logger.warning("live chat thread context unavailable: %s", exc)
         return list(events.values()), False
     return list(events.values()), True
 
 
-def _events_mention_user(events: list[ChatEvent], user_id: str) -> bool:
-    return bool(user_id) and any(user_id in event.mentions for event in events)
+def _mentions(messages: Iterable[ChatMessage], user_id: str) -> bool:
+    return bool(user_id) and any(user_id in message.mentions for message in messages)
 
 
 def _merge_thread_context(
@@ -876,7 +869,7 @@ def _latest_chat_post_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any]
 
 def _record_handoffs(
     *,
-    context: Any,
+    context: Context,
     thread_state: ThreadConversationState,
     participant_labels: dict[str, str],
     mentioned_user_ids: list[str],
@@ -886,7 +879,9 @@ def _record_handoffs(
 ) -> None:
     if not mentioned_user_ids:
         return
-    roles_by_person = _roles_by_person(context)
+    roles_by_person = {
+        member.person_id: list(member.roles) for member in context.team.members
+    }
     existing = {
         (handoff.person_id, handoff.message_id) for handoff in thread_state.handoffs
     }
@@ -914,43 +909,11 @@ def _record_handoffs(
         existing.add(key)
 
 
-def _roles_by_person(context: Any) -> dict[str, list[str]]:
-    team = getattr(context, "team", None)
-    members = getattr(team, "members", []) if team is not None else []
-    roles: dict[str, list[str]] = {}
-    for member in members:
-        person_id = str(getattr(member, "person_id", "")).strip()
-        if not person_id:
-            continue
-        member_roles = getattr(member, "roles", {}) or {}
-        roles[person_id] = [str(role_id) for role_id in member_roles]
-    return roles
-
-
 def _truncate_handoff_text(text: str) -> str:
     normalized = " ".join(text.split())
     if len(normalized) <= _MAX_HANDOFF_TEXT_LENGTH:
         return normalized
     return normalized[: _MAX_HANDOFF_TEXT_LENGTH - 1].rstrip() + "..."
-
-
-def _handoff_to_prompt_dict(handoff: ThreadHandoffState) -> dict[str, Any]:
-    return {
-        "person_id": handoff.person_id,
-        "roles": handoff.roles,
-        "message_id": handoff.message_id,
-        "text": handoff.text,
-        "thread_topic": handoff.thread_topic,
-        "latest_focus": handoff.latest_focus,
-    }
-
-
-def _thread_has_mentioned_user(
-    thread_messages: list[ChatMessage], user_id: str
-) -> bool:
-    if not user_id:
-        return False
-    return any(user_id in set(message.mentions) for message in thread_messages)
 
 
 def _should_skip_event(
@@ -969,17 +932,10 @@ def _should_skip_event(
     return not latest_mentions_self and not thread_has_mentioned_self
 
 
-def _chat_participation(value: Any) -> str:
-    participation = str(value or "strict").strip().lower()
-    if participation in {"strict", "social", "muted"}:
-        return participation
-    return "strict"
-
-
 def _build_author_labels(
-    context: Any,
+    self_person_id: str,
     self_user_id: str,
-    event: ChatEvent | None,
+    event: ChatEvent,
     thread_messages: list[ChatMessage],
     person_labels: dict[str, str],
 ) -> dict[str, str]:
@@ -998,16 +954,9 @@ def _build_author_labels(
         register(message.author_id, is_bot=message.is_bot_message)
         for mention in message.mentions:
             register(mention, is_bot=False)
-    if event is not None:
-        register(event.author_id, is_bot=event.is_bot_message)
-        for mention in event.mentions:
-            register(mention, is_bot=False)
-
-    self_person_id = str(
-        getattr(getattr(context, "person", None), "person_id", "")
-    ).strip()
-    if not self_person_id:
-        self_person_id = "self"
+    register(event.author_id, is_bot=event.is_bot_message)
+    for mention in event.mentions:
+        register(mention, is_bot=False)
 
     labels: dict[str, str] = {}
     if self_user_id:
@@ -1035,61 +984,39 @@ def _build_author_labels(
 
 
 def _build_handoff_candidates(
-    context: Any, person_labels: dict[str, str]
+    context: Context, person_labels: dict[str, str]
 ) -> list[dict[str, Any]]:
-    team = getattr(context, "team", None)
-    members = getattr(team, "members", []) if team is not None else []
-    self_person_id = str(
-        getattr(getattr(context, "person", None), "person_id", "")
-    ).strip()
     mentionable_person_ids = set(person_labels.values())
-    candidates: list[dict[str, Any]] = []
-    for member in members:
-        person_id = str(getattr(member, "person_id", "")).strip()
-        if (
-            not person_id
-            or person_id == self_person_id
-            or person_id not in mentionable_person_ids
-        ):
-            continue
-        roles = _handoff_roles(member)
-        if not roles:
-            continue
-        candidates.append(
-            {
-                "person_id": person_id,
-                "name": str(getattr(member, "name", "")).strip(),
-                "mention": f"@{person_id}",
-                "roles": roles,
-            }
-        )
-    return candidates
+    return [
+        {
+            "person_id": member.person_id,
+            "name": member.name.strip(),
+            "mention": f"@{member.person_id}",
+            "roles": roles,
+        }
+        for member in context.team.members
+        if member.person_id != context.person.person_id
+        and member.person_id in mentionable_person_ids
+        and (roles := _handoff_roles(member))
+    ]
 
 
-def _handoff_roles(member: Any) -> dict[str, dict[str, str]]:
-    raw_roles = getattr(member, "roles", {}) or {}
-    if not isinstance(raw_roles, dict):
-        return {}
-
-    roles: dict[str, dict[str, str]] = {}
-    for fallback_id, role in raw_roles.items():
-        role_id = str(getattr(role, "id", fallback_id)).strip()
-        if not role_id:
-            continue
-        role_info = {
+def _handoff_roles(member: Person) -> dict[str, dict[str, str]]:
+    return {
+        role.id: {
             key: value
-            for key, value in {
-                "summary": str(getattr(role, "summary", "")).strip(),
-                "description": str(getattr(role, "description", "")).strip(),
-            }.items()
+            for key, value in (
+                ("summary", role.summary.strip()),
+                ("description", role.description.strip()),
+            )
             if value
         }
-        roles[role_id] = role_info
-    return roles
+        for role in member.roles.values()
+    }
 
 
 async def _chat_user_to_person_labels(
-    context: Any, chat_service: ChatService
+    context: Context, chat_service: ChatService
 ) -> dict[str, str]:
     """Each member's chat user: as configured, else (for an agent) the user
     of its own credential."""
@@ -1156,13 +1083,3 @@ def _message_to_prompt_dict(message: Message) -> dict[str, str]:
         "author_type": message.author_type,
         "timestamp": message.timestamp,
     }
-
-
-def _log(context: Any, level: str, msg: str, *args: Any) -> None:
-    logger = getattr(context, "logger", None)
-    if logger is None:
-        return
-    try:
-        getattr(logger, level)(msg, *args)
-    except Exception:
-        return

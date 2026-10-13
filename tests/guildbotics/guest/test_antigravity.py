@@ -255,7 +255,6 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     assert initialized.details["permission_mode"] == "always-proceed"
     assert initialized.details["cwd"] == "/workspace"
     assert environment.closed
-    await adapter.close()
 
 
 @pytest.mark.asyncio

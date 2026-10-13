@@ -5,7 +5,7 @@ from guildbotics.app_api.intelligences import (
     intelligence_config_dir,
 )
 from guildbotics.app_api.models import IntelligenceConfigUpdateRequest
-from guildbotics.app_api.runtime import _command_roots
+from guildbotics.app_api.command_catalog import _command_roots
 from guildbotics.commands.discovery import iter_candidate_paths
 from guildbotics.entities.team import Person
 from guildbotics.setup.setup_service import (

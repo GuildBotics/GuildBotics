@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from dataclasses import replace
@@ -13,6 +12,8 @@ from typing import Any
 from guildbotics.guest.provider_process import (
     StreamJsonAdapter,
     StreamJsonProcess,
+    as_dict,
+    publish,
     turn_deadline,
 )
 from guildbotics.guest.turn import (
@@ -50,9 +51,6 @@ _EFFORT_SETTING_KEYS = frozenset({"model", "effort"})
 #: The levels `claude --help` advertises for `--effort`.
 _EFFORT_VALUES = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LOGGER = getLogger(__name__)
-# Before this release, ``--strict-mcp-config`` could still wait for approval
-# of project-scoped servers it was explicitly told not to load. That makes a
-# headless turn unsafe only when the working tree actually has ``.mcp.json``.
 _SESSION_LIMIT_PATTERN = re.compile(
     r"\AYou've hit your session limit"
     r"(?:\s*·\s*(?P<retry_after_text>resets\s+\d{1,2}:\d{2}\s*(?:am|pm)"
@@ -139,9 +137,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             details={"bash_sandbox": False},
         )
         events.append(policy_event)
-        emitted = emit(policy_event)
-        if asyncio.iscoroutine(emitted):
-            await emitted
+        await publish(emit, policy_event)
         await process.stdin.drain()
         process.stdin.close()
         try:
@@ -173,9 +169,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
                                     details={**started.details, **event.details},
                                 )
                         events.append(event)
-                        result = emit(event)
-                        if asyncio.iscoroutine(result):
-                            await result
+                        await publish(emit, event)
                     if raw.get("type") == "result":
                         terminal_seen = True
                         terminal_output = str(raw.get("result", "") or "").strip()
@@ -346,8 +340,7 @@ _RATE_LIMIT_INFO_KEYS = (
 def _rate_limit_info(raw: dict[str, Any]) -> dict[str, Any]:
     if raw.get("type") != "rate_limit_event":
         return {}
-    info = raw.get("rate_limit_info")
-    return info if isinstance(info, dict) else {}
+    return as_dict(raw.get("rate_limit_info"))
 
 
 def _rate_limit_event_details(info: dict[str, Any]) -> dict[str, Any]:
@@ -447,12 +440,7 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
                 )
             )
     if event_type == "stream_event":
-        event: dict[str, Any] = (
-            raw["event"] if isinstance(raw.get("event"), dict) else {}
-        )
-        delta: dict[str, Any] = (
-            event["delta"] if isinstance(event.get("delta"), dict) else {}
-        )
+        delta = as_dict(as_dict(raw.get("event")).get("delta"))
         if delta.get("type") == "text_delta":
             events.append(
                 AgentEvent(
@@ -463,9 +451,7 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
                 )
             )
     if event_type == "assistant":
-        message: dict[str, Any] = (
-            raw["message"] if isinstance(raw.get("message"), dict) else {}
-        )
+        message = as_dict(raw.get("message"))
         content: list[Any] = (
             message["content"] if isinstance(message.get("content"), list) else []
         )
@@ -474,9 +460,7 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
                 continue
             if block.get("type") == "tool_use":
                 tool_name = str(block.get("name", "") or "")
-                tool_input = (
-                    block["input"] if isinstance(block.get("input"), dict) else {}
-                )
+                tool_input = as_dict(block.get("input"))
                 path = _tool_path(tool_input)
                 if tool_name in {"Edit", "MultiEdit", "NotebookEdit", "Write"}:
                     kind = AgentEventKind.FILE_CHANGE
@@ -505,9 +489,7 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
                     )
                 )
     if event_type == "user":
-        user_message: dict[str, Any] = (
-            raw["message"] if isinstance(raw.get("message"), dict) else {}
-        )
+        user_message = as_dict(raw.get("message"))
         user_content: list[Any] = (
             user_message["content"]
             if isinstance(user_message.get("content"), list)
@@ -558,7 +540,7 @@ def _tool_path(tool_input: dict[str, Any]) -> str:
 
 
 def _usage(value: Any) -> dict[str, int]:
-    raw = value if isinstance(value, dict) else {}
+    raw = as_dict(value)
     output: dict[str, int] = {}
     for key in (
         "input_tokens",

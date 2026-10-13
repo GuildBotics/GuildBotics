@@ -631,8 +631,11 @@ def _listening(chat: str, *failed: str) -> RuntimeStatus:
 
 
 @pytest.mark.parametrize("chat", ["slack", "local"])
-def test_a_listener_refused_for_a_member_opens_its_credential_alert(chat: str) -> None:
-    alerts = SystemAlertService(None).list_alerts(_listening(chat, "alice")).alerts
+def test_a_listener_refused_for_a_member_opens_its_credential_alert(
+    chat: str, tmp_path: Path
+) -> None:
+    service = SystemAlertService(DiagnosticsStore(tmp_path / "diagnostics.jsonl"))
+    alerts = service.list_alerts(_listening(chat, "alice")).alerts
 
     assert [
         (alert.id, alert.code, alert.provider, alert.person_id, alert.severity)
@@ -640,11 +643,13 @@ def test_a_listener_refused_for_a_member_opens_its_credential_alert(chat: str) -
     ] == [(f"credential:{chat}:alice", "credential", chat, "alice", "critical")]
 
 
-def test_runtime_alert_dismissal_lasts_until_condition_resolves() -> None:
+def test_runtime_alert_dismissal_lasts_until_condition_resolves(
+    tmp_path: Path,
+) -> None:
     """Dismissing the listener's alert lasts while the chat refuses the member;
     once it does not, the next refusal shows again. Another chat provider's
     dismissal is not the listener's to forget."""
-    service = SystemAlertService(None)
+    service = SystemAlertService(DiagnosticsStore(tmp_path / "diagnostics.jsonl"))
     for chat in ("slack", "local"):
         (alert,) = service.list_alerts(_listening(chat, "alice")).alerts
         service.dismiss(alert.id)
@@ -698,7 +703,7 @@ def _environment_ready(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_system_alerts_endpoint_reads_diagnostics(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     bus.publish_event(
         "command.failed",
         {"command": "workflows/demo", "person": "alice"},
@@ -717,7 +722,7 @@ def test_system_alerts_endpoint_reads_diagnostics(tmp_path: Path) -> None:
 def test_system_alerts_endpoint_dismisses_alert(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     bus.publish_event("command.failed", {"command": "workflows/demo"})
     app = create_app(session_token="secret", runtime=runtime)
 

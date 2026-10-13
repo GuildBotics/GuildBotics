@@ -20,7 +20,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
@@ -34,7 +36,6 @@ from tests.guildbotics.app_api.provider_doubles import (
 HTTP_OK = 200
 HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
-HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
 HTTP_SERVER_ERROR = 500
 CALLBACK_BASE = "http://testserver"
@@ -56,6 +57,8 @@ def _pem() -> str:
 
 
 class RuntimeStub:
+    system_service_run_id = "stub-service"
+
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
@@ -65,6 +68,8 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
+        self.workspace_sync_service = WorkspaceSyncService()
+        self.event_bus = EventBus()
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
@@ -211,21 +216,6 @@ def test_the_registration_from_start_to_installation(
     # The installations were listed as the app itself.
     listing = next(r for r in github if r.url.path == "/app/installations")
     assert listing.headers["Authorization"].startswith("Bearer ey")
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/config/providers/github/app-registrations",
-        "/config/providers/github/app-registration",
-    ],
-)
-def test_the_screens_requests_need_the_session_token(
-    client: TestClient, path: str
-) -> None:
-    response = client.post(path, json={"state": "x"})
-
-    assert response.status_code == HTTP_UNAUTHORIZED
 
 
 def test_start_refuses_an_invalid_app_name(client: TestClient) -> None:

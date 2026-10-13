@@ -17,6 +17,8 @@ from typing import Any
 from guildbotics.guest.provider_process import (
     StreamJsonAdapter,
     StreamJsonProcess,
+    as_dict,
+    publish,
     turn_deadline,
 )
 from guildbotics.guest.turn import (
@@ -189,14 +191,12 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         terminal_seen = False
         terminal_error: AgentRuntimeError | None = None
 
-        async def _publish(event: AgentEvent) -> None:
+        async def record(event: AgentEvent) -> None:
             events.append(event)
-            emitted = emit(event)
-            if asyncio.iscoroutine(emitted):
-                await emitted
+            await publish(emit, event)
 
         for event in _start_events(settings, rejected):
-            await _publish(event)
+            await record(event)
         try:
             async with turn_deadline(
                 _LABEL, self._timeout + _TIMEOUT_GRACE_SECONDS, self.interrupt
@@ -204,9 +204,9 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
                 while (raw := await output.next_event()) is not None:
                     conversation_id = _conversation_id_of(raw) or conversation_id
                     for decoded in _decode_events(raw, conversation_id):
-                        await _publish(decoded)
+                        await record(decoded)
                     if raw.get("event") == "result":
-                        result = _dict(raw.get("result"))
+                        result = as_dict(raw.get("result"))
                         terminal_seen = True
                         terminal_output = str(result.get("response", "") or "").strip()
                         usage = _usage(result.get("usage"))
@@ -368,18 +368,18 @@ def _start_events(
 
 def _conversation_id_of(raw: dict[str, Any]) -> str:
     """The conversation id an envelope carries, wherever ``agy`` puts it."""
-    payload = _dict(raw.get(str(raw.get("event", ""))))
+    payload = as_dict(raw.get(str(raw.get("event", ""))))
     return str(raw.get("conversation_id") or payload.get("conversation_id") or "")
 
 
 def _decode_events(raw: dict[str, Any], conversation_id: str) -> list[AgentEvent]:
     event_type = str(raw.get("event", ""))
     if event_type == "init":
-        return _init_events(_dict(raw.get("init")), conversation_id)
+        return _init_events(as_dict(raw.get("init")), conversation_id)
     if event_type == "step_update":
-        return _step_events(_dict(raw.get("step_update")), conversation_id)
+        return _step_events(as_dict(raw.get("step_update")), conversation_id)
     if event_type == "result":
-        return _result_events(_dict(raw.get("result")), conversation_id)
+        return _result_events(as_dict(raw.get("result")), conversation_id)
     return []
 
 
@@ -434,8 +434,8 @@ def _step_events(step: dict[str, Any], conversation_id: str) -> list[AgentEvent]
 def _tool_events(
     step: dict[str, Any], state: str, conversation_id: str
 ) -> list[AgentEvent]:
-    info = _dict(step.get("tool_info"))
-    parameters = _dict(info.get("parameters"))
+    info = as_dict(step.get("tool_info"))
+    parameters = as_dict(info.get("parameters"))
     tool_name = str(step.get("tool_name") or info.get("name") or "")
     if tool_name in _FILE_CHANGE_TOOLS:
         kind = AgentEventKind.FILE_CHANGE
@@ -464,7 +464,7 @@ def _tool_events(
                 details={"tool": tool_name},
             )
         ]
-    error = _dict(info.get("error"))
+    error = as_dict(info.get("error"))
     return [
         AgentEvent(
             kind,
@@ -540,7 +540,7 @@ def _result_error(result: dict[str, Any]) -> AgentRuntimeError | None:
 
 def _usage(value: Any) -> dict[str, int]:
     """Normalize ``agy``'s token counts onto the keys shared by all adapters."""
-    raw = _dict(value)
+    raw = as_dict(value)
     output: dict[str, int] = {}
     for source, target in (
         ("input_tokens", "input_tokens"),
@@ -583,7 +583,3 @@ def _mcp_config(broker: TurnBroker) -> bytes:
 def _log_tail(log: bytes | None) -> str:
     """The end of ``agy``'s own log, for a failure that has nothing else."""
     return (log or b"")[-_LOG_TAIL_BYTES:].decode(errors="replace").strip()
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}

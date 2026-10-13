@@ -682,17 +682,10 @@ _FIELDS = [
     {
         "id": "status",
         "name": "Status",
-        "dataType": "SINGLE_SELECT",
         "options": [
             {"id": "todo", "name": "Todo"},
             {"id": "working", "name": "In Progress"},
             {"id": "done", "name": "Done"},
         ],
-    },
-    {
-        "id": "agent",
-        "name": "Agent",
-        "dataType": "SINGLE_SELECT",
-        "options": [{"id": "agent-aiko", "name": f"⚙{MEMBER}"}],
     },
 ]

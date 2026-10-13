@@ -25,7 +25,7 @@ export const github = {
         privateKeyPath: "GitHub private key path",
         agentFieldSyncFailedTitle: "Agent field update failed",
         agentFieldSyncFailedBody:
-          "The member was saved, but the project's Agent field could not be updated. Update it from Setup → Integrations, or it will be synced automatically on the first run.",
+          "The member was saved, but the project's Agent field could not be updated. Update it from Setup → Integrations.",
         githubAppsSetupMode: {
           label: "GitHub App setup method",
           create: "Register a new app",
@@ -203,7 +203,7 @@ export const github = {
         privateKeyPath: "GitHub秘密鍵パス",
         agentFieldSyncFailedTitle: "Agent フィールドの更新に失敗しました",
         agentFieldSyncFailedBody:
-          "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → 連携 から更新するか、初回実行時の自動同期をお待ちください。",
+          "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → 連携 から更新してください。",
         githubAppsSetupMode: {
           label: "GitHub App の設定方法",
           create: "新規に App を登録",

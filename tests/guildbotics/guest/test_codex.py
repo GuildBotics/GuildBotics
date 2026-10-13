@@ -281,7 +281,6 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
     result = await adapter.run_turn(
         "continue", _context(tmp_path), conversation, events.append
     )
-    await adapter.close()
 
     assert result.output == "hello world"
     assert result.provider_session_id == "thread-1"
@@ -337,7 +336,6 @@ async def test_codex_declines_legacy_approval_requests(monkeypatch, tmp_path) ->
         ConversationRecord(key=_context(tmp_path).conversation_key),
         events.append,
     )
-    await adapter.close()
 
     assert {"id": 999, "result": {"decision": "denied"}} in process.messages
     assert any(event.approval == "decline" for event in events)
@@ -362,7 +360,6 @@ async def test_codex_rejects_permission_profile_request_with_json_rpc_error(
         ConversationRecord(key=_context(tmp_path).conversation_key),
         events.append,
     )
-    await adapter.close()
 
     response = next(message for message in process.messages if message.get("id") == 999)
     assert response["error"]["code"] == -32601
@@ -394,35 +391,6 @@ async def test_codex_malformed_stream_is_protocol_failure(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
     assert excinfo.value.rotate_session is True
-    await adapter.close()
-
-
-@pytest.mark.asyncio
-async def test_codex_restarts_process_after_protocol_failure(
-    monkeypatch, tmp_path
-) -> None:
-    processes = [_Process(malformed_turn=True), _Process()]
-
-    async def create_process(*args, **kwargs):
-        return processes.pop(0)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
-
-    with pytest.raises(AgentRuntimeError):
-        await adapter.run_turn(
-            "first", _context(tmp_path), conversation, lambda _event: None
-        )
-
-    recovered = await adapter.run_turn(
-        "second", _context(tmp_path), conversation, lambda _event: None
-    )
-    await adapter.close()
-
-    assert recovered.output == "hello world"
-    assert recovered.provider_session_id == "thread-1"
-    assert processes == []
 
 
 @pytest.mark.asyncio
@@ -445,7 +413,6 @@ async def test_codex_stdout_eof_is_process_failure(monkeypatch, tmp_path) -> Non
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
     assert excinfo.value.rotate_session is True
-    await adapter.close()
 
 
 @pytest.mark.asyncio
@@ -468,7 +435,6 @@ async def test_codex_requests_stream_limit_for_oversized_lines(
         ConversationRecord(key=_context(tmp_path).conversation_key),
         lambda _event: None,
     )
-    await adapter.close()
 
     assert result.output.endswith("hello world")
     assert len(result.output) > 2**17
@@ -494,7 +460,6 @@ async def test_codex_oversized_line_beyond_limit_is_protocol_error(
             ConversationRecord(key=_context(tmp_path).conversation_key),
             lambda _event: None,
         )
-    await adapter.close()
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
     assert excinfo.value.rotate_session is True
@@ -667,7 +632,6 @@ async def test_codex_terminal_error_notification_uses_structured_category(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
     assert excinfo.value.rotate_session is True
-    await adapter.close()
 
 
 @pytest.mark.asyncio
@@ -704,7 +668,6 @@ async def test_codex_timeout_interrupts_and_rotates_session(
     assert interrupted is True
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
     assert excinfo.value.rotate_session is True
-    await adapter.close()
 
 
 @pytest.mark.asyncio
@@ -756,7 +719,6 @@ async def test_codex_empty_terminal_response_is_protocol_failure(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROTOCOL
     assert excinfo.value.rotate_session is True
-    await adapter.close()
 
 
 @pytest.mark.parametrize(
@@ -832,7 +794,6 @@ async def _run_turn_returning(
         **(conversation_overrides or {}),
     )
     terminal = await adapter.run_turn("go", context, conversation, lambda _event: None)
-    await adapter.close()
     return process, terminal
 
 

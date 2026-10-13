@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -139,14 +138,20 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.traces import (
+    global_records,
+    last_cli_agent_turns,
+    latest_inference_failures,
+    list_memory_events,
+    list_traces,
+    trace_detail,
+)
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.entities.team import Service, Team
 from guildbotics.environment.spec import guest_path
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.provider import Operation, Page, SetupError, page_path
 from guildbotics.intelligences.llm_providers import discover_llm_providers
-from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup.setup_service import (
     PROJECT_CONFIG_PATHS,
     PersonConfigSnapshot,
@@ -237,41 +242,25 @@ def create_app(
     session_token: str | None = None,
     allowed_origins: list[str] | None = None,
     runtime: AppRuntime | None = None,
-    event_bus: EventBus | None = None,
-    diagnostics_store: DiagnosticsStore | None = None,
     command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
     workspace_problem: str = "",
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
-    store = diagnostics_store or DiagnosticsStore()
-    bus = event_bus or EventBus(store=store)
-    if runtime is not None:
-        app_runtime = runtime
-    elif restore_workspace_environment:
-        app_runtime = AppRuntime(
-            bus,
-            diagnostics_store=store,
-            load_workspace_environment=True,
-            workspace_problem=workspace_problem,
-        )
-    else:
-        app_runtime = AppRuntime(bus, diagnostics_store=store)
-    log_handler = EventBusLogHandler(bus)
-    system_service_run_id = getattr(
-        app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
+    app_runtime = runtime or AppRuntime(
+        EventBus(),
+        load_workspace_environment=restore_workspace_environment,
+        workspace_problem=workspace_problem,
     )
+    bus = app_runtime.event_bus
+    store = bus.store
+    log_handler = EventBusLogHandler(bus)
+    system_service_run_id = app_runtime.system_service_run_id
     input_file_store = command_input_file_store or CommandInputFileStore()
-    if isinstance(app_runtime, AppRuntime):
-        app_runtime.command_inputs = lambda: input_file_store.directory
-    # The service holds no state of its own: the queue it starts and stops
-    # is process-wide, so this instance and the runtime's act on the same one.
+    app_runtime.command_inputs = lambda: input_file_store.directory
     # The runtime owns the common execution boundary; the sync service only
     # attaches/detaches its relay publisher there.
-    if isinstance(app_runtime, AppRuntime):
-        sync_service = app_runtime.workspace_sync_service
-    else:
-        sync_service = WorkspaceSyncService()
+    sync_service = app_runtime.workspace_sync_service
     # Secrets travel between OS secret stores rather than through Git, but the
     # machine they travel to is the workspace's hub, so the two services share
     # one answer to "where is the hub" instead of resolving it twice.
@@ -341,6 +330,23 @@ def create_app(
         409: {"model": ApiError},
         500: {"model": ApiError},
     }
+
+    def require_token(
+        provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+    ) -> None:
+        if provided != token:
+            raise AppApiError(
+                "invalid_session_token",
+                status_code=401,
+            )
+
+    # Every route takes the session token except the few on ``app`` itself,
+    # each of which says why it cannot.
+    token_required: dict[str, Any] = {
+        "dependencies": [Depends(require_token)],
+        "responses": error_responses,
+    }
+    router = _Routes(app, token_required)
 
     @app.exception_handler(UnsafePathError)
     async def unsafe_path_handler(
@@ -432,25 +438,12 @@ def create_app(
             },
         )
 
-    def require_token(
-        provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
-    ) -> None:
-        if provided != token:
-            raise AppApiError(
-                "invalid_session_token",
-                status_code=401,
-            )
-
-    @app.get("/device/workspaces", response_model=list[str], responses=error_responses)
-    def device_workspaces(_: None = Depends(require_token)) -> list[str]:
+    @router.get("/device/workspaces")
+    def device_workspaces() -> list[str]:
         return [str(path) for path in registered_workspaces()]
 
-    @app.delete(
-        "/device/workspaces", response_model=list[str], responses=error_responses
-    )
-    def remove_device_workspace(
-        request: WorkspaceChangeRequest, _: None = Depends(require_token)
-    ) -> list[str]:
+    @router.delete("/device/workspaces")
+    def remove_device_workspace(request: WorkspaceChangeRequest) -> list[str]:
         from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
 
         selected = app_runtime.selected_workspace
@@ -470,24 +463,21 @@ def create_app(
         unregister_workspace(request.workspace_dir)
         return [str(path) for path in registered_workspaces()]
 
-    @app.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
+    @router.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
     async def hub_secret_transfer(
-        request: Request,
-        workspace_id: str,
-        operation: str,
-        _: None = Depends(require_token),
+        request: Request, workspace_id: str, operation: str
     ) -> Response:
         return await hub_secrets.transfer(request, workspace_id, operation)
 
-    @app.get("/health", response_model=HealthResponse, responses=error_responses)
-    def health(_: None = Depends(require_token)) -> HealthResponse:
+    @router.get("/health")
+    def health() -> HealthResponse:
         return HealthResponse(
             status="ok",
             service_instance_id=system_service_run_id,
             workspace=app_runtime.get_config_status().workspace,
         )
 
-    @app.post(PROOF_PATH, response_model=LocalApiProofResponse)
+    @app.post(PROOF_PATH)
     def local_api_proof_of_token(
         request: LocalApiProofRequest,
     ) -> LocalApiProofResponse:
@@ -497,13 +487,8 @@ def create_app(
             proof=local_api_proof(token, request.nonce, system_service_run_id)
         )
 
-    @app.post(
-        "/shutdown",
-        status_code=202,
-        response_model=ShutdownResponse,
-        responses=error_responses,
-    )
-    def shutdown(_: None = Depends(require_token)) -> ShutdownResponse:
+    @router.post("/shutdown", status_code=202)
+    def shutdown() -> ShutdownResponse:
         """Ask the hosting server to exit through its normal shutdown path.
 
         The desktop host calls this before it would kill the sidecar, so the
@@ -515,8 +500,8 @@ def create_app(
         app.state.request_shutdown()
         return ShutdownResponse(teardown_budget_seconds=TEARDOWN_BUDGET_SECONDS)
 
-    @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
-    def config_status(_: None = Depends(require_token)) -> ConfigStatus:
+    @router.get("/config/status")
+    def config_status() -> ConfigStatus:
         if input_file_store.problem:
             with contextlib.suppress(UnsafePathError):
                 input_file_store.start()
@@ -524,254 +509,139 @@ def create_app(
             update={"input_store_problem": input_file_store.problem}
         )
 
-    @app.post("/workspace", response_model=ConfigStatus, responses=error_responses)
-    def workspace_change(
-        request: WorkspaceChangeRequest,
-        _: None = Depends(require_token),
-    ) -> ConfigStatus:
+    @router.post("/workspace")
+    def workspace_change(request: WorkspaceChangeRequest) -> ConfigStatus:
         return app_runtime.set_workspace(request.workspace_dir)
 
-    @app.get("/hub", response_model=HubStatus, responses=error_responses)
-    def hub_status(_: None = Depends(require_token)) -> HubStatus:
+    @router.get("/hub")
+    def hub_status() -> HubStatus:
         return sync_service.get_hub()
 
-    @app.post("/hub", response_model=HubStatus, responses=error_responses)
-    def hub_create(_: None = Depends(require_token)) -> HubStatus:
+    @router.post("/hub")
+    def hub_create() -> HubStatus:
         return sync_service.create_hub()
 
-    @app.post("/hub/inspect", response_model=HubConnection, responses=error_responses)
-    def hub_inspect(
-        request: HubTarget,
-        _: None = Depends(require_token),
-    ) -> HubConnection:
+    @router.post("/hub/inspect")
+    def hub_inspect(request: HubTarget) -> HubConnection:
         return sync_service.inspect_hub(request)
 
-    @app.post("/hub/trust", response_model=HubConnection, responses=error_responses)
-    def hub_trust(
-        request: HubTrustRequest,
-        _: None = Depends(require_token),
-    ) -> HubConnection:
+    @router.post("/hub/trust")
+    def hub_trust(request: HubTrustRequest) -> HubConnection:
         return sync_service.trust_hub(request)
 
-    @app.get("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
-    def hub_ssh_key(_: None = Depends(require_token)) -> DeviceSshKey:
+    @router.get("/hub/ssh-key")
+    def hub_ssh_key() -> DeviceSshKey:
         return sync_service.get_ssh_key()
 
-    @app.post("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
-    def hub_ssh_key_create(_: None = Depends(require_token)) -> DeviceSshKey:
+    @router.post("/hub/ssh-key")
+    def hub_ssh_key_create() -> DeviceSshKey:
         return sync_service.create_ssh_key()
 
-    @app.get(
-        "/workspace/devices",
-        response_model=WorkspaceDevices,
-        responses=error_responses,
-    )
-    def workspace_devices(_: None = Depends(require_token)) -> WorkspaceDevices:
+    @router.get("/workspace/devices")
+    def workspace_devices() -> WorkspaceDevices:
         return sync_service.get_devices()
 
-    @app.post(
-        "/workspace/devices/self",
-        response_model=WorkspaceDevices,
-        responses=error_responses,
-    )
-    def workspace_device_rename(
-        request: DeviceRenameRequest,
-        _: None = Depends(require_token),
-    ) -> WorkspaceDevices:
+    @router.post("/workspace/devices/self")
+    def workspace_device_rename(request: DeviceRenameRequest) -> WorkspaceDevices:
         return sync_service.rename_device(request)
 
-    @app.get(
-        "/workspace/live",
-        response_model=list[WorkspaceLiveState],
-        responses=error_responses,
-    )
-    def workspace_live(_: None = Depends(require_token)) -> list[WorkspaceLiveState]:
+    @router.get("/workspace/live")
+    def workspace_live() -> list[WorkspaceLiveState]:
         return sync_service.get_live_states()
 
-    @app.get(
-        "/workspace/service-owner",
-        response_model=WorkspaceServiceOwner,
-        responses=error_responses,
-    )
-    def workspace_service_owner(
-        _: None = Depends(require_token),
-    ) -> WorkspaceServiceOwner:
+    @router.get("/workspace/service-owner")
+    def workspace_service_owner() -> WorkspaceServiceOwner:
         return sync_service.get_service_owner()
 
-    @app.post(
-        "/workspace/service-owner/transfer",
-        response_model=WorkspaceServiceOwner,
-        responses=error_responses,
-    )
+    @router.post("/workspace/service-owner/transfer")
     def workspace_service_owner_transfer(
         request: WorkspaceServiceOwnerTransferRequest,
-        _: None = Depends(require_token),
     ) -> WorkspaceServiceOwner:
         return sync_service.transfer_service_owner(request.device_id)
 
-    @app.get(
-        "/workspace/sync",
-        response_model=WorkspaceSyncStatus,
-        responses=error_responses,
-    )
-    def workspace_sync_status(
-        _: None = Depends(require_token),
-    ) -> WorkspaceSyncStatus:
+    @router.get("/workspace/sync")
+    def workspace_sync_status() -> WorkspaceSyncStatus:
         return sync_service.get_status()
 
-    @app.post(
-        "/workspace/sync/preview",
-        response_model=WorkspaceSyncPreview,
-        responses=error_responses,
-    )
+    @router.post("/workspace/sync/preview")
     def workspace_sync_preview(
         request: WorkspaceSyncEnableRequest,
-        _: None = Depends(require_token),
     ) -> WorkspaceSyncPreview:
         return sync_service.preview(request)
 
-    @app.post(
-        "/workspace/sync/enable",
-        response_model=WorkspaceSyncStatus,
-        responses=error_responses,
-    )
+    @router.post("/workspace/sync/enable")
     def workspace_sync_enable(
         request: WorkspaceSyncEnableRequest,
-        _: None = Depends(require_token),
     ) -> WorkspaceSyncStatus:
         return sync_service.enable(request)
 
-    @app.post(
-        "/workspace/sync/hub",
-        response_model=WorkspaceSyncStatus,
-        responses=error_responses,
-    )
+    @router.post("/workspace/sync/hub")
     def workspace_sync_change_hub(
         request: WorkspaceSyncEnableRequest,
-        _: None = Depends(require_token),
     ) -> WorkspaceSyncStatus:
         return sync_service.change_hub(request)
 
-    @app.post(
-        "/workspace/sync/retry",
-        response_model=WorkspaceSyncStatus,
-        responses=error_responses,
-    )
-    def workspace_sync_retry(_: None = Depends(require_token)) -> WorkspaceSyncStatus:
+    @router.post("/workspace/sync/retry")
+    def workspace_sync_retry() -> WorkspaceSyncStatus:
         return sync_service.retry()
 
-    @app.post(
-        "/workspace/sync/rejections/{rejection_id}/discard",
-        response_model=WorkspaceSyncStatus,
-        responses=error_responses,
-    )
-    def workspace_sync_discard_rejection(
-        rejection_id: str,
-        _: None = Depends(require_token),
-    ) -> WorkspaceSyncStatus:
+    @router.post("/workspace/sync/rejections/{rejection_id}/discard")
+    def workspace_sync_discard_rejection(rejection_id: str) -> WorkspaceSyncStatus:
         """Drop one displaced commit the user has finished with."""
         return sync_service.discard_rejection(rejection_id)
 
-    @app.get(
-        "/workspace/secrets",
-        response_model=WorkspaceSecrets,
-        responses=error_responses,
-    )
-    def workspace_secrets(_: None = Depends(require_token)) -> WorkspaceSecrets:
+    @router.get("/workspace/secrets")
+    def workspace_secrets() -> WorkspaceSecrets:
         """Report which keys this device holds, and which the hub holds."""
         return secret_service.get_secrets()
 
-    @app.post(
-        "/workspace/secrets/send",
-        response_model=SecretTransferResponse,
-        responses=error_responses,
-    )
+    @router.post("/workspace/secrets/send")
     def workspace_secrets_send(
         request: SecretTransferRequest,
-        _: None = Depends(require_token),
     ) -> SecretTransferResponse:
         """Hand this device's values to the hub, because the user asked."""
         return secret_service.send(request)
 
-    @app.post(
-        "/workspace/secrets/fetch",
-        response_model=SecretTransferResponse,
-        responses=error_responses,
-    )
+    @router.post("/workspace/secrets/fetch")
     def workspace_secrets_fetch(
         request: SecretTransferRequest,
-        _: None = Depends(require_token),
     ) -> SecretTransferResponse:
         """Take values from the hub into this device's own secret store."""
         return secret_service.fetch(request)
 
-    @app.post(
-        "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses
-    )
-    def workspace_sync_clone(
-        request: WorkspaceSyncCloneRequest,
-        _: None = Depends(require_token),
-    ) -> ConfigStatus:
+    @router.post("/workspace/sync/clone")
+    def workspace_sync_clone(request: WorkspaceSyncCloneRequest) -> ConfigStatus:
         """Take a copy of a hub's workspace and switch to it."""
         destination = sync_service.clone(request)
         return app_runtime.set_workspace(destination)
 
-    @app.get("/team", response_model=TeamSummary, responses=error_responses)
-    def team(_: None = Depends(require_token)) -> TeamSummary:
+    @router.get("/team")
+    def team() -> TeamSummary:
         return app_runtime.get_team_summary()
 
-    @app.get(
-        "/commands/options",
-        response_model=CommandOptionsResponse,
-        responses=error_responses,
-    )
-    def command_options(
-        person: str | None = None,
-        _: None = Depends(require_token),
-    ) -> CommandOptionsResponse:
+    @router.get("/commands/options")
+    def command_options(person: str | None = None) -> CommandOptionsResponse:
         return app_runtime.get_command_options(person)
 
-    @app.get(
-        "/commands/routine-options",
-        response_model=RoutineCommandOptionsResponse,
-        responses=error_responses,
-    )
+    @router.get("/commands/routine-options")
     def routine_command_options(
         person: str | None = None,
-        _: None = Depends(require_token),
     ) -> RoutineCommandOptionsResponse:
         return app_runtime.get_routine_command_options(person)
 
-    @app.post(
-        "/commands/run",
-        response_model=CommandRunResponse,
-        responses=error_responses,
-    )
-    async def run_command(
-        request: CommandRunRequest,
-        _: None = Depends(require_token),
-    ) -> CommandRunResponse:
+    @router.post("/commands/run")
+    async def run_command(request: CommandRunRequest) -> CommandRunResponse:
         return await app_runtime.run_command(request)
 
-    @app.post(
-        "/commands/input-files",
-        response_model=CommandInputFileResponse,
-        responses=error_responses,
-    )
+    @router.post("/commands/input-files")
     def command_input_file_upload(
         file: UploadFile = File(...),  # noqa: B008
-        _: None = Depends(require_token),
     ) -> CommandInputFileResponse:
         return _store_command_input(lambda: input_file_store.save(file))
 
-    @app.post(
-        "/commands/input-files/copy",
-        response_model=CommandInputFileResponse,
-        responses=error_responses,
-    )
+    @router.post("/commands/input-files/copy")
     def command_input_file_copy(
         request: CommandInputFileCopyRequest,
-        _: None = Depends(require_token),
     ) -> CommandInputFileResponse:
         return _store_command_input(lambda: input_file_store.copy(request.path))
 
@@ -794,14 +664,9 @@ def create_app(
             ) from exc
         return CommandInputFileResponse(path=path, guest_path=guest_path(path))
 
-    @app.post(
-        "/commands/input-paths",
-        response_model=CommandInputPathsResponse,
-        responses=error_responses,
-    )
+    @router.post("/commands/input-paths")
     def command_input_paths(
         request: CommandInputPathsRequest,
-        _: None = Depends(require_token),
     ) -> CommandInputPathsResponse:
         return CommandInputPathsResponse(
             paths=[
@@ -825,118 +690,61 @@ def create_app(
             ]
         )
 
-    @app.post(
-        "/commands/author",
-        response_model=CommandAuthoringResponse,
-        responses=error_responses,
-    )
+    @router.post("/commands/author")
     async def author_command(
         request: CommandAuthoringRequest,
-        _: None = Depends(require_token),
     ) -> CommandAuthoringResponse:
         return await app_runtime.author_command(request)
 
-    @app.post(
-        "/commands/author/apply",
-        response_model=CommandAuthoringApplyResponse,
-        responses=error_responses,
-    )
+    @router.post("/commands/author/apply")
     def apply_command_authoring(
         request: CommandAuthoringApplyRequest,
-        _: None = Depends(require_token),
     ) -> CommandAuthoringApplyResponse:
         return app_runtime.apply_command_authoring(request)
 
-    @app.get(
-        "/commands/files",
-        response_model=CommandFilesResponse,
-        responses=error_responses,
-    )
-    def list_command_files(
-        _: None = Depends(require_token),
-    ) -> CommandFilesResponse:
+    @router.get("/commands/files")
+    def list_command_files() -> CommandFilesResponse:
         return app_runtime.list_command_files()
 
-    @app.get(
-        "/commands/files/{file_id}",
-        response_model=CommandFileDetail,
-        responses=error_responses,
-    )
-    def get_command_file(
-        file_id: str,
-        _: None = Depends(require_token),
-    ) -> CommandFileDetail:
+    @router.get("/commands/files/{file_id}")
+    def get_command_file(file_id: str) -> CommandFileDetail:
         return app_runtime.get_command_file(file_id)
 
-    @app.post(
-        "/commands/files",
-        response_model=CommandFileDetail,
-        responses=error_responses,
-    )
-    def create_command_file(
-        request: CommandFileCreateRequest,
-        _: None = Depends(require_token),
-    ) -> CommandFileDetail:
+    @router.post("/commands/files")
+    def create_command_file(request: CommandFileCreateRequest) -> CommandFileDetail:
         return app_runtime.create_command_file(request)
 
-    @app.put(
-        "/commands/files/{file_id}",
-        response_model=CommandFileDetail,
-        responses=error_responses,
-    )
+    @router.put("/commands/files/{file_id}")
     def update_command_file(
-        file_id: str,
-        request: CommandFileUpdateRequest,
-        _: None = Depends(require_token),
+        file_id: str, request: CommandFileUpdateRequest
     ) -> CommandFileDetail:
         return app_runtime.update_command_file(file_id, request)
 
-    @app.delete(
-        "/commands/files/{file_id}",
-        response_model=CommandFilesResponse,
-        responses=error_responses,
-    )
+    @router.delete("/commands/files/{file_id}")
     def delete_command_file(
-        file_id: str,
-        expected_revision: str,
-        _: None = Depends(require_token),
+        file_id: str, expected_revision: str
     ) -> CommandFilesResponse:
         return app_runtime.delete_command_file(file_id, expected_revision)
 
-    @app.get(
-        "/commands/files/{file_id}/execution-status",
-        response_model=CommandFileExecutionStatus,
-        responses=error_responses,
-    )
+    @router.get("/commands/files/{file_id}/execution-status")
     def command_file_execution_status(
-        file_id: str,
-        expected_revision: str,
-        person: str | None = None,
-        _: None = Depends(require_token),
+        file_id: str, expected_revision: str, person: str | None = None
     ) -> CommandFileExecutionStatus:
         return app_runtime.get_command_file_execution_status(
             file_id, person, expected_revision
         )
 
-    @app.get("/hotkeys", response_model=HotkeySettings, responses=error_responses)
-    def get_hotkeys(_: None = Depends(require_token)) -> HotkeySettings:
+    @router.get("/hotkeys")
+    def get_hotkeys() -> HotkeySettings:
         return load_hotkeys()
 
-    @app.put("/hotkeys", response_model=HotkeySettings, responses=error_responses)
-    def put_hotkeys(
-        request: HotkeySettings,
-        _: None = Depends(require_token),
-    ) -> HotkeySettings:
+    @router.put("/hotkeys")
+    def put_hotkeys(request: HotkeySettings) -> HotkeySettings:
         return save_hotkeys(request)
 
-    @app.get(
-        "/config/roles",
-        response_model=RoleOptionsResponse,
-        responses=error_responses,
-    )
+    @router.get("/config/roles")
     def config_roles(
         language: Annotated[str, Query(pattern="^(en|ja)$")] = "ja",
-        _: None = Depends(require_token),
     ) -> RoleOptionsResponse:
         role_file = get_template_path() / f"roles/default.{language}.yml"
         role_data = cast(dict, load_yaml_file(role_file))
@@ -955,143 +763,69 @@ def create_app(
                 )
         return RoleOptionsResponse(roles=roles)
 
-    @app.get(
-        "/scheduler/status",
-        response_model=RuntimeStatus,
-        responses=error_responses,
-    )
-    def scheduler_status(_: None = Depends(require_token)) -> RuntimeStatus:
+    @router.get("/scheduler/status")
+    def scheduler_status() -> RuntimeStatus:
         return app_runtime.get_scheduler_status()
 
-    @app.post(
-        "/scheduler/start",
-        response_model=RuntimeStatus,
-        responses=error_responses,
-    )
-    def scheduler_start(
-        request: SchedulerStartRequest,
-        _: None = Depends(require_token),
-    ) -> RuntimeStatus:
+    @router.post("/scheduler/start")
+    def scheduler_start(request: SchedulerStartRequest) -> RuntimeStatus:
         return app_runtime.start_scheduler(request)
 
-    @app.post(
-        "/scheduler/stop",
-        response_model=RuntimeStatus,
-        responses=error_responses,
-    )
-    def scheduler_stop(
-        request: SchedulerStopRequest | None = None,
-        _: None = Depends(require_token),
-    ) -> RuntimeStatus:
+    @router.post("/scheduler/stop")
+    def scheduler_stop(request: SchedulerStopRequest | None = None) -> RuntimeStatus:
         return app_runtime.stop_scheduler(force=request.force if request else False)
 
-    @app.get(
-        "/service/keep-awake",
-        response_model=ServiceKeepAwake,
-        responses=error_responses,
-    )
-    def service_keep_awake(_: None = Depends(require_token)) -> ServiceKeepAwake:
+    @router.get("/service/keep-awake")
+    def service_keep_awake() -> ServiceKeepAwake:
         return app_runtime.get_service_keep_awake()
 
-    @app.put(
-        "/service/keep-awake",
-        response_model=ServiceKeepAwake,
-        responses=error_responses,
-    )
-    def service_keep_awake_update(
-        request: ServiceKeepAwake,
-        _: None = Depends(require_token),
-    ) -> ServiceKeepAwake:
+    @router.put("/service/keep-awake")
+    def service_keep_awake_update(request: ServiceKeepAwake) -> ServiceKeepAwake:
         return app_runtime.update_service_keep_awake(request)
 
-    @app.post(
-        "/chat/receive-state/reset",
-        response_model=ChatReceiveResetResponse,
-        responses=error_responses,
-    )
-    def chat_receive_state_reset(
-        _: None = Depends(require_token),
-    ) -> ChatReceiveResetResponse:
+    @router.post("/chat/receive-state/reset")
+    def chat_receive_state_reset() -> ChatReceiveResetResponse:
         return app_runtime.reset_chat_receive_state()
 
-    @app.get(
-        "/transcripts/settings",
-        response_model=TranscriptSettingsStatus,
-        responses=error_responses,
-    )
-    def transcript_settings(
-        _: None = Depends(require_token),
-    ) -> TranscriptSettingsStatus:
+    @router.get("/transcripts/settings")
+    def transcript_settings() -> TranscriptSettingsStatus:
         return app_runtime.get_transcript_settings()
 
-    @app.put(
-        "/transcripts/settings",
-        response_model=TranscriptSettingsStatus,
-        responses=error_responses,
-    )
+    @router.put("/transcripts/settings")
     def transcript_settings_update(
         request: TranscriptSettingsUpdateRequest,
-        _: None = Depends(require_token),
     ) -> TranscriptSettingsStatus:
         return app_runtime.update_transcript_settings(request)
 
-    @app.get(
-        "/runtime/debug",
-        response_model=RuntimeDebugStatus,
-        responses=error_responses,
-    )
-    def runtime_debug_status(_: None = Depends(require_token)) -> RuntimeDebugStatus:
+    @router.get("/runtime/debug")
+    def runtime_debug_status() -> RuntimeDebugStatus:
         return app_runtime.get_runtime_debug_status()
 
-    @app.put(
-        "/runtime/debug",
-        response_model=RuntimeDebugStatus,
-        responses=error_responses,
-    )
-    def runtime_debug_update(
-        request: RuntimeDebugUpdateRequest,
-        _: None = Depends(require_token),
-    ) -> RuntimeDebugStatus:
+    @router.put("/runtime/debug")
+    def runtime_debug_update(request: RuntimeDebugUpdateRequest) -> RuntimeDebugStatus:
         return app_runtime.update_runtime_debug(request)
 
-    @app.post("/verify", response_model=VerifyResponse, responses=error_responses)
-    def verify(_: None = Depends(require_token)) -> VerifyResponse:
+    @router.post("/verify")
+    def verify() -> VerifyResponse:
         return app_runtime.verify()
 
-    @app.get(
-        "/system-alerts",
-        response_model=SystemAlertsResponse,
-        responses=error_responses,
-    )
-    def system_alerts(_: None = Depends(require_token)) -> SystemAlertsResponse:
+    @router.get("/system-alerts")
+    def system_alerts() -> SystemAlertsResponse:
         return app_runtime.get_system_alerts()
 
-    @app.post(
-        "/system-alerts/dismiss",
-        response_model=SystemAlertsResponse,
-        responses=error_responses,
-    )
+    @router.post("/system-alerts/dismiss")
     def dismiss_system_alert(
-        request: SystemAlertDismissRequest, _: None = Depends(require_token)
+        request: SystemAlertDismissRequest,
     ) -> SystemAlertsResponse:
         return app_runtime.dismiss_system_alert(request.alert_id)
 
-    @app.post(
-        "/diagnostics/scenario",
-        response_model=ScenarioDiagnosticsResponse,
-        responses=error_responses,
-    )
+    @router.post("/diagnostics/scenario")
     async def diagnostics_scenario(
         person_id: str | None = None,
-        _: None = Depends(require_token),
     ) -> ScenarioDiagnosticsResponse:
         return await app_runtime.run_scenario_diagnostics(person_id=person_id)
 
-    @app.get(
-        "/diagnostics/traces",
-        response_model=TracesResponse,
-        responses=error_responses,
-    )
+    @router.get("/diagnostics/traces")
     def diagnostics_traces(
         source: str | None = None,
         person_id: str | None = None,
@@ -1099,9 +833,9 @@ def create_app(
         attr_key: str | None = None,
         attr_value: str | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-        _: None = Depends(require_token),
     ) -> TracesResponse:
-        return app_runtime.list_traces(
+        return list_traces(
+            store,
             source=source,
             person_id=person_id,
             query=q,
@@ -1110,44 +844,23 @@ def create_app(
             limit=limit,
         )
 
-    @app.get(
-        "/diagnostics/traces/{trace_id}",
-        response_model=TraceDetailResponse,
-        responses=error_responses,
-    )
-    def diagnostics_trace_detail(
-        trace_id: str,
-        _: None = Depends(require_token),
-    ) -> TraceDetailResponse:
-        return app_runtime.get_trace_detail(trace_id)
+    @router.get("/diagnostics/traces/{trace_id}")
+    def diagnostics_trace_detail(trace_id: str) -> TraceDetailResponse:
+        return trace_detail(store, trace_id)
 
-    @app.get(
-        "/diagnostics/global",
-        response_model=TraceDetailResponse,
-        responses=error_responses,
-    )
+    @router.get("/diagnostics/global")
     def diagnostics_global_records(
         limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-        _: None = Depends(require_token),
     ) -> TraceDetailResponse:
-        return app_runtime.get_global_records(limit=limit)
+        return global_records(store, limit)
 
-    @app.post(
-        "/diagnostics/troubleshoot",
-        response_model=TroubleshootingResponse,
-        responses=error_responses,
-    )
+    @router.post("/diagnostics/troubleshoot")
     async def diagnostics_troubleshoot(
         request: TroubleshootingRequest,
-        _: None = Depends(require_token),
     ) -> TroubleshootingResponse:
         return await app_runtime.troubleshoot(request)
 
-    @app.get(
-        "/diagnostics/memory-events",
-        response_model=MemoryEventsResponse,
-        responses=error_responses,
-    )
+    @router.get("/diagnostics/memory-events")
     def diagnostics_memory_events(
         person_id: str | None = None,
         doc_id: str | None = None,
@@ -1158,9 +871,8 @@ def create_app(
         since: str | None = None,
         until: str | None = None,
         limit: Annotated[int, Query(ge=1, le=1000)] = 200,
-        _: None = Depends(require_token),
     ) -> MemoryEventsResponse:
-        return app_runtime.list_memory_events(
+        return list_memory_events(
             person_id=person_id,
             doc_id=doc_id,
             action=action,
@@ -1172,18 +884,13 @@ def create_app(
             limit=limit,
         )
 
-    @app.get(
-        "/activity/history",
-        response_model=ActivityHistoryResponse,
-        responses=error_responses,
-    )
+    @router.get("/activity/history")
     def activity_history(
         start: str | None = None,
         end: str | None = None,
         refresh: bool = False,
         sync_start: str | None = None,
         sync_end: str | None = None,
-        _: None = Depends(require_token),
     ) -> ActivityHistoryResponse:
         return app_runtime.get_activity_history(
             start=start,
@@ -1193,110 +900,56 @@ def create_app(
             sync_end=sync_end,
         )
 
-    @app.get(
-        "/intelligences/cli-agents/last-turns",
-        response_model=list[CliAgentLastTurn],
-        responses=error_responses,
-    )
-    def cli_agent_last_turns(
-        _: None = Depends(require_token),
-    ) -> list[CliAgentLastTurn]:
-        return app_runtime.get_cli_agent_last_turns()
+    @router.get("/intelligences/cli-agents/last-turns")
+    def cli_agent_last_turns() -> list[CliAgentLastTurn]:
+        return last_cli_agent_turns(store)
 
-    @app.get(
-        "/intelligences/inference-failures",
-        response_model=InferenceFailuresResponse,
-        responses=error_responses,
-    )
-    def inference_failures(
-        _: None = Depends(require_token),
-    ) -> InferenceFailuresResponse:
-        return app_runtime.get_inference_failures()
+    @router.get("/intelligences/inference-failures")
+    def inference_failures() -> InferenceFailuresResponse:
+        return latest_inference_failures(store)
 
-    @app.get(
-        "/intelligences/cli-agents/{agent}/usage",
-        response_model=CliAgentUsageResponse,
-        responses=error_responses,
-    )
+    @router.get("/intelligences/cli-agents/{agent}/usage")
     async def cli_agent_usage(
-        agent: str,
-        refresh: bool = False,
-        _: None = Depends(require_token),
+        agent: str, refresh: bool = False
     ) -> CliAgentUsageResponse:
         return await app_runtime.get_cli_agent_usage(agent, refresh=refresh)
 
-    @app.get(
-        "/intelligences/agent-environment",
-        response_model=AgentEnvironmentStatusResponse,
-        responses=error_responses,
-    )
-    def agent_environment_status_view(
-        _: None = Depends(require_token),
-    ) -> AgentEnvironmentStatusResponse:
+    @router.get("/intelligences/agent-environment")
+    def agent_environment_status_view() -> AgentEnvironmentStatusResponse:
         """This device's agent environment, and every active member's slots on it."""
         return app_runtime.get_agent_environment_status()
 
-    @app.post(
-        "/intelligences/agent-environment/build",
-        response_model=AgentEnvironmentStatusResponse,
-        responses=error_responses,
-    )
-    def agent_environment_build(
-        _: None = Depends(require_token),
-    ) -> AgentEnvironmentStatusResponse:
+    @router.post("/intelligences/agent-environment/build")
+    def agent_environment_build() -> AgentEnvironmentStatusResponse:
         """Start building this device's snapshot; the status reports its progress."""
         return app_runtime.build_agent_environment()
 
-    @app.get(
-        "/intelligences/agent-environment/images",
-        response_model=EnvironmentImagesResponse,
-        responses=error_responses,
-    )
-    def agent_environment_images_view(
-        _: None = Depends(require_token),
-    ) -> EnvironmentImagesResponse:
+    @router.get("/intelligences/agent-environment/images")
+    def agent_environment_images_view() -> EnvironmentImagesResponse:
         """The images this device holds, for the declaration to name one."""
         return agent_environment_images()
 
-    @app.get(
-        "/intelligences/grant-evaluation",
-        response_model=GrantEvaluation,
-        responses=error_responses,
-    )
+    @router.get("/intelligences/grant-evaluation")
     def grant_evaluation_view(
-        scope: GrantScope,
-        path: str,
-        access: str = "read",
-        _: None = Depends(require_token),
+        scope: GrantScope, path: str, access: str = "read"
     ) -> GrantEvaluation:
         """What a grant the user is about to add would mean on this device."""
         return evaluate_grant(scope, path, access)
 
-    @app.get(
-        "/intelligences/model-providers",
-        response_model=LlmProvidersResponse,
-        responses=error_responses,
-    )
-    def list_model_providers(
-        _: None = Depends(require_token),
-    ) -> LlmProvidersResponse:
+    @router.get("/intelligences/model-providers")
+    def list_model_providers() -> LlmProvidersResponse:
         config_dir = app_runtime.get_config_status().config_dir
         return LlmProvidersResponse(
             providers=discover_llm_providers(config_dir or get_template_path())
         )
 
     decisions.register(
-        app, lambda: _resolve_existing_config_dir(app_runtime), require_token
+        app, lambda: _resolve_existing_config_dir(app_runtime), token_required
     )
 
-    @app.get(
-        "/config/intelligences",
-        response_model=IntelligenceConfigResponse,
-        responses=error_responses,
-    )
+    @router.get("/config/intelligences")
     def config_intelligences(
         person_id: PersonId | None = None,
-        _: None = Depends(require_token),
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
         revisions = config_repository(config_dir).tree_revisions(
@@ -1308,14 +961,9 @@ def create_app(
         )
         return response.model_copy(update={"revisions": revisions})
 
-    @app.put(
-        "/config/intelligences",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
+    @router.put("/config/intelligences")
     def config_intelligences_update(
         request: IntelligenceConfigUpdateRequest,
-        _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         scope = intelligence_config_dir(request.person_id)
         receipt = apply_config_write(
@@ -1331,15 +979,8 @@ def create_app(
             revisions=receipt.revisions,
         )
 
-    @app.post(
-        "/config/init",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
-    def config_init(
-        request: ProjectSetupInput,
-        _: None = Depends(require_token),
-    ) -> ConfigWriteResponse:
+    @router.post("/config/init")
+    def config_init(request: ProjectSetupInput) -> ConfigWriteResponse:
         # Nothing to compare against on a first setup, but the workspace may
         # already be synchronized -- taking a copy from a hub creates one, and
         # its queue is running while this writes.
@@ -1352,20 +993,9 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
-    @app.get(
-        "/config/project",
-        response_model=ProjectConfigResponse,
-        responses=error_responses,
-    )
-    def config_project(_: None = Depends(require_token)) -> ProjectConfigResponse:
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                context={"project": str(status.project_file)},
-                status_code=400,
-            )
+    @router.get("/config/project")
+    def config_project() -> ProjectConfigResponse:
+        config_dir = _resolve_existing_config_dir(app_runtime)
         # Revisions first: pairing content read earlier with a revision read
         # later would describe a state that never existed, and a save composed
         # against it would slip past the very check it feeds.
@@ -1379,14 +1009,9 @@ def create_app(
             snapshot.model_dump() | {"revisions": revisions}
         )
 
-    @app.put(
-        "/config/project",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
+    @router.put("/config/project")
     def config_project_update(
         request: ProjectConfigUpdateRequest,
-        _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         receipt = apply_config_write(
             request.config_dir,
@@ -1398,14 +1023,9 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
-    @app.put(
-        "/config/project/default-person",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
+    @router.put("/config/project/default-person")
     def config_default_person_update(
         request: DefaultPersonUpdateRequest,
-        _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
         receipt = apply_config_write(
@@ -1420,15 +1040,8 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
-    @app.post(
-        "/config/members",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
-    def config_members(
-        request: PersonSetupInput,
-        _: None = Depends(require_token),
-    ) -> ConfigWriteResponse:
+    @router.post("/config/members")
+    def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
         status = app_runtime.get_config_status()
         member = request.model_copy(
             update={"config_dir": status.config_dir or request.config_dir}
@@ -1442,15 +1055,8 @@ def create_app(
         )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
-    @app.get(
-        "/config/members/{person_id}",
-        response_model=PersonConfigSnapshot,
-        responses=error_responses,
-    )
-    def config_member(
-        person_id: MemberDirectoryName,
-        _: None = Depends(require_token),
-    ) -> PersonConfigSnapshot:
+    @router.get("/config/members/{person_id}")
+    def config_member(person_id: MemberDirectoryName) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
         stored_person_config_dir(config_dir, person_id)
         revisions = config_repository(config_dir).revisions(
@@ -1462,15 +1068,9 @@ def create_app(
         )
         return snapshot.model_copy(update={"revisions": revisions})
 
-    @app.put(
-        "/config/members/{person_id}",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
+    @router.put("/config/members/{person_id}")
     def config_member_update(
-        person_id: MemberDirectoryName,
-        request: PersonUpdateInput,
-        _: None = Depends(require_token),
+        person_id: MemberDirectoryName, request: PersonUpdateInput
     ) -> ConfigWriteResponse:
         if request.original_person_id != person_id:
             raise AppApiError(
@@ -1492,15 +1092,9 @@ def create_app(
         )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
-    @app.delete(
-        "/config/members/{person_id}",
-        response_model=ConfigWriteResponse,
-        responses=error_responses,
-    )
+    @router.delete("/config/members/{person_id}")
     def config_member_delete(
-        person_id: MemberDirectoryName,
-        request: MemberDeleteRequest,
-        _: None = Depends(require_token),
+        person_id: MemberDirectoryName, request: MemberDeleteRequest
     ) -> ConfigWriteResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
         receipt = apply_config_write(
@@ -1515,12 +1109,8 @@ def create_app(
         )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
-    @app.get(
-        "/config/providers",
-        response_model=list[ProviderOption],
-        responses=error_responses,
-    )
-    def config_providers(_: None = Depends(require_token)) -> list[ProviderOption]:
+    @router.get("/config/providers")
+    def config_providers() -> list[ProviderOption]:
         return [
             ProviderOption(
                 name=provider.name,
@@ -1539,12 +1129,10 @@ def create_app(
     for provider in PROVIDERS.values():
         setup = provider.setup
         for name, operation in (setup.operations if setup else {}).items():
-            app.add_api_route(
+            router.add_api_route(
                 f"/config/providers/{provider.name}/{name}",
-                _operation_endpoint(operation, require_token, app_runtime.saved_team),
+                _operation_endpoint(operation, app_runtime.saved_team),
                 methods=["POST"],
-                response_model=operation.response,
-                responses=error_responses,
             )
         # A page is opened by a browser, which cannot send the session token;
         # what the page acts on names itself in the query (the unguessable
@@ -1583,15 +1171,10 @@ def create_app(
             return resp
         raise AppApiError("avatar_not_found", status_code=404)
 
-    @app.post(
-        "/config/members/{person_id}/avatar",
-        response_model=AvatarMutationResponse,
-        responses=error_responses,
-    )
+    @router.post("/config/members/{person_id}/avatar")
     def config_member_avatar_upload(
         person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
-        _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
         from guildbotics.app_api.avatar import read_upload, store_avatar
@@ -1619,15 +1202,9 @@ def create_app(
             ) from exc
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
-    @app.post(
-        "/config/members/{person_id}/avatar/{provider}",
-        response_model=AvatarMutationResponse,
-        responses=error_responses,
-    )
+    @router.post("/config/members/{person_id}/avatar/{provider}")
     async def config_member_avatar_import(
-        person_id: PersonId,
-        provider: str,
-        _: None = Depends(require_token),
+        person_id: PersonId, provider: str
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
         setup = PROVIDERS[provider].setup if provider in PROVIDERS else None
@@ -1687,9 +1264,8 @@ async def _store_downloaded_avatar(config_dir: Path, person_id: str, url: str) -
 
 def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
     status = app_runtime.get_config_status()
-    config_dir = _get_existing_config_dir(status)
-    if config_dir is not None:
-        return config_dir
+    if status.project_file_exists and status.config_dir is not None:
+        return status.config_dir
     raise AppApiError(
         "project_not_found",
         context={"project": str(status.project_file)},
@@ -1708,39 +1284,19 @@ def _resolve_member_config_dir(app_runtime: AppRuntime) -> Path:
     )
 
 
-def _get_existing_config_dir(status: ConfigStatus) -> Path | None:
-    if status.project_file_exists and status.config_dir is not None:
-        return status.config_dir
-    return None
-
-
 def _operation_endpoint(
-    operation: Operation,
-    require_token: Callable[..., None],
-    team: Callable[[], Team],
-) -> Callable[..., Awaitable[BaseModel]]:
+    operation: Operation, team: Callable[[], Team]
+) -> Callable[[BaseModel], Awaitable[BaseModel]]:
     """An endpoint answering ``operation``, typed by its request and response
     so that they are what the API's schema says."""
 
-    async def endpoint(request: BaseModel, _: None = None) -> BaseModel:
+    async def endpoint(request: BaseModel) -> BaseModel:
         return await operation.run(request, team)
 
-    endpoint.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
-        [
-            inspect.Parameter(
-                "request",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=operation.request,
-            ),
-            inspect.Parameter(
-                "_",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Depends(require_token),
-                annotation=None,
-            ),
-        ],
-        return_annotation=operation.response,
-    )
+    endpoint.__annotations__ = {
+        "request": operation.request,
+        "return": operation.response,
+    }
     return endpoint
 
 
@@ -1754,6 +1310,25 @@ def _page_endpoint(
         return HTMLResponse(shown.html, status_code=shown.status_code)
 
     return endpoint
+
+
+class _Routes:
+    """The app's route decorators, each adding the same route options.
+
+    The routes are registered on the app itself: FastAPI builds the routes of
+    an included ``APIRouter`` again when the app first serves a request, a cost
+    every app pays once more.
+    """
+
+    def __init__(self, app: FastAPI, options: dict[str, Any]) -> None:
+        self._app = app
+        self._options = options
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        register = getattr(self._app, method)
+        return lambda path, *args, **kwargs: register(
+            path, *args, **self._options, **kwargs
+        )
 
 
 class _UnhandledErrorMiddleware:

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 import logging
 import os
-import shlex
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from functools import cached_property, partial
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,29 +22,30 @@ from guildbotics.app_api.activity_history import (
     lifecycle_from_run,
     lifecycle_from_session,
     parse_timestamp,
-    run_subject_id,
 )
 from guildbotics.app_api.agent_environment_status import (
     EnvironmentProblemEntry,
     agent_environment_problems,
     agent_environment_status,
 )
-from guildbotics.app_api.agent_streams import collapse_assistant_streams
-from guildbotics.app_api.cli_agent_turns import last_cli_agent_turns
 from guildbotics.app_api.cli_agent_usage import CliAgentUsageCache
-from guildbotics.app_api.command_files import CommandFileService, file_revision
+from guildbotics.app_api.command_catalog import (
+    command_file_execution_status,
+    command_options,
+    guard_run_target,
+    routine_command_options,
+)
+from guildbotics.app_api.command_files import CommandFileService
 from guildbotics.app_api.command_input_files import command_cwd
 from guildbotics.app_api.config_revisions import apply_config_write
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.inference_failures import latest_inference_failures
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentEnvironmentStatusResponse,
     ChatReceiveResetResponse,
-    CliAgentLastTurn,
     CliAgentUsageCheck,
     CliAgentUsageResponse,
     CommandAuthoringApplyRequest,
@@ -59,16 +58,11 @@ from guildbotics.app_api.models import (
     CommandFileExecutionStatus,
     CommandFilesResponse,
     CommandFileUpdateRequest,
-    CommandOption,
     CommandOptionsResponse,
-    CommandRequirement,
     CommandRunRequest,
     CommandRunResponse,
     ConfigStatus,
-    InferenceFailuresResponse,
     MemberSummary,
-    MemoryEvent,
-    MemoryEventsResponse,
     ProjectSummary,
     RoutineCommandOptionsResponse,
     RuntimeDebugStatus,
@@ -79,18 +73,12 @@ from guildbotics.app_api.models import (
     ServiceKeepAwake,
     SystemAlertsResponse,
     TeamSummary,
-    TraceDetailResponse,
-    TraceRecord,
-    TracesResponse,
-    TraceSummary,
     TranscriptSettingsStatus,
     TranscriptSettingsUpdateRequest,
     TroubleshootingFocus,
     TroubleshootingRequest,
     TroubleshootingResponse,
     VerifyResponse,
-    to_command_arguments,
-    to_command_inputs,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
@@ -101,39 +89,17 @@ from guildbotics.capabilities.command_failures import (
 )
 from guildbotics.capabilities.member_memory_audit import (
     MemoryAuditStore,
-    parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.cli.member import run_in_process
 from guildbotics.commands.authoring import CommandAuthoringResult
-from guildbotics.commands.brains import is_brain_disabled
-from guildbotics.commands.discovery import (
-    command_source,
-    get_shared_commands_root,
-    is_within,
-    iter_effective_commands,
-    logical_command_name,
-    resolve_command_path,
-    resolve_command_reference,
-)
 from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
-from guildbotics.commands.metadata import (
-    command_entries,
-    default_command_label,
-    load_command_metadata,
-    parse_command_arguments,
-    parse_command_input_policy,
-)
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.validation import (
-    CommandValidationError,
-    validate_command_source,
-)
 from guildbotics.drivers.command_runner import (
     PreparedCommand,
     host_command_cwd,
@@ -153,8 +119,7 @@ from guildbotics.drivers.service_lock import (
     service_keeps_awake,
     set_service_keeps_awake,
 )
-from guildbotics.drivers.trace_presentations import normalize_trace_presentation
-from guildbotics.entities import Person, Project, Service, Team
+from guildbotics.entities import Person, Project, Team
 from guildbotics.environment.command_environment import inspected_directories
 from guildbotics.environment.contract import (
     AccessContractError,
@@ -167,10 +132,6 @@ from guildbotics.environment.runtime import (
     doctor,
 )
 from guildbotics.environment.snapshot import build_snapshot
-from guildbotics.environment.status import (
-    DeviceStatus,
-    device_status,
-)
 from guildbotics.environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
@@ -185,25 +146,19 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
-from guildbotics.intelligences.brains.factory import cli_agent_of
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.observability.activity_event_store import ActivityEventStore
-from guildbotics.observability.diagnostics_store import (
-    DEFAULT_DIAGNOSTICS_MAX_BYTES,
-    DiagnosticsStore,
-)
+from guildbotics.observability.diagnostics_store import DEFAULT_DIAGNOSTICS_MAX_BYTES
 from guildbotics.observability.event_types import TARGET_RECORDED_EVENT_TYPE
 from guildbotics.observability.interactive_sessions import InteractiveSessionStore
 from guildbotics.observability.session_transcripts import (
     transcript_detail,
     transcript_retention_days,
 )
-from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import ServiceError
-from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.setup.setup_service import (
     PersonConfigSummary,
     SimplePersonSetupService,
@@ -222,11 +177,8 @@ from guildbotics.utils.fileio import (
     apply_workspace_root,
     get_machine_state_root,
     get_primary_config_dir,
-    get_primary_config_path,
-    get_template_path,
     get_workspace_local_path,
     get_workspace_root,
-    get_workspace_state_path,
     get_workspace_work_path,
     load_yaml_file,
 )
@@ -236,7 +188,6 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     GUILDBOTICS_WORKSPACE_ROOT,
     *HOME_ENV_PROTECTED_KEYS,
 }
-MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
 ACTIVITY_SYNC_COOLDOWN_SECONDS = 5 * 60
 ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
 ACTIVITY_SYNC_PERIOD_PARTS = 2
@@ -311,16 +262,15 @@ class AppRuntime:
         event_bus: EventBus,
         *,
         stop_timeout_seconds: float = 10.0,
-        diagnostics_store: DiagnosticsStore | None = None,
         load_workspace_environment: bool = False,
         workspace_problem: str = "",
     ) -> None:
         install_member_cli(run_in_process)
-        self._event_bus = event_bus
+        self.event_bus = event_bus
         self.workspace_problem = workspace_problem
-        self._diagnostics_store = diagnostics_store
+        self._diagnostics_store = event_bus.store
         self._system_service_run_id = new_id()
-        self._system_alerts = SystemAlertService(diagnostics_store)
+        self._system_alerts = SystemAlertService(event_bus.store)
         self._lock = threading.Lock()
         self._activity_sync_lock = threading.Lock()
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
@@ -335,11 +285,7 @@ class AppRuntime:
         self._execution_status = ExecutionStatusPublisher()
         self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage = CliAgentUsageCache(
-            lambda: (
-                self._diagnostics_store.latest_system_trace_id() or ""
-                if self._diagnostics_store is not None
-                else ""
-            )
+            lambda: self._diagnostics_store.latest_system_trace_id() or ""
         )
         self._environment_build_lock = threading.Lock()
         self._environment_build: threading.Thread | None = None
@@ -448,8 +394,7 @@ class AppRuntime:
         stopped = self.stop_scheduler(force=True)
         if stopped.has_active_work:
             raise _workspace_switch_blocked_error(stopped)
-        if self._diagnostics_store is not None:
-            self._diagnostics_store.finish_system_session()
+        self._diagnostics_store.finish_system_session()
         # Stopped before the switch so the queue of the workspace being left
         # cannot commit into the one being entered. A queue still finishing a
         # fetch or push holds that workspace's repository, so the switch waits
@@ -465,9 +410,8 @@ class AppRuntime:
         if self.on_workspace_changed is not None:
             self.on_workspace_changed(workspace)
         self._load_workspace_env()
-        if self._diagnostics_store is not None:
-            self._diagnostics_store.start_system_session(self._system_service_run_id)
-            self._diagnostics_store.start_maintenance()
+        self._diagnostics_store.start_system_session(self._system_service_run_id)
+        self._diagnostics_store.start_maintenance()
         self._workspace_sync.activate()
         self.workspace_problem = ""
         return self.get_config_status()
@@ -526,11 +470,7 @@ class AppRuntime:
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
-        context = self._command_options_context(person)
-        options = self._collect_command_options(context)
-        return CommandOptionsResponse(
-            options=sorted(options.values(), key=lambda option: option.command)
-        )
+        return command_options(self._get_context(), person)
 
     def _command_file_service(self) -> CommandFileService:
         language_code = self._get_context().team.project.get_language_code()
@@ -669,233 +609,14 @@ class AppRuntime:
     def get_command_file_execution_status(
         self, file_id: str, person: str | None, expected_revision: str
     ) -> CommandFileExecutionStatus:
-        try:
-            # An omitted person runs as the team default, so the status must be
-            # evaluated for that member rather than for no member at all.
-            context = self._command_options_context(
-                person or self._get_context().team.get_default_person_id() or None
-            )
-        except AppApiError as exc:
-            if exc.code == "person_not_found":
-                return CommandFileExecutionStatus(
-                    matches_selected_file=False,
-                    blocking_code="person_not_found",
-                    blocking_context={"identifier": person or ""},
-                )
-            raise
-        path = self._command_file_service().resolve_existing(file_id)
-        language_code = context.team.project.get_language_code()
-        command = logical_command_name(get_shared_commands_root(), path, language_code)
-        code, blocking_context, requirements = self._evaluate_run_target(
-            context, file_id, expected_revision, command
+        return command_file_execution_status(
+            self._get_context(), file_id, person, expected_revision
         )
-        return CommandFileExecutionStatus(
-            matches_selected_file=code is None,
-            requirements=requirements,
-            blocking_code=cast(Any, code),
-            blocking_context=blocking_context,
-        )
-
-    def _evaluate_run_target(
-        self,
-        context: Context,
-        file_id: str,
-        expected_revision: str,
-        command: str,
-    ) -> tuple[str | None, dict[str, str], list[CommandRequirement]]:
-        """Evaluate whether running ``command`` executes the selected file.
-
-        ``command`` is the logical command the caller intends to run (the run
-        request's command, or the file's own logical name for status). The check
-        confirms that resolving ``command`` for this member lands on exactly the
-        selected file, so a mismatched command name cannot ride a valid file
-        id/revision. Returns ``(blocking_code, blocking_context, requirements)``;
-        a ``None`` code means the file is the target and every requirement is
-        satisfied.
-        """
-        path = self._command_file_service().resolve_existing(file_id)
-        language_code = context.team.project.get_language_code()
-
-        data = path.read_bytes()
-        current = file_revision(data)
-        if current != expected_revision:
-            return "command_file_changed", {"current_revision": current}, []
-
-        resolved = (
-            resolve_command_path(command, language_code, context.person.person_id)
-            if command
-            else None
-        )
-        if resolved is None or resolved.resolve(strict=False) != path.resolve(
-            strict=False
-        ):
-            context_data = {"shadow_source": _shadow_source(resolved)}
-            if resolved is not None:
-                context_data["resolved_relative_path"] = _resolved_display(resolved)
-            return "command_file_shadowed", context_data, []
-
-        try:
-            source = data.decode("utf-8")
-        except UnicodeDecodeError:
-            return (
-                "command_file_invalid_source",
-                {
-                    "message": "Command source must be valid UTF-8.",
-                    "reason": "invalid_utf8",
-                },
-                [],
-            )
-        try:
-            validate_command_source(path.suffix, source)
-        except CommandValidationError as exc:
-            return exc.code, {"message": str(exc), **exc.context}, []
-
-        metadata = load_command_metadata(path, language_code)
-        requirements = _command_requirements(
-            path, metadata, self._requirement_facts(), context
-        )
-        if any(not requirement.satisfied for requirement in requirements):
-            return "command_requirement_missing", {}, requirements
-        return None, {}, requirements
 
     def get_routine_command_options(
         self, person: str | None = None
     ) -> RoutineCommandOptionsResponse:
-        """Return the catalog of commands selectable as member routine commands.
-
-        A command is a routine candidate when it self-declares ``routine: true``
-        in its metadata (frontmatter for ``.md`` / ``.yml``;
-        ``COMMAND_METADATA`` for ``.py``). Discovery scans member, workspace and
-        package-template command roots through a single pass, so both built-in
-        routine workflows (such as ``workflows/ticket_driven_workflow``) and
-        workspace-defined ones surface without a maintained file list.
-
-        The "runs with no caller-supplied input" rule is not used to hide
-        candidates: a declared routine that still has required arguments is
-        returned with ``routine_eligible=False`` so the UI can explain why it
-        cannot run, instead of silently dropping it.
-        """
-        context = self._command_options_context(person)
-        facts = self._requirement_facts()
-        language_code = context.team.project.get_language_code()
-
-        options: dict[str, CommandOption] = {}
-        for command, path in iter_effective_commands(
-            _routine_command_roots(context.person.person_id),
-            language_code,
-            person_id=context.person.person_id,
-        ):
-            metadata = load_command_metadata(path, language_code)
-            if not _is_routine_command(metadata):
-                continue
-            option = _command_option(
-                command=command,
-                path=path,
-                facts=facts,
-                context=context,
-                metadata=metadata,
-            )
-            options[command] = option.model_copy(
-                update={
-                    "routine_eligible": option.inputs.message != "required"
-                    and (
-                        option.inputs.defined_args == "hidden"
-                        or not any(argument.required for argument in option.arguments)
-                    )
-                }
-            )
-        ordered = sorted(options.values(), key=lambda option: option.command)
-        return RoutineCommandOptionsResponse(
-            options=ordered,
-            default_command=_default_routine_command(ordered),
-        )
-
-    def _command_options_context(self, person: str | None) -> Context:
-        context = self._get_context()
-        if not person:
-            return context
-        member = next(
-            (
-                team_member
-                for team_member in context.team.members
-                if person in {team_member.person_id, team_member.name}
-            ),
-            None,
-        )
-        if member is None:
-            raise AppApiError(
-                "person_not_found",
-                "person_not_found.plain",
-                params={"person": person},
-                context={
-                    "identifier": person,
-                    "available": [
-                        team_member.person_id for team_member in context.team.members
-                    ],
-                },
-            )
-        return context.clone_for(member)
-
-    def _requirement_facts(self) -> _RequirementFacts:
-        try:
-            project = self._get_context().team.project
-        except Exception:
-            return _RequirementFacts(services=frozenset())
-        return _RequirementFacts(
-            services=frozenset(
-                service.value
-                for service in Service
-                if project.is_available_service(service)
-            )
-        )
-
-    def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
-        facts = self._requirement_facts()
-        options: dict[str, CommandOption] = {}
-        for command, path in iter_effective_commands(
-            _command_roots(context.person.person_id),
-            context.team.project.get_language_code(),
-            person_id=context.person.person_id,
-        ):
-            if command in options:
-                continue
-            options[command] = _command_option(
-                command=command,
-                path=path,
-                facts=facts,
-                context=context,
-            )
-        return options
-
-    def _guard_run_target(self, request: CommandRunRequest, context: Context) -> None:
-        """Reject a manual run unless the request runs exactly the selected file.
-
-        Resolves ``request.command`` against the expected file id/revision, so a
-        file-changed, shadowing, command-mismatch or missing-requirement
-        condition all block the run. The frontend execution-status is only an
-        ahead-of-time hint; the backend is the authority.
-
-        Args:
-            request: The manual run request being guarded.
-            context: Context of the member the run executes as. It must be the
-                member the run itself resolves, or the guard would check a
-                different file than the one that ends up running.
-        """
-        assert request.expected_command_file_id is not None
-        assert request.expected_command_file_revision is not None
-        code, blocking_context, _ = self._evaluate_run_target(
-            context,
-            request.expected_command_file_id,
-            request.expected_command_file_revision,
-            request.command,
-        )
-        if code is not None:
-            raise AppApiError(
-                code,
-                "command_not_runtime_target",
-                status_code=409,
-                context=blocking_context,
-            )
+        return routine_command_options(self._get_context(), person)
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
         trace_id, outcome = await self._execute_command(
@@ -910,7 +631,7 @@ class AppRuntime:
             message=lambda _access: request.message,
             expected_workspace=request.expected_workspace,
             guard=(
-                partial(self._guard_run_target, request)
+                partial(guard_run_target, request)
                 if request.expected_command_file_id is not None
                 else None
             ),
@@ -1038,7 +759,7 @@ class AppRuntime:
             return resolve_person(context.team, person_identifier, allow_default=True)
         except PersonSelectionRequiredError as exc:
             available = list(exc.available)
-            self._event_bus.publish_event(
+            self.event_bus.publish_event(
                 "command.failed",
                 {
                     "command": command,
@@ -1053,7 +774,7 @@ class AppRuntime:
             ) from exc
         except PersonNotFoundError as exc:
             available = list(exc.available)
-            self._event_bus.publish_event(
+            self.event_bus.publish_event(
                 "command.failed",
                 {
                     "command": command,
@@ -1079,7 +800,7 @@ class AppRuntime:
         # whole run started and ended. Events carry the resolved person so an
         # omitted request person still shows the member the run belongs to.
         person_id = runner.context.person.person_id
-        self._event_bus.publish_event(
+        self.event_bus.publish_event(
             "command.started", {"command": execution.label, "person": person_id}
         )
         try:
@@ -1095,7 +816,7 @@ class AppRuntime:
             # Anything but a failed command is a defect: it stays a generic 500,
             # so internal wording never reaches the client.
             failed = isinstance(exc, CommandError | CliAgentExecutionError)
-            self._event_bus.publish_event(
+            self.event_bus.publish_event(
                 "command.failed",
                 {
                     "command": execution.label,
@@ -1107,7 +828,7 @@ class AppRuntime:
             if isinstance(exc, CommandError | CliAgentExecutionError):
                 raise execution.failure(exc) from exc
             raise
-        self._event_bus.publish_event(
+        self.event_bus.publish_event(
             "command.finished", {"command": execution.label, "person": person_id}
         )
         return outcome
@@ -1248,7 +969,7 @@ class AppRuntime:
             asyncio.run(build_snapshot(declaration, on_line=on_line))
         except (AgentEnvironmentError, ToolchainError) as exc:
             on_line(str(exc))
-            self._event_bus.publish_log(
+            self.event_bus.publish_log(
                 "WARNING", f"The agent environment build failed: {exc}"
             )
 
@@ -1298,7 +1019,7 @@ class AppRuntime:
                 )
                 channels_reset += 1
             members_reset += 1
-        self._event_bus.publish_event(
+        self.event_bus.publish_event(
             "chat.receive_state_reset",
             {"members": members_reset, "channels": channels_reset},
         )
@@ -1307,14 +1028,7 @@ class AppRuntime:
         )
 
     def get_transcript_settings(self) -> TranscriptSettingsStatus:
-        usage = (
-            self._diagnostics_store.transcript_usage()
-            if self._diagnostics_store is not None
-            else {
-                "total_size_bytes": 0,
-                "index_size_bytes": 0,
-            }
-        )
+        usage = self._diagnostics_store.transcript_usage()
         memory_size, memory_max_size = MemoryAuditStore().usage()
         return TranscriptSettingsStatus(
             detail=cast(Any, transcript_detail()),
@@ -1386,7 +1100,7 @@ class AppRuntime:
             response = VerifyService().verify(
                 config=status, team=team, team_error=team_error
             )
-            self._event_bus.publish_event(
+            self.event_bus.publish_event(
                 "verify.completed",
                 {
                     "ok": response.ok,
@@ -1413,7 +1127,7 @@ class AppRuntime:
                     context_error=context_error,
                     person_id=person_id,
                 )
-                self._event_bus.publish_event(
+                self.event_bus.publish_event(
                     "diagnostics.completed",
                     {
                         "ok": response.ok,
@@ -1438,62 +1152,6 @@ class AppRuntime:
             finally:
                 if context is not None:
                     await context.aclose()
-
-    def list_traces(
-        self,
-        *,
-        source: str | None = None,
-        person_id: str | None = None,
-        query: str | None = None,
-        attr_key: str | None = None,
-        attr_value: str | None = None,
-        limit: int = 200,
-    ) -> TracesResponse:
-        if self._diagnostics_store is None:
-            return TracesResponse(traces=[])
-        summaries = self._diagnostics_store.list_traces(
-            source=source,
-            person_id=person_id,
-            query=query,
-            attr_key=attr_key,
-            attr_value=attr_value,
-            limit=limit,
-            completion_summary=_completion_summary_lookup(),
-        )
-        traces = [TraceSummary.model_validate(summary) for summary in summaries]
-        return TracesResponse(traces=traces)
-
-    def get_trace_detail(self, trace_id: str) -> TraceDetailResponse:
-        records: list[TraceRecord] = []
-        summary = None
-        if self._diagnostics_store is not None:
-            raw_summary = self._diagnostics_store.get_summary(
-                trace_id, _completion_summary_lookup()
-            )
-            summary = (
-                TraceSummary.model_validate(raw_summary)
-                if raw_summary is not None
-                else None
-            )
-            records.extend(
-                _to_trace_record(item)
-                for item in collapse_assistant_streams(
-                    self._diagnostics_store.get_records(trace_id)
-                )
-            )
-        records.extend(self._memory_trace_records(trace_id))
-        records.sort(key=_trace_record_sort_key)
-        transcript_available = (
-            self._diagnostics_store.transcript_exists(trace_id)
-            if self._diagnostics_store is not None
-            else False
-        )
-        return TraceDetailResponse(
-            trace_id=trace_id,
-            summary=summary,
-            records=records,
-            transcript_available=transcript_available,
-        )
 
     async def troubleshoot(
         self, request: TroubleshootingRequest
@@ -1537,37 +1195,9 @@ class AppRuntime:
             trace_ids=[
                 candidate
                 for candidate in result.trace_ids
-                if self._trace_exists(candidate)
+                if candidate
+                and self._diagnostics_store.get_summary(candidate) is not None
             ],
-        )
-
-    def _trace_exists(self, trace_id: str) -> bool:
-        if not trace_id or self._diagnostics_store is None:
-            return False
-        return self._diagnostics_store.get_summary(trace_id) is not None
-
-    def get_global_records(self, limit: int = 200) -> TraceDetailResponse:
-        records: list[TraceRecord] = []
-        trace_id = ""
-        summary = None
-        if self._diagnostics_store is not None:
-            trace_id = self._diagnostics_store.latest_system_trace_id() or ""
-            if trace_id:
-                raw_summary = self._diagnostics_store.get_summary(trace_id)
-                summary = (
-                    TraceSummary.model_validate(raw_summary)
-                    if raw_summary is not None
-                    else None
-                )
-            records.extend(
-                _to_trace_record(item)
-                for item in self._diagnostics_store.global_records(limit=limit)
-            )
-        return TraceDetailResponse(
-            trace_id=trace_id,
-            summary=summary,
-            records=records,
-            transcript_available=bool(records),
         )
 
     def get_activity_history(
@@ -1632,11 +1262,7 @@ class AppRuntime:
             members=context.team.members,
             lifecycles=_activity_lifecycles_between(start_time, end_time),
             records=self._activity_records_between(start_time, end_time),
-            detail_available=(
-                self._diagnostics_store.transcript_exists
-                if self._diagnostics_store is not None
-                else lambda _trace_id: False
-            ),
+            detail_available=self._diagnostics_store.transcript_exists,
         )
 
     def _refresh_activity_events(
@@ -1674,7 +1300,7 @@ class AppRuntime:
             if end <= datetime.now(UTC):
                 _mark_activity_week_completed(period)
         except Exception as exc:
-            self._event_bus.publish_log("WARNING", f"Activity refresh failed: {exc}")
+            self.event_bus.publish_log("WARNING", f"Activity refresh failed: {exc}")
 
     def _activity_records_between(
         self, start: datetime, end: datetime
@@ -1695,59 +1321,17 @@ class AppRuntime:
             return _timestamp_in_range(value, start, end)
 
         records = ActivityEventStore().records_between(start, end)
-        if self._diagnostics_store is not None:
-            records.extend(
-                item
-                for item in self._diagnostics_store.records_between(includes=includes)
-                if item.get("type") == TARGET_RECORDED_EVENT_TYPE
-            )
+        records.extend(
+            item
+            for item in self._diagnostics_store.records_between(includes=includes)
+            if item.get("type") == TARGET_RECORDED_EVENT_TYPE
+        )
         records.extend(
             MemoryAuditStore().list_events(
                 since=start.isoformat(), until=end.isoformat()
             )
         )
         return records
-
-    def list_memory_events(
-        self,
-        *,
-        person_id: str | None = None,
-        doc_id: str | None = None,
-        action: str | None = None,
-        trace_id: str | None = None,
-        source: str | None = None,
-        query: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
-        limit: int = 200,
-    ) -> MemoryEventsResponse:
-        filters = {
-            "person_id": person_id,
-            "doc_id": doc_id,
-            "action": action,
-            "trace_id": trace_id,
-            "source": source,
-            "query": query,
-            "since": since,
-            "until": until,
-        }
-        raw_events = MemoryAuditStore().list_events(**filters, limit=limit)
-        return MemoryEventsResponse(
-            event_count=len(raw_events),
-            events=[_memory_event(item) for item in raw_events],
-        )
-
-    def _memory_trace_records(self, trace_id: str) -> list[TraceRecord]:
-        return [
-            _to_trace_record(item)
-            for item in MemoryAuditStore().list_events(trace_id=trace_id, limit=1000)
-        ]
-
-    def get_cli_agent_last_turns(self) -> list[CliAgentLastTurn]:
-        return last_cli_agent_turns(self._diagnostics_store)
-
-    def get_inference_failures(self) -> InferenceFailuresResponse:
-        return latest_inference_failures(self._diagnostics_store)
 
     async def get_cli_agent_usage(
         self, agent_name: str, refresh: bool = False
@@ -1764,10 +1348,10 @@ class AppRuntime:
         self._load_workspace_env()
         return YamlTeamLoader().load()
 
-    def _get_context(self, message: str = "") -> Context:
+    def _get_context(self) -> Context:
         self._load_workspace_env()
         try:
-            return create_context(message)
+            return create_context()
         except FileNotFoundError as exc:
             raise AppApiError(
                 "config_not_found",
@@ -1854,372 +1438,9 @@ class AppRuntime:
                 self._running_command_id = None
 
 
-def _command_roots(person_id: str) -> list[Path]:
-    """Physical roots whose logical command names seed the general catalog."""
-    from guildbotics.utils.person_id import person_config_directory
-
-    member_root = person_config_directory(person_id) / "commands"
-    try:
-        primary = get_primary_config_path(Path())
-    except WorkspaceNotConfiguredError:
-        return []
-    return [
-        primary / member_root,
-        get_shared_commands_root(),
-    ]
-
-
-def _routine_command_roots(person_id: str) -> list[Path]:
-    """Roots scanned for routine candidates.
-
-    Unlike :func:`_command_roots`, this includes the package templates so that
-    built-in routine workflows are discovered through the same single pass as
-    workspace-defined ones. The shared runtime resolver still decides which
-    file each logical command resolves to.
-    """
-    return [
-        *_command_roots(person_id),
-        get_template_path() / "commands",
-    ]
-
-
-def _is_routine_command(metadata: dict[str, Any]) -> bool:
-    return metadata.get("routine") is True
-
-
-def _default_routine_command(options: list[CommandOption]) -> str:
-    """Pick the routine command to seed / pre-select for a new member.
-
-    A single eligible candidate is the default on its own; with several, the
-    ticket workflow wins.
-    """
-    eligible = [option.command for option in options if option.routine_eligible]
-    if TICKET_WORKFLOW_COMMAND in eligible:
-        return TICKET_WORKFLOW_COMMAND
-    return eligible[0] if eligible else ""
-
-
 def _timestamp_in_range(value: str, start: datetime, end: datetime) -> bool:
     parsed = parse_timestamp(value)
     return parsed is not None and start <= parsed < end
-
-
-def _command_option(
-    *,
-    command: str,
-    path: Path,
-    facts: _RequirementFacts,
-    context: Context,
-    metadata: dict[str, Any] | None = None,
-) -> CommandOption:
-    if metadata is None:
-        metadata = load_command_metadata(path, context.team.project.get_language_code())
-    requirements = _command_requirements(path, metadata, facts, context)
-    description = str(metadata.get("description", ""))
-    try:
-        arguments = to_command_arguments(
-            parse_command_arguments(path, metadata, command)
-        )
-    except CommandError:
-        arguments = []
-    try:
-        inputs = to_command_inputs(parse_command_input_policy(metadata.get("inputs")))
-    except CommandError:
-        inputs = to_command_inputs(parse_command_input_policy(None))
-    return CommandOption(
-        command=command,
-        label=str(metadata.get("name") or default_command_label(command)),
-        description=description,
-        category=cast(Any, _command_category(command)),
-        source=cast(Any, command_source(path)),
-        path=path,
-        arguments=arguments,
-        inputs=inputs,
-        requirements=requirements,
-    )
-
-
-def _command_category(command: str) -> str:
-    if command.startswith("workflows/"):
-        return "workflow"
-    if command.startswith("functions/"):
-        return "function"
-    if command.startswith("examples/"):
-        return "example"
-    return "custom"
-
-
-def _shadow_source(resolved: Path | None) -> str:
-    """Classify why a resolved command differs from the selected shared file."""
-    if resolved is None:
-        return "workspace"
-    if is_within(resolved, get_template_path()):
-        return "template"
-    if is_within(resolved, get_shared_commands_root()):
-        return "workspace"
-    return "member"
-
-
-def _resolved_display(resolved: Path) -> str:
-    for root in (get_shared_commands_root(), get_template_path()):
-        if is_within(resolved, root):
-            return (
-                resolved.resolve(strict=False)
-                .relative_to(root.resolve(strict=False))
-                .as_posix()
-            )
-    return resolved.name
-
-
-def _command_requirements(
-    path: Path,
-    metadata: dict[str, Any],
-    facts: _RequirementFacts,
-    context: Context,
-) -> list[CommandRequirement]:
-    # Every command runs in the isolated environment, whatever else it needs.
-    needs = {
-        ("environment", ""),
-        *_command_requirement_kinds(path, metadata, context, set()),
-    }
-    requirements: list[CommandRequirement] = []
-    for kind in sorted({kind for kind, _ in needs}):
-        unmet = [
-            facts.unmet(kind, tool) for need, tool in sorted(needs) if need == kind
-        ]
-        requirements.append(
-            CommandRequirement(
-                kind=cast(Any, kind),
-                satisfied=all(reason is None for reason in unmet),
-                message=next((reason for reason in unmet if reason), ""),
-            )
-        )
-    return requirements
-
-
-def _command_requirement_kinds(
-    path: Path,
-    metadata: dict[str, Any],
-    context: Context,
-    seen: set[Path],
-) -> set[_Need]:
-    resolved_path = path.resolve(strict=False)
-    if resolved_path in seen:
-        return set()
-    seen.add(resolved_path)
-
-    kinds: set[_Need] = _direct_command_requirement_kinds(path, metadata, context)
-    kinds.update(_child_command_requirement_kinds(path, metadata, context, seen))
-    return kinds
-
-
-def _direct_command_requirement_kinds(
-    path: Path, metadata: dict[str, Any], context: Context
-) -> set[_Need]:
-    if path.suffix == ".md":
-        kind = _markdown_brain_requirement_kind(metadata, context)
-        if kind:
-            return {kind}
-        return set()
-    if path.suffix == ".py":
-        return _python_requirement_kinds(path)
-    return set()
-
-
-def _markdown_brain_requirement_kind(
-    metadata: dict[str, Any], context: Context
-) -> _Need | None:
-    return _brain_requirement_kind(metadata.get("brain", "default"), context)
-
-
-def _brain_requirement_kind(brain_value: object, context: Context) -> _Need | None:
-    brain = str(brain_value).strip()
-    if is_brain_disabled(brain):
-        return None
-
-    try:
-        tool = cli_agent_of(context.person.person_id, brain)
-    except Exception:
-        # A mapping that does not load names no need: running the command
-        # says why it cannot run.
-        return None
-    return ("llm", "") if tool is None else ("cli_agent", tool)
-
-
-def _child_command_requirement_kinds(
-    path: Path,
-    metadata: dict[str, Any],
-    context: Context,
-    seen: set[Path],
-) -> set[_Need]:
-    kinds: set[_Need] = set()
-    for entry in command_entries(metadata):
-        kinds.update(
-            _command_entry_requirement_kinds(path.parent, entry, context, seen)
-        )
-    return kinds
-
-
-def _command_entry_requirement_kinds(
-    base_dir: Path,
-    entry: object,
-    context: Context,
-    seen: set[Path],
-) -> set[_Need]:
-    if isinstance(entry, str):
-        return _referenced_command_requirement_kinds(base_dir, entry, context, seen)
-    if not isinstance(entry, dict):
-        return set()
-
-    if any(key in entry for key in {"prompt", "print"}):
-        return _inline_markdown_requirement_kinds(entry, context)
-    if "python" in entry:
-        return _inline_python_requirement_kinds(entry)
-    if any(key in entry for key in {"script", "to_html", "to_pdf"}):
-        return set()
-    command_text = entry.get("command")
-    if command_text is not None:
-        return _referenced_command_requirement_kinds(
-            base_dir, str(command_text), context, seen
-        )
-    path_text = entry.get("path") or entry.get("name")
-    if path_text is not None:
-        return _referenced_command_requirement_kinds(
-            base_dir, str(path_text), context, seen
-        )
-    return set()
-
-
-def _inline_markdown_requirement_kinds(entry: dict, context: Context) -> set[_Need]:
-    if "print" in entry:
-        return set()
-    kind = _brain_requirement_kind(entry.get("brain", "default"), context)
-    if kind is None:
-        return set()
-    return {kind}
-
-
-def _inline_python_requirement_kinds(entry: dict) -> set[_Need]:
-    code = entry.get("python")
-    if not isinstance(code, str):
-        return set()
-    try:
-        module = ast.parse(code)
-    except Exception:
-        return set()
-    return _python_module_requirement_kinds(module)
-
-
-def _referenced_command_requirement_kinds(
-    base_dir: Path,
-    command_text: str,
-    context: Context,
-    seen: set[Path],
-) -> set[_Need]:
-    command_name = _command_reference_name(command_text)
-    if not command_name:
-        return set()
-    try:
-        resolved = resolve_command_reference(base_dir, command_name, context)
-    except Exception:
-        return set()
-    metadata = load_command_metadata(resolved, context.team.project.get_language_code())
-    return _command_requirement_kinds(resolved, metadata, context, seen)
-
-
-def _command_reference_name(command_text: str) -> str:
-    try:
-        parts = shlex.split(command_text)
-    except ValueError:
-        return ""
-    return parts[0] if parts else ""
-
-
-def _python_requirement_kinds(path: Path) -> set[_Need]:
-    try:
-        module = ast.parse(path.read_text(encoding="utf-8"))
-    except Exception:
-        return set()
-    return _python_module_requirement_kinds(module)
-
-
-def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
-    names: set[str] = set()
-    attrs: set[str] = set()
-    modules: set[str] = set()
-    for node in ast.walk(module):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                modules.add(node.module)
-            for alias in node.names:
-                modules.add(alias.name)
-                names.add(alias.asname or alias.name.rsplit(".", 1)[-1])
-        elif isinstance(node, ast.Name):
-            names.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            attrs.add(node.attr)
-
-    # A command needs a kind of service when it uses its port.
-    kinds = {
-        service.value
-        for service in Service
-        if f"guildbotics.runtime.{service.value}" in modules
-        or service.value.title().replace("_", "") in names
-        or {f"get_{service.value}", f"create_{service.value}"} & attrs
-    }
-    if modules & {"guildbotics.intelligences.functions"} or attrs & {"get_brain"}:
-        kinds.add("llm")
-    if names & {"CliAgentBrain"}:
-        kinds.add("cli_agent")
-    # A Python command names no tool, so no tool of its own refuses it here.
-    return {(kind, "") for kind in kinds}
-
-
-#: What a command needs: a requirement kind, and for ``cli_agent`` the tool
-#: its brain runs ("" when the command does not say which).
-_Need = tuple[str, str]
-
-
-@dataclass
-class _RequirementFacts:
-    """What this device has for the requirement kinds, read once per listing.
-
-    Every command runs in the isolated agent environment, so ``environment``
-    is met when the device can start one, and its refusal is the reason when
-    it cannot. An AI CLI tool runs there too, so ``cli_agent`` is met unless
-    the tool itself cannot start a turn (not logged in), which is the reason
-    then; what the device refuses is the ``environment``'s to say.
-    """
-
-    #: The kinds of service the project names a provider for.
-    services: frozenset[str]
-
-    @cached_property
-    def device(self) -> DeviceStatus:
-        return device_status()
-
-    def unmet(self, kind: str, tool: str) -> str | None:
-        """None when the need is met, else why ("" when there is no reason
-        more specific than the kind)."""
-        if kind == "environment":
-            return self.device.refusal or None
-        if kind == "cli_agent":
-            return (self.device.tool(tool).refusal or None) if tool else None
-        return None if self._satisfied(kind) else ""
-
-    def _satisfied(self, kind: str) -> bool:
-        from guildbotics.utils.fileio import get_config_path
-
-        if kind in {service.value for service in Service}:
-            return kind in self.services
-        if kind == "llm":
-            from guildbotics.intelligences.llm_providers import provider_env_keys
-
-            return any(
-                os.getenv(env_var)
-                for env_var in provider_env_keys(get_config_path("")).values()
-            )
-        return True
 
 
 def _env_truthy(value: str) -> bool:
@@ -2255,131 +1476,6 @@ def _activity_lifecycles_between(
         for record in InteractiveSessionStore().list_between(start, end)
     )
     return lifecycles
-
-
-def _completion_summary_lookup() -> CompletionSummary:
-    """Resolve a trace's recorded run completion summary from its attributes.
-
-    The run records are read once per request, and only if some trace asks
-    (``resolve_trace_title`` asks only for a trace that names no PR / issue),
-    so listing traces stays cheap.
-    """
-    store = RunStore()
-    summaries: dict[tuple[str, str], str] | None = None
-
-    def lookup(attributes: Mapping[str, Any], person_id: str) -> str:
-        nonlocal summaries
-        if summaries is None:
-            summaries = store.summaries_by_subject()
-        return summaries.get((run_subject_id(attributes), person_id), "")
-
-    return lookup
-
-
-def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
-    attributes = item.get("attributes")
-    payload = item.get("payload")
-    return TraceRecord(
-        kind=str(item.get("kind", "")),
-        timestamp=str(item.get("timestamp", "")),
-        trace_id=item.get("trace_id"),
-        span_id=item.get("span_id"),
-        parent_id=item.get("parent_id"),
-        call_id=item.get("call_id"),
-        span=str(item.get("span") or ""),
-        source=str(item.get("source") or ""),
-        person_id=str(item.get("person_id") or ""),
-        command=str(item.get("command") or ""),
-        workflow=str(item.get("workflow") or ""),
-        type=str(item.get("type") or ""),
-        level=str(item.get("level") or ""),
-        message=str(item.get("message") or ""),
-        attributes=attributes if isinstance(attributes, dict) else {},
-        payload=payload if isinstance(payload, dict) else {},
-        presentation=normalize_trace_presentation(item),
-    )
-
-
-def _trace_record_sort_key(record: TraceRecord) -> datetime:
-    return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
-        tzinfo=UTC
-    )
-
-
-def _memory_event(item: dict[str, Any]) -> MemoryEvent:
-    raw_attributes = item.get("attributes")
-    raw_payload = item.get("payload")
-    attributes = (
-        cast(dict[str, Any], raw_attributes) if isinstance(raw_attributes, dict) else {}
-    )
-    payload = cast(dict[str, Any], raw_payload) if isinstance(raw_payload, dict) else {}
-    source = payload.get("source")
-    changed_fields = payload.get("changed_fields")
-    query_keywords = payload.get("query_keywords")
-    path = str(attributes.get("memory.path") or "")
-    action = str(
-        attributes.get("memory.action")
-        or str(item.get("type") or "").removeprefix("memory.")
-    )
-    return MemoryEvent(
-        timestamp=str(item.get("timestamp") or ""),
-        action=action,
-        person_id=str(item.get("person_id") or ""),
-        scope=str(attributes.get("memory.scope") or ""),
-        doc_id=str(attributes.get("memory.doc_id") or ""),
-        path=path,
-        title=str(payload.get("title") or ""),
-        summary=str(payload.get("summary") or ""),
-        kind=str(attributes.get("memory.kind") or ""),
-        trace_id=item.get("trace_id"),
-        run_id=str(attributes.get("run_id") or ""),
-        task_run_id=str(attributes.get("task_run_id") or ""),
-        source=[entry for entry in source if isinstance(entry, dict)]
-        if isinstance(source, list)
-        else [],
-        changed_fields=[
-            str(field) for field in changed_fields if isinstance(field, str)
-        ]
-        if isinstance(changed_fields, list)
-        else [],
-        query_keywords=[
-            str(keyword) for keyword in query_keywords if isinstance(keyword, str)
-        ]
-        if isinstance(query_keywords, list)
-        else [],
-        result_count=_optional_int(payload.get("result_count")),
-        duration_ms=_optional_float(payload.get("duration_ms")),
-        body_preview=_memory_body_preview(path),
-    )
-
-
-def _optional_int(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _optional_float(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _memory_body_preview(path: str, *, limit: int = 800) -> str:
-    parts = path.split("/")
-    if len(parts) < MIN_MEMORY_DOCUMENT_PATH_PARTS or parts[0] != "documents":
-        return ""
-    relative_parts = parts[1:]
-    if any(part in {"", ".", ".."} for part in relative_parts):
-        return ""
-    body_path = get_workspace_state_path("documents", *relative_parts) / "body.md"
-    if not body_path.is_file():
-        return ""
-    try:
-        body = body_path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    return body[:limit]
 
 
 def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:

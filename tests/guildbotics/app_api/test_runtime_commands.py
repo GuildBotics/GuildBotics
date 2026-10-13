@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from guildbotics.app_api import command_catalog as catalog_module
 from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api.command_files import encode_file_id, file_revision
 from guildbotics.app_api.errors import AppApiError
@@ -409,36 +410,6 @@ def test_command_options_apply_declared_argument_requiredness_and_defaults(
     ]
 
 
-def test_command_options_tolerate_invalid_argument_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/invalid.md",
-        "\n".join(
-            [
-                "---",
-                "args:",
-                "  language:",
-                "    required: true",
-                "    default: English",
-                "---",
-                "Use ${language}.",
-            ]
-        ),
-    )
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    option = next(
-        item
-        for item in runtime.get_command_options().options
-        if item.command == "invalid"
-    )
-
-    assert option.arguments == []
-
-
 def test_command_options_read_manual_input_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -614,7 +585,7 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
         reads.append(None)
         return agent_environment(**kwargs)
 
-    monkeypatch.setattr(runtime_module, "device_status", counted)
+    monkeypatch.setattr(catalog_module, "device_status", counted)
     runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
 
     def requirements(kind: str) -> dict[str, tuple[bool, str]]:
@@ -825,7 +796,7 @@ def test_routine_command_options_reuse_loaded_metadata(
     )
     context = _make_context([_make_person()])
     runtime = _runtime_with_context(monkeypatch, context)
-    original = runtime_module.load_command_metadata
+    original = catalog_module.load_command_metadata
     loads: list[Path] = []
 
     def counting_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
@@ -833,7 +804,7 @@ def test_routine_command_options_reuse_loaded_metadata(
             loads.append(path)
         return original(path, language_code)
 
-    monkeypatch.setattr(runtime_module, "load_command_metadata", counting_metadata)
+    monkeypatch.setattr(catalog_module, "load_command_metadata", counting_metadata)
 
     assert any(
         item.command == "my_routine"
@@ -1834,7 +1805,7 @@ def test_execution_status_member_override_is_shadowed(
     status = runtime.get_command_file_execution_status(file_id, "bot", revision)
 
     assert status.blocking_code == "command_file_shadowed"
-    assert status.blocking_context["shadow_source"] == "member"
+    assert status.blocking_context == {"shadow_source": "member"}
 
 
 def test_execution_status_rejects_shadowed_file_id(
@@ -2021,7 +1992,7 @@ def test_execution_status_uses_the_default_person(
     status = runtime.get_command_file_execution_status(file_id, None, revision)
 
     assert status.blocking_code == "command_file_shadowed"
-    assert status.blocking_context["shadow_source"] == "member"
+    assert status.blocking_context == {"shadow_source": "member"}
 
 
 def test_run_command_guards_the_file_of_the_default_person(
@@ -2313,7 +2284,7 @@ async def test_an_assistant_run_publishes_its_trace_boundary(
 
     response = await _author(runtime)
 
-    events = runtime._event_bus.snapshot_events()
+    events = runtime.event_bus.snapshot_events()
     assert [event["type"] for event in events] == [
         "command.started",
         "command.finished",
@@ -2355,7 +2326,7 @@ async def test_an_assistant_run_publishes_a_failed_boundary(
     with pytest.raises(raised):
         await _author(runtime)
 
-    events = runtime._event_bus.snapshot_events()
+    events = runtime.event_bus.snapshot_events()
     assert [event["type"] for event in events] == ["command.started", "command.failed"]
     assert events[-1]["payload"]["code"] == code
     assert (
@@ -2511,7 +2482,7 @@ async def test_a_command_that_cannot_be_resolved_never_ran(
 
     assert (caught.value.code, caught.value.status_code) == ("command_error", 400)
     assert "missing" in caught.value.message
-    assert runtime._event_bus.snapshot_events() == []
+    assert runtime.event_bus.snapshot_events() == []
     assert runtime._accepted_command_ids == set()
 
 

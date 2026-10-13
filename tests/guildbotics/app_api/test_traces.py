@@ -1,10 +1,11 @@
-"""Integration tests for the ``/diagnostics/traces`` endpoints."""
+"""The trace and device-record readings (``traces.py``) and their endpoints."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.traces import last_cli_agent_turns, latest_inference_failures
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Project, Team
@@ -36,7 +38,7 @@ HTTP_OK = 200
 def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    app = create_app(session_token="secret", event_bus=bus, diagnostics_store=store)
+    app = create_app(session_token="secret", runtime=AppRuntime(bus))
     return TestClient(app), bus
 
 
@@ -45,12 +47,10 @@ def _runtime_app(
 ) -> tuple[TestClient, EventBus, AppRuntime, DiagnosticsStore]:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     app = create_app(
         session_token="secret",
         runtime=runtime,
-        event_bus=bus,
-        diagnostics_store=store,
     )
     return TestClient(app), bus, runtime, store
 
@@ -321,7 +321,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     team = Team(
         project=Project(name="demo"),
         members=[
@@ -356,8 +356,6 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     app = create_app(
         session_token="secret",
         runtime=runtime,
-        event_bus=bus,
-        diagnostics_store=store,
     )
     # A workflow run is its shared task-run record, mirrored from its trace by
     # the execution boundary; its command events stay in local diagnostics.
@@ -576,7 +574,7 @@ def test_activity_history_reads_sessions_from_their_lifecycle_records(
     """Sessions come from the shared lifecycle records, in the window asked."""
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     team = Team(
         project=Project(name="demo"),
         members=[
@@ -720,3 +718,215 @@ def test_trace_detail_merges_memory_events(
     records = response.json()["records"]
     assert [record["kind"] for record in records] == ["event", "memory", "event"]
     assert records[1]["type"] == "memory.record"
+
+
+def _turn(
+    store: DiagnosticsStore,
+    *,
+    person: str = "alice",
+    tool: str = "codex",
+    model: str = "actual",
+    effort: str = "",
+    specified: bool | None = False,
+    timestamp: str = "2026-09-29T10:00:00Z",
+    status: str = "finished",
+    slot: str = "default",
+) -> None:
+    store.record(
+        {
+            "kind": "event",
+            "type": f"span.{status}",
+            "person_id": person,
+            "timestamp": timestamp,
+            "attributes": {
+                "agent.kind": "cli_agent",
+                "agent.adapter": tool,
+                "agent.slot": slot,
+            },
+            "payload": {"model": model, "model_specified": specified, "effort": effort},
+        }
+    )
+
+
+def _call(
+    store: DiagnosticsStore,
+    status: str,
+    timestamp: str,
+    *,
+    service: str = "llm",
+    provider: str = "openai",
+    category: str = "",
+) -> None:
+    store.record(
+        {
+            "kind": "event",
+            "type": f"span.{status}",
+            "timestamp": timestamp,
+            "attributes": {
+                "credential.provider": service,
+                **({"llm.provider": provider} if provider else {}),
+                **(
+                    {
+                        "error.category": category,
+                        "error.status_code": 429,
+                        "error.response": f"{category} answer",
+                    }
+                    if category
+                    else {}
+                ),
+            },
+            "payload": {},
+        }
+    )
+
+
+def test_latest_finished_or_failed_turn_per_member_and_tool(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl", memory_limit=1)
+    _turn(store, model="old", effort="low")
+    _turn(store, tool="claude", model="sonnet", specified=True, effort="high")
+    _turn(store, person="bob", model="bob-model", effort="xhigh")
+    # Unknown effective values on the latest turn must replace an older model.
+    _turn(
+        store,
+        model="",
+        status="failed",
+        slot="reviewer",
+        timestamp="2026-09-29T12:00:00Z",
+    )
+    # Arrival order and spelling of the timezone must not decide recency.
+    _turn(store, model="late-arriving-old", timestamp="2026-09-29T19:30:00+09:00")
+    _turn(
+        store, model="still-running", status="started", timestamp="2026-09-30T00:00:00Z"
+    )
+
+    turns = {(turn.person_id, turn.agent): turn for turn in last_cli_agent_turns(store)}
+    assert set(turns) == {("alice", "codex"), ("alice", "claude"), ("bob", "codex")}
+    assert turns["alice", "codex"].model == ""
+    assert turns["alice", "codex"].effort == ""
+    assert turns["alice", "codex"].timestamp == "2026-09-29T12:00:00Z"
+    assert turns["alice", "claude"].model == "sonnet"
+    assert turns["alice", "claude"].model_specified is True
+    assert turns["alice", "claude"].effort == "high"
+    assert turns["bob", "codex"].model == "bob-model"
+    assert turns["bob", "codex"].model_specified is False
+    assert turns["bob", "codex"].effort == "xhigh"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"person": ""},
+        {"tool": ""},
+        {"specified": None},
+        {"timestamp": "invalid"},
+    ],
+)
+def test_incomplete_turn_facts_are_not_inferred_from_current_settings(
+    tmp_path: Path, overrides: dict[str, Any]
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    _turn(store, **overrides)
+    assert last_cli_agent_turns(store) == []
+
+
+def test_each_keys_latest_call_decides_its_state(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl", memory_limit=1)
+    _call(store, "failed", "2026-10-08T10:00:00Z", category="credit")
+    # A later call of the same key that succeeds clears it.
+    _call(store, "finished", "2026-10-08T10:05:00Z")
+    _call(
+        store, "failed", "2026-10-08T10:00:00Z", provider="anthropic", category="credit"
+    )
+    # Arrival order and timezone spelling do not decide recency.
+    _call(
+        store,
+        "failed",
+        "2026-10-08T19:10:00+09:00",
+        provider="anthropic",
+        category="rate_limit",
+    )
+    _call(
+        store,
+        "finished",
+        "2026-10-08T19:00:00+09:00",
+        provider="anthropic",
+    )
+    _call(
+        store,
+        "failed",
+        "2026-10-08T10:00:00Z",
+        service="jev",
+        provider="",
+        category="authentication",
+    )
+    # A call given up on says nothing of the key.
+    _call(store, "failed", "2026-10-08T11:00:00Z", service="jev", provider="")
+    # Nor does a span of anything else.
+    store.record(
+        {
+            "kind": "event",
+            "type": "span.failed",
+            "timestamp": "2026-10-08T12:00:00Z",
+            "attributes": {"agent.kind": "cli_agent", "error.category": "credit"},
+        }
+    )
+
+    failures = latest_inference_failures(store)
+
+    assert failures.model_dump() == {
+        "llm": {
+            "anthropic": {
+                "category": "rate_limit",
+                "timestamp": "2026-10-08T19:10:00+09:00",
+                "status_code": 429,
+                "response": "rate_limit answer",
+            }
+        },
+        "jev": {
+            "category": "authentication",
+            "timestamp": "2026-10-08T10:00:00Z",
+            "status_code": 429,
+            "response": "authentication answer",
+        },
+    }
+
+
+def test_no_records_read_as_no_turns_and_no_failures(tmp_path: Path) -> None:
+    empty = DiagnosticsStore(tmp_path / "empty.jsonl")
+    assert last_cli_agent_turns(empty) == []
+    assert latest_inference_failures(empty).model_dump() == {"llm": {}, "jev": None}
+
+
+def test_device_record_endpoints_read_the_persisted_records(tmp_path: Path) -> None:
+    persisted = DiagnosticsStore(tmp_path / "diag.jsonl")
+    _turn(persisted, specified=True, effort="xhigh")
+    _call(persisted, "failed", "2026-10-08T10:00:00Z", category="credit")
+    client, _bus = _app(tmp_path)
+
+    with client:
+        turns = client.get("/intelligences/cli-agents/last-turns", headers=HEADERS)
+        failures = client.get("/intelligences/inference-failures", headers=HEADERS)
+
+    assert turns.status_code == HTTP_OK
+    assert turns.json() == [
+        {
+            "person_id": "alice",
+            "agent": "codex",
+            "model": "actual",
+            "model_specified": True,
+            "effort": "xhigh",
+            "timestamp": "2026-09-29T10:00:00Z",
+        }
+    ]
+    assert failures.status_code == HTTP_OK
+    assert failures.json() == {
+        "llm": {
+            "openai": {
+                "category": "credit",
+                "timestamp": "2026-10-08T10:00:00Z",
+                "status_code": 429,
+                "response": "credit answer",
+            }
+        },
+        "jev": None,
+    }

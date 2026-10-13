@@ -25,6 +25,7 @@ from websockets.sync.client import connect
 
 from guildbotics.app_api.api import _stream, create_app
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
@@ -37,6 +38,12 @@ TOKEN = "secret"
 class RuntimeStub:
     """Minimal runtime stub: websocket endpoints never touch it."""
 
+    system_service_run_id = "stub-service"
+
+    def __init__(self, event_bus: EventBus) -> None:
+        self.workspace_sync_service = WorkspaceSyncService()
+        self.event_bus = event_bus
+
     def stop_scheduler(self, *, force: bool = False) -> None:
         return None
 
@@ -47,12 +54,10 @@ class RuntimeStub:
         raise AssertionError("websocket endpoints never read the team")
 
 
-def _app(event_bus: EventBus, store: DiagnosticsStore | None = None):
+def _app(event_bus: EventBus):
     return create_app(
         session_token=TOKEN,
-        runtime=RuntimeStub(),
-        event_bus=event_bus,
-        diagnostics_store=store,
+        runtime=RuntimeStub(event_bus),
     )
 
 
@@ -236,9 +241,7 @@ def test_the_token_reaches_neither_the_server_log_nor_the_diagnostics(
     event_bus = EventBus(store=store)
     app = create_app(
         session_token=token,
-        runtime=RuntimeStub(),
-        event_bus=event_bus,
-        diagnostics_store=store,
+        runtime=RuntimeStub(event_bus),
     )
     logger = logging.getLogger("uvicorn.error")
     stderr = _Lines()

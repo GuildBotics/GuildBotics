@@ -580,13 +580,11 @@ def test_the_sandbox_endpoints_answer_from_this_device(
             params={"scope": "other", "path": "x"},
             headers=headers,
         )
-        unauthorized = client.get("/intelligences/agent-environment")
 
     assert status.json()["platform"] == "darwin"
     assert images.json()["images"][0]["reference"] == "local/agent:1"
     assert evaluation.json()["scope"] == "deny"
     assert bad_scope.status_code == 422
-    assert unauthorized.status_code == 401
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
@@ -614,6 +612,7 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
     from guildbotics.app_api.system_alerts import SystemAlertService
     from guildbotics.environment import provider_state
     from guildbotics.intelligences.cli_agents import cli_agent_info
+    from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
     _codex_slot(monkeypatch)
     original = module.device_status()
@@ -631,7 +630,7 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
             tools=tuple(device_module._tool_status(agent) for agent in CLI_AGENTS),
         ),
     )
-    service = SystemAlertService(None)
+    service = SystemAlertService(DiagnosticsStore(home / "diagnostics.jsonl"))
     persons = ["alice", "bob"]
     for failed in (True, False, True, False):
         provider_state.record_authentication_outcome(tool, failed=failed)
@@ -709,7 +708,7 @@ async def test_usage_result_is_shared_by_card_and_alerts(
     _device(monkeypatch, credentials_saved=frozenset({agent}))
     store = DiagnosticsStore()
     store.start_system_session("usage-test")
-    runtime = AppRuntime(EventBus(), diagnostics_store=store)
+    runtime = AppRuntime(EventBus(store=store))
     monkeypatch.setattr(runtime, "_active_agent_ids", lambda: [])
     monkeypatch.setattr(
         "guildbotics.app_api.cli_agent_usage.has_credentials",

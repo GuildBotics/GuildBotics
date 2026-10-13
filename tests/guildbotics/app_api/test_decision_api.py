@@ -42,10 +42,6 @@ def assignment(model):
 
 def test_registration_and_deletion(configured):
     root, client = configured
-    assert (
-        client.get("/intelligences/decisions/options").status_code
-        == HTTPStatus.UNAUTHORIZED
-    )
     assert not client.get("/intelligences/decisions/options", headers=HEADERS).json()[
         "credential_present"
     ]

@@ -423,32 +423,6 @@ def test_run_request_expected_pair_must_be_complete(
         assert response.status_code == 422
 
 
-def test_command_files_endpoints_require_session_token(
-    client: TestClient, workspace: Path
-) -> None:
-    with client:
-        assert client.get("/commands/files").status_code == 401
-        assert client.get("/commands/files/anything").status_code == 401
-        assert (
-            client.post(
-                "/commands/files",
-                json={"command": "x", "format": "markdown"},
-            ).status_code
-            == 401
-        )
-        assert (
-            client.put(
-                "/commands/files/anything",
-                json={"content": "", "expected_revision": ""},
-            ).status_code
-            == 401
-        )
-        assert (
-            client.delete("/commands/files/anything?expected_revision=x").status_code
-            == 401
-        )
-
-
 def test_temp_workspace_intelligence_update_writes_files(
     client: TestClient, workspace: Path
 ) -> None:

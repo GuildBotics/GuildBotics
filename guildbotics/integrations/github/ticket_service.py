@@ -79,6 +79,93 @@ query($owner: String!, $repo: String!, $number: Int!) {
 }
 """
 
+#: The board's single-select fields: Status, and the Agent field when set up.
+_PROJECT_FIELDS = """
+query($proj: ID!, $cursor: String) {
+  node(id: $proj) {
+    ... on ProjectV2 {
+      fields(first: 100, after: $cursor) {
+        nodes {
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options { id name description color }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+#: The board's items with their single-select values (Status and Agent, read
+#: by the field's name) and the issue each one holds.
+_BOARD_ITEMS = """
+query($proj: ID!, $cursor: String) {
+  node(id: $proj) {
+    ... on ProjectV2 {
+      items(first: 100, after: $cursor) {
+        nodes {
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                field {
+                  __typename
+                  ... on ProjectV2SingleSelectField { name }
+                }
+                name
+                updatedAt
+              }
+            }
+          }
+          content {
+            ... on Issue {
+              id
+              number
+              url
+              title
+              body
+              createdAt
+              assignees(first: 10) { nodes { id login name } }
+              timelineItems(last: 10, itemTypes: [ASSIGNED_EVENT]) {
+                nodes {
+                  ... on AssignedEvent {
+                    createdAt
+                    assignee { ... on User { login } }
+                  }
+                }
+              }
+              labels(first: 10) { nodes { name } }
+              repository { name owner { login } }
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+#: The board's issues and pull requests, with when they closed.
+_PROJECT_CONTENTS = """
+query($proj: ID!, $cursor: String) {
+  node(id: $proj) {
+    ... on ProjectV2 {
+      items(first: 100, after: $cursor) {
+        nodes { content {
+          __typename
+          ... on Issue { number title url state closedAt repository { name owner { login } } }
+          ... on PullRequest { number title url state closedAt mergedAt repository { name owner { login } } }
+        } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
 
 class GitHubTicketService(GitHubApi, TicketService):
     """GitHub Projects V2 ticket service using GraphQL and REST APIs."""
@@ -105,27 +192,9 @@ class GitHubTicketService(GitHubApi, TicketService):
 
         # What the board's reads fill in.
         self._project_node_id: str | None = None
+        self._status_field_id = ""
         self.columns: dict[str, str] = {}  # Task status -> option_id
         self._status_positions: dict[str, int] = {}  # Status option name -> position
-        self.custom_fields: dict[str, dict[str, Any]] = {}  # field_name -> field_info
-
-        #: Custom field definitions
-        agents = []
-        for member in team.members:
-            if member.person_type not in ["", "human"]:
-                agents.append(
-                    {
-                        "name": get_agent_token(member),
-                        "description": member.name,
-                    }
-                )
-
-        self._custom_field_definitions: dict[str, dict] = {
-            GitHubTicketService.FIELD_AGENT: {
-                "dataType": "SINGLE_SELECT",
-                "options": agents,
-            },
-        }
 
     # --------------------------------------------------------------------- #
     #   Tickets                                                             #
@@ -333,50 +402,36 @@ class GitHubTicketService(GitHubApi, TicketService):
         return self._project_node_id
 
     # --------------------------------------------------------------------- #
-    #   Status field & option utilities                                     #
+    #   The board's fields                                                  #
     # --------------------------------------------------------------------- #
 
-    async def _get_status_field(self) -> tuple[str, dict[str, dict]]:
-        proj_id = await self._project_node()
-
-        query = """
-        query($proj:ID!,$first:Int!,$after:String){
-        node(id:$proj){
-            ... on ProjectV2{
-            fields(first:$first, after:$after){
-                nodes{
-                ... on ProjectV2SingleSelectField{
-                    id
-                    name
-                    options{ id name }
-                }
-                }
-                pageInfo{ endCursor hasNextPage }
-            }
-            }
-        }
-        }
-        """
-
-        after: str | None = None
+    async def _project_connection(
+        self, query: str, connection: str
+    ) -> list[dict[str, Any]]:
+        """Every node of one of the board's connections, page by page."""
+        project = await self._project_node()
+        nodes: list[dict[str, Any]] = []
+        cursor: str | None = None
         while True:
-            data = await self.graphql(
-                query, {"proj": proj_id, "first": 100, "after": after}
-            )
-            fields = data["node"]["fields"]
-            for fld in fields["nodes"]:
-                if fld and fld["name"] == "Status":
-                    opts = {
-                        o["name"]: {"id": o["id"], "name": o["name"], "position": idx}
-                        for idx, o in enumerate(fld["options"])
-                    }
-                    return fld["id"], opts
+            data = await self.graphql(query, {"proj": project, "cursor": cursor})
+            page = data["node"][connection]
+            nodes.extend(node for node in page["nodes"] if node)
+            if not page["pageInfo"]["hasNextPage"]:
+                return nodes
+            cursor = page["pageInfo"]["endCursor"]
 
-            if not fields["pageInfo"]["hasNextPage"]:
-                break
-            after = fields["pageInfo"]["endCursor"]
+    async def _fields(self) -> dict[str, dict[str, Any]]:
+        """The board's single-select fields by name, read afresh."""
+        fields = await self._project_connection(_PROJECT_FIELDS, "fields")
+        return {field["name"]: field for field in fields}
 
-        raise ServiceError("Status field not found (after paginating all fields)")
+    async def _status_options(self) -> list[dict[str, Any]]:
+        """The Status field's options in board order; its id is kept for moves."""
+        status = (await self._fields()).get("Status")
+        if status is None:
+            raise ServiceError("Status field not found (after paginating all fields)")
+        self._status_field_id = status["id"]
+        return status["options"]
 
     def _cache_is_complete(self) -> bool:
         required = {Task.READY, Task.DONE}
@@ -388,32 +443,25 @@ class GitHubTicketService(GitHubApi, TicketService):
     async def _sync_status_columns(self) -> None:
         if self._cache_is_complete():
             return
-
-        _, columns_local = await self._get_status_field()
-
+        options = await self._status_options()
         self._status_positions = {
-            name: info["position"] for name, info in columns_local.items()
+            option["name"]: position for position, option in enumerate(options)
         }
-
-        current_set = set(columns_local)
-        self.columns = {}
+        ids = {option["name"]: option["id"] for option in options}
         status_by_lane = {
             self.LANE_READY: Task.READY,
             self.LANE_DONE: Task.DONE,
             self.LANE_WORKING: Task.IN_PROGRESS,
         }
-        for lane, option_name in self.lane_map.items():
-            if option_name in current_set:
-                self.columns[status_by_lane[lane]] = columns_local[option_name]["id"]
+        self.columns = {
+            status_by_lane[lane]: ids[name]
+            for lane, name in self.lane_map.items()
+            if name in ids
+        }
 
     async def get_statuses(self) -> list[str]:
-        """
-        Return the list of Status column names.
-
-        Ensures the Status column set is synced before fetching.
-        """
-        _, columns_local = await self._get_status_field()
-        return list(columns_local)
+        """Return the board's Status option names, read afresh."""
+        return [option["name"] for option in await self._status_options()]
 
     async def is_assignable_user(self, username: str) -> bool:
         """
@@ -441,55 +489,41 @@ class GitHubTicketService(GitHubApi, TicketService):
         user = resp.get("user") if isinstance(resp, dict) else None
         return bool(user and user.get("id"))
 
+    def _agent_options(self) -> list[dict[str, str]]:
+        """The Agent options of the configured non-human members."""
+        return [
+            {"name": get_agent_token(member), "description": member.name}
+            for member in self.team.members
+            if member.person_type not in ["", "human"]
+        ]
+
     async def get_agent_field_options(self) -> list[str]:
-        """Return the option names of the project's ``Agent`` custom field.
-
-        Read-only: unlike :meth:`ensure_custom_fields`, this does not create the
-        field if it is missing (an empty list is returned in that case).
-        """
-        fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketService.FIELD_AGENT, {})
-        options = agent_field.get("options", {})
-        return list(options) if isinstance(options, dict) else []
-
-    def _desired_agent_options(self) -> list[dict[str, str]]:
-        """The Agent options expected from configured non-human members."""
-        config = self._custom_field_definitions[GitHubTicketService.FIELD_AGENT]
-        return list(config.get("options", []))
+        """Return the option names of the board's ``Agent`` field, read afresh;
+        none when the field is missing, which only :meth:`sync_agent_field`
+        creates."""
+        state = await self.get_agent_field_state()
+        return [option["name"] for option in state["options"]]
 
     async def get_agent_field_state(self) -> dict[str, Any]:
-        """Return the current state of the project's ``Agent`` custom field.
+        """Return the current state of the board's ``Agent`` field, read afresh.
 
-        Read-only. ``options`` are the members currently registered as field
-        options; ``missing`` are configured non-human members not yet registered
-        (what :meth:`sync_agent_field` would add). Each entry is
+        ``options`` are the members currently registered as field options;
+        ``missing`` are configured non-human members not yet registered (what
+        :meth:`sync_agent_field` would add). Each entry is
         ``{"name": <agent token>, "description": <member name>}``.
         """
-        self.custom_fields = {}  # force a fresh read
-        fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketService.FIELD_AGENT)
-        desired = self._desired_agent_options()
-        desired_by_name = {opt["name"]: opt.get("description", "") for opt in desired}
-        if agent_field is None:
-            return {
-                "exists": False,
-                "options": [],
-                "missing": [
-                    {"name": opt["name"], "description": opt.get("description", "")}
-                    for opt in desired
-                ],
-            }
-        current_names = list(agent_field.get("options", {}).keys())
-        options = [
-            {"name": name, "description": desired_by_name.get(name, "")}
-            for name in current_names
-        ]
-        missing = [
-            {"name": opt["name"], "description": opt.get("description", "")}
-            for opt in desired
-            if opt["name"] not in current_names
-        ]
-        return {"exists": True, "options": options, "missing": missing}
+        agent = (await self._fields()).get(self.FIELD_AGENT)
+        current = [option["name"] for option in agent["options"]] if agent else []
+        desired = self._agent_options()
+        described = {option["name"]: option["description"] for option in desired}
+        return {
+            "exists": agent is not None,
+            "options": [
+                {"name": name, "description": described.get(name, "")}
+                for name in current
+            ],
+            "missing": [option for option in desired if option["name"] not in current],
+        }
 
     async def sync_agent_field(self) -> dict[str, Any]:
         """Create the ``Agent`` field (with options) or add missing options.
@@ -499,72 +533,29 @@ class GitHubTicketService(GitHubApi, TicketService):
         assignments; only the missing configured members are appended. Returns
         the refreshed state (same shape as :meth:`get_agent_field_state`).
         """
-        self.custom_fields = {}  # force a fresh read
-        fields = await self._get_custom_fields()
-        agent_field = fields.get(GitHubTicketService.FIELD_AGENT)
-        desired = self._desired_agent_options()
-
-        if agent_field is None:
-            await self._create_custom_field(
-                GitHubTicketService.FIELD_AGENT,
-                self._custom_field_definitions[GitHubTicketService.FIELD_AGENT],
+        agent = (await self._fields()).get(self.FIELD_AGENT)
+        current = agent["options"] if agent else []
+        names = {option["name"] for option in current}
+        additions = [
+            {**option, "color": "GRAY"}
+            for option in self._agent_options()
+            if option["name"] not in names
+        ]
+        if agent is None:
+            await self.graphql(
+                CREATE_PROJECT_FIELD,
+                {
+                    "proj": await self._project_node(),
+                    "name": self.FIELD_AGENT,
+                    "options": additions or None,
+                },
             )
-        else:
-            current = await self._fetch_single_select_options(agent_field["id"])
-            current_names = {opt["name"] for opt in current}
-            additions = [opt for opt in desired if opt["name"] not in current_names]
-            if additions:
-                merged: list[dict[str, str]] = [
-                    {
-                        "id": opt["id"],
-                        "name": opt["name"],
-                        "description": opt.get("description", ""),
-                        "color": opt.get("color", "GRAY"),
-                    }
-                    for opt in current
-                ] + [
-                    {
-                        "name": opt["name"],
-                        "description": opt.get("description", ""),
-                        "color": "GRAY",
-                    }
-                    for opt in additions
-                ]
-                await self._update_single_select_options(agent_field["id"], merged)
-
+        elif additions:
+            await self.graphql(
+                UPDATE_PROJECT_FIELD_OPTIONS,
+                {"field": agent["id"], "options": [*current, *additions]},
+            )
         return await self.get_agent_field_state()
-
-    async def _fetch_single_select_options(self, field_id: str) -> list[dict[str, str]]:
-        """Return the full option records (id/name/description/color) of a field."""
-        query = """
-        query($id: ID!) {
-          node(id: $id) {
-            ... on ProjectV2SingleSelectField {
-              options { id name description color }
-            }
-          }
-        }
-        """
-        data = await self.graphql(query, {"id": field_id})
-        node = data.get("node") or {}
-        return [opt for opt in (node.get("options") or []) if opt]
-
-    async def _update_single_select_options(
-        self, field_id: str, options: list[dict[str, str]]
-    ) -> None:
-        """Overwrite a single-select field's option set (must include existing ids)."""
-        await self.graphql(
-            UPDATE_PROJECT_FIELD_OPTIONS, {"field": field_id, "options": options}
-        )
-
-    async def get_column_id(self, column_name: str) -> str | None:
-        """
-        Return the option-ID corresponding to *column_name*.
-
-        Ensures the Status column set is synced before fetching.
-        """
-        await self._sync_status_columns()
-        return self.columns.get(column_name, None)
 
     def _status_from_option(self, option_name: str | None) -> str | None:
         """Map a board Status option to an internal lane by its board position.
@@ -594,161 +585,10 @@ class GitHubTicketService(GitHubApi, TicketService):
             return Task.IN_PROGRESS
         return None
 
-    def _issue_to_task(
-        self,
-        issue: dict,
-        status: str,
-        assignee: str | None,
-    ) -> Task:
-        """
-        Convert a GitHub Issue JSON to a Task instance.
-
-        Args:
-            issue (dict): The issue JSON payload.
-            status (str): The current status.
-            assignee (str | None): The assignee of the task.
-
-        Returns:
-            Task: The converted Task object.
-        """
-        return Task(
-            provider="github",
-            label=self.item(issue["url"], "ticket").label,
-            id=issue["id"],
-            url=issue.get("url"),
-            title=issue["title"],
-            description=issue.get("body", "") or "",
-            status=status,
-            created_at=issue["createdAt"],
-            assignee=assignee,
-        )
-
     async def get_all_tickets(self) -> list[dict]:
-        """Retrieve all tickets from the GitHub Projects V2 board."""
+        """Retrieve all items of the GitHub Projects V2 board."""
         await self._sync_status_columns()
-        await self.ensure_custom_fields()
-        proj_node = await self._project_node()
-
-        # Build GraphQL fragments for custom fields
-        custom_field_fragments = []
-        for _field_name, field_info in self.custom_fields.items():
-            data_type = field_info["dataType"]
-            if data_type == "SINGLE_SELECT":
-                # updatedAt is requested for every single-select field; only
-                # the Agent field's value is read, to date the assignment.
-                custom_field_fragments.append(
-                    """
-                ... on ProjectV2ItemFieldSingleSelectValue {
-                    field {
-                        __typename
-                        ... on ProjectV2SingleSelectField { id name }
-                    }
-                    name
-                    updatedAt
-                }
-                """
-                )
-            elif data_type == "NUMBER":
-                custom_field_fragments.append(
-                    """
-                ... on ProjectV2ItemFieldNumberValue {
-                    field {
-                        __typename
-                        ... on ProjectV2Field { id }
-                    }
-                    number
-                }
-                """
-                )
-            elif data_type == "DATE":
-                custom_field_fragments.append(
-                    """
-                ... on ProjectV2ItemFieldDateValue {
-                    field {
-                        __typename
-                        ... on ProjectV2Field { id }
-                    }
-                    date
-                }
-                """
-                )
-            elif data_type == "TEXT":
-                custom_field_fragments.append(
-                    """
-                ... on ProjectV2ItemFieldTextValue {
-                    field {
-                        __typename
-                        ... on ProjectV2Field { id }
-                    }
-                    text
-                }
-                """
-                )
-
-        # Fetch all items via cursor-based pagination
-        all_items: list[dict] = []
-        cursor: str | None = None
-        while True:
-            query = f"""
-            query($proj: ID!, $cursor: String) {{
-              node(id: $proj) {{
-                ... on ProjectV2 {{
-                  items(first: 100, after: $cursor) {{
-                    nodes {{
-                      fieldValues(first: 20) {{
-                        nodes {{
-                          ... on ProjectV2ItemFieldSingleSelectValue {{
-                            field {{
-                              __typename
-                              ... on ProjectV2SingleSelectField {{ name }}
-                            }}
-                            name
-                          }}
-                          {"".join(custom_field_fragments)}
-                        }}
-                      }}
-                      content {{
-                        ... on Issue {{
-                          id
-                          number
-                          url
-                          title
-                          body
-                          createdAt
-                          assignees(first:10) {{ nodes {{ id login name }} }}
-                          timelineItems(last: 10, itemTypes: [ASSIGNED_EVENT]) {{
-                            nodes {{
-                              ... on AssignedEvent {{
-                                createdAt
-                                assignee {{ ... on User {{ login }} }}
-                              }}
-                            }}
-                          }}
-                          labels(first:10)    {{ nodes {{ name }} }}
-                          repository {{
-                            name
-                            owner {{ login }}
-                          }}
-                        }}
-                      }}
-                    }}
-                    pageInfo {{
-                      hasNextPage
-                      endCursor
-                    }}
-                  }}
-                }}
-              }}
-            }}
-            """
-            variables = {"proj": proj_node, "cursor": cursor}
-            resp = await self.graphql(query, variables)
-            payload = resp["node"]["items"]
-            all_items.extend(payload["nodes"])
-            if not payload["pageInfo"]["hasNextPage"]:
-                break
-            cursor = payload["pageInfo"]["endCursor"]
-        return all_items
+        return await self._project_connection(_BOARD_ITEMS, "items")
 
     @cached_property
     def _login(self) -> str:
@@ -878,72 +718,49 @@ class GitHubTicketService(GitHubApi, TicketService):
         tasks: list[Task] = []
         task_metadata: dict[str, dict[str, Any]] = {}
         for it in all_items:
-            status: str | None = None
-            field_values = {}
-            field_updated_at: dict[str, str] = {}
-
-            for fv in it["fieldValues"]["nodes"]:
-                field = fv.get("field", {})
-                field_name = field.get("name")
-                field_id = field.get("id")
-
-                if field_name == "Status":
-                    status = self._status_from_option(fv["name"])
-                elif field_id in [info["id"] for info in self.custom_fields.values()]:
-                    custom_field_name = next(
-                        (
-                            name
-                            for name, info in self.custom_fields.items()
-                            if info["id"] == field_id
-                        ),
-                        None,
-                    )
-                    if custom_field_name:
-                        if "name" in fv:  # SINGLE_SELECT
-                            field_values[custom_field_name] = fv["name"]
-                            field_updated_at[custom_field_name] = (
-                                fv.get("updatedAt") or ""
-                            )
-                        elif "number" in fv:  # NUMBER
-                            field_values[custom_field_name] = fv["number"]
-                        elif "date" in fv:  # DATE
-                            field_values[custom_field_name] = fv["date"]
-                        elif "text" in fv:  # TEXT
-                            field_values[custom_field_name] = fv["text"]
-
-            if status is None or status == Task.DONE:
-                continue
-
+            # Single-select values by their field's name; other values are empty.
+            values = {
+                (value.get("field") or {}).get("name"): value
+                for value in it["fieldValues"]["nodes"]
+            }
+            status = self._status_from_option((values.get("Status") or {}).get("name"))
             issue = it["content"]
-            if not issue:
+            if status is None or status == Task.DONE or not issue:
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
             # Assignees and the Agent field are independent ways to assign this
             # member, and both can be set at once. Each active one carries its
             # own request time, so the most recent of them is the live request.
             by_assignee = any(self._is_me(str(a.get("login") or "")) for a in assignees)
-            agent_field = GitHubTicketService.FIELD_AGENT
-            by_agent_field = field_values.get(agent_field) == self._mention_token
+            agent = values.get(self.FIELD_AGENT) or {}
+            by_agent_field = agent.get("name") == self._mention_token
             is_assigned = by_assignee or by_agent_field
-            assignee = self.person.person_id if is_assigned else None
 
             assignment_times = []
             if by_assignee:
                 assignment_times.append(self._latest_assigned_event_time(issue))
             if by_agent_field:
-                assignment_times.append(field_updated_at.get(agent_field, ""))
+                assignment_times.append(agent.get("updatedAt") or "")
             assigned_at = max((time for time in assignment_times if time), default="")
 
-            task = self._issue_to_task(issue, status, assignee)
-            tasks.append(task)
-            assert task.id, "Task ID must be set"
-            task_metadata[task.id] = {
+            tasks.append(
+                Task(
+                    provider="github",
+                    label=self.item(issue["url"], "ticket").label,
+                    id=issue["id"],
+                    url=issue.get("url"),
+                    title=issue["title"],
+                    description=issue.get("body", "") or "",
+                    status=status,
+                    created_at=issue["createdAt"],
+                    assignee=self.person.person_id if is_assigned else None,
+                )
+            )
+            task_metadata[issue["id"]] = {
                 "assigned": is_assigned,
                 "assigned_at": assigned_at,
             }
-
-        tasks = sorted(tasks)
-        return tasks, task_metadata
+        return sorted(tasks), task_metadata
 
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
@@ -1017,7 +834,6 @@ class GitHubTicketService(GitHubApi, TicketService):
         return None
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
-
         project_id = await self._project_node()
         data = await self.graphql(
             ADD_PROJECT_ITEM, {"proj": project_id, "content": issue_node_id}
@@ -1028,21 +844,17 @@ class GitHubTicketService(GitHubApi, TicketService):
         """Set the ticket's Status to the lane's option; ``False`` when the
         lane has none (the working lane is not configured, or is not on the
         board)."""
-        proj_node = await self._project_node()
-        # update ProjectV2 item field value
-        assert task.id, "Task ID must be set before moving"
-        item_id = await self._get_project_item_id(task.id)
-        status_field_id, _ = await self._get_status_field()
-        option_id = await self.get_column_id(lane)
+        await self._sync_status_columns()
+        option_id = self.columns.get(lane)
         if not option_id:
             return False
-
+        assert task.id, "Task ID must be set before moving"
         await self.graphql(
             UPDATE_PROJECT_ITEM_STATUS,
             {
-                "proj": proj_node,
-                "item": item_id,
-                "field": status_field_id,
+                "proj": await self._project_node(),
+                "item": await self._get_project_item_id(task.id),
+                "field": self._status_field_id,
                 "opt": option_id,
             },
         )
@@ -1058,7 +870,10 @@ class GitHubTicketService(GitHubApi, TicketService):
         """The Project's issues and pull requests closed in ``[start, end]``,
         with the closed pull requests of every repository the Project holds
         items of: those reach the board only through their issue."""
-        items = await self._project_contents()
+        items = [
+            item.get("content") or {}
+            for item in await self._project_connection(_PROJECT_CONTENTS, "items")
+        ]
         closed: list[ClosedItem] = []
         for repository in sorted({_repository_of(item) for item in items} - {""}):
             closed.extend(await self._closed_pull_requests(repository, start))
@@ -1073,36 +888,6 @@ class GitHubTicketService(GitHubApi, TicketService):
             if (occurred := parse_timestamp(item.closed_at)) is not None
             and start <= occurred <= end
         ]
-
-    async def _project_contents(self) -> list[dict[str, Any]]:
-        query = """
-        query($proj: ID!, $cursor: String) {
-          node(id: $proj) {
-            ... on ProjectV2 {
-              items(first: 100, after: $cursor) {
-                nodes { content {
-                  __typename
-                  ... on Issue { number title url state closedAt repository { name owner { login } } }
-                  ... on PullRequest { number title url state closedAt mergedAt repository { name owner { login } } }
-                } }
-                pageInfo { hasNextPage endCursor }
-              }
-            }
-          }
-        }
-        """
-        project = await self._project_node()
-        contents: list[dict[str, Any]] = []
-        cursor: str | None = None
-        while True:
-            data = await self.graphql(query, {"proj": project, "cursor": cursor})
-            connection = data["node"]["items"]
-            contents.extend(
-                item.get("content") or {} for item in connection.get("nodes") or []
-            )
-            if not connection["pageInfo"]["hasNextPage"]:
-                return contents
-            cursor = str(connection["pageInfo"]["endCursor"])
 
     async def _closed_pull_requests(
         self, repository: str, start: datetime
@@ -1131,156 +916,6 @@ class GitHubTicketService(GitHubApi, TicketService):
             if item is not None:
                 closed.append(item)
         return closed
-
-    async def _get_custom_fields(self) -> dict[str, dict[str, Any]]:
-        """
-        Get all custom fields for the project.
-
-        Returns:
-            dict: Custom field information keyed by field name.
-        """
-        if self.custom_fields:
-            return self.custom_fields
-
-        proj_id = await self._project_node()
-
-        query = """
-        query($proj:ID!,$first:Int!,$after:String){
-            node(id:$proj){
-                ... on ProjectV2{
-                    fields(first:$first, after:$after){
-                        nodes{
-                            ... on ProjectV2Field{
-                                id
-                                name
-                                dataType
-                            }
-                            ... on ProjectV2SingleSelectField{
-                                id
-                                name
-                                dataType
-                                options{ id name description color }
-                            }
-                        }
-                        pageInfo{ endCursor hasNextPage }
-                    }
-                }
-            }
-        }
-        """
-
-        after: str | None = None
-        all_fields = {}
-
-        while True:
-            data = await self.graphql(
-                query, {"proj": proj_id, "first": 100, "after": after}
-            )
-            fields = data["node"]["fields"]
-
-            for field in fields["nodes"]:
-                if field and field["name"] in self._custom_field_definitions:
-                    field_info: dict[str, Any] = {
-                        "id": field["id"],
-                        "name": field["name"],
-                        "dataType": field["dataType"],
-                    }
-                    # Normalize SINGLE_SELECT options to a mapping: name -> optionId
-                    if field.get("dataType") == "SINGLE_SELECT":
-                        opts = field.get("options", []) or []
-                        field_info["options"] = {o["name"]: o["id"] for o in opts if o}
-                    all_fields[field["name"]] = field_info
-
-            if not fields["pageInfo"]["hasNextPage"]:
-                break
-            after = fields["pageInfo"]["endCursor"]
-
-        self.custom_fields = all_fields
-        return self.custom_fields
-
-    async def _create_custom_field(self, field_name: str, field_config: dict) -> dict:
-        """
-        Create a custom field in the project.
-
-        Args:
-            field_name: Name of the field to create.
-            field_config: Field configuration.
-
-        Returns:
-            Created field information.
-        """
-        proj_id = await self._project_node()
-
-        # Prepare options for SINGLE_SELECT fields
-        options: list[dict[str, str]] = field_config.get("options", [])
-
-        for opt in options:
-            if "color" not in opt:
-                opt["color"] = "GRAY"
-
-        variables = {
-            "proj": proj_id,
-            "name": field_name,
-            "dataType": field_config["dataType"],
-            "options": options if options else None,
-        }
-
-        data = await self.graphql(CREATE_PROJECT_FIELD, variables)
-        field = data["createProjectV2Field"]["projectV2Field"]
-
-        # Format field info
-        field_info = {
-            "id": field["id"],
-            "name": field["name"],
-            "dataType": field["dataType"],
-            "options": field.get("options", []),
-        }
-
-        return field_info
-
-    async def ensure_custom_fields(self) -> None:
-        """
-        Ensure all required custom fields exist, creating them if necessary.
-        Also, for existing SINGLE_SELECT fields, ensure options are up to date.
-        """
-        existing_fields = await self._get_custom_fields()
-        created_any = False
-
-        for field_name, field_config in self._custom_field_definitions.items():
-            if field_name not in existing_fields:
-                # Create field then refresh cache to get option IDs
-                await self._create_custom_field(field_name, field_config)
-                created_any = True
-            elif (
-                field_config.get("dataType") == "SINGLE_SELECT"
-                and "options" in field_config
-            ):
-                # For existing fields, check and update options if necessary
-                desired_options = field_config["options"]
-                current_options = existing_fields[field_name].get("options", {})
-                current_option_names = list(current_options.keys())
-                missing_options = {}
-                for opt in desired_options:
-                    if opt["name"] not in current_option_names:
-                        missing_options[opt["name"]] = opt.get("description", "")
-
-                if missing_options:
-                    message = t(
-                        "integrations.github.ticket_service.add_custom_field_options",
-                        field=field_name,
-                        options="\n"
-                        + "\n".join(
-                            f"  - {label}: {description}"
-                            for label, description in missing_options.items()
-                        ),
-                    )
-                    self.logger.warning(message)
-
-        # If any fields were created, refresh the local cache to include option IDs
-        if created_any:
-            # Clear cache and re-fetch
-            self.custom_fields = {}
-            await self._get_custom_fields()
 
 
 def _latest_workflow_status_suppresses_selection(

@@ -18,7 +18,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import (
@@ -29,8 +29,6 @@ from guildbotics.app_api.models import (
     CommandFilesResponse,
     CommandFileSummary,
     CommandInputs,
-    to_command_arguments,
-    to_command_inputs,
 )
 from guildbotics.commands.discovery import (
     command_source,
@@ -292,14 +290,10 @@ class CommandFileService:
             strict=False
         ):
             return
-        source = command_source(resolved) if resolved is not None else "workspace"
-        context = {"shadow_source": source}
-        if resolved is not None:
-            context["resolved_relative_path"] = _display_relative(resolved)
         raise _error(
             "command_file_shadowed",
             params={"command": command},
-            context=context,
+            context={"shadow_source": shadow_source(resolved)},
         )
 
     def _validate_command_name(self, command: str, extension: str) -> str:
@@ -435,28 +429,56 @@ class CommandFileService:
             format=FORMAT_BY_EXTENSION[path.suffix.lower()],
             content=data.decode("utf-8", errors="replace"),
             revision=file_revision(data),
-            arguments=_safe_arguments(path, metadata, command),
-            inputs=_safe_inputs(metadata),
+            arguments=command_arguments(path, metadata, command),
+            inputs=command_inputs(metadata),
         )
 
 
-def _safe_arguments(
+def command_arguments(
     path: Path, metadata: dict[str, Any], command_name: str
 ) -> list[CommandArgumentOption]:
+    """The arguments a command declares; none when the declaration is invalid."""
     try:
-        return to_command_arguments(
-            parse_command_arguments(path, metadata, command_name)
-        )
+        arguments = parse_command_arguments(path, metadata, command_name)
     except CommandError:
         return []
+    return [
+        CommandArgumentOption(
+            name=argument.name,
+            kind=cast(Any, argument.kind),
+            required=argument.required,
+            default=argument.default,
+        )
+        for argument in arguments
+    ]
 
 
-def _safe_inputs(metadata: dict[str, Any]) -> CommandInputs:
+def command_inputs(metadata: dict[str, Any]) -> CommandInputs:
+    """The inputs a command takes; the defaults when the declaration is invalid."""
     try:
         policy = parse_command_input_policy(metadata.get("inputs"))
     except CommandError:
         policy = parse_command_input_policy(None)
-    return to_command_inputs(policy)
+    return CommandInputs(
+        defined_args=cast(Any, policy.defined_args),
+        extra_args=cast(Any, policy.extra_args),
+        message=cast(Any, policy.message),
+    )
+
+
+def shadow_source(resolved: Path | None) -> str:
+    """Classify what a command resolves to instead of the selected shared file.
+
+    Args:
+        resolved: The file the command resolves to, or ``None`` when it
+            resolves to none.
+
+    Returns:
+        ``template`` or ``member`` for a file there, else ``workspace``.
+    """
+    if resolved is None or is_within(resolved, get_shared_commands_root()):
+        return "workspace"
+    return "template" if command_source(resolved) == "template" else "member"
 
 
 def file_revision(data: bytes) -> str:
@@ -465,13 +487,6 @@ def file_revision(data: bytes) -> str:
 
 def _relative_to(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
-
-
-def _display_relative(path: Path) -> str:
-    try:
-        return _relative_to(get_shared_commands_root(), path)
-    except ValueError:
-        return path.name
 
 
 def _error(

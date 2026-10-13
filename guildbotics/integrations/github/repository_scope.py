@@ -54,28 +54,17 @@ mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
 """
 
 CREATE_PROJECT_FIELD = """
-mutation(
-  $proj: ID!
-  $name: String!
-  $dataType: ProjectV2CustomFieldType!
-  $options: [ProjectV2SingleSelectFieldOptionInput!]
-) {
+mutation($proj: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
   createProjectV2Field(
     input: {
       projectId: $proj
       name: $name
-      dataType: $dataType
+      dataType: SINGLE_SELECT
       singleSelectOptions: $options
     }
   ) {
     projectV2Field {
-      ... on ProjectV2Field { id name dataType }
-      ... on ProjectV2SingleSelectField {
-        id
-        name
-        dataType
-        options { name description color }
-      }
+      ... on ProjectV2SingleSelectField { id }
     }
   }
 }

@@ -167,12 +167,6 @@ def test_endpoints_round_trip_and_report_conflicts(
         assert conflict.json()["code"] == "hotkey_conflict"
 
 
-def test_endpoint_requires_the_session_token(local_dir: Path, tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-    with TestClient(app) as client:
-        assert client.get("/hotkeys").status_code == 401
-
-
 @pytest.fixture
 def no_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)

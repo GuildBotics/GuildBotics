@@ -157,14 +157,17 @@ def test_the_command_does_not_select_the_workspace_again(monkeypatch) -> None:
 
 
 def _record_git_commit(monkeypatch) -> None:
-    async def git_commit(person, repo_path, message, workspace_mode):
-        return {
-            "repo_path": str(repo_path),
-            "message": message,
-            "cwd": str(member_module._call().cwd),
-        }
+    """Make ``git commit`` print what it would hand the member's git service."""
 
-    monkeypatch.setattr(member_module, "_git_commit", git_commit)
+    class Service:
+        async def commit(self, repo_path, message, workspace_mode, cwd):
+            payload = {"repo_path": str(repo_path), "message": message, "cwd": str(cwd)}
+            return SimpleNamespace(to_dict=lambda: payload)
+
+    async def git(person, workspace_mode, evidence, use, **_options):
+        return (await use(Service())).to_dict()
+
+    monkeypatch.setattr(member_module, "_git", git)
     monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
 
 

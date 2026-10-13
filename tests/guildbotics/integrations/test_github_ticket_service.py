@@ -26,7 +26,7 @@ from guildbotics.runtime.port import (
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import Ticket, WorkTarget
-from guildbotics.utils.i18n_tool import set_language, t
+from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.github_services import (
     API,
     LOGIN,
@@ -43,17 +43,14 @@ from tests.guildbotics.integrations.github_services import (
 )
 
 AGENT_FIELD = GitHubTicketService.FIELD_AGENT
+#: What marks the read of the board's fields.
+_FIELDS = "fields(first"
 
 
 class _Board(GitHubTicketService):
-    """The board's items as given, and the moves it is asked for: what the
-    selection decides from them, with every issue read from GitHub."""
+    """The board read from GitHub, and the moves it is asked for."""
 
-    items: list[dict[str, Any]]
     moved: list[tuple[str, str]]
-
-    async def get_all_tickets(self) -> list[dict[str, Any]]:
-        return self.items
 
     async def move(self, task: Task, lane: str) -> bool:
         self.moved.append((str(task.url), lane))
@@ -74,7 +71,18 @@ def _board(
     statuses: list[str] | None = None,
     github_username: str = LOGIN,
 ) -> tuple[_Board, ScriptedGitHub]:
-    github = ScriptedGitHub()
+    # Board column order (left -> right): options before the ready lane or
+    # at/after the done lane are ignored, and those between them are working
+    # lanes.
+    order = statuses if statuses is not None else ["Todo", "In Progress", "Done"]
+    github = (
+        ScriptedGitHub()
+        .on_graphql(_FIELDS, _status_field(*order))
+        .on_graphql(
+            "fieldValues",
+            {"node": {"items": {"nodes": items, "pageInfo": {"hasNextPage": False}}}},
+        )
+    )
     for item in items:
         number = item["content"]["number"]
         github.on(
@@ -91,20 +99,7 @@ def _board(
     person = member(github_username=github_username)
     board = {"lane_map": lane_map} if lane_map is not None else {}
     service = _Board(logging.getLogger("test"), person, team(person, **board))
-    # Board column order (left -> right), as _sync_status_columns() caches it:
-    # options before the ready lane or at/after the done lane are ignored, and
-    # those between them are working lanes.
-    order = statuses if statuses is not None else ["Todo", "In Progress", "Done"]
-    service._status_positions = {name: index for index, name in enumerate(order)}
-    service.custom_fields = {
-        AGENT_FIELD: {
-            "id": "agent-field",
-            "name": AGENT_FIELD,
-            "dataType": "SINGLE_SELECT",
-            "options": {},
-        }
-    }
-    service.items = items
+    service._project_node_id = "PROJECT"
     service.moved = []
     return service, github
 
@@ -119,18 +114,14 @@ def _item(
     agent_updated_at: str | None = None,
     assigned_events: list[dict[str, str]] | None = None,
     created_at: str = "2026-01-01T00:00:00Z",
-    extra_field_values: list[dict[str, Any]] | None = None,
+    field: str = AGENT_FIELD,
 ) -> dict:
-    field_values = [{"field": {"name": "Status"}, "name": status}]
+    field_values: list[dict[str, Any]] = [{"field": {"name": "Status"}, "name": status}]
     if agent:
-        agent_value: dict[str, Any] = {
-            "field": {"id": "agent-field", "name": AGENT_FIELD},
-            "name": agent,
-        }
+        agent_value: dict[str, Any] = {"field": {"name": field}, "name": agent}
         if agent_updated_at:
             agent_value["updatedAt"] = agent_updated_at
         field_values.append(agent_value)
-    field_values.extend(extra_field_values or [])
     return {
         "fieldValues": {"nodes": field_values},
         "content": {
@@ -212,39 +203,26 @@ async def test_default_todo_assigned_ticket_is_selected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_single_select_priority_field_does_not_break_ticket_retrieval(
-    monkeypatch,
-):
-    """A board carrying a single-select ``Priority`` field is simply ignored."""
-    service, _ = _board(
+async def test_the_agent_field_assigns_by_its_name(monkeypatch):
+    """A value of the field named Agent assigns the member it names; the same
+    value in another field does not."""
+    service, github = _board(
         monkeypatch,
         items=[
-            _item(
-                number=1,
-                status="Todo",
-                extra_field_values=[
-                    {
-                        "field": {"id": "priority-field", "name": "Priority"},
-                        "name": "P1",
-                    }
-                ],
-            )
+            _item(number=1, status="Todo", assignee=None, agent="⚙aiko"),
+            _item(number=2, status="Todo", assignee=None, agent="⚙aiko", field="QA"),
+            _item(number=3, status="Todo", assignee=None, agent="⚙other"),
         ],
     )
-    service.custom_fields["Priority"] = {
-        "id": "priority-field",
-        "name": "Priority",
-        "dataType": "SINGLE_SELECT",
-        "options": {},
-    }
 
-    task = await service.first_task()
+    [task] = await service.candidates()
 
-    assert task is not None
-    assert task.status == Task.READY
+    assert (task.url, task.assignee) == (issue_url(1), "aiko")
+    assert github.writes == []
 
 
-def test_project_tasks_are_ordered_by_creation_date(monkeypatch):
+@pytest.mark.asyncio
+async def test_project_tasks_are_ordered_by_creation_date(monkeypatch):
     service, _ = _board(
         monkeypatch,
         items=[
@@ -254,7 +232,7 @@ def test_project_tasks_are_ordered_by_creation_date(monkeypatch):
         ],
     )
 
-    tasks, _ = service._build_project_tasks(service.items)
+    tasks, _ = service._build_project_tasks(await service.get_all_tickets())
 
     assert [task.url for task in tasks] == [issue_url(2), issue_url(3), issue_url(1)]
 
@@ -788,7 +766,9 @@ async def test_mention_on_second_comment_page_reopens_the_ticket(monkeypatch):
     assert task is not None
     assert task.trigger_reason == "ready_lane"
     assert task.comments[-1].content == "⚙aiko one more thing"
-    assert [r.url.params["page"] for r in github.requests] == ["1", "2"]
+    assert [
+        r.url.params["page"] for r in github.requests if r.url.path != "/graphql"
+    ] == ["1", "2"]
 
 
 @pytest.mark.asyncio
@@ -879,18 +859,11 @@ async def test_app_member_is_recognized_under_the_graphql_login(monkeypatch):
 
 
 def _fields(options: list[dict] | None) -> dict:
-    """The Project's fields as ``_get_custom_fields`` reads them; ``None``
+    """The Project's fields with the Agent field's ``options``; ``None``
     means no Agent field."""
     nodes = []
     if options is not None:
-        nodes.append(
-            {
-                "id": "agent-field-id",
-                "name": AGENT_FIELD,
-                "dataType": "SINGLE_SELECT",
-                "options": options,
-            }
-        )
+        nodes.append({"id": "agent-field-id", "name": AGENT_FIELD, "options": options})
     return {
         "node": {
             "fields": {
@@ -921,42 +894,8 @@ def _agent_service(github: ScriptedGitHub, monkeypatch, *agents: tuple[str, str]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("language", ["en", "ja"])
-async def test_missing_custom_field_options_warning(language, monkeypatch, caplog):
-    github = ScriptedGitHub().on_graphql(
-        "dataType",
-        _fields([{"id": "option-id", "name": "Existing", "description": ""}]),
-    )
-    service = _agent_service(github, monkeypatch)
-    service._custom_field_definitions = {
-        AGENT_FIELD: {
-            "dataType": "SINGLE_SELECT",
-            "options": [
-                {"name": "Existing", "description": "Already configured"},
-                {"name": "Aiko", "description": "Developer"},
-                {"name": "Unassigned"},
-            ],
-        }
-    }
-    set_language(language)
-    try:
-        with caplog.at_level(logging.WARNING):
-            await service.ensure_custom_fields()
-        assert caplog.messages == [
-            t(
-                "integrations.github.ticket_service.add_custom_field_options",
-                field="Agent",
-                options="\n  - Aiko: Developer\n  - Unassigned: ",
-            )
-        ]
-    finally:
-        set_language("en")
-    assert github.writes == []
-
-
-@pytest.mark.asyncio
 async def test_get_agent_field_state_reports_missing_field(monkeypatch):
-    github = ScriptedGitHub().on_graphql("dataType", _fields(None))
+    github = ScriptedGitHub().on_graphql(_FIELDS, _fields(None))
     service = _agent_service(github, monkeypatch, ("bot1", "Bot One"))
 
     state = await service.get_agent_field_state()
@@ -972,7 +911,7 @@ async def test_get_agent_field_state_reports_missing_field(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_agent_field_state_lists_registered_and_missing(monkeypatch):
     github = ScriptedGitHub().on_graphql(
-        "dataType",
+        _FIELDS,
         _fields(
             [
                 {"id": "o0", "name": "⚙aiko", "description": "Aiko"},
@@ -1003,20 +942,11 @@ async def test_sync_agent_field_creates_field_with_options(monkeypatch):
             "createProjectV2Field",
             lambda variables: (
                 created.append(variables)
-                or {
-                    "createProjectV2Field": {
-                        "projectV2Field": {
-                            "id": "f1",
-                            "name": AGENT_FIELD,
-                            "dataType": "SINGLE_SELECT",
-                            "options": [],
-                        }
-                    }
-                }
+                or {"createProjectV2Field": {"projectV2Field": {"id": "f1"}}}
             ),
         )
         .on_graphql(
-            "dataType",
+            _FIELDS,
             lambda _: _fields(
                 [{"id": "o1", "name": "⚙aiko", "description": "Aiko"}]
                 if created
@@ -1052,9 +982,8 @@ async def test_sync_agent_field_adds_missing_option_preserving_existing(monkeypa
                 }
             ),
         )
-        .on_graphql("query($id: ID!)", {"node": {"options": [existing]}})
         .on_graphql(
-            "dataType",
+            _FIELDS,
             lambda _: _fields(
                 [existing]
                 + (
@@ -1204,7 +1133,7 @@ async def test_a_ticket_reads_its_lane_on_the_configured_board(
         _issues()
         .on_graphql("projectItems(first: 100)", _on_project(*items))
         .on_graphql(
-            "ProjectV2SingleSelectField",
+            _FIELDS,
             _status_field("Backlog", "Todo", "In Progress", "In Review", "Done"),
         )
     )
@@ -1574,9 +1503,7 @@ def _board_github() -> ScriptedGitHub:
             ADD_PROJECT_ITEM, {"addProjectV2ItemById": {"item": {"id": "ITEM_7"}}}
         )
         .on_graphql(UPDATE_PROJECT_ITEM_STATUS, {"updateProjectV2ItemFieldValue": {}})
-        .on_graphql(
-            "ProjectV2SingleSelectField", _status_field("Todo", "In Progress", "Done")
-        )
+        .on_graphql(_FIELDS, _status_field("Todo", "In Progress", "Done"))
     )
 
 

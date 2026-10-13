@@ -601,8 +601,16 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
             "Retry summary",
             "--keyword",
             "retry",
+            "--thread",
+            "https://chat.test/t/1",
             "--ticket",
-            "https://example.test/issues/1",
+            " https://example.test/issues/1 ",
+            "--ticket",
+            "  ",
+            "--pr",
+            "https://example.test/pull/2",
+            "--channel",
+            "https://chat.test/c/1",
             "--content-stdin",
         ],
         input="Retry after refresh.\n",
@@ -626,6 +634,24 @@ def test_member_memory_record_and_recall_cli(monkeypatch):
 
     assert recall.exit_code == 0
     assert json.loads(recall.output)["results"][0]["doc_id"] == doc_id
+
+    def get(*flags: str):
+        return runner.invoke(
+            member_module.member,
+            ["memory", "get", "--person", "aiko", "--id", doc_id, *flags],
+        )
+
+    team, either = get("--team"), get()
+
+    assert team.exit_code != 0
+    assert f"Memory document not found: {doc_id}" in team.output
+    assert either.exit_code == 0
+    assert json.loads(either.output)["meta"]["source"] == [
+        {"type": "ticket", "url": "https://example.test/issues/1"},
+        {"type": "pr", "url": "https://example.test/pull/2"},
+        {"type": "channel", "url": "https://chat.test/c/1"},
+        {"type": "thread", "url": "https://chat.test/t/1"},
+    ]
 
 
 def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):

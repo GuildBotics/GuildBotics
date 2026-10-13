@@ -20,6 +20,7 @@ from typing import Any
 from guildbotics.guest.jsonrpc import LineJsonRpcTransport
 from guildbotics.guest.turn import ProviderProcess, Turn
 from guildbotics.intelligences.agent_runtime.models import (
+    AgentEvent,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
@@ -29,6 +30,18 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    """The value as a mapping, or an empty one -- provider payloads are untyped."""
+    return value if isinstance(value, dict) else {}
+
+
+async def publish(emit: EventSink, event: AgentEvent) -> None:
+    """Hand ``event`` to ``emit``, awaiting it when the sink is asynchronous."""
+    result = emit(event)
+    if asyncio.iscoroutine(result):
+        await result
 
 
 @asynccontextmanager
@@ -67,6 +80,31 @@ class ProviderAdapter:
         self._timeout = timeout
         self._environment: Turn | None = None
 
+    async def run_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
+        """Run one turn; its provider and environment end with it."""
+        try:
+            return await self._run_active_turn(prompt, context, conversation, emit)
+        finally:
+            await self.close()
+
+    async def _run_active_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        raise NotImplementedError
+
     async def interrupt(self) -> None:
         """Stop the running turn: end it first, which revokes its member
         broker grant and its login, then its provider."""
@@ -97,27 +135,6 @@ class StreamJsonAdapter(ProviderAdapter):
     def __init__(self, *, executable: str, timeout: float) -> None:
         super().__init__(executable=executable, timeout=timeout)
         self._process: ProviderProcess | None = None
-
-    async def run_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        try:
-            return await self._run_active_turn(prompt, context, conversation, emit)
-        finally:
-            await self.close()
-
-    async def _run_active_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        raise NotImplementedError
 
     async def _stop_provider(self) -> None:
         if self._process is not None and self._process.returncode is None:

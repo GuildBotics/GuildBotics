@@ -16,6 +16,8 @@ from guildbotics.guest.jsonrpc import (
 )
 from guildbotics.guest.provider_process import (
     JsonRpcAdapter,
+    as_dict,
+    publish,
     turn_deadline,
 )
 from guildbotics.guest.turn import (
@@ -65,11 +67,6 @@ _PERMISSION_PROFILE = "guildbotics"
 #: pointed there -- it takes its inference over a WebSocket to chatgpt.com.
 _MODEL_PROVIDER = "guildbotics"
 _BROKER = cli_agent_info("codex").provision.credential_broker
-#: Where Codex looks for skills, relative to the home directory (`.agents`)
-#: and to its config folder (`skills`, `_skills`). Codex injects only the
-#: skill index into the prompt; the agent reads a skill's body itself, from
-#: inside the sandbox, so these must be readable or every skill outside the
-#: working directory is listed but unusable.
 #: The only effort-mapping keys ``turn/start`` accepts. Anything else is a
 #: configuration mistake and is reported rather than silently dropped.
 _TURN_SETTING_KEYS = frozenset({"model", "effort"})
@@ -116,18 +113,6 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         self._active_thread_id = ""
         self._active_turn_id = ""
 
-    async def run_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        try:
-            return await self._run_active_turn(prompt, context, conversation, emit)
-        finally:
-            await self.close()
-
     async def _run_active_turn(
         self,
         prompt: str,
@@ -144,9 +129,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
             approval=_APPROVAL_POLICY,
             details={"adapter_settings": _sandbox_overrides(environment.spec)},
         )
-        emitted = emit(policy_event)
-        if asyncio.iscoroutine(emitted):
-            await emitted
+        await publish(emit, policy_event)
         thread_id = await self._resolve_thread(context, conversation)
         self._active_thread_id = thread_id
         turn_settings = await self._turn_settings(context)
@@ -171,7 +154,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
             )
         except RpcError as exc:
             raise _agent_error_from_rpc(exc) from exc
-        turn = _dict(_dict(response).get("turn"))
+        turn = as_dict(as_dict(response).get("turn"))
         self._active_turn_id = _identifier(turn)
         events: list[AgentEvent] = []
         assistant_deltas: list[str] = []
@@ -179,11 +162,9 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         usage: dict[str, int] = {}
         finish_reason = "completed"
 
-        async def publish(event: AgentEvent) -> None:
+        async def record(event: AgentEvent) -> None:
             events.append(event)
-            result = emit(event)
-            if asyncio.iscoroutine(result):
-                await result
+            await publish(emit, event)
 
         try:
             async with turn_deadline("Codex", self._timeout, self.interrupt):
@@ -196,12 +177,12 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                             "Codex App Server stopped unexpectedly.",
                             rotate_session=True,
                         )
-                    params = _dict(message.get("params"))
+                    params = as_dict(message.get("params"))
                     if not _belongs_to_turn(params, thread_id, self._active_turn_id):
                         continue
                     event = _decode_notification(method, params)
                     if event is not None:
-                        await publish(event)
+                        await record(event)
                         if event.kind is AgentEventKind.ASSISTANT and event.message:
                             if event.name == "delta":
                                 assistant_deltas.append(event.message)
@@ -221,7 +202,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                                 raise refreshed from notification_error
                         raise notification_error
                     if method == "turn/completed":
-                        completed_turn = _dict(params.get("turn"))
+                        completed_turn = as_dict(params.get("turn"))
                         finish_reason = str(
                             completed_turn.get("status")
                             or params.get("status")
@@ -282,8 +263,6 @@ class CodexAppServerAdapter(JsonRpcAdapter):
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> Turn:
-        if self._transport.process is not None:
-            await self.close()
         environment = await start_turn(context, "codex")
         self._environment = environment
         try:
@@ -300,7 +279,6 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                 limit=STREAM_READ_LIMIT,
             )
         except TurnError as exc:
-            await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Codex App Server: {exc}",
@@ -308,17 +286,10 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         self._transport.start(process)
         try:
             await self._request("initialize", {"clientInfo": CLIENT_INFO})
-            await self._notify("initialized", {})
+            await self._transport.notify("initialized", {})
         except RpcError as exc:
-            await self.close()
             raise _agent_error_from_rpc(exc) from exc
-        except Exception:
-            await self.close()
-            raise
-        event = AgentEvent(AgentEventKind.PROCESS, "started")
-        result = emit(event)
-        if asyncio.iscoroutine(result):
-            await result
+        await publish(emit, AgentEvent(AgentEventKind.PROCESS, "started"))
         return environment
 
     async def _resolve_thread(
@@ -348,7 +319,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                 "thread/start",
                 {"cwd": str(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
             )
-        thread_id = _identifier(_dict(_dict(response).get("thread")))
+        thread_id = _identifier(as_dict(as_dict(response).get("thread")))
         if not thread_id:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROTOCOL,
@@ -440,7 +411,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         if self._model_catalog:
             return self._model_catalog
         try:
-            response = _dict(await self._request("model/list", {}))
+            response = as_dict(await self._request("model/list", {}))
         except RpcError:
             # Older Codex builds do not expose the catalog; skip validation.
             return {}
@@ -458,7 +429,9 @@ class CodexAppServerAdapter(JsonRpcAdapter):
 
     async def _check_account(self) -> None:
         try:
-            result = _dict(await self._request("account/read", {"refreshToken": False}))
+            result = as_dict(
+                await self._request("account/read", {"refreshToken": False})
+            )
         except RpcError as exc:
             raise _agent_error_from_rpc(exc) from exc
         requires_auth = result.get(
@@ -472,7 +445,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
 
     async def _check_rate_limits(self) -> None:
         try:
-            result = _dict(await self._request("account/rateLimits/read", {}))
+            result = as_dict(await self._request("account/rateLimits/read", {}))
         except RpcError:
             # API-key and non-ChatGPT providers may not expose this capability.
             return
@@ -492,9 +465,6 @@ class CodexAppServerAdapter(JsonRpcAdapter):
 
     async def _request(self, method: str, params: dict[str, Any]) -> Any:
         return await self._transport.request(method, params)
-
-    async def _notify(self, method: str, params: dict[str, Any]) -> None:
-        await self._transport.notify(method, params)
 
     async def _handle_reverse_request(
         self, method: str, request_id: Any, _params: dict[str, Any]
@@ -657,13 +627,13 @@ def _toml(value: Any) -> str:
 
 
 def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | None:
-    session_id = _identifier(_dict(params.get("thread"))) or str(
+    session_id = _identifier(as_dict(params.get("thread"))) or str(
         params.get("threadId", params.get("thread_id", "")) or ""
     )
-    turn_id = _identifier(_dict(params.get("turn"))) or str(
+    turn_id = _identifier(as_dict(params.get("turn"))) or str(
         params.get("turnId", params.get("turn_id", "")) or ""
     )
-    item = _dict(params.get("item"))
+    item = as_dict(params.get("item"))
     item_id = _identifier(item)
     if method == "thread/compacted" or (
         method == "item/completed" and item.get("type") == "contextCompaction"
@@ -717,8 +687,8 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
             details=details,
         )
     if method == "thread/tokenUsage/updated":
-        token_usage = _dict(params.get("tokenUsage", params.get("token_usage")))
-        latest = _dict(token_usage.get("last")) or _dict(token_usage.get("total"))
+        token_usage = as_dict(params.get("tokenUsage", params.get("token_usage")))
+        latest = as_dict(token_usage.get("last")) or as_dict(token_usage.get("total"))
         return AgentEvent(
             AgentEventKind.USAGE,
             "updated",
@@ -732,8 +702,8 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
             },
         )
     if method == "turn/completed":
-        turn = _dict(params.get("turn"))
-        usage = _usage(_dict(turn.get("usage")) or _dict(params.get("usage")))
+        turn = as_dict(params.get("turn"))
+        usage = _usage(as_dict(turn.get("usage")) or as_dict(params.get("usage")))
         return AgentEvent(
             AgentEventKind.TURN,
             "completed",
@@ -753,7 +723,7 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
             },
         )
     if method == "error":
-        error = _dict(params.get("error"))
+        error = as_dict(params.get("error"))
         return AgentEvent(
             AgentEventKind.FAILED,
             "provider",
@@ -776,10 +746,10 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
 
 
 def _belongs_to_turn(params: dict[str, Any], thread_id: str, turn_id: str) -> bool:
-    event_thread = _identifier(_dict(params.get("thread"))) or str(
+    event_thread = _identifier(as_dict(params.get("thread"))) or str(
         params.get("threadId", params.get("thread_id", "")) or ""
     )
-    event_turn = _identifier(_dict(params.get("turn"))) or str(
+    event_turn = _identifier(as_dict(params.get("turn"))) or str(
         params.get("turnId", params.get("turn_id", "")) or ""
     )
     return (not event_thread or event_thread == thread_id) and (
@@ -846,10 +816,6 @@ def _usage(raw: dict[str, Any]) -> dict[str, int]:
     return output
 
 
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
 def _identifier(value: dict[str, Any]) -> str:
     return str(
         value.get("id")
@@ -862,19 +828,7 @@ def _identifier(value: dict[str, Any]) -> str:
 
 
 def _agent_error_from_rpc(exc: RpcError) -> AgentRuntimeError:
-    error = _dict(exc.error)
-    data = _dict(error.get("data"))
-    identifiers = {
-        str(value).lower()
-        for value in (
-            error.get("type"),
-            error.get("category"),
-            data.get("type"),
-            data.get("category"),
-            data.get("code"),
-        )
-        if value is not None
-    }
+    identifiers = exc.identifiers(("type", "category"), ("type", "category", "code"))
     details = exc.provider_details(
         {
             "retryAfterAt": "retry_after_at",
@@ -900,7 +854,7 @@ def _agent_error_from_rpc(exc: RpcError) -> AgentRuntimeError:
             "Codex account rate limit is active.",
             details=details,
         )
-    if error.get("code") == METHOD_NOT_FOUND:
+    if as_dict(exc.error).get("code") == METHOD_NOT_FOUND:
         return AgentRuntimeError(
             AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
             "The installed Codex App Server does not support the required protocol.",
@@ -929,7 +883,7 @@ def _error_notification(
 
 
 def _turn_error(value: Any) -> AgentRuntimeError | None:
-    error = _dict(value)
+    error = as_dict(value)
     if not error:
         return None
     raw_code = error.get("codexErrorInfo", error.get("codex_error_info"))

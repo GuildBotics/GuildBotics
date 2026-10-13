@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 
 
@@ -39,8 +41,21 @@ def test_get_chat_subscriptions_reads_message_channels():
 def test_get_chat_subscriptions_takes_the_channel_name_from_the_channel():
     person = _Person(message_channels=[{"name": "dev-chat", "chat": {"enabled": True}}])
     assert get_chat_subscriptions(person) == [
-        {"channel_id": "", "channel_name": "dev-chat"}
+        {"channel_id": "", "channel_name": "dev-chat", "participation": "strict"}
     ]
+
+
+@pytest.mark.parametrize(
+    "stored, participation",
+    [(None, "strict"), ("  ", "strict"), ("unknown", "strict"), (" Social", "social")],
+)
+def test_a_channel_participates_strictly_unless_it_names_another_policy(
+    stored, participation
+):
+    person = _Person(
+        message_channels=[{"name": "dev-chat", "chat": {"participation": stored}}]
+    )
+    assert get_chat_subscriptions(person)[0]["participation"] == participation
 
 
 def test_a_channel_whose_chat_is_disabled_is_not_watched():

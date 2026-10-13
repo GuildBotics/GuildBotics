@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -14,10 +14,6 @@ from pydantic import (
 
 from guildbotics.app_api.activity_events import ActivityEventType
 from guildbotics.commands.formats import CommandFormat
-from guildbotics.commands.metadata import (
-    CommandArgumentMetadata,
-    CommandInputPolicy,
-)
 from guildbotics.drivers.live_state import LivePresentation
 from guildbotics.environment.contract import (
     LocalGrants,
@@ -767,30 +763,6 @@ class TroubleshootingRequest(AssistantTurnRequest):
 
 class TroubleshootingResponse(AssistantTurnResponse):
     trace_ids: list[str] = Field(default_factory=list)
-
-
-def to_command_inputs(policy: CommandInputPolicy) -> CommandInputs:
-    """Convert the core input policy into the App API wire model."""
-    return CommandInputs(
-        defined_args=cast(Any, policy.defined_args),
-        extra_args=cast(Any, policy.extra_args),
-        message=cast(Any, policy.message),
-    )
-
-
-def to_command_arguments(
-    arguments: list[CommandArgumentMetadata],
-) -> list[CommandArgumentOption]:
-    """Convert core argument metadata into App API wire models."""
-    return [
-        CommandArgumentOption(
-            name=argument.name,
-            kind=cast(Any, argument.kind),
-            required=argument.required,
-            default=argument.default,
-        )
-        for argument in arguments
-    ]
 
 
 class TraceSummary(BaseModel):

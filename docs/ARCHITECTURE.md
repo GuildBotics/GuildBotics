@@ -38,7 +38,7 @@ guildbotics/
 ├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
 ├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
 ├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control, live state
-├── setup/           # Workspace and member setup (setup_service, per-provider setup) used by the GUI
+├── setup/           # Workspace and member setup (setup_service) used by the GUI; per-provider setup lives in integrations/<provider>/setup.py
 ├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
 ├── capabilities/    # Member-side code-host/git/chat/memory operations + domain events, judgments (decisions/)
 ├── integrations/    # Provider descriptors and per-kind selection, the write scope, the receiving port; GitHub / Slack / local (the reference provider)

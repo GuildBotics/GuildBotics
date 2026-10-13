@@ -16,9 +16,7 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 def test_activity_refresh_forces_on_entry_and_throttles_normal_reads(
     monkeypatch, tmp_path
 ):
-    runtime = AppRuntime(
-        EventBus(), diagnostics_store=DiagnosticsStore(tmp_path / "diag.jsonl")
-    )
+    runtime = AppRuntime(EventBus(store=DiagnosticsStore(tmp_path / "diag.jsonl")))
     team = Team(project=Project(), members=[Person(person_id="aiko", name="Aiko")])
     calls: list[tuple[str, str]] = []
 
@@ -64,9 +62,7 @@ def test_activity_refresh_forces_on_entry_and_throttles_normal_reads(
     ],
 )
 def test_activity_history_rejects_invalid_sync_ranges(sync_start, sync_end, tmp_path):
-    runtime = AppRuntime(
-        EventBus(), diagnostics_store=DiagnosticsStore(tmp_path / "diag.jsonl")
-    )
+    runtime = AppRuntime(EventBus(store=DiagnosticsStore(tmp_path / "diag.jsonl")))
 
     with pytest.raises(AppApiError) as exc_info:
         runtime.get_activity_history(
@@ -100,7 +96,7 @@ def _shared_event(
 
 
 def _runtime_with_team(monkeypatch, store: DiagnosticsStore) -> AppRuntime:
-    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+    runtime = AppRuntime(EventBus(store=store))
     team = Team(
         project=Project(),
         members=[Person(person_id="alice", name="Alice", person_type="agent")],
@@ -129,7 +125,7 @@ def test_activity_records_keep_the_trace_of_every_device(tmp_path):
         _shared_event(
             events, "repository.push", trace_id, payload={"ref": "refs/heads/main"}
         )
-    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+    runtime = AppRuntime(EventBus(store=store))
 
     records = runtime._activity_records_between(
         datetime(2026, 7, 9, tzinfo=UTC), datetime(2026, 7, 11, tzinfo=UTC)
@@ -225,9 +221,7 @@ def test_activity_records_keep_the_whole_window_past_a_thousand_facts(tmp_path):
                 datetime(2026, 7, 6, tzinfo=UTC) + timedelta(minutes=5 * index)
             ).isoformat(),
         )
-    runtime = AppRuntime(
-        EventBus(), diagnostics_store=DiagnosticsStore(tmp_path / "diag.jsonl")
-    )
+    runtime = AppRuntime(EventBus(store=DiagnosticsStore(tmp_path / "diag.jsonl")))
 
     records = runtime._activity_records_between(
         datetime(2026, 7, 6, tzinfo=UTC), datetime(2026, 7, 13, tzinfo=UTC)

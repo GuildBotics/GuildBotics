@@ -350,12 +350,14 @@ class SchedulerLifecycle(_RuntimeLifecycle):
         try:
             scheduler.start()
         except Exception as exc:
+            # Fail the status before announcing the failure, so a reader that
+            # reacts to the event finds the status already failed.
+            with self._lock:
+                self._transition_locked("failed", running=False, error=str(exc))
             self._event_bus.publish_event(
                 "scheduler.failed",
                 {"error": str(exc), "traceback": traceback.format_exc()},
             )
-            with self._lock:
-                self._transition_locked("failed", running=False, error=str(exc))
         else:
             with self._lock:
                 if self._status.state != "stopping":
