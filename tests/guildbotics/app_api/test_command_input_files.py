@@ -476,14 +476,10 @@ def test_copy_command_input_file_refuses_directories_and_large_files(
     assert list(directory.iterdir()) == []
 
 
-def test_store_lives_where_no_microvm_writes_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_store_lives_where_no_microvm_writes_by_default(tmp_path: Path) -> None:
     """Under the machine-local state root: no grant may open it, and its
     session directory is mounted read-only into the commands it runs."""
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
 
     store = CommandInputFileStore()
     assert store.directory is None
@@ -569,11 +565,9 @@ def test_session_creation_refuses_an_exchange_name_swapped_after_validation(
 
 
 def test_the_working_directory_expands_the_home_and_refuses_relative_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
 
     # No shell sits in front of the Desktop's field, so `~` is expanded here.
     assert command_cwd(None) is None
@@ -592,8 +586,6 @@ def test_describe_command_input_paths_answers_as_the_turn_would(
     home = tmp_path / "home"
     (home / "Documents/GuildBotics/tmp").mkdir(parents=True)
     (home / "Desktop").mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     # The exchange directory needs no entry: GuildBotics grants it itself.
     monkeypatch.setattr(command_input_files, "load_shared_grants", SharedGrants)
     monkeypatch.setattr(command_input_files, "load_local_grants", LocalGrants)
@@ -653,8 +645,6 @@ def test_describe_command_input_paths_reaches_nothing_when_grants_are_broken(
     home.mkdir(exist_ok=True)
     # A grant that names a file cannot be resolved.
     (home / "notes").write_text("not a directory", encoding="utf-8")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(
         command_input_files,
         "load_shared_grants",

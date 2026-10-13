@@ -27,7 +27,6 @@ HEADERS = {"X-GuildBotics-Session-Token": "test"}
 def configured(tmp_path, monkeypatch):
     root = tmp_path / ".guildbotics/config"
     root.mkdir(parents=True)
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(root))
     monkeypatch.setattr(
         "guildbotics.app_api.api._resolve_existing_config_dir", lambda _: root

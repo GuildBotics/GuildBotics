@@ -68,7 +68,6 @@ def test_record_enforces_shared_boundary_guarantees(
     keeping error text available for cross-machine troubleshooting."""
     from guildbotics.utils.secret_store import KeyringSecretStore
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
         "OPENAI_API_KEY", "sk-live-secret-12345"
     )

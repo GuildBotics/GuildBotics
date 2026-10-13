@@ -122,12 +122,11 @@ def test_unscoped_records_do_not_implicitly_start_system_session(
     assert list(store.sessions_dir.glob("*.jsonl")) == []
 
 
-def test_transcript_settings_and_standard_filters(tmp_path, monkeypatch) -> None:
+def test_transcript_settings_and_standard_filters() -> None:
     from guildbotics.observability.session_transcripts import (
         write_transcript_settings,
     )
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     write_transcript_settings(detail="full", retention_days=14)
     assert transcript_detail() == "full"
     assert transcript_retention_days() == 14
@@ -144,7 +143,7 @@ def test_standard_stderr_keeps_last_eight_kibibytes() -> None:
     assert result == "x" * STANDARD_STDERR_TAIL_BYTES
 
 
-def test_prune_expired_keeps_active_system_session(tmp_path: Path, monkeypatch) -> None:
+def test_prune_expired_keeps_active_system_session(tmp_path: Path) -> None:
     store = SessionTranscriptStore(tmp_path / "run/diagnostics.jsonl")
     store.route(_record("command.started", trace_id="old-trace"))
     started = store.start_system_session("service-1")
@@ -158,7 +157,6 @@ def test_prune_expired_keeps_active_system_session(tmp_path: Path, monkeypatch) 
         write_transcript_settings,
     )
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     write_transcript_settings(detail="standard", retention_days=5)
 
     deleted = store.prune_expired()

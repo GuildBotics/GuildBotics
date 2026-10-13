@@ -185,7 +185,6 @@ def test_session_targets_cross_the_shared_boundary_masked_and_bounded(
 ):
     from guildbotics.utils.secret_store import KeyringSecretStore
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
         "OPENAI_API_KEY", "sk-live-secret-12345"
     )

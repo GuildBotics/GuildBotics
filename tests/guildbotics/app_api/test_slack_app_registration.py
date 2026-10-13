@@ -35,13 +35,6 @@ VERIFY = "/config/providers/slack/verify-tokens"
 
 
 @pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
 def client(workspace: Path) -> Iterator[TestClient]:
     with saved_workspace(workspace, {"chat_service": {"name": "slack"}}) as client:
         yield client

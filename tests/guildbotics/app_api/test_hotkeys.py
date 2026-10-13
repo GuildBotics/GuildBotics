@@ -20,9 +20,8 @@ from tests.guildbotics.app_api.test_api import RuntimeStub
 
 
 @pytest.fixture
-def local_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def local_dir(tmp_path: Path) -> Path:
     """This device's own corner of the workspace, which never leaves it."""
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     directory = tmp_path / ".guildbotics" / "local"
     directory.mkdir(parents=True)
     return directory
@@ -175,11 +174,8 @@ def test_endpoint_requires_the_session_token(local_dir: Path, tmp_path: Path) ->
 
 
 @pytest.fixture
-def no_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+def no_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
 
 def test_load_returns_defaults_without_workspace(no_workspace: None) -> None:

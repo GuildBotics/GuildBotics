@@ -43,7 +43,6 @@ def test_each_cli_selection_registers_the_workspace_without_prior_registry(
     workspace = tmp_path / "selected"
     workspace.mkdir()
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
-    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     if source == "environment":
         monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace))
     elif source == "active":
@@ -103,7 +102,6 @@ def test_active_workspace_file_uses_machine_state_root(monkeypatch, tmp_path):
 
 def test_apply_workspace_environment_sets_config_and_root(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
-    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     workspace = tmp_path / "project"
     workspace.mkdir()
 
@@ -120,7 +118,6 @@ def test_apply_workspace_for_cli_uses_active_when_no_explicit_source(
     monkeypatch, tmp_path
 ):
     _set_home(monkeypatch, tmp_path)
-    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
     workspace = tmp_path / "project"
     workspace.mkdir()
@@ -151,7 +148,6 @@ def test_apply_workspace_for_cli_keeps_explicit_workspace_env(monkeypatch, tmp_p
 
 def test_apply_workspace_for_cli_does_not_use_cwd(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
-    monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
     cwd = tmp_path / "repo"
     cwd.mkdir()

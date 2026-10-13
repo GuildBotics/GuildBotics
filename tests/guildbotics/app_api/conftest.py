@@ -3,9 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from guildbotics.app_api import runtime as runtime_module
 from guildbotics.app_api import verify as verify_module
+from guildbotics.app_api.api import create_app
+from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.environment.runtime import AgentEnvironmentHealth
 from guildbotics.environment.snapshot import SnapshotStatus
 from guildbotics.environment.status import (
@@ -16,11 +20,19 @@ from guildbotics.environment.status import (
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
 
 
-@pytest.fixture(autouse=True)
-def isolate_machine_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Keep App API service locks out of the developer's real home directory."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+@pytest.fixture
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Use the temporary workspace as the runtime's working directory."""
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def client(workspace: Path) -> TestClient:
+    """Bind a client to a real runtime rooted at the temporary workspace."""
+    return TestClient(
+        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
+    )
 
 
 class AgentEnvironmentStandIn:

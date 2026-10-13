@@ -47,11 +47,6 @@ CONFIG = "config/team/project.yml"
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A workspace and a home directory of its own, both temporary."""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     root = tmp_path / "workspace"
     path = root / ".guildbotics" / CONFIG
     path.parent.mkdir(parents=True, exist_ok=True)

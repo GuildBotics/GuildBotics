@@ -29,9 +29,6 @@ from fastapi.testclient import TestClient
 
 import guildbotics.app_api.avatar as avatar_module
 import guildbotics.workspace.config_repository as config_repository_module
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
@@ -136,24 +133,6 @@ ELSEWHERE |= {
     ("POST", f"/config/providers/{provider}/{operation}"): reason
     for (provider, operation), reason in PROVIDER_OPERATIONS.items()
 }
-
-
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
-def client(workspace: Path) -> TestClient:
-    return TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
 
 
 @pytest.fixture

@@ -33,13 +33,8 @@ class FakeCredentialApi:
         self.values.pop(target, None)
 
 
-def _workspace(tmp_path: Path, monkeypatch, *, env_lines: str = "") -> Path:
-    """Create a workspace dir and keep runtime env vars from leaking out."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    for key in ("GUILDBOTICS_CONFIG_DIR",):
-        monkeypatch.setenv(key, "placeholder")
-        monkeypatch.delenv(key)
+def _workspace(tmp_path: Path) -> Path:
+    """Create a workspace directory with its configuration directory."""
     workspace = tmp_path / "workspace"
     (workspace / ".guildbotics" / "config").mkdir(parents=True)
     return workspace
@@ -49,8 +44,8 @@ def _config_dir(workspace: Path) -> Path:
     return workspace / ".guildbotics" / "config"
 
 
-def test_secrets_group_is_registered_on_main_cli(tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+def test_secrets_group_is_registered_on_main_cli(tmp_path):
+    workspace = _workspace(tmp_path)
 
     result = CliRunner().invoke(
         main, ["secrets", "--workspace", str(workspace), "status"]
@@ -60,8 +55,8 @@ def test_secrets_group_is_registered_on_main_cli(tmp_path, monkeypatch):
     assert "os_secret_store: available" in result.output
 
 
-def test_status_reports_os_secret_store(fake_keyring, tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+def test_status_reports_os_secret_store(fake_keyring, tmp_path):
+    workspace = _workspace(tmp_path)
 
     result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "status"])
 
@@ -70,8 +65,8 @@ def test_status_reports_os_secret_store(fake_keyring, tmp_path, monkeypatch):
     assert "locked: no" in result.output
 
 
-def test_set_stores_in_keychain(fake_keyring, tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+def test_set_stores_in_keychain(fake_keyring, tmp_path):
+    workspace = _workspace(tmp_path)
     KeyringSecretStore(_config_dir(workspace)).ensure_initialized()
 
     result = CliRunner().invoke(
@@ -82,8 +77,8 @@ def test_set_stores_in_keychain(fake_keyring, tmp_path, monkeypatch):
     assert KeyringSecretStore(_config_dir(workspace)).get("MY_TOKEN") == "new-secret"
 
 
-def test_list_and_delete(fake_keyring, tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+def test_list_and_delete(fake_keyring, tmp_path):
+    workspace = _workspace(tmp_path)
     store = KeyringSecretStore(_config_dir(workspace))
     store.set("B_TOKEN", "b")
     store.set("A_TOKEN", "a")
@@ -100,8 +95,8 @@ def test_list_and_delete(fake_keyring, tmp_path, monkeypatch):
     assert store.keys() == ["B_TOKEN"]
 
 
-def test_export_and_import_roundtrip(fake_keyring, tmp_path, monkeypatch):
-    source = _workspace(tmp_path, monkeypatch)
+def test_export_and_import_roundtrip(fake_keyring, tmp_path):
+    source = _workspace(tmp_path)
     store = KeyringSecretStore(_config_dir(source))
     store.set("OPENAI_API_KEY", "sk-secret")
     runner = CliRunner()
@@ -124,13 +119,13 @@ def test_export_and_import_roundtrip(fake_keyring, tmp_path, monkeypatch):
     assert KeyringSecretStore(_config_dir(target)).get("OPENAI_API_KEY") == "sk-secret"
 
 
-def test_export_and_import_roundtrip_multiline_pem(fake_keyring, tmp_path, monkeypatch):
+def test_export_and_import_roundtrip_multiline_pem(fake_keyring, tmp_path):
     pem = (
         "-----BEGIN RSA PRIVATE KEY-----\n"
         'MIIEow+abc/123 "quoted" back\\slash\n'
         "-----END RSA PRIVATE KEY-----\n"
     )
-    source = _workspace(tmp_path, monkeypatch)
+    source = _workspace(tmp_path)
     KeyringSecretStore(_config_dir(source)).set("ALICE_GITHUB_PRIVATE_KEY", pem)
     runner = CliRunner()
     export_file = tmp_path / "secrets-export.env"
@@ -154,7 +149,7 @@ def test_export_and_import_roundtrip_multiline_pem(fake_keyring, tmp_path, monke
 
 
 def test_windows_import_accepts_large_pem(tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+    workspace = _workspace(tmp_path)
     api = FakeCredentialApi()
     manager = WindowsCredentialManager(api)
     KeyringSecretStore(_config_dir(workspace), keychain=manager).ensure_initialized()
@@ -183,7 +178,7 @@ def test_windows_import_accepts_large_pem(tmp_path, monkeypatch):
 
 
 def test_windows_import_prevalidates_all_values(tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+    workspace = _workspace(tmp_path)
     api = FakeCredentialApi()
     manager = WindowsCredentialManager(api)
     KeyringSecretStore(_config_dir(workspace), keychain=manager).ensure_initialized()
@@ -240,8 +235,8 @@ def test_secret_size_error_is_translated_in_english_and_japanese():
     )
 
 
-def test_export_to_stdout(fake_keyring, tmp_path, monkeypatch):
-    workspace = _workspace(tmp_path, monkeypatch)
+def test_export_to_stdout(fake_keyring, tmp_path):
+    workspace = _workspace(tmp_path)
     KeyringSecretStore(_config_dir(workspace)).set("OPENAI_API_KEY", "sk-secret")
 
     result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "export"])
@@ -261,7 +256,7 @@ class TestHubTransfers:
 
     def _connected(self, tmp_path, monkeypatch, hub_secrets, order=None):
         """A workspace whose hub is this same machine."""
-        workspace = _workspace(tmp_path, monkeypatch)
+        workspace = _workspace(tmp_path)
         monkeypatch.setattr(
             secrets_cli,
             "hub_remote_url",
@@ -346,7 +341,7 @@ class TestHubTransfers:
         )
 
     def test_a_workspace_with_no_hub_says_so(self, fake_keyring, tmp_path, monkeypatch):
-        workspace = _workspace(tmp_path, monkeypatch)
+        workspace = _workspace(tmp_path)
         monkeypatch.setattr(secrets_cli, "hub_remote_url", lambda *_: None)
 
         result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "pull"])

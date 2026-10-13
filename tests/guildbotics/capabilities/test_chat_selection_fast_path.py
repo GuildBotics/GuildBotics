@@ -17,8 +17,7 @@ from tests.guildbotics.capabilities.test_chat_selection import (
 
 
 @pytest.fixture
-def chat(tmp_path, monkeypatch):
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+def chat():
     context = FakeInvokeContext("reply")
     _set_incoming_event(context)
     store = FileConversationStateStore()

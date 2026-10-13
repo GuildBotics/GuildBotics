@@ -59,17 +59,6 @@ from guildbotics.utils.workspace_sync_port import (
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    return tmp_path
-
-
 @pytest.fixture(autouse=True)
 def brief_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shorten the wait so a refusal is immediate rather than half a minute.
@@ -164,27 +153,27 @@ def _existing_shared_files(workspace: Path) -> Path:
 
 @pytest.mark.parametrize("helper", sorted(PORT_WRITES))
 def test_every_port_write_waits_for_the_other_writer(
-    workspace: Path, helper: str
+    tmp_path: Path, helper: str
 ) -> None:
     """Checked on every entry, because one unguarded entry is the whole hole."""
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
 
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         with pytest.raises(SharedWriteBusyError):
             PORT_WRITES[helper](shared)
 
 
 @pytest.mark.parametrize("helper", sorted(PORT_WRITES))
 def test_the_same_change_succeeds_when_nobody_else_is_writing(
-    workspace: Path, helper: str
+    tmp_path: Path, helper: str
 ) -> None:
     """The wait is about the other writer, not about the path or the payload."""
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
 
     PORT_WRITES[helper](shared)
 
 
-def test_announcing_a_change_already_made_takes_no_lock(workspace: Path) -> None:
+def test_announcing_a_change_already_made_takes_no_lock(tmp_path: Path) -> None:
     """Excluding the queue after the file changed protects nothing.
 
     A writer that renames or unlinks a shared file itself holds the lock across
@@ -192,25 +181,25 @@ def test_announcing_a_change_already_made_takes_no_lock(workspace: Path) -> None
     only make an announcement look like the protection it is not, and would
     stall a writer already inside a wider span of its own.
     """
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
 
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         change = notify_shared_state_changed("update", [shared / "state/other.json"])
 
     assert change is not None and change.paths == ("state/other.json",)
 
 
-def test_a_device_local_change_never_waits(workspace: Path) -> None:
+def test_a_device_local_change_never_waits(tmp_path: Path) -> None:
     """``local/`` is this machine's, so no queue ever touches it.
 
     The port drops those paths rather than announcing them, and the lock has to
     agree: waiting on them would make every device-local writer queue behind a
     synchronization cycle it is not racing.
     """
-    local = workspace / ".guildbotics/local/hotkeys.yml"
+    local = tmp_path / ".guildbotics/local/hotkeys.yml"
     local.parent.mkdir(parents=True)
 
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         assert write_shared_text(local, "a: b\n") is None
 
     assert local.read_text(encoding="utf-8") == "a: b\n"
@@ -221,7 +210,6 @@ def test_a_change_with_no_workspace_selected_never_waits(
 ) -> None:
     """Nothing is shared until a workspace is, so there is nothing to serialize."""
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     path = tmp_path / ".guildbotics/state/thing.json"
     path.parent.mkdir(parents=True)
 
@@ -230,7 +218,7 @@ def test_a_change_with_no_workspace_selected_never_waits(
         pass
 
 
-def test_a_wider_span_subsumes_a_narrower_one(workspace: Path) -> None:
+def test_a_wider_span_subsumes_a_narrower_one(tmp_path: Path) -> None:
     """A writer declares its own span without asking who called it.
 
     Answering "does my caller already hold it?" per writer is what produced a
@@ -239,21 +227,21 @@ def test_a_wider_span_subsumes_a_narrower_one(workspace: Path) -> None:
     """
     service = MemberMemoryService(Person(person_id="p1", name="P"))
 
-    with shared_write_lock(workspace):
+    with shared_write_lock(tmp_path):
         recorded = service.record(scope="personal", title="t", body="b")
 
     assert service.get(doc_id=recorded["doc_id"])["body"] == "b"
 
 
-def test_a_span_still_excludes_another_thread(workspace: Path) -> None:
+def test_a_span_still_excludes_another_thread(tmp_path: Path) -> None:
     """Re-entering is for this thread only; everyone else still waits."""
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         with pytest.raises(SharedWriteBusyError):
-            with shared_write_lock(workspace):
+            with shared_write_lock(tmp_path):
                 pytest.fail("the lock was taken while another thread held it")
 
 
-def test_a_rewrite_reads_the_file_inside_the_span(workspace: Path) -> None:
+def test_a_rewrite_reads_the_file_inside_the_span(tmp_path: Path) -> None:
     """The transformation is not even reached while another writer holds it.
 
     This is the whole reason the closure is passed in rather than the finished
@@ -262,10 +250,10 @@ def test_a_rewrite_reads_the_file_inside_the_span(workspace: Path) -> None:
     happened to put its ``with``. Given the transformation, the read is the
     helper's, and it happens after the wait.
     """
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
     reads: list[str | None] = []
 
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         with pytest.raises(SharedWriteBusyError):
             update_shared_text(
                 shared / "state/other.json", lambda current: reads.append(current) or ""
@@ -274,13 +262,13 @@ def test_a_rewrite_reads_the_file_inside_the_span(workspace: Path) -> None:
     assert not reads, "the file was read before the other writer was waited for"
 
 
-def test_a_rewrite_sees_what_the_other_writer_left(workspace: Path) -> None:
+def test_a_rewrite_sees_what_the_other_writer_left(tmp_path: Path) -> None:
     """Waiting is not enough on its own: the read has to come after it."""
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
     target = shared / "state/other.json"
 
     def hold_then_change() -> None:
-        with shared_write_lock(workspace):
+        with shared_write_lock(tmp_path):
             started.set()
             proceed.wait(30)
             target.write_text(json.dumps({"n": 1}), encoding="utf-8")
@@ -302,14 +290,14 @@ def test_a_rewrite_sees_what_the_other_writer_left(workspace: Path) -> None:
     "helper", ["write_shared_json", "update_shared_json_with_change"]
 )
 def test_shared_target_stays_locked_and_announced_when_resolution_changes(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, helper: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
 ) -> None:
-    target = workspace / ".guildbotics/state/new/thing.json"
+    target = tmp_path / ".guildbotics/state/new/thing.json"
     real_resolve = Path.resolve
 
     def unstable_resolve(path: Path, *args: object, **kwargs: object) -> Path:
         if path == target and not kwargs.get("strict"):
-            return workspace / "outside.json"
+            return tmp_path / "outside.json"
         return real_resolve(path, *args, **kwargs)
 
     def write() -> ChangeSet | None:
@@ -320,7 +308,7 @@ def test_shared_target_stays_locked_and_announced_when_resolution_changes(
     monkeypatch.setattr(Path, "resolve", unstable_resolve)
     assert shared_relative_path(target) == "state/new/thing.json"
 
-    with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
+    with held_elsewhere(tmp_path), pytest.raises(SharedWriteBusyError):
         write()
     assert not target.exists()
 
@@ -337,11 +325,11 @@ def test_shared_target_stays_locked_and_announced_when_resolution_changes(
 
 
 def test_strict_resolution_prefix_still_locks_and_announces(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    target = workspace / ".guildbotics/state/new/thing.json"
+    target = tmp_path / ".guildbotics/state/new/thing.json"
     target.parent.mkdir(parents=True)
-    prefixed = workspace.parent / "device-prefixed/state/new"
+    prefixed = tmp_path.parent / "device-prefixed/state/new"
     real_resolve = Path.resolve
     real_plain = fileio._plain_windows_path
 
@@ -357,7 +345,7 @@ def test_strict_resolution_prefix_still_locks_and_announces(
     monkeypatch.setattr(fileio, "_plain_windows_path", plain)
     assert shared_relative_path(target) == "state/new/thing.json"
 
-    with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
+    with held_elsewhere(tmp_path), pytest.raises(SharedWriteBusyError):
         write_shared_json(target, {"id": "one"})
     assert not target.exists()
 
@@ -375,9 +363,9 @@ def test_strict_resolution_prefix_still_locks_and_announces(
 
 @pytest.mark.parametrize("error", [PermissionError, NotADirectoryError])
 def test_unreadable_shared_ancestor_stops_before_writing(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, error: type[OSError]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[OSError]
 ) -> None:
-    target = workspace / ".guildbotics/state/new/thing.json"
+    target = tmp_path / ".guildbotics/state/new/thing.json"
     target.parent.mkdir(parents=True)
     real_resolve = Path.resolve
 
@@ -400,11 +388,11 @@ def test_unreadable_shared_ancestor_stops_before_writing(
 
 
 def test_dangling_symlink_to_shared_file_keeps_the_lock(
-    workspace: Path, symlinks: None
+    tmp_path: Path, symlinks: None
 ) -> None:
-    target = workspace / ".guildbotics/state/new.jsonl"
+    target = tmp_path / ".guildbotics/state/new.jsonl"
     target.parent.mkdir(parents=True)
-    alias = workspace / "alias.jsonl"
+    alias = tmp_path / "alias.jsonl"
     alias.symlink_to(target)
 
     assert shared_relative_path(alias) == "state/new.jsonl", (
@@ -412,7 +400,7 @@ def test_dangling_symlink_to_shared_file_keeps_the_lock(
         alias.is_symlink(),
         alias.readlink(),
     )
-    with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
+    with held_elsewhere(tmp_path), pytest.raises(SharedWriteBusyError):
         append_shared_text(alias, "{}\n")
     assert not target.exists()
 
@@ -427,9 +415,9 @@ def test_dangling_symlink_to_shared_file_keeps_the_lock(
     ["update_shared_text", "update_shared_json", "update_shared_json_with_change"],
 )
 def test_an_unreadable_file_is_not_replaced(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, helper: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper: str
 ) -> None:
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
     target = shared / "state/other.json"
     original = target.read_bytes()
     applied: list[object] = []
@@ -463,10 +451,10 @@ def test_an_unreadable_file_is_not_replaced(
     assert announced == []
 
 
-def test_unchanged_content_is_not_rewritten(workspace: Path) -> None:
+def test_unchanged_content_is_not_rewritten(tmp_path: Path) -> None:
     """A file rewritten with what it already held is synchronization work with
     nothing behind it, so no change is announced for one."""
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
     target = shared / "state/other.json"
     announced: list[ChangeSet] = []
     set_workspace_sync_port(_RecordingPort(announced))
@@ -481,9 +469,9 @@ def test_unchanged_content_is_not_rewritten(workspace: Path) -> None:
     assert [change.paths for change in announced] == [("state/other.json",)]
 
 
-def test_a_rewrite_that_returns_nothing_removes_the_file(workspace: Path) -> None:
+def test_a_rewrite_that_returns_nothing_removes_the_file(tmp_path: Path) -> None:
     """An emptied record is stored as no file, not as an empty one."""
-    shared = _existing_shared_files(workspace)
+    shared = _existing_shared_files(tmp_path)
     target = shared / "state/other.json"
 
     assert update_shared_text(target, lambda _current: None) is None
@@ -612,7 +600,7 @@ def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
 
 @pytest.mark.parametrize("operation", sorted(HAND_DECLARED_SPANS))
 def test_a_hand_declared_span_starts_at_the_read(
-    workspace: Path, operation: str
+    tmp_path: Path, operation: str
 ) -> None:
     """A read the write is derived from is inside the span, not in front of it.
 
@@ -628,10 +616,10 @@ def test_a_hand_declared_span_starts_at_the_read(
     """
     # Run it once first: these operations read files they also create, and on
     # a workspace where it does not exist yet there is no read to observe.
-    HAND_DECLARED_SPANS[operation](workspace)
+    HAND_DECLARED_SPANS[operation](tmp_path)
 
-    with recording_shared_reads(workspace) as reads:
-        HAND_DECLARED_SPANS[operation](workspace)
+    with recording_shared_reads(tmp_path) as reads:
+        HAND_DECLARED_SPANS[operation](tmp_path)
 
     assert reads, f"{operation} read no shared file, so it does not belong here"
     path, held = reads[0]

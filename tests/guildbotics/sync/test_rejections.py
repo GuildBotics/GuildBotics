@@ -18,7 +18,6 @@ from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 @pytest.fixture
 def recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr(workspace_sync_port, "_port", RecordingPort())
     record_update_rejected(
         rejection_id="0198ab00-0000-7000-8000-0000000000aa",

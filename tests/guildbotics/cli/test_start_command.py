@@ -68,12 +68,10 @@ class _FakeEventListenerRunner:
         return False
 
 
-def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
+def test_service_lock_path_uses_machine_state_root(tmp_path):
     from guildbotics.cli.service import _service_lock_path
 
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
 
     assert _service_lock_path() == home / ".guildbotics/data/run/service.lock"
 

@@ -86,7 +86,6 @@ def command_api(tmp_path, monkeypatch, language):
         encoding="utf-8",
     )
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(config))
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     set_language(language)
     use_brain_slots(

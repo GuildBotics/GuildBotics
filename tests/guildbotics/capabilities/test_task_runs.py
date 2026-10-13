@@ -172,7 +172,6 @@ def test_task_run_enforces_shared_boundary_guarantees(
     bounded, and bulk log bodies never enter it."""
     from guildbotics.utils.secret_store import KeyringSecretStore
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
         "GITHUB_TOKEN", "ghp-live-secret-12345"
     )
@@ -449,7 +448,6 @@ def test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded(
     """A PR title can quote a secret value as easily as an error message can."""
     from guildbotics.utils.secret_store import KeyringSecretStore
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
         "OPENAI_API_KEY", "sk-live-secret-12345"
     )

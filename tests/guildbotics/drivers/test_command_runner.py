@@ -521,7 +521,6 @@ def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):
     from guildbotics.utils.fileio import WorkspaceNotConfiguredError
 
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     ledger = HostRunLedger("run-1", Work.of_ticket("https://example.test/1"))
 

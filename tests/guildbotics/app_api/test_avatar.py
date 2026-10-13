@@ -144,17 +144,6 @@ def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
 
 
 @pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
 def app_client(workspace: Path) -> Iterator[TestClient]:
     with saved_workspace(workspace, {"chat_service": {"name": "slack"}}) as client:
         yield client
