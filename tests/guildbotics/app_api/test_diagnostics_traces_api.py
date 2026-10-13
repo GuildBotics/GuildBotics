@@ -36,7 +36,7 @@ HTTP_OK = 200
 def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    app = create_app(session_token="secret", event_bus=bus, diagnostics_store=store)
+    app = create_app(session_token="secret", runtime=AppRuntime(bus))
     return TestClient(app), bus
 
 
@@ -45,12 +45,10 @@ def _runtime_app(
 ) -> tuple[TestClient, EventBus, AppRuntime, DiagnosticsStore]:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     app = create_app(
         session_token="secret",
         runtime=runtime,
-        event_bus=bus,
-        diagnostics_store=store,
     )
     return TestClient(app), bus, runtime, store
 
@@ -321,7 +319,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     team = Team(
         project=Project(name="demo"),
         members=[
@@ -356,8 +354,6 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     app = create_app(
         session_token="secret",
         runtime=runtime,
-        event_bus=bus,
-        diagnostics_store=store,
     )
     # A workflow run is its shared task-run record, mirrored from its trace by
     # the execution boundary; its command events stay in local diagnostics.
@@ -576,7 +572,7 @@ def test_activity_history_reads_sessions_from_their_lifecycle_records(
     """Sessions come from the shared lifecycle records, in the window asked."""
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    runtime = AppRuntime(bus, diagnostics_store=store)
+    runtime = AppRuntime(bus)
     team = Team(
         project=Project(name="demo"),
         members=[

@@ -4,7 +4,8 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.inference_failures import latest_inference_failures
+from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.traces import latest_inference_failures
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
@@ -102,8 +103,7 @@ def test_each_keys_latest_call_decides_its_state(tmp_path) -> None:
     }
 
 
-def test_no_store_or_no_calls(tmp_path) -> None:
-    assert latest_inference_failures(None).model_dump() == {"llm": {}, "jev": None}
+def test_no_calls(tmp_path) -> None:
     empty = DiagnosticsStore(tmp_path / "empty.jsonl")
     assert latest_inference_failures(empty).model_dump() == {"llm": {}, "jev": None}
 
@@ -112,9 +112,7 @@ def test_api_reads_the_device_records_and_requires_token(tmp_path) -> None:
     path = tmp_path / "diagnostics.jsonl"
     _call(DiagnosticsStore(path), "failed", "2026-10-08T10:00:00Z", category="credit")
     store = DiagnosticsStore(path)
-    app = create_app(
-        session_token="secret", event_bus=EventBus(store=store), diagnostics_store=store
-    )
+    app = create_app(session_token="secret", runtime=AppRuntime(EventBus(store=store)))
     with TestClient(app) as client:
         url = "/intelligences/inference-failures"
         assert client.get(url).status_code == 401

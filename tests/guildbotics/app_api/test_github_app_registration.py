@@ -20,7 +20,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
@@ -56,6 +58,8 @@ def _pem() -> str:
 
 
 class RuntimeStub:
+    system_service_run_id = "stub-service"
+
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
@@ -65,6 +69,8 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
+        self.workspace_sync_service = WorkspaceSyncService()
+        self.event_bus = EventBus()
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status

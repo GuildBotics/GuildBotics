@@ -137,6 +137,23 @@ async def test_error_response_raises_rpc_error_with_payload() -> None:
     await transport.aclose()
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            {"type": "Auth", "category": "x", "data": {"code": "RATE", "type": None}},
+            {"auth", "rate"},
+        ),
+        ({"type": "Auth", "data": "not a mapping"}, {"auth"}),
+        ("not a mapping", set()),
+    ],
+)
+def test_rpc_error_identifiers_read_only_the_named_fields(
+    error: Any, expected: set[str]
+) -> None:
+    assert RpcError(error).identifiers(("type",), ("code", "type")) == expected
+
+
 @pytest.mark.asyncio
 async def test_notifications_are_queued_in_arrival_order() -> None:
     transport, process = _transport()

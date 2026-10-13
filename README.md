@@ -277,7 +277,7 @@ Press **Validate settings** under **Setup → Verification** in the desktop app 
 
 ### Task Board Conventions
 
-**Custom fields**: GuildBotics manages an `Agent` field that selects the member who runs a task. It is created automatically the first time GuildBotics touches the GitHub Project, so no explicit setup is required. Because a GitHub App member cannot be a GitHub assignee, use this field to pick the member.
+**Custom fields**: GuildBotics manages an `Agent` field that selects the member who runs a task. It is created, and kept in step with your members, from the GitHub board settings under **Setup**; saving a non-human GitHub member updates it automatically. **Validate settings** reports a member that needs the field but has no option in it. Because a GitHub App member cannot be a GitHub assignee, use this field to pick the member.
 
 **Lane mapping**: GuildBotics treats GitHub Projects statuses as three lanes (ready / working / done).
 

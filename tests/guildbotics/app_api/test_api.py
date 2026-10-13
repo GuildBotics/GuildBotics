@@ -1,14 +1,16 @@
 import asyncio
 import inspect
 import os
+import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 import wakepy
-from fastapi.routing import APIRoute
+from fastapi import FastAPI
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 from yaml import safe_load
 
@@ -44,6 +46,8 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.traces import list_traces
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers import service_lock as service_lock_module
 from guildbotics.drivers.relay_runtime import RelayRuntime
@@ -53,7 +57,12 @@ from guildbotics.environment.spec import guest_path
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.integrations.provider import Operation, ProviderCheck, SetupError
+from guildbotics.integrations.provider import (
+    Operation,
+    ProviderCheck,
+    SetupError,
+    page_path,
+)
 from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     CliAgentUsageSnapshot,
     CliAgentUsageWindow,
@@ -65,7 +74,7 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.correlation import trace_scope
-from guildbotics.utils.local_api import TOKEN_SUBPROTOCOL
+from guildbotics.utils.local_api import PROOF_PATH, TOKEN_SUBPROTOCOL
 
 HTTP_OK = 200
 HTTP_ACCEPTED = 202
@@ -301,6 +310,8 @@ def _runtime_status(
 
 
 class RuntimeStub:
+    system_service_run_id = "stub-service"
+
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
@@ -310,6 +321,8 @@ class RuntimeStub:
             project_file_exists=False,
             storage_dir=tmp_path,
         )
+        self.workspace_sync_service = WorkspaceSyncService()
+        self.event_bus = EventBus()
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
         self.stop_force = force
@@ -1058,8 +1071,8 @@ def test_command_input_file_upload_runs_sync_io_outside_event_loop(
 
     route = next(
         route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/commands/input-files"
+        for route in iter_route_contexts(app.routes)
+        if route.path == "/commands/input-files"
     )
 
     assert not inspect.iscoroutinefunction(route.endpoint)
@@ -1219,11 +1232,11 @@ def test_routine_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
 
 
 def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
-    event_bus = EventBus()
+    stub = RuntimeStub(tmp_path)
+    event_bus = stub.event_bus
     app = create_app(
         session_token="secret",
-        runtime=RuntimeStub(tmp_path),
-        event_bus=event_bus,
+        runtime=stub,
     )
     with trace_scope("manual", trace_id="request-1"):
         event_bus.publish_event(
@@ -2493,7 +2506,7 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     event_bus = EventBus(store=store)
-    runtime = AppRuntime(event_bus, diagnostics_store=store)
+    runtime = AppRuntime(event_bus)
     team = Team(
         project=Project(name="demo"),
         members=[
@@ -2513,7 +2526,7 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
 
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
-    traces = runtime.list_traces()
+    traces = list_traces(store)
     # This test reads local command records; GitHub refresh has its own tests.
     monkeypatch.setattr(runtime, "_refresh_activity_events", lambda *_a, **_k: None)
     history = runtime.get_activity_history(
@@ -2531,62 +2544,59 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
 # --- auth coverage -------------------------------------------------------
 
 
-PROTECTED_ENDPOINTS = [
-    ("GET", "/health"),
-    ("GET", "/config/status"),
-    ("POST", "/workspace"),
-    ("GET", "/team"),
-    ("GET", "/commands/options"),
-    ("GET", "/commands/routine-options"),
-    ("POST", "/commands/run"),
-    ("POST", "/commands/input-files"),
-    ("POST", "/commands/author"),
-    ("POST", "/commands/author/apply"),
-    ("GET", "/config/roles"),
-    ("GET", "/scheduler/status"),
-    ("POST", "/scheduler/start"),
-    ("POST", "/scheduler/stop"),
-    ("POST", "/chat/receive-state/reset"),
-    ("GET", "/transcripts/settings"),
-    ("PUT", "/transcripts/settings"),
-    ("GET", "/runtime/debug"),
-    ("PUT", "/runtime/debug"),
-    ("GET", "/service/keep-awake"),
-    ("PUT", "/service/keep-awake"),
-    ("POST", "/verify"),
-    ("GET", "/system-alerts"),
-    ("POST", "/system-alerts/dismiss"),
-    ("POST", "/diagnostics/scenario"),
-    ("GET", "/config/intelligences"),
-    ("PUT", "/config/intelligences"),
-    ("POST", "/config/init"),
-    ("GET", "/config/project"),
-    ("PUT", "/config/project"),
-    ("PUT", "/config/project/default-person"),
-    ("POST", "/config/members"),
-    ("GET", "/config/members/alice"),
-    ("PUT", "/config/members/alice"),
-    ("DELETE", "/config/members/alice"),
-    ("GET", "/config/providers"),
-    ("POST", "/config/members/alice/avatar/github"),
-]
-
-
-@pytest.mark.parametrize("method,path", PROTECTED_ENDPOINTS)
-@pytest.mark.parametrize("headers", [None, {"X-GuildBotics-Session-Token": "wrong"}])
-def test_every_endpoint_rejects_missing_or_invalid_token(
-    tmp_path: Path, method: str, path: str, headers: dict[str, str] | None
-) -> None:
-    client = _client(RuntimeStub(tmp_path))
-
-    response = client.request(method, path, headers=headers, json={})
-
-    assert response.status_code == HTTP_UNAUTHORIZED
-    assert response.json() == {
-        "code": "invalid_session_token",
-        "message": "Invalid session token.",
-        "context": {},
+def _http_routes(app: FastAPI) -> set[tuple[str, str]]:
+    return {
+        (method, route.path)
+        for route in iter_route_contexts(app.routes)
+        for method in route.methods or ()
+        if method != "HEAD"
     }
+
+
+#: Every route a request reaches without the session token, each because its
+#: caller cannot send one: the proof is asked before the client trusts the
+#: port, a provider's page is opened by the user's browser, and FastAPI serves
+#: its own schema pages. The WebSocket carries the token in its subprotocol
+#: (``test_api_ws.py``) and the avatar image checks it in the query too
+#: (``test_avatar.py``).
+TOKEN_FREE_ROUTES = {
+    ("POST", PROOF_PATH),
+    *(
+        ("GET", page_path(provider.name, name))
+        for provider in PROVIDERS.values()
+        if provider.setup
+        for name in provider.setup.pages
+    ),
+    ("GET", "/openapi.json"),
+    ("GET", "/docs"),
+    ("GET", "/docs/oauth2-redirect"),
+    ("GET", "/redoc"),
+}
+
+
+@pytest.mark.parametrize("headers", [None, {"X-GuildBotics-Session-Token": "wrong"}])
+def test_every_route_but_the_token_free_ones_refuses_a_request_without_the_token(
+    tmp_path: Path, headers: dict[str, str] | None
+) -> None:
+    """The population is the routing table, so a route registered outside the
+    token-checking router, or a token-free one put inside it, fails here."""
+    client = _client(RuntimeStub(tmp_path))
+    routes = _http_routes(cast(FastAPI, client.app))
+
+    refused = set()
+    for method, path in routes:
+        url = re.sub(r"\{[^}]+\}", "alice", path)
+        response = client.request(method, url, headers=headers, json={})
+        if response.status_code == HTTP_UNAUTHORIZED:
+            assert response.json() == {
+                "code": "invalid_session_token",
+                "message": "Invalid session token.",
+                "context": {},
+            }
+            refused.add((method, path))
+
+    assert TOKEN_FREE_ROUTES <= routes
+    assert refused == routes - TOKEN_FREE_ROUTES
 
 
 def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
@@ -2877,27 +2887,6 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
             "avatar": True,
         },
     ]
-
-
-def _provider_operations() -> list[tuple[str, str]]:
-    return [
-        ("POST", f"/config/providers/{provider.name}/{name}")
-        for provider in PROVIDERS.values()
-        if provider.setup
-        for name in provider.setup.operations
-    ]
-
-
-@pytest.mark.parametrize("method,path", _provider_operations())
-def test_provider_operations_require_the_session_token(
-    tmp_path: Path, method: str, path: str
-) -> None:
-    client = _client(RuntimeStub(tmp_path))
-
-    response = client.request(method, path, json={})
-
-    assert response.status_code == HTTP_UNAUTHORIZED
-    assert response.json()["code"] == "invalid_session_token"
 
 
 def test_provider_pages_are_served_without_the_session_token(tmp_path: Path) -> None:

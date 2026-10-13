@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, TextIO, cast
+from typing import Any, Literal, TextIO
 from uuid import uuid4
 
 import click
@@ -41,6 +41,7 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
+from guildbotics.capabilities.member_memory import Scope as MemoryScope
 from guildbotics.capabilities.member_reference import (
     capability_reference_text,
     command_summary,
@@ -192,6 +193,15 @@ _human_approved_option = click.option(
 )
 
 
+def _with_options(*options: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def decorate(command: Any) -> Any:
+        for option in reversed(options):
+            command = option(command)
+        return command
+
+    return decorate
+
+
 @dataclass(frozen=True, slots=True)
 class MemberCall:
     """Where one member command resolves paths, reads input, and prints.
@@ -317,6 +327,51 @@ def memory() -> None:
     """Record, recall, and maintain member memory documents."""
 
 
+_SOURCE_LABELS = {
+    "ticket": "ticket",
+    "pr": "PR",
+    "channel": "chat channel",
+    "thread": "chat thread",
+}
+_source_options = tuple(
+    click.option(
+        f"--{kind}",
+        f"{kind}s",
+        multiple=True,
+        help=f"Related {label} URL (source anchor). May be repeated.",
+    )
+    for kind, label in _SOURCE_LABELS.items()
+)
+_document_options = (
+    click.option("--id", "doc_id", required=True, help="Memory document id."),
+    click.option(
+        "--team",
+        "team_scope",
+        flag_value="team",
+        default=None,
+        help="Operate on team memory instead of personal memory.",
+    ),
+)
+_policy_approved_option = click.option(
+    "--policy-approved",
+    is_flag=True,
+    help="Confirm that a human approved this policy memory change.",
+)
+_set_option = click.option(
+    "--set",
+    "set_values",
+    multiple=True,
+    help="Extra metadata as key=value. May be repeated.",
+)
+
+
+async def _memory(
+    person: str, use: Callable[[MemberMemoryService], dict[str, Any]]
+) -> dict[str, Any]:
+    """What ``use`` makes of the member's memory."""
+    return use(MemberMemoryService(_resolve(person)[1]))
+
+
 @memory.command(name="record")
 @_person_option
 @click.option(
@@ -337,30 +392,7 @@ def memory() -> None:
     multiple=True,
     help="Recall keyword. May be repeated.",
 )
-@click.option(
-    "--ticket",
-    "tickets",
-    multiple=True,
-    help="Related ticket URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--pr",
-    "prs",
-    multiple=True,
-    help="Related PR URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--channel",
-    "channels",
-    multiple=True,
-    help="Related chat channel URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--thread",
-    "threads",
-    multiple=True,
-    help="Related chat thread URL (source anchor). May be repeated.",
-)
+@_with_options(*_source_options)
 @click.option(
     "--kind",
     type=click.Choice(["note", "policy"]),
@@ -374,21 +406,12 @@ def memory() -> None:
     help="Pin as a standing rule included in member context.",
 )
 @_required_content_stdin_option
-@click.option(
-    "--policy-approved",
-    is_flag=True,
-    help="Confirm that a human approved this policy memory change.",
-)
-@click.option(
-    "--set",
-    "set_values",
-    multiple=True,
-    help="Extra metadata as key=value. May be repeated.",
-)
+@_policy_approved_option
+@_set_option
 @_json_format_option
 def memory_record(
     person: str,
-    scope: str,
+    scope: MemoryScope,
     title: str,
     summary: str,
     keywords: tuple[str, ...],
@@ -404,46 +427,22 @@ def memory_record(
 ) -> _CommandWork:
     title = _validate_title(title)
     body = _read_stdin("memory body")
-    return _memory_record(
+    source = _source_entries(tickets, prs, channels, threads)
+    params = _parse_set_values(set_values)
+    return _memory(
         person,
-        scope,
-        title,
-        summary,
-        list(keywords),
-        _source_entries(tickets, prs, channels, threads),
-        kind,
-        pinned,
-        body,
-        policy_approved,
-        _parse_set_values(set_values),
-    )
-
-
-async def _memory_record(
-    person: str,
-    scope: str,
-    title: str,
-    summary: str,
-    keywords: list[str],
-    source: list[dict[str, Any]],
-    kind: str,
-    pinned: bool,
-    body: str,
-    policy_approved: bool,
-    params: dict[str, Any],
-) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).record(
-        scope=cast(Any, scope),
-        title=title,
-        summary=summary,
-        keywords=keywords,
-        source=source,
-        kind=kind,
-        pinned=pinned,
-        body=body,
-        policy_approved=policy_approved,
-        params=params,
+        lambda memory: memory.record(
+            scope=scope,
+            title=title,
+            summary=summary,
+            keywords=list(keywords),
+            source=source,
+            kind=kind,
+            pinned=pinned,
+            body=body,
+            policy_approved=policy_approved,
+            params=params,
+        ),
     )
 
 
@@ -475,51 +474,28 @@ def memory_recall(
     limit: int,
     output_format: str,
 ) -> _CommandWork:
-    return _memory_recall(person, list(queries), meta_only, limit)
-
-
-async def _memory_recall(
-    person: str, queries: list[str], meta_only: bool, limit: int
-) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).recall(
-        queries=queries,
-        meta_only=meta_only,
-        limit=limit,
+    return _memory(
+        person,
+        lambda memory: memory.recall(
+            queries=list(queries), meta_only=meta_only, limit=limit
+        ),
     )
 
 
 @memory.command(name="get")
 @_read_only_member_command
 @_person_option
-@click.option("--id", "doc_id", required=True, help="Memory document id.")
-@click.option(
-    "--team",
-    "team_scope",
-    is_flag=True,
-    help="Operate on team memory instead of personal memory.",
-)
+@_with_options(*_document_options)
 @_json_format_option
 def memory_get(
-    person: str, doc_id: str, team_scope: bool, output_format: str
+    person: str, doc_id: str, team_scope: MemoryScope | None, output_format: str
 ) -> _CommandWork:
-    return _memory_get(person, doc_id, "team" if team_scope else None)
-
-
-async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).get(doc_id=doc_id, scope=cast(Any, scope))
+    return _memory(person, lambda memory: memory.get(doc_id=doc_id, scope=team_scope))
 
 
 @memory.command(name="update")
 @_person_option
-@click.option("--id", "doc_id", required=True, help="Memory document id.")
-@click.option(
-    "--team",
-    "team_scope",
-    is_flag=True,
-    help="Operate on team memory instead of personal memory.",
-)
+@_with_options(*_document_options)
 @click.option("--title", help="New document title.")
 @click.option("--summary", help="New one-line summary.")
 @click.option(
@@ -540,30 +516,7 @@ async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, 
     multiple=True,
     help="Remove a recall keyword. May be repeated.",
 )
-@click.option(
-    "--ticket",
-    "tickets",
-    multiple=True,
-    help="Related ticket URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--pr",
-    "prs",
-    multiple=True,
-    help="Related PR URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--channel",
-    "channels",
-    multiple=True,
-    help="Related chat channel URL (source anchor). May be repeated.",
-)
-@click.option(
-    "--thread",
-    "threads",
-    multiple=True,
-    help="Related chat thread URL (source anchor). May be repeated.",
-)
+@_with_options(*_source_options)
 @click.option(
     "--pin",
     "pin_value",
@@ -578,22 +531,13 @@ async def _memory_get(person: str, doc_id: str, scope: str | None) -> dict[str, 
     help="Change the document kind; 'policy' requires --policy-approved.",
 )
 @_optional_content_stdin_option
-@click.option(
-    "--policy-approved",
-    is_flag=True,
-    help="Confirm that a human approved this policy memory change.",
-)
-@click.option(
-    "--set",
-    "set_values",
-    multiple=True,
-    help="Extra metadata as key=value. May be repeated.",
-)
+@_policy_approved_option
+@_set_option
 @_json_format_option
 def memory_update(
     person: str,
     doc_id: str,
-    team_scope: bool,
+    team_scope: MemoryScope | None,
     title: str | None,
     summary: str | None,
     keywords: tuple[str, ...],
@@ -610,91 +554,58 @@ def memory_update(
     set_values: tuple[str, ...],
     output_format: str,
 ) -> _CommandWork:
-    body = _read_optional_stdin(content_stdin, "memory body")
+    body = _read_stdin("memory body") if content_stdin else None
     if title is not None:
         title = _validate_title(title)
     source = _source_entries(tickets, prs, channels, threads)
-    return _memory_update(
-        person=person,
-        doc_id=doc_id,
-        scope="team" if team_scope else None,
-        title=title,
-        summary=summary,
-        keywords=list(keywords) if keywords else None,
-        add_keywords=list(add_keywords),
-        remove_keywords=list(remove_keywords),
-        source=source if source else None,
-        pinned=pin_value,
-        kind=kind,
-        body=body,
-        policy_approved=policy_approved,
-        params=_parse_set_values(set_values),
+    params = _parse_set_values(set_values)
+    return _memory(
+        person,
+        lambda memory: memory.update(
+            doc_id=doc_id,
+            scope=team_scope,
+            title=title,
+            summary=summary,
+            keywords=list(keywords) if keywords else None,
+            add_keywords=list(add_keywords),
+            remove_keywords=list(remove_keywords),
+            source=source or None,
+            pinned=pin_value,
+            kind=kind,
+            body=body,
+            policy_approved=policy_approved,
+            params=params,
+        ),
     )
-
-
-async def _memory_update(**kwargs: Any) -> dict[str, Any]:
-    _context, member_person = _resolve(str(kwargs.pop("person")))
-    return MemberMemoryService(member_person).update(**kwargs)
 
 
 @memory.command(name="touch")
 @_person_option
-@click.option("--id", "doc_id", required=True, help="Memory document id.")
-@click.option(
-    "--team",
-    "team_scope",
-    is_flag=True,
-    help="Operate on team memory instead of personal memory.",
-)
+@_with_options(*_document_options)
 @_json_format_option
 def memory_touch(
-    person: str, doc_id: str, team_scope: bool, output_format: str
+    person: str, doc_id: str, team_scope: MemoryScope | None, output_format: str
 ) -> _CommandWork:
-    return _memory_touch(person, doc_id, "team" if team_scope else None)
-
-
-async def _memory_touch(person: str, doc_id: str, scope: str | None) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).touch(
-        doc_id=doc_id, scope=cast(Any, scope)
-    )
+    return _memory(person, lambda memory: memory.touch(doc_id=doc_id, scope=team_scope))
 
 
 @memory.command(name="archive")
 @_person_option
-@click.option("--id", "doc_id", required=True, help="Memory document id.")
-@click.option(
-    "--team",
-    "team_scope",
-    is_flag=True,
-    help="Operate on team memory instead of personal memory.",
-)
-@click.option(
-    "--policy-approved",
-    is_flag=True,
-    help="Confirm that a human approved this policy memory change.",
-)
+@_with_options(*_document_options)
+@_policy_approved_option
 @_json_format_option
 def memory_archive(
     person: str,
     doc_id: str,
-    team_scope: bool,
+    team_scope: MemoryScope | None,
     policy_approved: bool,
     output_format: str,
 ) -> _CommandWork:
-    return _memory_archive(
-        person, doc_id, "team" if team_scope else None, policy_approved
-    )
-
-
-async def _memory_archive(
-    person: str, doc_id: str, scope: str | None, policy_approved: bool
-) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).archive(
-        doc_id=doc_id,
-        scope=cast(Any, scope),
-        policy_approved=policy_approved,
+    return _memory(
+        person,
+        lambda memory: memory.archive(
+            doc_id=doc_id, scope=team_scope, policy_approved=policy_approved
+        ),
     )
 
 
@@ -703,12 +614,7 @@ async def _memory_archive(
 @click.option("--id", "doc_id", required=True, help="Memory document id.")
 @_json_format_option
 def memory_promote(person: str, doc_id: str, output_format: str) -> _CommandWork:
-    return _memory_promote(person, doc_id)
-
-
-async def _memory_promote(person: str, doc_id: str) -> dict[str, Any]:
-    _context, member_person = _resolve(person)
-    return MemberMemoryService(member_person).promote(doc_id=doc_id)
+    return _memory(person, lambda memory: memory.promote(doc_id=doc_id))
 
 
 async def _context_cmd(
@@ -765,15 +671,6 @@ _channel_options = (
         help="Channel name (alternative to --channel-id).",
     ),
 )
-
-
-def _with_options(*options: Callable[[Any], Any]) -> Callable[[Any], Any]:
-    def decorate(command: Any) -> Any:
-        for option in reversed(options):
-            command = option(command)
-        return command
-
-    return decorate
 
 
 def _message_url_option(alternative: str) -> Callable[[Any], Any]:
@@ -1139,7 +1036,7 @@ async def _git_prepare(
 def git_commit(
     person: str,
     repo_path: Path,
-    workspace_mode: str,
+    workspace_mode: WorkspaceMode,
     output_format: str,
 ) -> _CommandWork:
     """Commit already-staged changes with the member identity.
@@ -1149,28 +1046,47 @@ def git_commit(
     that single commit without changing the repository's git config.
     """
     message = _read_stdin("commit message")
-    return _git_commit(person, repo_path, message, workspace_mode)
+    return _git(
+        person,
+        workspace_mode,
+        "git_commit",
+        lambda service: service.commit(
+            repo_path=repo_path,
+            message=message,
+            workspace_mode=workspace_mode,
+            cwd=_call().cwd,
+        ),
+    )
 
 
-async def _git_commit(
+async def _git(
     person: str,
-    repo_path: Path,
-    message: str,
-    workspace_mode: str,
+    workspace_mode: WorkspaceMode,
+    evidence: str,
+    use: Callable[[MemberGitWorkspaceService], Awaitable[Any]],
+    *,
+    pushes: bool = False,
 ) -> dict[str, Any]:
+    """Run one git capability as the member and record what it did.
+
+    The result is the run's ``evidence``; one that ``pushes`` is also
+    recorded as the member's push.
+    """
     task_run_id = current_task_run_id()
     _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
     context, member_person = _resolve(person)
     service = _git_service(context, member_person)
     try:
-        result = await service.commit(
-            repo_path=repo_path,
-            message=message,
-            workspace_mode=_workspace_mode(workspace_mode),
-            cwd=_call().cwd,
-        )
-        payload = result.to_dict()
-        TaskRunStore().append_evidence(task_run_id, "git_commit", payload)
+        payload = (await use(service)).to_dict()
+        TaskRunStore().append_evidence(task_run_id, evidence, payload)
+        if pushes:
+            record_member_push_event(
+                member_person,
+                payload,
+                provider=context.team.project.get_service_name(
+                    Service.CODE_HOSTING_SERVICE
+                ),
+            )
         return payload
     finally:
         await context.aclose()
@@ -1189,39 +1105,18 @@ async def _git_commit(
 def git_push(
     person: str,
     repo_path: Path,
-    workspace_mode: str,
+    workspace_mode: WorkspaceMode,
     output_format: str,
 ) -> _CommandWork:
-    return _git_push(person, repo_path, workspace_mode)
-
-
-async def _git_push(
-    person: str,
-    repo_path: Path,
-    workspace_mode: str,
-) -> dict[str, Any]:
-    task_run_id = current_task_run_id()
-    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
-    context, member_person = _resolve(person)
-    service = _git_service(context, member_person)
-    try:
-        result = await service.push(
-            repo_path=repo_path,
-            workspace_mode=_workspace_mode(workspace_mode),
-            cwd=_call().cwd,
-        )
-        payload = result.to_dict()
-        TaskRunStore().append_evidence(task_run_id, "git_push", payload)
-        record_member_push_event(
-            member_person,
-            payload,
-            provider=context.team.project.get_service_name(
-                Service.CODE_HOSTING_SERVICE
-            ),
-        )
-        return payload
-    finally:
-        await context.aclose()
+    return _git(
+        person,
+        workspace_mode,
+        "git_push",
+        lambda service: service.push(
+            repo_path=repo_path, workspace_mode=workspace_mode, cwd=_call().cwd
+        ),
+        pushes=True,
+    )
 
 
 @git.command(name="publish")
@@ -1238,7 +1133,7 @@ async def _git_push(
 def git_publish(
     person: str,
     repo_path: Path,
-    workspace_mode: str,
+    workspace_mode: WorkspaceMode,
     output_format: str,
 ) -> _CommandWork:
     """Commit already-staged changes with the member identity, then push.
@@ -1248,42 +1143,23 @@ def git_publish(
     branch using the member credential.
     """
     message = _read_stdin("commit message")
-    return _git_publish(person, repo_path, message, workspace_mode)
-
-
-async def _git_publish(
-    person: str,
-    repo_path: Path,
-    message: str,
-    workspace_mode: str,
-) -> dict[str, Any]:
-    task_run_id = current_task_run_id()
-    _reject_current_workspace_mode_in_task_run(workspace_mode, task_run_id)
-    context, member_person = _resolve(person)
-    service = _git_service(context, member_person)
-    try:
-        if workspace_mode == "current":
-            result = await service.publish_current_workspace(
+    return _git(
+        person,
+        workspace_mode,
+        "git_publish",
+        lambda service: (
+            service.publish_current_workspace(
                 repo_path=repo_path, message=message, cwd=_call().cwd
             )
-        else:
-            result = await service.publish(repo_path=repo_path, message=message)
-        payload = result.to_dict()
-        TaskRunStore().append_evidence(task_run_id, "git_publish", payload)
-        record_member_push_event(
-            member_person,
-            payload,
-            provider=context.team.project.get_service_name(
-                Service.CODE_HOSTING_SERVICE
-            ),
-        )
-        return payload
-    finally:
-        await context.aclose()
+            if workspace_mode == "current"
+            else service.publish(repo_path=repo_path, message=message)
+        ),
+        pushes=True,
+    )
 
 
 def _reject_current_workspace_mode_in_task_run(
-    workspace_mode: str, task_run_id: str | None
+    workspace_mode: WorkspaceMode, task_run_id: str | None
 ) -> None:
     # A command of an isolated environment, run or not: the current mode runs
     # git on the host in a repository that environment can write.
@@ -1295,12 +1171,6 @@ def _reject_current_workspace_mode_in_task_run(
             "used inside a workflow task run or a command of an isolated "
             "environment."
         )
-
-
-def _workspace_mode(value: str) -> WorkspaceMode:
-    if value not in {"member", "current"}:
-        raise click.ClickException(f"Unsupported workspace mode: {value}")
-    return cast(WorkspaceMode, value)
 
 
 async def _code_hosting(
@@ -1707,14 +1577,12 @@ _head_option = click.option(
 @_required_content_stdin_option
 @_json_format_option
 def pr_review(
-    person: str, pr_url: str, event: str, head: str, output_format: str
+    person: str, pr_url: str, event: ReviewVerdict, head: str, output_format: str
 ) -> _CommandWork:
     body = _read_stdin("pull request review body")
     return _code_hosting(
         person,
-        lambda context: member_repository.pr_review(
-            context, pr_url, body, cast(ReviewVerdict, event), head
-        ),
+        lambda context: member_repository.pr_review(context, pr_url, body, event, head),
         evidence="pr_review",
     )
 
@@ -2026,12 +1894,6 @@ def _read_content_source(content_file: Path | None) -> str:
         ) from exc
 
 
-def _read_optional_stdin(content_stdin: bool, label: str) -> str | None:
-    if not content_stdin:
-        return None
-    return _read_stdin(label)
-
-
 def _validate_title(title: str) -> str:
     if "\n" in title or "\r" in title:
         raise click.ClickException("title must not contain newlines.")
@@ -2041,23 +1903,14 @@ def _validate_title(title: str) -> str:
     return normalized
 
 
-def _source_entries(
-    tickets: tuple[str, ...],
-    prs: tuple[str, ...],
-    channels: tuple[str, ...],
-    threads: tuple[str, ...],
-) -> list[dict[str, str]]:
-    entries: list[dict[str, str]] = []
-    for source_type, values in (
-        ("ticket", tickets),
-        ("pr", prs),
-        ("channel", channels),
-        ("thread", threads),
-    ):
-        for value in values:
-            if value.strip():
-                entries.append({"type": source_type, "url": value.strip()})
-    return entries
+def _source_entries(*urls: tuple[str, ...]) -> list[dict[str, str]]:
+    """The source anchors of the ``--ticket/--pr/--channel/--thread`` URLs."""
+    return [
+        {"type": kind, "url": url.strip()}
+        for kind, values in zip(_SOURCE_LABELS, urls, strict=True)
+        for url in values
+        if url.strip()
+    ]
 
 
 def _parse_set_values(values: tuple[str, ...]) -> dict[str, Any]:
@@ -2081,7 +1934,7 @@ def _parse_scalar(value: str) -> Any:
         return value
 
 
-def _run(coro, *, output_format: str) -> Any:
+def _run(coro: _CommandWork, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
     needs_sync = _member_command_needs_lease()
@@ -2103,12 +1956,11 @@ def _run(coro, *, output_format: str) -> Any:
         ChatUpdatesRequired,
         TaskRunError,
         KeyError,
+        SyncRepositoryBusyError,
     ) as exc:
         raise click.ClickException(str(exc) or type(exc).__name__) from exc
-    except SyncRepositoryBusyError as exc:
-        raise click.ClickException(str(exc)) from exc
     except BaseException:
-        if not started and asyncio.iscoroutine(coro):
+        if not started:
             coro.close()
         raise
     if needs_sync:
@@ -2283,7 +2135,7 @@ def _run_interactive(
                 raise
             _record_member_command_event("member.command.finished", command)
             status = "success"
-            return cast(dict[str, Any], result)
+            return result
     finally:
         store.touch(session)
         _record_interactive_session(

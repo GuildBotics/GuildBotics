@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter
 from pydantic import BaseModel, SecretStr
 
 from guildbotics.app_api.errors import AppApiError
@@ -14,13 +14,13 @@ class DecisionCredential(BaseModel):
     value: SecretStr
 
 
-def register(app: FastAPI, config_dir: Callable[[], Path], authorize: Callable) -> None:
+def register(router: APIRouter, config_dir: Callable[[], Path]) -> None:
 
-    @app.get("/intelligences/decisions/options", dependencies=[Depends(authorize)])
+    @router.get("/intelligences/decisions/options")
     def options():
         return preparation.options(config_dir())
 
-    @app.post("/intelligences/decisions/credential", dependencies=[Depends(authorize)])
+    @router.post("/intelligences/decisions/credential")
     def save_credential(request: DecisionCredential):
         try:
             return preparation.save_credential(

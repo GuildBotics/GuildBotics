@@ -640,16 +640,10 @@ async def test_a_channel_name_is_resolved_once_while_the_subscription_stands(
     assert resolved == ["dev-chat"]
 
 
-def test_subscription_signature_normalizes_participation_defaults():
+def test_subscription_signature_follows_participation():
     runner, _ = _runner()
     base = {"channel_id": "C1"}
 
-    assert runner._subscription_signature(
-        [{**base, "participation": None}]
-    ) == runner._subscription_signature([{**base, "participation": "  "}])
-    assert runner._subscription_signature(
-        [{**base, "participation": "unknown"}]
-    ) == runner._subscription_signature([{**base, "participation": "strict"}])
     assert runner._subscription_signature(
         [{**base, "participation": "social"}]
     ) != runner._subscription_signature([{**base, "participation": "strict"}])

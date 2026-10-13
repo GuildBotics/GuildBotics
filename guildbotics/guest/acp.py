@@ -23,6 +23,8 @@ from guildbotics.guest.jsonrpc import (
 )
 from guildbotics.guest.provider_process import (
     JsonRpcAdapter,
+    as_dict,
+    publish,
     turn_deadline,
 )
 from guildbotics.guest.turn import (
@@ -75,7 +77,7 @@ _STOP_REASONS = {
     "refusal": (AgentRuntimeErrorCategory.PROCESS, "{agent} refused the turn."),
 }
 #: Error identifiers every provider spells the same way. A subclass adds its
-#: own through ``rate_limit_codes`` / ``auth_codes``.
+#: own rate-limit identifiers through ``rate_limit_codes``.
 _RATE_LIMIT_CODES = frozenset(
     {
         "rate_limit",
@@ -127,7 +129,6 @@ class AcpAdapterBase(JsonRpcAdapter):
     known_extension_noise: frozenset[str] = frozenset()
     #: Provider error identifiers, added to the shared sets above.
     rate_limit_codes: frozenset[str] = frozenset()
-    auth_codes: frozenset[str] = frozenset()
     #: The catalog name of the tool, which names its provisioning and state.
     tool_name: str = ""
 
@@ -173,25 +174,6 @@ class AcpAdapterBase(JsonRpcAdapter):
             if key in self.setting_keys and str(value or "")
         }
 
-    async def run_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        try:
-            await self._ensure_started(context, emit)
-            try:
-                await self._prepare_turn(context)
-                return await self._run_active_turn(prompt, context, conversation, emit)
-            finally:
-                await self._finish_turn(context)
-        finally:
-            # The provider process is the turn's: the next turn starts its
-            # own and reloads the session.
-            await self.close()
-
     async def _run_active_turn(
         self,
         prompt: str,
@@ -199,13 +181,15 @@ class AcpAdapterBase(JsonRpcAdapter):
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
+        await self._ensure_started(context, emit)
+        await self._prepare_turn(context)
         self._warn_unusable_settings(context)
         self._unhandled = {}
         self._tool_kinds = {}
         self._context_used = 0
         self._context_size = 0
         self._turn_rate_limit = {}
-        await _publish(
+        await publish(
             emit,
             AgentEvent(
                 AgentEventKind.APPROVAL,
@@ -220,9 +204,9 @@ class AcpAdapterBase(JsonRpcAdapter):
         chunks = _AssistantBuffer()
         usage: dict[str, int] = {}
 
-        async def publish(event: AgentEvent) -> None:
+        async def record(event: AgentEvent) -> None:
             events.append(event)
-            await _publish(emit, event)
+            await publish(emit, event)
 
         prompt_task = asyncio.create_task(
             self._transport.request(
@@ -230,7 +214,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                 {
                     "sessionId": session_id,
                     "prompt": [
-                        {"type": "text", "text": self._turn_prompt(prompt, context)}
+                        {"type": "text", "text": self._member_broker.prompt(prompt)}
                     ],
                 },
                 # ACP answers session/prompt only when the turn ends, so a
@@ -241,14 +225,14 @@ class AcpAdapterBase(JsonRpcAdapter):
         )
         try:
             stop_reason = await self._consume_turn(
-                prompt_task, session_id, publish, chunks, usage
+                prompt_task, session_id, record, chunks, usage
             )
             output = chunks.text().strip()
             if stop_reason == "end_turn" and output:
                 # ACP has no terminal assistant update, but every adapter must
                 # end a finished stream with the whole reply: the display layer
                 # drops the per-chunk records once it arrives.
-                await publish(
+                await record(
                     AgentEvent(
                         AgentEventKind.ASSISTANT,
                         "completed",
@@ -302,15 +286,12 @@ class AcpAdapterBase(JsonRpcAdapter):
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
-        if self._transport.process is not None:
-            await self.close()
         self._environment = await start_turn(context, self.tool_name)
         try:
             process = await self._environment.run(
                 *self._launch_argv(context), limit=STREAM_READ_LIMIT
             )
         except TurnError as exc:
-            await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start {self.product_label}: {exc}",
@@ -318,16 +299,9 @@ class AcpAdapterBase(JsonRpcAdapter):
         self._transport.start(process)
         try:
             await self._initialize()
-        except AgentRuntimeError:
-            await self.close()
-            raise
         except RpcError as exc:
-            await self.close()
             raise self._agent_error_from_rpc(exc) from exc
-        except Exception:
-            await self.close()
-            raise
-        await _publish(
+        await publish(
             emit,
             AgentEvent(
                 AgentEventKind.PROCESS,
@@ -394,7 +368,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                         "session/new",
                         {
                             "cwd": str(context.cwd),
-                            "mcpServers": self._mcp_servers(context),
+                            "mcpServers": [self._member_broker.mcp_server],
                         },
                     )
                 )
@@ -418,7 +392,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                     {
                         "sessionId": session_id,
                         "cwd": str(context.cwd),
-                        "mcpServers": self._mcp_servers(context),
+                        "mcpServers": [self._member_broker.mcp_server],
                     },
                 )
             )
@@ -434,7 +408,7 @@ class AcpAdapterBase(JsonRpcAdapter):
         # must not reach the current turn, chat, or the normal transcript.
         replayed = self._absorb_replay()
         if replayed:
-            await _publish(
+            await publish(
                 emit,
                 AgentEvent(
                     AgentEventKind.TURN,
@@ -454,13 +428,13 @@ class AcpAdapterBase(JsonRpcAdapter):
         emit: EventSink,
     ) -> None:
         for event in await self._configure_session(session_id, context, result):
-            await _publish(emit, event)
+            await publish(emit, event)
 
     async def _consume_turn(
         self,
         prompt_task: asyncio.Task[Any],
         session_id: str,
-        publish: Any,
+        record: Any,
         chunks: _AssistantBuffer,
         usage: dict[str, int],
     ) -> str:
@@ -470,7 +444,7 @@ class AcpAdapterBase(JsonRpcAdapter):
             if params.get("sessionId") not in (None, "", session_id):
                 return
             for event in self._decode(method, params, session_id):
-                await publish(event)
+                await record(event)
                 # Only the answer stream builds the reply. Reasoning chunks are
                 # recorded for transcripts but must never reach the output.
                 if event.kind is AgentEventKind.ASSISTANT and event.name == "delta":
@@ -694,7 +668,7 @@ class AcpAdapterBase(JsonRpcAdapter):
     ) -> None:
         if not self._unhandled:
             return
-        await _publish(
+        await publish(
             emit,
             AgentEvent(
                 AgentEventKind.TURN,
@@ -761,18 +735,7 @@ class AcpAdapterBase(JsonRpcAdapter):
         )
 
     def _agent_error_from_rpc(self, exc: RpcError) -> AgentRuntimeError:
-        error = as_dict(exc.error)
-        data = as_dict(error.get("data"))
-        identifiers = {
-            str(value).lower()
-            for value in (
-                error.get("type"),
-                data.get("type"),
-                data.get("code"),
-                data.get("error_type"),
-            )
-            if value is not None
-        }
+        identifiers = exc.identifiers(("type",), ("type", "code", "error_type"))
         details = exc.provider_details(
             {
                 "resetAt": "retry_after_at",
@@ -781,7 +744,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                 "retry_after_seconds": "retry_after_seconds",
             }
         )
-        if identifiers & (_AUTH_CODES | self.auth_codes):
+        if identifiers & _AUTH_CODES:
             return AgentRuntimeError(
                 AgentRuntimeErrorCategory.AUTHENTICATION,
                 f"{self.product_label} authentication failed.",
@@ -793,7 +756,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                 f"{self.agent_label} account rate limit is active.",
                 details=details,
             )
-        if error.get("code") == METHOD_NOT_FOUND:
+        if as_dict(exc.error).get("code") == METHOD_NOT_FOUND:
             return AgentRuntimeError(
                 AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
                 f"The installed {self.product_label} does not support the "
@@ -823,23 +786,11 @@ class AcpAdapterBase(JsonRpcAdapter):
         """Prepare provider-specific services and state for this turn."""
         mcp = as_dict(self._capabilities.get("mcpCapabilities"))
         if not mcp.get("http"):
-            await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
                 f"The installed {self.product_label} does not support HTTP MCP servers.",
                 details={"agent_version": self._agent_version},
             )
-
-    async def _finish_turn(self, context: AgentExecutionContext) -> None:
-        """Revoke provider-specific services after this turn finishes."""
-
-    def _mcp_servers(self, context: AgentExecutionContext) -> list[dict[str, Any]]:
-        """ACP MCP descriptors attached to a new or reloaded session."""
-        return [self._member_broker.mcp_server]
-
-    def _turn_prompt(self, prompt: str, context: AgentExecutionContext) -> str:
-        """Add provider-specific execution instructions to the turn prompt."""
-        return self._member_broker.prompt(prompt)
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         """The command line that starts this provider's ACP server."""
@@ -953,12 +904,6 @@ def _stop_reason(response: Any) -> str:
     return str(as_dict(response).get("stopReason", "") or "")
 
 
-async def _publish(emit: EventSink, event: AgentEvent) -> None:
-    result = emit(event)
-    if asyncio.iscoroutine(result):
-        await result
-
-
 def _reject_option_id(options: Any) -> str:
     """Return the option id of the agent's own reject option, if it offered one."""
     if not isinstance(options, list):
@@ -983,11 +928,6 @@ def non_negative_int(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if value >= 0 else None
-
-
-def as_dict(value: Any) -> dict[str, Any]:
-    """The value as a mapping, or an empty one -- protocol payloads are untyped."""
-    return value if isinstance(value, dict) else {}
 
 
 def config_values(result: Any) -> dict[str, str]:

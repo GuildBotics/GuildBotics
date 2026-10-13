@@ -144,7 +144,7 @@ class FakeInvokeContext(types.SimpleNamespace):
     brain_factory = None
 
     def __init__(self, action: str) -> None:
-        person = types.SimpleNamespace(
+        person = Person(
             person_id="alice",
             name="Alice",
             profile={"chat": {"subscriptions": [{"service": "local"}]}},
@@ -979,9 +979,8 @@ async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
 
 
 def test_author_labels_include_mentionable_team_members_not_in_thread():
-    ctx = types.SimpleNamespace(person=types.SimpleNamespace(person_id="alice"))
     labels = chat_selection._build_author_labels(
-        ctx,
+        "alice",
         "alice",
         chat_event(
             event_id="C1:100.1",

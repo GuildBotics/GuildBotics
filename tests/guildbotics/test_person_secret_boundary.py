@@ -66,10 +66,7 @@ STORE_ELSEWHERE = {
         "setup/setup_service.py",
         "SimpleProjectSetupService.read_project_config",
     ): ("LLM provider API keys named by the project setup"),
-    ("setup/setup_service.py", "SimpleProjectSetupService.update_project"): (
-        "LLM provider API keys named by the project setup"
-    ),
-    ("setup/setup_service.py", "SimpleProjectSetupService.write_project"): (
+    ("setup/setup_service.py", "SimpleProjectSetupService._write_project_config"): (
         "LLM provider API keys named by the project setup"
     ),
     ("capabilities/decisions/preparation.py", "options"): "the workspace's Jev key",

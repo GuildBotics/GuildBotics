@@ -219,7 +219,7 @@ def test_set_workspace_splits_system_session_with_same_service_run_id(
     working_directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = DiagnosticsStore(working_directory / "diagnostics.jsonl")
-    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+    runtime = AppRuntime(EventBus(store=store))
     monkeypatch.setattr(
         runtime,
         "stop_scheduler",
@@ -233,7 +233,6 @@ def test_set_workspace_splits_system_session_with_same_service_run_id(
         runtime.set_workspace(workspace)
     finally:
         store.finish_system_session()
-        store.stop_maintenance()
 
     boundaries = [
         json.loads(line)

@@ -18,6 +18,12 @@ def get_chat_subscriptions(person: Any) -> list[dict[str, Any]]:
     return out
 
 
+def chat_participation(value: object) -> str:
+    """A channel's participation policy: ``strict`` unless it names another."""
+    participation = str(value or "strict").strip().lower()
+    return participation if participation in {"strict", "social", "muted"} else "strict"
+
+
 def _channel_to_subscription(ch: Any) -> dict[str, Any] | None:
     chat_cfg = _as_dict(_get(ch, "chat", {}))
     if not chat_cfg:
@@ -37,9 +43,9 @@ def _channel_to_subscription(ch: Any) -> dict[str, Any] | None:
     item = {
         "channel_id": channel_id,
         "channel_name": channel_name,
+        "participation": chat_participation(chat_cfg.get("participation")),
     }
     for key in (
-        "participation",
         "startup_backfill_minutes",
         "backfill_interval_seconds",
         "backfill_overlap_seconds",

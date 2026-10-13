@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from guildbotics.app_api import runtime as runtime_module
+from guildbotics.app_api import command_catalog as catalog_module
 from guildbotics.app_api import verify as verify_module
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
@@ -18,6 +18,7 @@ from guildbotics.environment.status import (
     ToolStatus,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
 @pytest.fixture
@@ -25,6 +26,23 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Use the temporary workspace as the runtime's working directory."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _stop_transcript_retention(monkeypatch: pytest.MonkeyPatch):
+    """Stop the retention a runtime starts on entering a workspace, which the
+    app's lifespan stops in production."""
+    started: list[DiagnosticsStore] = []
+    start = DiagnosticsStore.start_maintenance
+
+    def tracked(store: DiagnosticsStore) -> None:
+        started.append(store)
+        start(store)
+
+    monkeypatch.setattr(DiagnosticsStore, "start_maintenance", tracked)
+    yield
+    for store in started:
+        store.stop_maintenance()
 
 
 @pytest.fixture
@@ -81,6 +99,6 @@ def agent_environment(monkeypatch: pytest.MonkeyPatch) -> AgentEnvironmentStandI
     asks the keychain for every tool's login.
     """
     device = AgentEnvironmentStandIn()
-    for module in (runtime_module, verify_module):
+    for module in (catalog_module, verify_module):
         monkeypatch.setattr(module, "device_status", device)
     return device

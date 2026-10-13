@@ -822,6 +822,16 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
 ) -> None:
     service, bus = _make_service(context_factory)
     bus_before = len(bus.snapshot_events())
+    # The status a reader of the failure event would find at that moment.
+    status_at_failure: list[str] = []
+    publish = bus.publish_event
+
+    def recording_publish(event_type: str, payload: Any = None, **kwargs: Any) -> None:
+        if event_type == "scheduler.failed" and "traceback" in (payload or {}):
+            status_at_failure.append(service.get_status().scheduler.state)
+        publish(event_type, payload, **kwargs)
+
+    bus.publish_event = recording_publish  # type: ignore[method-assign]
 
     # Patch the next constructed scheduler to raise inside start().
     original_init = FakeScheduler.__init__
@@ -838,10 +848,11 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
             )
         )
         # Wait on the emitted event, without polling status as a release trigger.
-        assert _wait_until(lambda: "scheduler.failed" in _events_for(bus, "scheduler"))
+        assert _wait_until(lambda: status_at_failure)
     finally:
         FakeScheduler.__init__ = original_init  # type: ignore[method-assign]
 
+    assert status_at_failure == ["failed"]
     status = service.get_status().scheduler
     assert status.state == "failed"
     assert status.running is False

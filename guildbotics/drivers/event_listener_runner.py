@@ -433,7 +433,7 @@ class EventListenerRunner:
                         str(sub.get("backfill_overlap_seconds", "")).strip(),
                     ),
                     ("backfill_limit", str(sub.get("backfill_limit", "")).strip()),
-                    ("participation", _chat_participation(sub.get("participation"))),
+                    ("participation", sub["participation"]),
                 )
             )
         return tuple(items)
@@ -457,7 +457,7 @@ class EventListenerRunner:
             limit=max(
                 1, _positive_int(subscription.get("backfill_limit"), default.limit)
             ),
-            participation=_chat_participation(subscription.get("participation")),
+            participation=subscription["participation"],
         )
 
     async def _resolve_subscription_channels(
@@ -753,10 +753,3 @@ def _positive_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, parsed)
-
-
-def _chat_participation(value: Any) -> str:
-    participation = str(value or "strict").strip().lower()
-    if participation in {"strict", "social", "muted"}:
-        return participation
-    return "strict"

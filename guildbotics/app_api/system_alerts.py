@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, get_args
 
 from guildbotics.app_api.agent_environment_status import EnvironmentProblemEntry
-from guildbotics.app_api.inference_failures import KEY_SERVICES, inference_key
 from guildbotics.app_api.models import (
     DeviceSetting,
     RuntimeStatus,
@@ -19,6 +18,7 @@ from guildbotics.app_api.models import (
     SystemAlertSeverity,
     SystemAlertsResponse,
 )
+from guildbotics.app_api.traces import KEY_SERVICES, inference_key
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.intelligences.llm_providers import CREDENTIAL_FAILURES
 from guildbotics.observability.diagnostics_store import (
@@ -69,7 +69,7 @@ _AGENT_ENVIRONMENT_ALERTS: dict[str, tuple[str, SystemAlertCode]] = {
 class SystemAlertService:
     """Fold diagnostics and current runtime state into unresolved alerts."""
 
-    def __init__(self, store: DiagnosticsStore | None) -> None:
+    def __init__(self, store: DiagnosticsStore) -> None:
         self._store = store
         self._lock = threading.Lock()
         self._state_path: Path | None = None
@@ -91,15 +91,13 @@ class SystemAlertService:
         """
         with self._lock:
             self._refresh_state()
-            changed = False
-            if self._store is not None:
-                records, cursor = self._store.records_after(
-                    self._cursor, includes=_is_relevant_record
-                )
-                for record in records:
-                    self._apply_record(self._alerts, record)
-                changed = cursor != self._cursor
-                self._cursor = cursor
+            records, cursor = self._store.records_after(
+                self._cursor, includes=_is_relevant_record
+            )
+            for record in records:
+                self._apply_record(self._alerts, record)
+            changed = cursor != self._cursor
+            self._cursor = cursor
             changed = (
                 self._reconcile_runtime_dismissals(
                     runtime, agent_environment_problems or []
@@ -130,25 +128,19 @@ class SystemAlertService:
             self._save_state()
 
     def _refresh_state(self) -> None:
-        path = (
-            self._store.path.with_name("system-alerts.json")
-            if self._store is not None
-            else None
-        )
+        path = self._state_file()
         if path == self._state_path:
             return
         self._state_path = path
         self._cursor = None
         self._alerts = {}
         self._dismissed = set()
-        if path is None:
-            return
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             version = payload.get("version")
             if version == _STATE_VERSION:
                 self._cursor = DiagnosticsCursor.from_dict(payload.get("cursor"))
-            elif self._store is not None:
+            else:
                 # Preserve existing alert/dismissal state without replaying rows
                 # already represented by the previous hash-based state format.
                 self._cursor = self._store.current_cursor()
@@ -168,9 +160,11 @@ class SystemAlertService:
             self._alerts = {}
             self._dismissed = set()
 
+    def _state_file(self) -> Path:
+        return self._store.path.with_name("system-alerts.json")
+
     def _save_state(self) -> None:
-        if self._state_path is None:
-            return
+        path = self._state_file()
         payload = {
             "version": _STATE_VERSION,
             "cursor": self._cursor.to_dict() if self._cursor is not None else None,
@@ -178,10 +172,8 @@ class SystemAlertService:
             "dismissed": sorted(self._dismissed),
         }
         try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
             return
 

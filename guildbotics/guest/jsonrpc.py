@@ -54,9 +54,7 @@ class RpcError(RuntimeError):
             retry_fields: The ``data`` fields in which this peer states when
                 to retry, each mapped to the detail it is reported as.
         """
-        error = self.error if isinstance(self.error, dict) else {}
-        data = error.get("data")
-        data = data if isinstance(data, dict) else {}
+        error, data = self._parts()
         details: dict[str, Any] = {
             "provider_code": error.get("code"),
             "provider_type": data.get("type") or error.get("type"),
@@ -69,6 +67,28 @@ class RpcError(RuntimeError):
             }
         )
         return details
+
+    def identifiers(
+        self, error_keys: tuple[str, ...], data_keys: tuple[str, ...]
+    ) -> set[str]:
+        """The peer's own names for this error, lower-cased.
+
+        Args:
+            error_keys: The fields of the error object that name it.
+            data_keys: The fields of its ``data`` that name it.
+        """
+        error, data = self._parts()
+        return {
+            str(value).lower()
+            for value in (*map(error.get, error_keys), *map(data.get, data_keys))
+            if value is not None
+        }
+
+    def _parts(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The error object and its ``data``, each empty when not a mapping."""
+        error = self.error if isinstance(self.error, dict) else {}
+        data = error.get("data")
+        return error, data if isinstance(data, dict) else {}
 
 
 class LineJsonRpcTransport:

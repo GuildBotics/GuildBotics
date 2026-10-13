@@ -6,12 +6,10 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.correlation import correlation_fields
-
-if TYPE_CHECKING:
-    from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
 @dataclass(frozen=True)
@@ -54,7 +52,9 @@ class EventBus:
         self._event_history: deque[dict[str, Any]] = deque(maxlen=history_limit)
         self._event_subscribers: set[_Subscriber] = set()
         self._lock = threading.Lock()
-        self._store = store
+        #: Every published record lands here; before a workspace is selected
+        #: the store keeps them in memory only.
+        self.store = store or DiagnosticsStore()
 
     def publish_event(
         self,
@@ -77,8 +77,7 @@ class EventBus:
             current_subscribers = list(self._event_subscribers)
         for subscriber in current_subscribers:
             subscriber.loop.call_soon_threadsafe(subscriber.queue.put_nowait, item)
-        if self._store is not None:
-            self._store.record(item)
+        self.store.record(item)
 
     def publish_log(self, level: str, message: str) -> None:
         correlation = correlation_fields()
@@ -89,8 +88,7 @@ class EventBus:
             **_correlation_record(correlation),
             "timestamp": _timestamp(),
         }
-        if self._store is not None:
-            self._store.record(item)
+        self.store.record(item)
 
     def subscribe_events(self) -> EventSubscription:
         return EventSubscription(

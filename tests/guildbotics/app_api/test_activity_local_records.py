@@ -3,18 +3,18 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
-from guildbotics.app_api.api import create_app
 from guildbotics.app_api.activity_history import run_subject_id
+from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_activity_events import (
-    record_member_work_target,
-    record_member_push_event,
-    record_member_pr_create_event,
     record_member_issue_create_event,
+    record_member_pr_create_event,
+    record_member_push_event,
+    record_member_work_target,
 )
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.observability import diagnostics_events
@@ -22,7 +22,7 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime.member_invocation import ChatSubject
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.i18n_tool import t
-from tests.guildbotics.local_code_host import local_member, ticket, pull_request
+from tests.guildbotics.local_code_host import local_member, pull_request, ticket
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_local_targets_push_and_chat_reach_activity_and_execution_titles(
     member = local_member()
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     monkeypatch.setattr(diagnostics_events, "_STORE", store)
-    runtime = AppRuntime(EventBus(store=store), diagnostics_store=store)
+    runtime = AppRuntime(EventBus(store=store))
     monkeypatch.setattr(
         runtime, "_get_context", lambda: SimpleNamespace(team=member.team)
     )

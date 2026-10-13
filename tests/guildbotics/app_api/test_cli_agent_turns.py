@@ -4,8 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
-from guildbotics.app_api.cli_agent_turns import last_cli_agent_turns
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.traces import last_cli_agent_turns
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 
@@ -69,8 +70,7 @@ def test_latest_finished_or_failed_turn_per_member_and_tool(tmp_path):
     assert turns["bob", "codex"].effort == "xhigh"
 
 
-def test_no_store_or_no_records(tmp_path):
-    assert last_cli_agent_turns(None) == []
+def test_no_records(tmp_path):
     assert last_cli_agent_turns(DiagnosticsStore(tmp_path / "empty.jsonl")) == []
 
 
@@ -96,9 +96,7 @@ def test_api_reads_persisted_device_records_and_requires_token(tmp_path, effort)
     path = tmp_path / "diagnostics.jsonl"
     _record(DiagnosticsStore(path), specified=True, effort=effort)
     store = DiagnosticsStore(path)
-    app = create_app(
-        session_token="secret", event_bus=EventBus(store=store), diagnostics_store=store
-    )
+    app = create_app(session_token="secret", runtime=AppRuntime(EventBus(store=store)))
     with TestClient(app) as client:
         url = "/intelligences/cli-agents/last-turns"
         assert client.get(url).status_code == 401

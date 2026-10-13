@@ -9,7 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
+from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.utils.secret_store import KeyringSecretStore
 from tests.guildbotics.app_api.provider_doubles import (
     answer,
@@ -24,6 +26,8 @@ PNG = b"\x89PNG\r\n\x1a\nimage"
 
 
 class RuntimeStub:
+    system_service_run_id = "stub-service"
+
     def __init__(self, tmp_path: Path) -> None:
         self.config_status = ConfigStatus(
             cwd=tmp_path,
@@ -33,6 +37,8 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
+        self.workspace_sync_service = WorkspaceSyncService()
+        self.event_bus = EventBus()
 
     def stop_scheduler(self, *, force: bool = False) -> None:
         pass

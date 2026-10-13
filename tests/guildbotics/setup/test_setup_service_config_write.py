@@ -396,6 +396,23 @@ def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) ->
     assert _default_person_id(config_dir) == ""
 
 
+def test_update_project_keeps_the_default_person(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    _seed_project(config_dir)
+    SimplePersonSetupService().write_person(_person_input(config_dir))
+    service = SimpleProjectSetupService()
+    service.set_default_person(config_dir=config_dir, person_id="alice")
+
+    service.update_project(
+        ProjectSetupInput(config_dir=config_dir, language="ja", description="Ops")
+    )
+
+    project_data = load_yaml_file(config_dir / "team/project.yml")
+    assert project_data["language"] == "ja"
+    assert project_data["description"] == "Ops"
+    assert _default_person_id(config_dir) == "alice"
+
+
 def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
