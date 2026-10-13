@@ -224,19 +224,8 @@ def test_every_writer_limit_is_the_boundary_limit() -> None:
     assert not stale, f"Excused as unshared but no longer declared: {stale}"
 
 
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    return tmp_path
-
-
 def test_a_memory_document_too_large_to_share_is_refused_when_recorded(
-    workspace: Path,
+    tmp_path: Path,
 ) -> None:
     """The agent writing the body is told now, not by a queue it cannot see."""
     service = MemberMemoryService(Person(person_id="p1", name="P"))
@@ -246,11 +235,11 @@ def test_a_memory_document_too_large_to_share_is_refused_when_recorded(
             scope="personal", title="t", body="x" * (MAX_SHARED_FILE_BYTES + 1)
         )
 
-    documents = workspace / ".guildbotics/state/documents/personal/p1"
+    documents = tmp_path / ".guildbotics/state/documents/personal/p1"
     assert not list(documents.glob("*/body.md"))
 
 
-def test_a_refused_update_leaves_the_document_as_it_was(workspace: Path) -> None:
+def test_a_refused_update_leaves_the_document_as_it_was(tmp_path: Path) -> None:
     """Metadata and body are measured together, so neither lands alone."""
     service = MemberMemoryService(Person(person_id="p1", name="P"))
     created = service.record(scope="personal", title="t", body="original")
@@ -263,12 +252,12 @@ def test_a_refused_update_leaves_the_document_as_it_was(workspace: Path) -> None
     assert document["meta"]["title"] == "t"
 
 
-def test_what_the_writer_accepts_the_boundary_carries(workspace: Path) -> None:
+def test_what_the_writer_accepts_the_boundary_carries(tmp_path: Path) -> None:
     """The two limits are checked against each other, not just against a number."""
     service = MemberMemoryService(Person(person_id="p1", name="P"))
     created = service.record(scope="personal", title="t", body="y" * 900_000)
 
-    root = workspace / ".guildbotics"
+    root = tmp_path / ".guildbotics"
     for path in sorted((root / "state/documents/personal/p1").rglob("*")):
         if path.is_file():
             relative = path.relative_to(root).as_posix()

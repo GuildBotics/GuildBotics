@@ -12,7 +12,6 @@ from guildbotics.intelligences.agent_runtime.wire import (
     SummaryEntry,
 )
 from guildbotics.runtime.chat_service import message_position
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.environment.window_doubles import (
     WindowDouble,
     enter_command,
@@ -985,7 +984,6 @@ async def test_a_turn_says_where_it_works_for_the_host_to_record_its_confinement
         ConversationKey,
     )
 
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     adapter = SimpleNamespace(
         run_turn=AsyncMock(
             return_value=AgentTerminalResult(
@@ -1039,7 +1037,6 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         ConversationKey,
     )
 
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     use_cli_agent_slots(
         monkeypatch,
         "judge",

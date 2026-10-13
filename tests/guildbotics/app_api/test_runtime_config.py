@@ -48,13 +48,10 @@ class _FakeContext:
 
 @pytest.fixture
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point cwd and HOME at the tmp tree and clear config overrides."""
+    """Use the temporary workspace as the working directory."""
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     return tmp_path
 
 
@@ -136,7 +133,6 @@ def test_config_status_never_falls_back_to_cwd_without_a_workspace(
     ``.guildbotics/`` inside a source checkout.
     """
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     status = AppRuntime(EventBus()).get_config_status()
 
@@ -720,7 +716,6 @@ def test_runtime_startup_never_adopts_cwd_as_workspace(
 ) -> None:
     """A sidecar started without a selected workspace must not publish cwd."""
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     runtime = AppRuntime(EventBus(), load_workspace_environment=True)
 

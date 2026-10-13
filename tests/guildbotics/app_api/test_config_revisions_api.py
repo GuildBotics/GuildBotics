@@ -13,9 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 from yaml import safe_load
 
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.utils.i18n_tool import t
 
 HTTP_OK = 200
@@ -309,24 +306,6 @@ def test_repair_read_requires_an_actual_stored_member(client, config_dir, name):
     response = client.get(f"/config/members/{name}", headers=AUTH_HEADERS)
     assert response.status_code == HTTP_BAD_REQUEST
     assert not list(directory.iterdir())
-
-
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
-def client(workspace: Path) -> TestClient:
-    return TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
 
 
 @pytest.fixture

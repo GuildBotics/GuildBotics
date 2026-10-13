@@ -66,7 +66,6 @@ from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.app_api.command_doubles import stub_commands
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
@@ -134,9 +133,6 @@ def _runtime_with_context(
 def _isolate_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point cwd / HOME at ``tmp_path`` so command discovery is deterministic."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     return tmp_path / ".guildbotics/config"
 
 
@@ -1174,8 +1170,6 @@ async def test_run_command_without_cwd_runs_in_the_exchange_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     runtime = AppRuntime(EventBus())
 
     async def fake_run_command(*_: Any) -> CommandOutcome:
@@ -1200,8 +1194,6 @@ async def test_run_command_expands_the_home_in_the_working_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     runtime = AppRuntime(EventBus())
 
     async def fake_run_command(*_: Any) -> CommandOutcome:
@@ -2084,7 +2076,6 @@ def _assistant_runtime(
 ) -> AppRuntime:
     """A runtime whose member's agent is ``agent``; nothing else is replaced."""
     _isolate_workspace(tmp_path, monkeypatch)
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     runtime = _runtime_with_context(monkeypatch, AgentContext(agent))
 
     class _StoreStub:

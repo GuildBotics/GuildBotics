@@ -21,7 +21,6 @@ from guildbotics.secrets import (
     transfer_status,
 )
 from guildbotics.secrets.hub_client import HubFetchResult, HubSendResult, SecretOffer
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import KeyringSecretStore, SecretKeyStatus
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
@@ -29,8 +28,7 @@ from tests.guildbotics.secrets.fake_hub import FakeHub
 
 
 @pytest.fixture
-def store(fake_keyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+def store(fake_keyring, tmp_path: Path):
     return KeyringSecretStore(tmp_path / ".guildbotics" / "config")
 
 

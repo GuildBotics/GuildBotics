@@ -29,15 +29,8 @@ from guildbotics.utils.shared_write_lock import (
 
 
 @pytest.fixture(autouse=True)
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+def brief_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shared_write_lock_module, "LOCK_TIMEOUT_SECONDS", 0.05)
-    return tmp_path
 
 
 @pytest.fixture
@@ -46,13 +39,13 @@ def service() -> MemberMemoryService:
 
 
 @contextmanager
-def held_elsewhere(workspace: Path) -> Iterator[None]:
+def held_elsewhere(tmp_path: Path) -> Iterator[None]:
     """Hold the workspace's lock on another thread for the duration."""
     taken = threading.Event()
     release = threading.Event()
 
     def hold() -> None:
-        with shared_write_lock(workspace):
+        with shared_write_lock(tmp_path):
             taken.set()
             release.wait(30)
 
@@ -67,7 +60,7 @@ def held_elsewhere(workspace: Path) -> Iterator[None]:
 
 
 def test_the_team_policy_lookup_happens_inside_the_span(
-    workspace: Path, service: MemberMemoryService
+    tmp_path: Path, service: MemberMemoryService
 ) -> None:
     """ "Is there one already?" decides create-or-replace, so it is the write.
 
@@ -76,7 +69,7 @@ def test_the_team_policy_lookup_happens_inside_the_span(
     it. Checked by refusal: with the lock held elsewhere, the call must not get
     as far as looking.
     """
-    with held_elsewhere(workspace):
+    with held_elsewhere(tmp_path):
         with pytest.raises(SharedWriteBusyError):
             service.record(
                 scope="team",
@@ -86,7 +79,7 @@ def test_the_team_policy_lookup_happens_inside_the_span(
                 policy_approved=True,
             )
 
-    assert not list((workspace / ".guildbotics/state/documents").rglob("meta.yml"))
+    assert not list((tmp_path / ".guildbotics/state/documents").rglob("meta.yml"))
 
 
 def test_replacing_the_team_policy_does_not_deadlock_against_itself(
@@ -111,7 +104,7 @@ def test_replacing_the_team_policy_does_not_deadlock_against_itself(
 
 
 def test_a_busy_audit_journal_does_not_undo_the_document(
-    monkeypatch: pytest.MonkeyPatch, service: MemberMemoryService, workspace: Path
+    monkeypatch: pytest.MonkeyPatch, service: MemberMemoryService, tmp_path: Path
 ) -> None:
     """The document is already written when the journal entry is made.
 
@@ -152,7 +145,7 @@ def test_a_busy_audit_journal_does_not_undo_an_update(
 
 
 def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The evidence check and the completion are one decision, so one span.
 
@@ -167,7 +160,7 @@ def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
     original = RunStore._read_record_if_exists
 
     def note_whether_anyone_else_can_write(self: RunStore, run_id: str) -> object:
-        got_in.append(_another_thread_can_take_the_lock(workspace))
+        got_in.append(_another_thread_can_take_the_lock(tmp_path))
         return original(self, run_id)
 
     monkeypatch.setattr(
@@ -187,13 +180,13 @@ def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
     assert store.status("run-1").status == "done"
 
 
-def _another_thread_can_take_the_lock(workspace: Path) -> bool:
+def _another_thread_can_take_the_lock(tmp_path: Path) -> bool:
     """Whether a second thread could write shared files right now."""
     taken: list[bool] = []
 
     def attempt() -> None:
         try:
-            with shared_write_lock(workspace):
+            with shared_write_lock(tmp_path):
                 taken.append(True)
         except SharedWriteBusyError:
             taken.append(False)
@@ -205,7 +198,7 @@ def _another_thread_can_take_the_lock(workspace: Path) -> bool:
     return taken == [True]
 
 
-def test_a_completion_without_evidence_is_still_refused(workspace: Path) -> None:
+def test_a_completion_without_evidence_is_still_refused(tmp_path: Path) -> None:
     """Widening the span must not have widened what counts as evidence."""
     store = RunStore()
 

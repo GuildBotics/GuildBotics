@@ -20,13 +20,6 @@ EXPECTED_ROUTINE_CALL_COUNT = 2
 
 
 @pytest.fixture(autouse=True)
-def _isolated_data_dir(monkeypatch, tmp_path):
-    # Keep the per-member chat dispatcher pointed at an empty temp workspace so it
-    # is a no-op (no queued chat events) in these scheduler timing tests.
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-
-
-@pytest.fixture(autouse=True)
 def _environment_ready(monkeypatch):
     """The device can run AI CLI turns unless a test says otherwise."""
     _set_environment_refusal(monkeypatch, "")
@@ -93,11 +86,7 @@ def test_task_scheduler_runs_routine_at_configured_minute_interval(monkeypatch) 
     )
     calls: list[dt.datetime] = []
 
-    async def fake_run_command(
-        context: object,
-        command: str,
-        task_type: str,
-    ) -> bool:
+    async def fake_run_command(context: object, command: str, task_type: str) -> bool:
         calls.append(FakeDateTime.current)
         if len(calls) == EXPECTED_ROUTINE_CALL_COUNT:
             scheduler.shutdown()
@@ -138,11 +127,7 @@ def test_task_scheduler_measures_routine_interval_after_routine_finishes(
     calls: list[dt.datetime] = []
     first_finished_at: dt.datetime | None = None
 
-    async def fake_run_command(
-        context: object,
-        command: str,
-        task_type: str,
-    ) -> bool:
+    async def fake_run_command(context: object, command: str, task_type: str) -> bool:
         nonlocal first_finished_at
         calls.append(FakeDateTime.current)
         if len(calls) == 1:

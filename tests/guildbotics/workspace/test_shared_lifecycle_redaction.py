@@ -71,7 +71,6 @@ LIFECYCLE_WRITERS: dict[str, Callable[[Path], Path]] = {
 def test_lifecycle_writer_masks_secrets_and_bounds_text(
     writer: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_keyring
 ) -> None:
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
         "OPENAI_API_KEY", SECRET
     )

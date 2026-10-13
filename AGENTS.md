@@ -609,6 +609,7 @@ desktop TypeScript 開発時の品質確認:
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
 - どのテストも既定で 120 秒で時間切れになり、止まらずに失敗する（`pyproject.toml` の `[tool.pytest.ini_options]` の `timeout`。pytest-timeout）。実機の隔離環境と provider CLI を使う任意実行のテストは、module の `pytestmark` に `pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE")` のように opt-in 環境変数を渡す。このマーカーのテストは 30 分で時間切れになる
 - テストは決定論的かつ hermetic に保つ。時間・乱数・環境変数・cwd・HOME・I/O は `monkeypatch` / `tmp_path` で制御し、実 home ディレクトリや外部サービスに触れない
+- `tests/conftest.py` の autouse fixture が、通常テストの `HOME`・`USERPROFILE` を `tmp_path / "home"`、`GUILDBOTICS_WORKSPACE_ROOT` を `tmp_path` に設定し、`GUILDBOTICS_CONFIG_DIR` を削除する。個別のテストや fixture では、これと違う値が必要なときだけ設定する
 - 通常の pytest は収集時から loopback（`127.0.0.1` / `::1` / `localhost`）以外の Python socket 接続と名前解決を失敗させる。子プロセスには到達不能な HTTP proxy と `GIT_ALLOW_PROTOCOL=file` を渡す。これらを無視する CLI（直接起動した `ssh` など）はテスト側で stub にする。接続試行の調査には `--network-audit` を使う。この監査で記録できるのは Python プロセス内の接続試行で、子プロセスの通信は含まない。`real_device` を付けたテストは指定した環境変数が `1` のときだけ実行し、その実行だけをネットワーク制限から除外する
 - `real_device` を付けた実機・provider 接続テストは、通常の CI、定期ジョブ、エージェントによる一括テストに含めず、pytest-xdist で並列実行しない。個別に実行する前に、対象と外部通信・実機の認証状態への影響を示してユーザーの明示的な承認を得る。ユーザーが実行に立ち会い、進行と結果を確認できる状態でのみ実行する。opt-in 環境変数の設定は承認や立ち会いの代わりにならない
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する

@@ -358,7 +358,6 @@ def test_failed_judgment_delegates_without_execution_settings(failure):
 async def test_snapshot_is_full_and_replayable_even_without_transcripts(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     state = {
         "thread_context_complete": True,
         "unprocessed_messages": [{"content": "ありがとう" * 600}],
@@ -617,7 +616,6 @@ async def test_resolved_configuration_is_durable_before_failed_call(
     from guildbotics.intelligences import cli_agents
     from guildbotics.intelligences.brains import agno_agent
 
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     logger = logging.getLogger()
     if engine == "jev":
         brain = jev.JevBrain("alice", "chat_decision", logger)

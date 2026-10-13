@@ -16,11 +16,7 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from guildbotics.utils.correlation import trace_scope
-from guildbotics.utils.fileio import (
-    GUILDBOTICS_WORKSPACE_ROOT,
-    dump_yaml,
-    load_yaml_file,
-)
+from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.workspace.identity import device_identity_path
 
 EXPECTED_DIGEST_N = 3
@@ -32,8 +28,7 @@ def person() -> Person:
 
 
 @pytest.fixture(autouse=True)
-def data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+def data_root(tmp_path: Path) -> Path:
     return tmp_path / ".guildbotics" / "state"
 
 

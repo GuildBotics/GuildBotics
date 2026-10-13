@@ -648,7 +648,6 @@ def test_runtime_config_status_reports_workspace_active_location(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     project_file = tmp_path / ".guildbotics/config/team/project.yml"
     project_file.parent.mkdir(parents=True)
     project_file.write_text("language: en\n")
@@ -663,7 +662,6 @@ def test_app_runtime_command_options_describe_workspace_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     command_file = tmp_path / ".guildbotics/config/commands/workflows/demo.py"
     command_file.parent.mkdir(parents=True)
     command_file.write_text(
@@ -708,9 +706,6 @@ def test_app_runtime_command_options_exclude_template_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
     project = Project()
     team = type("TeamStub", (), {"project": project, "members": [person]})()
@@ -738,9 +733,6 @@ def test_app_runtime_command_options_do_not_seed_empty_workspace(
     # directory is a valid empty state, and sample seeding only happens at
     # project setup, not on every options request.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     project_file = tmp_path / ".guildbotics/config/team/project.yml"
     project_file.parent.mkdir(parents=True)
     project_file.write_text("language: ja\n")
@@ -771,9 +763,6 @@ def test_app_runtime_command_options_propagate_nested_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     commands_dir = tmp_path / ".guildbotics/config/commands"
     commands_dir.mkdir(parents=True)
     (commands_dir / "cli-task.md").write_text(
@@ -820,9 +809,6 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     config_dir = tmp_path / ".guildbotics/config"
     commands_dir = config_dir / "commands"
     commands_dir.mkdir(parents=True)
@@ -895,9 +881,6 @@ def test_app_runtime_command_options_extract_markdown_arguments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     command_file = tmp_path / ".guildbotics/config/commands/translate.md"
     command_file.parent.mkdir(parents=True)
     command_file.write_text(
@@ -3291,7 +3274,6 @@ def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
 def test_chat_receive_state_reset_ignores_past_for_active_members(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     runtime = AppRuntime(EventBus())
     active = _chat_person("alice", "C1", active=True)
@@ -3335,7 +3317,6 @@ def test_chat_receive_state_reset_ignores_past_for_active_members(
 def test_chat_receive_state_reset_covers_name_only_subscription(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     runtime = AppRuntime(EventBus())
     # Subscription known only by channel name, with no stored per-channel state.

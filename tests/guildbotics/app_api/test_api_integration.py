@@ -10,38 +10,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 from yaml import safe_load
 
-from guildbotics.app_api.api import create_app
-from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
-
-
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A hermetic temp workspace acting as the runtime working directory."""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
-def client(workspace: Path) -> TestClient:
-    """A TestClient bound to a real runtime rooted at the temp workspace."""
-    app = create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    return TestClient(app)
 
 
 def _init_project(

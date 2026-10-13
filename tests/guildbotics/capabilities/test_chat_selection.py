@@ -58,11 +58,6 @@ from tests.guildbotics.local_chat import at, chat_event, lines, position, say
 _WORKFLOW = "workflows/chat_conversation_workflow"
 
 
-@pytest.fixture(autouse=True)
-def _isolated_data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-
-
 class StubLogger:
     def __init__(self) -> None:
         self.lines: list[tuple] = []

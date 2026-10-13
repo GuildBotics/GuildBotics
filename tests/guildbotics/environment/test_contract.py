@@ -237,12 +237,10 @@ def test_invalid_grants_allow_selection_but_still_refuse_execution(
 
 @pytest.mark.parametrize("name", _PROTECTED_PATH_DEPTHS)
 def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
-    tmp_path, monkeypatch, symlinks, name
+    tmp_path, symlinks, name
 ):
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     target = tmp_path / "dotfiles" / "private"
     target.mkdir(parents=True)
     link = home / name
@@ -265,8 +263,6 @@ def test_workspace_admission_reads_target_grants_independently_of_current_select
 ):
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     old = tmp_path / "old"
     old.mkdir()
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(old))
@@ -285,14 +281,12 @@ def test_workspace_admission_reads_target_grants_independently_of_current_select
 
 @pytest.mark.parametrize("state_exists", [False, True])
 def test_an_inactive_registered_workspace_is_protected_before_creation(
-    tmp_path, monkeypatch, state_exists
+    tmp_path, state_exists
 ):
     from guildbotics.utils.workspace_state import register_workspace
 
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     inactive = tmp_path / "inactive"
     if state_exists:
         (inactive / ".guildbotics").mkdir(parents=True)
@@ -322,8 +316,6 @@ def test_workspace_locations_inside_grants_or_exchange_are_refused(
     from guildbotics.environment import contract
 
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(
         contract,
         "load_shared_grants",

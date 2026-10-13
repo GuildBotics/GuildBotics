@@ -151,19 +151,14 @@ def test_get_config_path_language_specific_and_fallback(tmp_path, monkeypatch):
     assert resolved_fallback == en_file
 
 
-def test_get_primary_config_path_uses_resolved_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-
+def test_get_primary_config_path_uses_resolved_workspace(tmp_path):
     assert get_primary_config_path(Path("team/project.yml")) == (
         tmp_path / ".guildbotics/config/team/project.yml"
     )
 
 
-def test_get_machine_state_root_is_independent_of_workspace(tmp_path, monkeypatch):
+def test_get_machine_state_root_is_independent_of_workspace(tmp_path):
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
 
     assert get_machine_state_root() == home / ".guildbotics" / "data"
     assert get_machine_state_path("run", "service.lock") == (
@@ -171,9 +166,7 @@ def test_get_machine_state_root_is_independent_of_workspace(tmp_path, monkeypatc
     )
 
 
-def test_workspace_state_and_local_paths_do_not_overlap(tmp_path, monkeypatch):
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-
+def test_workspace_state_and_local_paths_do_not_overlap(tmp_path):
     state = get_workspace_state_path("documents")
     local = get_workspace_local_path("run")
     clone = get_member_clone_path("aiko")
@@ -194,14 +187,12 @@ def test_get_workspace_root_does_not_use_cwd(tmp_path, monkeypatch):
     other.mkdir()
     monkeypatch.chdir(other)
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
 
     with pytest.raises(WorkspaceNotConfiguredError):
         get_workspace_root()
 
 
-def test_apply_workspace_root_publishes_config_dir(tmp_path, monkeypatch):
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+def test_apply_workspace_root_publishes_config_dir(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -264,36 +255,26 @@ def test_save_yaml_file_roundtrip_cleans(tmp_path):
     assert loaded == expected
 
 
-def test_get_primary_config_path_requires_workspace(monkeypatch, tmp_path):
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+def test_get_primary_config_path_requires_workspace(monkeypatch):
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     with pytest.raises(WorkspaceNotConfiguredError):
         get_primary_config_path(Path("hotkeys.yml"))
 
 
-def test_get_config_path_uses_template_without_workspace(monkeypatch, tmp_path):
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+def test_get_config_path_uses_template_without_workspace(monkeypatch):
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     resolved = get_config_path("team/project.yml")
 
     assert resolved == find_package_subdir(Path("templates")) / "team" / "project.yml"
 
 
-def test_the_host_keeps_its_temporary_files_under_its_own_state(
-    tmp_path, monkeypatch
-) -> None:
+def test_the_host_keeps_its_temporary_files_under_its_own_state(tmp_path) -> None:
     """Never in the OS temporary directory, which a grant may open."""
     from guildbotics.utils.fileio import host_temporary_directory, host_temporary_root
 
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
 
     root = host_temporary_root()
 

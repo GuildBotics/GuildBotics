@@ -64,18 +64,7 @@ WITHOUT_A_GENERATION = {
 RECORD_SUFFIXES = {".json", ".jsonl", ".yml", ".yaml"}
 
 
-@pytest.fixture
-def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-    return tmp_path
-
-
-def _write_one_of_every_shared_record(workspace: Path) -> None:
+def _write_one_of_every_shared_record(tmp_path: Path) -> None:
     """Run the real writers, so the population comes from what they produce."""
     ensure_workspace_identity()
     publish_device_record()
@@ -133,15 +122,13 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
 AHEAD = SHARED_RECORD_SCHEMA_VERSION + 1
 
 
-def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
+def _write_with_a_foreign_generation(tmp_path: Path) -> dict[str, Path]:
     """Run each writer with a foreign generation in what it is handed."""
     store = FileConversationStateStore()
     # The pending-event writers read the file and hand the same mapping back,
     # so planting the generation on disk is how a caller-supplied one would
     # actually reach them on a later save.
-    pending = (
-        workspace / ".guildbotics/state/chat_state/slack/p1/pending_events/C1.json"
-    )
+    pending = tmp_path / ".guildbotics/state/chat_state/slack/p1/pending_events/C1.json"
     pending.parent.mkdir(parents=True, exist_ok=True)
     pending.write_text(
         json.dumps({"schema_version": AHEAD, "events": []}), encoding="utf-8"
@@ -173,7 +160,7 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
     )
 
     RunStore().append("run-1", {"kind": "evidence", "schema_version": AHEAD})
-    sessions = workspace / ".guildbotics/state/sessions"
+    sessions = tmp_path / ".guildbotics/state/sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     (sessions / "trace-1.json").write_text(
         json.dumps({"schema_version": AHEAD, "trace_id": "trace-1"}), encoding="utf-8"
@@ -194,7 +181,7 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
     return {
         "pending events": pending,
         "memory metadata": (
-            workspace / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
+            tmp_path / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
         ),
         "interactive session": sessions / "trace-1.json",
     }
@@ -213,7 +200,7 @@ def _interactive_session() -> InteractiveTraceSession:
     )
 
 
-def test_a_generation_the_caller_supplies_never_survives(workspace: Path) -> None:
+def test_a_generation_the_caller_supplies_never_survives(tmp_path: Path) -> None:
     """The stamp is this build's, whatever the payload said.
 
     Stamped first instead of last, the value already in the mapping wins --
@@ -223,9 +210,9 @@ def test_a_generation_the_caller_supplies_never_survives(workspace: Path) -> Non
     the precise failure the field exists to prevent, reintroduced by the order
     of two lines.
     """
-    _write_with_a_foreign_generation(workspace)
+    _write_with_a_foreign_generation(tmp_path)
 
-    for relative, path in _shared_files(workspace).items():
+    for relative, path in _shared_files(tmp_path).items():
         if path.suffix not in RECORD_SUFFIXES:
             continue
         for payload in _records_in(path):
@@ -235,15 +222,15 @@ def test_a_generation_the_caller_supplies_never_survives(workspace: Path) -> Non
 
 
 def test_the_boundary_would_have_refused_the_supplied_generation(
-    workspace: Path,
+    tmp_path: Path,
 ) -> None:
     """The stamp matters because the boundary acts on what it finds.
 
     A record that kept the foreign generation would be refused on the way out
     -- by this device, about its own file -- and its queue would stop.
     """
-    planted = _write_with_a_foreign_generation(workspace)
-    root = workspace / ".guildbotics"
+    planted = _write_with_a_foreign_generation(tmp_path)
+    root = tmp_path / ".guildbotics"
 
     for name, path in planted.items():
         relative = path.relative_to(root).as_posix()
@@ -255,17 +242,17 @@ def test_the_boundary_would_have_refused_the_supplied_generation(
         assert name
 
 
-def _shared_files(workspace: Path) -> dict[str, Path]:
-    state = workspace / ".guildbotics" / "state"
+def _shared_files(tmp_path: Path) -> dict[str, Path]:
+    state = tmp_path / ".guildbotics" / "state"
     return {
-        path.relative_to(workspace / ".guildbotics").as_posix(): path
+        path.relative_to(tmp_path / ".guildbotics").as_posix(): path
         for path in sorted(state.rglob("*"))
         if path.is_file()
     }
 
 
 def test_every_record_written_under_state_declares_its_generation(
-    workspace: Path,
+    tmp_path: Path,
 ) -> None:
     """Checked on what the writers produce, not on a list of record kinds.
 
@@ -273,8 +260,8 @@ def test_every_record_written_under_state_declares_its_generation(
     were the three someone thought about. Reading them back off disk is what
     makes the next one impossible to forget.
     """
-    _write_one_of_every_shared_record(workspace)
-    written = _shared_files(workspace)
+    _write_one_of_every_shared_record(tmp_path)
+    written = _shared_files(tmp_path)
     assert written, "the writers produced nothing to check"
 
     unclassified = sorted(
@@ -307,12 +294,12 @@ def test_every_record_written_under_state_declares_its_generation(
     )
 
 
-def test_the_boundary_stops_a_record_from_a_newer_build(workspace: Path) -> None:
+def test_the_boundary_stops_a_record_from_a_newer_build(tmp_path: Path) -> None:
     """The generation is only worth stamping if the boundary acts on it."""
-    _write_one_of_every_shared_record(workspace)
+    _write_one_of_every_shared_record(tmp_path)
 
     checked = 0
-    for relative, path in _shared_files(workspace).items():
+    for relative, path in _shared_files(tmp_path).items():
         if path.suffix not in RECORD_SUFFIXES:
             continue
         ahead = _with_generation(path, SHARED_RECORD_SCHEMA_VERSION + 1)
