@@ -13,7 +13,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from yaml import safe_load
 
-
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
