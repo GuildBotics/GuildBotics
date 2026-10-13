@@ -14,6 +14,7 @@ no layer names the provider a workspace configures for a kind of service.
 """
 
 import re
+import subprocess
 from itertools import combinations
 from pathlib import Path
 
@@ -72,20 +73,24 @@ def _agent_facing_files() -> list[Path]:
 
 
 def test_guest_entry_instructions_use_the_snapshot_interpreter():
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z", "*.md", "*.py"], text=True, encoding="utf-8"
+    )
+    # Runtime tests intentionally invoke the guest with sys.executable.
+    documented = {
+        Path(name)
+        for name in tracked.split("\0")
+        if name and not name.startswith("tests/")
+    }
     sources = {
         str(path): path.read_text(encoding="utf-8")
-        for path in (
-            *_agent_facing_files(),
-            Path("AGENTS.md"),
-            Path("docs/ARCHITECTURE.md"),
-            Path("docs/custom_command_guide.en.md"),
-            Path("docs/custom_command_guide.ja.md"),
-            Path("guildbotics/guest/entry.py"),
-        )
+        for path in sorted(documented | set(_agent_facing_files()))
     }
     sources["member context/help"] = capability_reference_text()
     interpreters = {
-        name: re.findall(r"([^\s`\"']+) -m guildbotics\.guest\.entry\b", text)
+        name: re.findall(
+            r"([^\s`\"']+)[`\"']?\s+-m\s+guildbotics\.guest\.entry\b", text
+        )
         for name, text in sources.items()
     }
     for name in (
