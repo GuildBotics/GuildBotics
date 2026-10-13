@@ -351,7 +351,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Run bundled inspections on the host with `guildbotics run repository/issue_inspect "
     "--person <person> url=<ticket_url>` (or repository/pr_inspect, "
     "repository/pr_checks with url=<pr_url>). Inside a workflow or delegated command's "
-    "isolated environment, use `python -m guildbotics.guest.entry "
+    "isolated environment, use `/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry "
     "repository/issue_inspect url=<ticket_url>` instead: it runs inside "
     "the existing environment, inherits the main command's access contract and "
     "member, and uses its member broker. Do not start a host run from there. "

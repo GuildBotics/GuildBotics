@@ -1276,8 +1276,21 @@ def test_what_the_hub_printed_is_kept_until_the_hub_is_reached_again(
     assert status.failure is None
 
 
-def test_synchronize_is_serialized_between_threads(first: Device) -> None:
+def test_synchronize_is_serialized_between_threads(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
     first.write(CONFIG, "language: ja\n")
+    cycle = first.manager._synchronize_status
+    running = threading.Lock()
+
+    def exclusive_cycle():
+        assert running.acquire(blocking=False), "synchronization cycles overlap"
+        try:
+            return cycle()
+        finally:
+            running.release()
+
+    monkeypatch.setattr(first.manager, "_synchronize_status", exclusive_cycle)
     results: list[str] = []
     threads = [
         threading.Thread(
@@ -1288,7 +1301,8 @@ def test_synchronize_is_serialized_between_threads(first: Device) -> None:
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(10)
+        # pytest-timeout bounds the test; join must wait for actual completion.
+        thread.join()
 
     assert results == ["idle"] * 4
 

@@ -63,7 +63,7 @@ The map is `[tool.importlinter]` in `pyproject.toml`, checked by `lint-imports`
 in CI: it classifies every package (an unclassified one fails), and its
 contracts state each side's responsibility. The host and the guest never import
 each other: the host starts the guest's entry by module name
-(`python -m guildbotics.guest.entry`), and what crosses between them is the
+(`/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry`), and what crosses between them is the
 shared wire (`intelligences/agent_runtime/wire.py`). Shared code imports
 neither, and neither it nor the guest imports a library only the host uses (a
 server stack, the microVM SDK, the OS keychain, the inference SDK).
@@ -166,7 +166,7 @@ workflow (orchestration)
   and records observed work targets. The code host's `readiness()` (GitHub:
   `integrations/github/pull_requests.py`) is the one readiness, shared by the
   inspection, push, and completion paths. An agent already
-  inside a command calls `python -m guildbotics.guest.entry <name> <args>`
+  inside a command calls `/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry <name> <args>`
   to run a child in that environment under the main command's access contract.
 
 Trust rules that follow from this shape:
