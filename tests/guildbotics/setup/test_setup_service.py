@@ -237,10 +237,10 @@ def test_update_project_replaces_the_services_whole(tmp_path: Path) -> None:
     service = SimpleProjectSetupService()
     base: dict[str, Any] = {"config_dir": config_dir, "language": "en"}
 
-    service.update_project(
-        ProjectSetupInput(**base, services={"chat_service": {"name": "slack"}})
-    )
-    assert _stored_services(config_dir) == {"chat_service": {"name": "slack"}}
+    # The chat keeps the items it is given; the kinds left out are dropped.
+    chat = {"name": "slack", "base_url": "https://proxy.example/api"}
+    service.update_project(ProjectSetupInput(**base, services={"chat_service": chat}))
+    assert _stored_services(config_dir) == {"chat_service": chat}
 
     service.update_project(ProjectSetupInput(**base))
     assert _stored_services(config_dir) is None

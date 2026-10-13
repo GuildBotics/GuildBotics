@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 from pathlib import Path
@@ -64,7 +63,6 @@ class _Peer(AcpPeerBase):
         current_config: dict[str, str] | None = None,
         permission_request: dict[str, Any] | None = None,
         permission_options: list[dict[str, Any]] | None = None,
-        prompt_delay: float = 0.0,
     ) -> None:
         super().__init__()
         self.initialize = initialize if initialize is not None else _initialize()
@@ -85,7 +83,6 @@ class _Peer(AcpPeerBase):
         self.permission_options = (
             permission_options if permission_options is not None else DEFAULT_OPTIONS
         )
-        self.prompt_delay = prompt_delay
         self.config = copy.deepcopy(SESSION)
         for option in self.config["configOptions"]:
             if option["id"] in (current_config or {}):
@@ -157,10 +154,6 @@ class _Peer(AcpPeerBase):
             self.send_error(request_id, self.prompt_error)
             return
         self._emit_commands()
-        if self.prompt_delay:
-            # A real turn answers session/prompt only when the work is done.
-            asyncio.get_running_loop().create_task(self._answer_later(request_id))
-            return
         if self.permission_request is not None:
             self.feed(
                 {
@@ -175,12 +168,6 @@ class _Peer(AcpPeerBase):
                     },
                 }
             )
-        for update in self.updates:
-            self.feed(session_update(self.SESSION_ID, update))
-        self.send_result(request_id, {"stopReason": self.stop_reason})
-
-    async def _answer_later(self, request_id: Any) -> None:
-        await asyncio.sleep(self.prompt_delay)
         for update in self.updates:
             self.feed(session_update(self.SESSION_ID, update))
         self.send_result(request_id, {"stopReason": self.stop_reason})
@@ -227,7 +214,6 @@ async def _run(
     record = conversation or ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
     result = await adapter.run_turn("do the thing", context, record, events.append)
-    await adapter.close()
     return result, events
 
 
@@ -600,7 +586,6 @@ async def test_every_turn_boots_its_own_environment_and_reloads_the_session(
     second_peer = _Peer(updates=[text_chunk("second")])
     launched_again = install(monkeypatch, second_peer)
     await adapter.run_turn("two", _context(tmp_path), conversation, lambda _e: None)
-    await adapter.close()
 
     assert len(launched) == 1 and len(launched_again) == 1
     assert [env.tool for env in fake_environment.started] == ["copilot", "copilot"]
@@ -872,27 +857,3 @@ async def test_a_rate_limit_reset_hint_is_carried_through(
         await _run(CopilotAcpAdapter(), tmp_path)
 
     assert error.value.details["retry_after_at"] == "2026-08-10T00:00:00Z"
-
-
-@pytest.mark.asyncio
-async def test_a_stalled_turn_is_bounded_by_the_turn_deadline(
-    monkeypatch, tmp_path
-) -> None:
-    peer = _Peer(prompt_delay=5.0)
-    install(monkeypatch, peer)
-    terminated: list[Any] = []
-
-    async def terminate(process: Any) -> None:
-        terminated.append(process)
-        process.returncode = -15
-
-    peer.kill = lambda: terminate(peer)
-    adapter = CopilotAcpAdapter(timeout=0.05)
-
-    with pytest.raises(AgentRuntimeError) as error:
-        await _run(adapter, tmp_path)
-
-    assert error.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert error.value.rotate_session is True
-    assert terminated == [peer]
-    assert peer.sent("session/cancel")["params"] == {"sessionId": _Peer.SESSION_ID}

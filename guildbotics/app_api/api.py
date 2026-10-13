@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 from fastapi import (
-    APIRouter,
     Depends,
     FastAPI,
     File,
@@ -343,7 +342,11 @@ def create_app(
 
     # Every route takes the session token except the few on ``app`` itself,
     # each of which says why it cannot.
-    router = APIRouter(dependencies=[Depends(require_token)], responses=error_responses)
+    token_required: dict[str, Any] = {
+        "dependencies": [Depends(require_token)],
+        "responses": error_responses,
+    }
+    router = _Routes(app, token_required)
 
     @app.exception_handler(UnsafePathError)
     async def unsafe_path_handler(
@@ -940,7 +943,9 @@ def create_app(
             providers=discover_llm_providers(config_dir or get_template_path())
         )
 
-    decisions.register(router, lambda: _resolve_existing_config_dir(app_runtime))
+    decisions.register(
+        app, lambda: _resolve_existing_config_dir(app_runtime), token_required
+    )
 
     @router.get("/config/intelligences")
     def config_intelligences(
@@ -1235,7 +1240,6 @@ def create_app(
     async def events(websocket: WebSocket):
         await _stream(websocket, token, bus)
 
-    app.include_router(router)
     return app
 
 
@@ -1306,6 +1310,25 @@ def _page_endpoint(
         return HTMLResponse(shown.html, status_code=shown.status_code)
 
     return endpoint
+
+
+class _Routes:
+    """The app's route decorators, each adding the same route options.
+
+    The routes are registered on the app itself: FastAPI builds the routes of
+    an included ``APIRouter`` again when the app first serves a request, a cost
+    every app pays once more.
+    """
+
+    def __init__(self, app: FastAPI, options: dict[str, Any]) -> None:
+        self._app = app
+        self._options = options
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        register = getattr(self._app, method)
+        return lambda path, *args, **kwargs: register(
+            path, *args, **self._options, **kwargs
+        )
 
 
 class _UnhandledErrorMiddleware:

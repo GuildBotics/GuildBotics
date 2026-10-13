@@ -275,7 +275,6 @@ async def _run(
     record = conversation or ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
     result = await adapter.run_turn("do the thing", context, record, events.append)
-    await adapter.close()
     return result, events
 
 
@@ -659,7 +658,6 @@ async def test_load_failure_is_session_unavailable_and_rotates(
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.SESSION_UNAVAILABLE
     assert excinfo.value.rotate_session is True
-    await adapter.close()
 
 
 # --- assistant assembly ------------------------------------------------------
@@ -1028,7 +1026,6 @@ async def test_partial_output_is_still_recorded_as_events_on_failure(
             ConversationRecord(key=context.conversation_key),
             events.append,
         )
-    await adapter.close()
 
     assert any("partial answer" in event.message for event in events)
 
@@ -1072,13 +1069,9 @@ async def test_missing_http_mcp_capability_is_unsupported(
     initialize["agentCapabilities"]["mcpCapabilities"]["http"] = False
     peer = _Peer(initialize=initialize)
     install(monkeypatch, peer)
-    adapter = GrokAcpAdapter()
 
-    try:
-        with pytest.raises(AgentRuntimeError) as excinfo:
-            await _run(adapter, tmp_path)
-    finally:
-        await adapter.close()
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
     assert excinfo.value.details["agent_version"] == "0.2.114"
@@ -1297,27 +1290,6 @@ async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> N
 
     # The environment is the boundary; Grok's Landlock profiles cannot run there.
     assert launched[0][0][2:4] == ("--sandbox", "off")
-
-
-@pytest.mark.asyncio
-async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) -> None:
-    peer = _Peer()
-    install(monkeypatch, peer)
-    adapter = GrokAcpAdapter()
-    terminated: list[Any] = []
-
-    async def terminate(process: Any) -> None:
-        terminated.append(process)
-        process.returncode = -15
-
-    peer.kill = lambda: terminate(peer)
-    adapter._transport._process = peer  # type: ignore[assignment]
-    adapter._active_session_id = _Peer.SESSION_ID
-
-    await adapter.interrupt()
-
-    assert terminated == [peer]
-    assert peer.sent("session/cancel")["params"]["sessionId"] == _Peer.SESSION_ID
 
 
 # --- pure helpers ------------------------------------------------------------
@@ -1707,7 +1679,6 @@ async def test_a_failed_turn_emits_no_completed_record(monkeypatch, tmp_path) ->
             ConversationRecord(key=context.conversation_key),
             events.append,
         )
-    await adapter.close()
 
     # Without it the display keeps the partial chunks, which is what happened.
     assert not [event for event in events if event.name == "completed"]

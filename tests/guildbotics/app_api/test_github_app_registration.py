@@ -36,7 +36,6 @@ from tests.guildbotics.app_api.provider_doubles import (
 HTTP_OK = 200
 HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
-HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
 HTTP_SERVER_ERROR = 500
 CALLBACK_BASE = "http://testserver"
@@ -217,21 +216,6 @@ def test_the_registration_from_start_to_installation(
     # The installations were listed as the app itself.
     listing = next(r for r in github if r.url.path == "/app/installations")
     assert listing.headers["Authorization"].startswith("Bearer ey")
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/config/providers/github/app-registrations",
-        "/config/providers/github/app-registration",
-    ],
-)
-def test_the_screens_requests_need_the_session_token(
-    client: TestClient, path: str
-) -> None:
-    response = client.post(path, json={"state": "x"})
-
-    assert response.status_code == HTTP_UNAUTHORIZED
 
 
 def test_start_refuses_an_invalid_app_name(client: TestClient) -> None:

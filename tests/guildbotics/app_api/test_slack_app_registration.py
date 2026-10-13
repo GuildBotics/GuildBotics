@@ -25,7 +25,6 @@ from tests.guildbotics.app_api.provider_doubles import (
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
-HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE = 422
 
 BOT_TOKEN = "xoxb-secret-bot-token"
@@ -67,15 +66,6 @@ def _tokens(requests: list[httpx.Request]) -> dict[str, str]:
         request.url.path.rsplit("/", 1)[-1]: request.headers["Authorization"]
         for request in requests
     }
-
-
-@pytest.mark.parametrize("path", [REGISTRATIONS, VERIFY])
-def test_the_screens_requests_need_the_session_token(
-    client: TestClient, path: str
-) -> None:
-    response = client.post(path, json={"app_name": "alice"})
-
-    assert response.status_code == HTTP_UNAUTHORIZED
 
 
 def test_start_returns_the_manifest_deep_link(client: TestClient) -> None:

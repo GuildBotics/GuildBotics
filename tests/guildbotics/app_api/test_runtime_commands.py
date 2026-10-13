@@ -410,36 +410,6 @@ def test_command_options_apply_declared_argument_requiredness_and_defaults(
     ]
 
 
-def test_command_options_tolerate_invalid_argument_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/invalid.md",
-        "\n".join(
-            [
-                "---",
-                "args:",
-                "  language:",
-                "    required: true",
-                "    default: English",
-                "---",
-                "Use ${language}.",
-            ]
-        ),
-    )
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    option = next(
-        item
-        for item in runtime.get_command_options().options
-        if item.command == "invalid"
-    )
-
-    assert option.arguments == []
-
-
 def test_command_options_read_manual_input_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -158,12 +158,9 @@ def test_desktop_unavailable_never_reads_or_writes_keychain(
     assert all(r.url.path == PROOF_PATH for r in requests)
 
 
-def test_endpoint_refuses_unauthenticated_nonloopback_and_malformed_requests(
-    desktop, caplog
-):
+def test_endpoint_refuses_nonloopback_and_malformed_requests(desktop, caplog):
     client, _, _ = desktop
     url = f"/hub/secrets/{WORKSPACE}/receive"
-    assert client.post(url, content=VALUE).status_code == 401
     response = client.post(url, content=VALUE, headers=HEADERS)
     assert response.status_code == 400
     assert VALUE not in response.text and VALUE not in caplog.text

@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import guildbotics.app_api.avatar as avatar_module
@@ -363,8 +362,8 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
     declared = set(MUTATIONS) | set(ELSEWHERE) | {AVATAR_IMPORT}
     routing_table = {
         (method, route.path)
-        for route in iter_route_contexts(client.app.routes)  # type: ignore[attr-defined]
-        for method in route.methods or ()
+        for route in client.app.routes  # type: ignore[attr-defined]
+        for method in getattr(route, "methods", set())
         if method in {"POST", "PUT", "DELETE"}
     }
 

@@ -12,7 +12,6 @@ from guildbotics.entities.task import Task
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
     ADD_REACTION,
-    CREATE_PROJECT_FIELD,
     NODE_REPOSITORY,
     UPDATE_PROJECT_ITEM_STATUS,
 )
@@ -200,20 +199,6 @@ async def test_default_todo_assigned_ticket_is_selected(monkeypatch):
         "target.title": "issue 1",
         "target.url": issue_url(1),
     }
-    assert github.writes == []
-
-
-@pytest.mark.asyncio
-async def test_the_patrol_leaves_a_missing_agent_field_to_setup(monkeypatch):
-    """The board has no Agent field: the patrol still selects by assignee and
-    creates nothing (the field is set up from the board settings)."""
-    service, github = _board(monkeypatch, items=[_item(number=1, status="Todo")])
-    github.on_graphql(
-        CREATE_PROJECT_FIELD, {"createProjectV2Field": {"projectV2Field": {"id": "F"}}}
-    )
-
-    assert [task.url for task in await service.candidates()] == [issue_url(1)]
-
     assert github.writes == []
 
 

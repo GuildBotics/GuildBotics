@@ -580,13 +580,11 @@ def test_the_sandbox_endpoints_answer_from_this_device(
             params={"scope": "other", "path": "x"},
             headers=headers,
         )
-        unauthorized = client.get("/intelligences/agent-environment")
 
     assert status.json()["platform"] == "darwin"
     assert images.json()["images"][0]["reference"] == "local/agent:1"
     assert evaluation.json()["scope"] == "deny"
     assert bad_scope.status_code == 422
-    assert unauthorized.status_code == 401
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])

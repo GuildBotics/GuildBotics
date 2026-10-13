@@ -269,7 +269,7 @@ def test_update_project_empty_intelligence_selection_preserves_existing_defaults
 
 
 # --------------------------------------------------------------------------- #
-# GitHub services: lane_map defaults and the chat's own items
+# GitHub services: lane_map defaults
 # --------------------------------------------------------------------------- #
 
 
@@ -282,27 +282,6 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
         "ready": "Todo",
         "working": "In Progress",
         "done": "Done",
-    }
-
-
-def test_update_project_writes_the_chat_items_it_is_given(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-
-    SimpleProjectSetupService().update_project(
-        _project_input(
-            config_dir,
-            services={
-                "chat_service": {
-                    "name": "slack",
-                    "base_url": "https://proxy.example/api",
-                }
-            },
-        )
-    )
-
-    assert load_yaml_file(config_dir / "team/project.yml")["services"] == {
-        "chat_service": {"name": "slack", "base_url": "https://proxy.example/api"}
     }
 
 
