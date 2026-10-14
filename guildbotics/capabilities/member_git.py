@@ -36,7 +36,7 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.repository_scope import valid_path
-from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
@@ -50,10 +50,6 @@ from guildbotics.utils.fileio import (
     get_member_clone_path,
     get_workspace_local_path,
     host_temporary_directory,
-)
-from guildbotics.utils.git_tool import (
-    build_git_auth_environment,
-    create_git_askpass_script,
 )
 
 #: The most a bundle a member's clone sends the host may be; more is refused.
@@ -281,24 +277,24 @@ class _Origin:
         self.git = _HostGit(path, timeout, ("fetch.fsckObjects=true",))
         self.git("config", "--replace-all", "remote.origin.url", url)
 
-    def fetch(self, token: str) -> None:
+    def fetch(self, credential: GitCredential | None) -> None:
         self._connected(
-            "fetch", "-q", "--prune", "origin", *_FETCH_REFSPECS, token=token
+            "fetch", "-q", "--prune", "origin", *_FETCH_REFSPECS, credential=credential
         )
 
-    def push(self, refspec: str, token: str) -> GuestResult:
+    def push(self, refspec: str, credential: GitCredential | None) -> GuestResult:
         return self._connected(
             "push",
             "--porcelain",
             "--no-follow-tags",
             "origin",
             refspec,
-            token=token,
+            credential=credential,
             ok=range(256),
         )
 
     def _connected(
-        self, *args: str, token: str, ok: Iterable[int] = (0,)
+        self, *args: str, credential: GitCredential | None, ok: Iterable[int] = (0,)
     ) -> GuestResult:
         """Run git that connects to ``origin`` with the member's credential.
 
@@ -321,7 +317,7 @@ class _Origin:
                     " member's credential is not sent: it goes only to the"
                     " configured code host."
                 )
-        with _git_auth_environment(token) as env:
+        with _git_auth_environment(credential) as env:
             return self.git(*args, env=env, ok=ok)
 
     def refs(self, *prefixes: str) -> dict[str, str]:
@@ -410,12 +406,12 @@ class MemberGitWorkspaceService:
         if not valid_path(repository):
             raise MemberCapabilityError(f"Invalid repository: {repository!r}")
         default_branch = await self.code.default_branch(repository)
-        token = await self.code.push_credential()
+        credential = await self.code.git_credential()
         with self._locked(self.host_root, guest.remaining()):
             self._branch_name(guest.remaining, branch)
             self._branch_name(guest.remaining, default_branch)
             origin = await self._origin(self.host_root, repository, guest.remaining)
-            origin.fetch(token)
+            origin.fetch(credential)
             # The clone's place is the repository's whole path, so repositories
             # of one name in two namespaces have one each.
             repo_path = self.workspace_root.joinpath(*repository.split("/"))
@@ -521,14 +517,14 @@ class MemberGitWorkspaceService:
             branch = self._branch_name(timeout, _current_branch(source))
             origin = await self._origin(root, repository, timeout)
             ensure_chat_current(self.person.person_id)
-            token = await self.code.push_credential()
-            origin.fetch(token)
+            credential = await self.code.git_credential()
+            origin.fetch(credential)
             sha = (
                 _receive(source, origin, branch)
                 if isinstance(source, _GuestGit)
                 else _exchange(origin, source, repo_path, branch)
             )
-            pushed, commits = self._push(origin, branch, token)
+            pushed, commits = self._push(origin, branch, credential)
             if pushed:
                 tracking = f"refs/remotes/origin/{branch}"
                 origin.git("update-ref", tracking, sha)
@@ -772,7 +768,7 @@ class MemberGitWorkspaceService:
         )
 
     def _push(
-        self, origin: _Origin, branch: str, token: str
+        self, origin: _Origin, branch: str, credential: GitCredential | None
     ) -> tuple[bool, list[dict[str, str]]]:
         """Push ``branch`` of the host's fetched repository to its URL unless
         it is already there.
@@ -804,7 +800,7 @@ class MemberGitWorkspaceService:
                 line.partition("\0") for line in listed.stdout.decode().splitlines()
             )
         ]
-        result = origin.push(f"refs/heads/{branch}:refs/heads/{branch}", token)
+        result = origin.push(f"refs/heads/{branch}:refs/heads/{branch}", credential)
         if result.returncode != 0:
             reason = (result.stdout + result.stderr).decode(errors="replace").strip()
             raise MemberCapabilityError(
@@ -978,13 +974,32 @@ def _check_out(
 
 
 @contextmanager
-def _git_auth_environment(token: str) -> Iterator[dict[str, str]]:
+def _git_auth_environment(credential: GitCredential | None) -> Iterator[dict[str, str]]:
     """What git authenticates to the code host with, as the member."""
-    if not token:
+    if credential is None:
         yield {}
         return
-    askpass_path = create_git_askpass_script()
-    try:
-        yield build_git_auth_environment(askpass_path, token)
-    finally:
-        askpass_path.unlink(missing_ok=True)
+    with host_temporary_directory("guildbotics-git-askpass-") as tmp:
+        askpass_path = Path(tmp) / "askpass.sh"
+        askpass_path.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            '*Username*) printf "%s\\n" "$GIT_USERNAME" ;;\n'
+            '*Password*) printf "%s\\n" "$GIT_PASSWORD" ;;\n'
+            '*) printf "\\n" ;;\n'
+            "esac\n",
+            encoding="utf-8",
+        )
+        askpass_path.chmod(0o700)
+        # Reset helpers from system, global, and repository configuration,
+        # preserving any other command-scope settings.
+        index = int(os.getenv("GIT_CONFIG_COUNT", "0"))
+        yield {
+            "GIT_ASKPASS": str(askpass_path),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_USERNAME": credential.username,
+            "GIT_PASSWORD": credential.password,
+            "GIT_CONFIG_COUNT": str(index + 1),
+            f"GIT_CONFIG_KEY_{index}": "credential.helper",
+            f"GIT_CONFIG_VALUE_{index}": "",
+        }

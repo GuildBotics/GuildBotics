@@ -31,6 +31,7 @@ from guildbotics.integrations import repository_scope
 from guildbotics.integrations.local import store
 from guildbotics.integrations.local.code_hosting import LocalCodeHostingService
 from guildbotics.integrations.local.tickets import LocalTicketService
+from guildbotics.runtime.code_hosting_service import GitCredential
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     GuestProcessError,
@@ -69,6 +70,7 @@ _GUEST_ENV_KEYS = {
     "GIT_COMMITTER_EMAIL",
 }
 _TOKEN = "dummy-token"
+_USERNAME = "provider-user"
 
 
 @pytest.fixture(autouse=True)
@@ -172,8 +174,84 @@ class _CredentialedHost(LocalCodeHostingService):
     """The local code host with a credential, which git must be given only
     toward it."""
 
-    async def push_credential(self) -> str:
-        return _TOKEN
+    async def git_credential(self) -> GitCredential:
+        return GitCredential(username=_USERNAME, password=_TOKEN)
+
+
+def test_auth_environment_appends_credential_reset_to_command_config(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.sslVerify")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+
+    with member_git._git_auth_environment(
+        GitCredential(username=_USERNAME, password=_TOKEN)
+    ) as env:
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_1"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_1"] == ""
+
+
+@pytest.mark.asyncio
+async def test_member_auth_environment_passes_provider_credentials_and_resets_helpers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    repo_path = tmp_path / "repo"
+    helper_marker = tmp_path / "external-helper-ran"
+    with git.Repo.init(repo_path) as repo, repo.config_writer() as writer:
+        writer.set_value(
+            "credential",
+            "helper",
+            f'!printf invoked > "{helper_marker.as_posix()}"',
+        )
+    person = _person()
+    credential = await _CredentialedHost(person, local_team(person)).git_credential()
+
+    with member_git._git_auth_environment(credential) as auth:
+        askpass_path = Path(auth["GIT_ASKPASS"])
+        script = askpass_path.read_text(encoding="utf-8")
+        assert credential.username not in script
+        assert credential.password not in script
+        result = subprocess.run(
+            ["git", "credential", "fill"],
+            cwd=repo_path,
+            env={**os.environ, **auth},
+            input="protocol=https\nhost=example.invalid\n\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    assert result.returncode == 0
+    assert f"username={credential.username}" in result.stdout
+    assert f"password={credential.password}" in result.stdout
+    assert not helper_marker.exists()
+    assert not askpass_path.parent.exists()
+
+
+def test_auth_environment_removes_askpass_after_failure():
+    with pytest.raises(RuntimeError, match="git failed"):
+        with member_git._git_auth_environment(
+            GitCredential(username=_USERNAME, password=_TOKEN)
+        ) as env:
+            askpass_path = Path(env["GIT_ASKPASS"])
+            assert askpass_path.exists()
+            raise RuntimeError("git failed")
+
+    assert not askpass_path.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_local_git_needs_no_authentication():
+    person = _person()
+    credential = await LocalCodeHostingService(
+        person, local_team(person)
+    ).git_credential()
+
+    assert credential is None
+    with member_git._git_auth_environment(credential) as env:
+        assert env == {}
 
 
 @dataclass
@@ -877,46 +955,38 @@ async def test_member_mode_git_is_refused_outside_a_command(member, operation):
 
 def test_member_git_starts_processes_only_through_subprocess_run() -> None:
     """The population ``host_git`` records: the host starts no git of member
-    git's any other way (GitPython included), and the token helpers start
-    none."""
-    package = Path(member_git.__file__).parent.parent
-    for relative, allowed in (
-        ("capabilities/member_git.py", {"run", "TimeoutExpired"}),
-        ("utils/git_tool.py", set()),
-    ):
-        tree = ast.parse((package / relative).read_text(encoding="utf-8"))
-        imported = {
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        } | {
-            node.module or ""
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-        }
-        assert not imported & {"git", "asyncio", "multiprocessing", "pty"}, relative
-        used = {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in {"subprocess", "os"}
-            and node.attr.startswith(
-                (
-                    "run",
-                    "Popen",
-                    "call",
-                    "check",
-                    "system",
-                    "exec",
-                    "spawn",
-                    "popen",
-                    "Timeout",
-                )
+    git's any other way (GitPython included)."""
+    tree = ast.parse(Path(member_git.__file__).read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+    assert not imported & {"git", "asyncio", "multiprocessing", "pty"}
+    used = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"subprocess", "os"}
+        and node.attr.startswith(
+            (
+                "run",
+                "Popen",
+                "call",
+                "check",
+                "system",
+                "exec",
+                "spawn",
+                "popen",
+                "Timeout",
             )
-        }
-        assert used == allowed, relative
+        )
+    }
+    assert used == {"run", "TimeoutExpired"}
 
 
 def _hook(repo_path: Path, name: str, script: str) -> None:
@@ -1196,6 +1266,7 @@ def _only_the_hosts_repositories_get_the_token(
     assert runs
     for call in runs:
         assert member.service.host_root in call.cwd.parents, call
+        assert call.env["GIT_USERNAME"] == _USERNAME
 
 
 @pytest.mark.asyncio
@@ -1440,7 +1511,7 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
             lambda member: [
                 (
                     "remote.origin.url",
-                    "https://x-access-token:secret@example.com/owner/repo.git",
+                    "https://provider-user:secret@example.com/owner/repo.git",
                 )
             ],
             "does not push to one repository",

@@ -505,7 +505,7 @@ Invocation example:
 ```shell
 $ guildbotics run coverage
 - [ ] Add unit tests for utils/fileio.py (priority: 1)
-- [ ] Add tests for utils/git_tool.py's operations and error handling (priority: 2)
+- [ ] Add tests for capabilities/member_git.py's operations and error handling (priority: 2)
 - [ ] Add integrated unit tests for drivers/command_runner.py and drivers/task_scheduler.py (priority: 3)
 - [ ] Add tests for utils/import_utils.py's import processing and edge cases (priority: 4)
 - [ ] Add business logic and external call mock tests for intelligences/functions.py (priority: 5)

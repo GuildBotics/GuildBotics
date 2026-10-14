@@ -13,7 +13,7 @@ happened to think of:
   one is not judged
 - every caller of ``create_github_client``, since the gate is only as right
   as the owner it is given
-- every use of the member's credential for git (``push_credential``), in any
+- every use of the member's credential for git (``git_credential``), in any
   module, since it is given to git only where the repository is checked
 - every GraphQL mutation document in the package
 
@@ -114,13 +114,13 @@ CLIENTS = {
 }
 
 #: ``(module, function)`` of every use of a member's credential for git, in
-#: any module: the code host hands it out (``push_credential``).
+#: any module: the code host hands it out (``git_credential``).
 TOKEN_USES = {
     ("capabilities/member_git.py", "prepare"): "fetch only; a read",
     ("capabilities/member_git.py", "push"): "checked",
 }
 #: Where GitHub makes the credential git is handed.
-GITHUB_TOKENS = {("integrations/github/code_hosting_service.py", "push_credential")}
+GITHUB_TOKENS = {("integrations/github/code_hosting_service.py", "git_credential")}
 
 _READS = {"GET", "HEAD"}
 _WRITE_METHODS = {"post", "patch", "put", "delete"}
@@ -260,7 +260,7 @@ def test_every_git_push_is_checked_before_git_is_given_the_token() -> None:
     for path in sorted(PACKAGE.rglob("*.py")):
         module = path.relative_to(PACKAGE).as_posix()
         for function, call, ancestors in _calls(ast.parse(path.read_text("utf-8"))):
-            if _callee(call) != "push_credential":
+            if _callee(call) != "git_credential":
                 continue
             uses.add((module, function))
             if TOKEN_USES.get((module, function)) != "checked":

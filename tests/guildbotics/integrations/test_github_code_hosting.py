@@ -31,7 +31,7 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.runtime.code_hosting_service import PullRequestHead
+from guildbotics.runtime.code_hosting_service import GitCredential, PullRequestHead
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
@@ -67,6 +67,16 @@ from tests.guildbotics.member_services import MemberServices
 PULL = pull_url(7)
 ISSUE = issue_url(42)
 _REPO_API = f"{API}/repos/{REPO}"
+
+
+@pytest.mark.asyncio
+async def test_git_credential_uses_the_members_token_and_github_username(monkeypatch):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "member-token")
+    service = code_host(ScriptedGitHub(), monkeypatch)
+
+    assert await service.git_credential() == GitCredential(
+        username="x-access-token", password="member-token"
+    )
 
 
 def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary():

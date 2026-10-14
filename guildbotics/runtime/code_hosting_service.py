@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, field
 from typing import IO, Any
 
 from guildbotics.entities import Task
@@ -30,6 +31,14 @@ from guildbotics.runtime.resources import (
     ReviewVerdict,
     WorkTarget,
 )
+
+
+@dataclass(frozen=True)
+class GitCredential:
+    """The username and password host git uses for fetch and push."""
+
+    username: str
+    password: str = field(repr=False)
 
 
 class PullRequestHead(ReadModel):
@@ -242,8 +251,8 @@ class CodeHostingService(ABC):
         """The repository and branch the pull request's head lives on."""
         raise NotImplementedError
 
-    async def push_credential(self) -> str:
-        """The credential git authenticates with as the member; empty for none."""
+    async def git_credential(self) -> GitCredential | None:
+        """The credential git authenticates with as the member; None for none."""
         raise NotImplementedError
 
     def check_push(self, repository: str) -> None:

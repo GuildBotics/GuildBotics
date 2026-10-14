@@ -19,7 +19,6 @@ _GIT_CONTRACT_PATHS = frozenset(
         "tests/guildbotics/sync/test_local_repository.py",
         "tests/guildbotics/sync/test_manager.py",
         "tests/guildbotics/sync/test_rejections.py",
-        "tests/guildbotics/utils/test_git_tool.py",
     }
 )
 

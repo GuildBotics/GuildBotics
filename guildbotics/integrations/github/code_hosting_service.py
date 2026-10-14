@@ -50,6 +50,7 @@ from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
     CodeHostingService,
+    GitCredential,
     PullRequestCreated,
     PullRequestHead,
     PullRequestUpdated,
@@ -419,8 +420,11 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         item = self.item(url, "pull_request")
         return head_of(item, await self.fetch(item))
 
-    async def push_credential(self) -> str:
-        return await get_person_github_token(self.person, self.base_url)
+    async def git_credential(self) -> GitCredential:
+        return GitCredential(
+            username="x-access-token",
+            password=await get_person_github_token(self.person, self.base_url),
+        )
 
     def check_push(self, repository: str) -> None:
         check_path(self.owner, repository, provider="github")
