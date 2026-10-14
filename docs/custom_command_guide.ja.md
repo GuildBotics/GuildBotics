@@ -512,7 +512,7 @@ brain: none
 ```shell
 $ guildbotics run coverage
 - [ ] utils/fileio.py の単体テストを追加 (priority: 1)
-- [ ] utils/git_tool.py の動作とエラー処理のテストを追加 (priority: 2)
+- [ ] capabilities/member_git.py の動作とエラー処理のテストを追加 (priority: 2)
 - [ ] drivers/command_runner.py と drivers/task_scheduler.py の統合的単体テストを追加 (priority: 3)
 - [ ] utils/import_utils.py のインポート処理とエッジケースのテストを追加 (priority: 4)
 - [ ] intelligences/functions.py のビジネスロジックと外部呼び出しのモックテストを追加 (priority: 5)

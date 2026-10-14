@@ -502,8 +502,8 @@ class LocalCodeHostingService(CodeHostingService):
         item = store.load(store.locate(url, "pull_request"))
         return PullRequestHead(repository=item["head_repository"], branch=item["head"])
 
-    async def push_credential(self) -> str:
-        return ""
+    async def git_credential(self) -> None:
+        return None
 
     def check_push(self, repository: str) -> None:
         check_path(self.scope, repository, provider="local")
