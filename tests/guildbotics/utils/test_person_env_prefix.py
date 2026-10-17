@@ -6,6 +6,7 @@ import i18n
 import pytest
 
 from guildbotics.entities.team import Person
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.provider import SetupError
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup.setup_service import (
@@ -200,7 +201,9 @@ def test_repair_preserves_ambiguous_secrets_without_access(
         if action == "snapshot":
             snapshot = service.read_person_config(config_dir=config, person_id=names[0])
             assert snapshot.secret_env_keys == {}
-            assert set(snapshot.accounts) == {"github", "slack"}
+            assert set(snapshot.accounts) == {
+                p.name for p in PROVIDERS.values() if p.setup and p.setup.member
+            }
             assert not any(
                 value
                 for view in snapshot.accounts.values()

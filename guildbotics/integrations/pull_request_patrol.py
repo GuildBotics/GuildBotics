@@ -343,15 +343,25 @@ async def hand_over_at_review_limit(
     PR until someone acts on it, and the rounds stay as they are.
     """
     reason: WorkflowStatusReason = REVIEW_LIMIT_REASON
-    key = "review_limit_reached"
     try:
         await draft()
     except Exception as exc:
         _LOGGER.warning(f"Could not convert {url} to a draft: {exc}")
-        reason, key = "failed", "review_limit_draft_failed"
+        reason = "failed"
+    notice = (
+        t(
+            "integrations.pull_request_patrol.review_limit_reached",
+            count=MAX_REVIEW_ROUNDS,
+        )
+        if reason == REVIEW_LIMIT_REASON
+        else t(
+            "integrations.pull_request_patrol.review_limit_draft_failed",
+            count=MAX_REVIEW_ROUNDS,
+        )
+    )
     await code.comment(
         url,
-        t(f"integrations.pull_request_patrol.{key}", count=MAX_REVIEW_ROUNDS),
+        notice,
         status=WorkflowStatus(
             reason=reason, person_id=person_id, run_id="", subject=url
         ),

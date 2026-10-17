@@ -128,8 +128,12 @@ def _failure(response: httpx.Response) -> ServiceError:
         return ServiceUnsupported(
             t("integrations.branvil.api.unsupported", message=message)
         )
-    if code in {"head_moved", "label_undefined"}:
-        return ServiceError(t(f"integrations.branvil.api.{code}", message=message))
+    if code == "head_moved":
+        return ServiceError(t("integrations.branvil.api.head_moved"))
+    if code == "label_undefined":
+        return ServiceError(
+            t("integrations.branvil.api.label_undefined", message=message)
+        )
     if code == "invalid_cursor":
         return ServiceError(t("integrations.resources.continuation"))
     return ServiceError(
@@ -358,7 +362,11 @@ class BranvilApi:
             or collection != _COLLECTIONS[kind]
             or not _ITEM_NAMES[kind].fullmatch(name)
         ):
-            raise ServiceNotFound(t(f"integrations.branvil.api.not_{kind}", url=url))
+            raise ServiceNotFound(
+                t("integrations.branvil.api.not_ticket", url=url)
+                if kind == "ticket"
+                else t("integrations.branvil.api.not_pull_request", url=url)
+            )
         return BranvilItem(kind, place, name)
 
     def url(self, item: BranvilItem) -> str:

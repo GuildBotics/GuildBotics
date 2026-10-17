@@ -120,10 +120,10 @@ def _human(member: Person) -> ProviderCheck:
         section=_SECTION,
         code="human_branvil_user",
         status="ok" if configured else "error",
-        message=t(
-            "integrations.branvil.provider.human_configured"
+        message=(
+            t("integrations.branvil.provider.human_configured")
             if configured
-            else "integrations.branvil.provider.human_missing"
+            else t("integrations.branvil.provider.human_missing")
         ),
         person_id=member.person_id,
         target=username(member),
