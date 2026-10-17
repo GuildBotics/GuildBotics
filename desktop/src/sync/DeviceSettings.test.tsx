@@ -44,7 +44,6 @@ function renderSettings() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getRegisteredWorkspaces).mockResolvedValue([]);
   vi.mocked(getConfigStatus).mockResolvedValue({ workspace: null } as Awaited<
     ReturnType<typeof getConfigStatus>

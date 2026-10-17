@@ -195,14 +195,7 @@ vi.mock("../api/client", async (importOriginal) => {
       options: [],
       default_command: "workflows/ticket_driven_workflow",
     })),
-    getConfigStatus: vi.fn(async () => ({
-      cwd: "/workspace",
-      workspace: "/workspace",
-      config_dir: "/workspace/.guildbotics/config",
-      project_file: "/workspace/.guildbotics/config/project.yml",
-      project_file_exists: true,
-      storage_dir: "/workspace/.guildbotics",
-    })),
+    getConfigStatus: vi.fn(async () => configStatus({ project_file_exists: true })),
     getCliAgentLastTurns: vi.fn(async () => []),
     getInferenceFailures: vi.fn(async () => ({ llm: {}, jev: null })),
     getIntelligenceConfig: vi.fn(async () => ({
@@ -250,17 +243,37 @@ vi.mock("../api/client", async (importOriginal) => {
       local_grants: { paths: [], deny: [] },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
-    getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
-    getProjectConfig: vi.fn(async () => ({
-      config_dir: "/workspace/.guildbotics/config",
-      revisions: {},
-      language: "en",
-      description: "Demo project",
-      llm_api_type: "openai",
-      cli_agent: "codex",
-      services: {},
-      provider_api_keys: { openai: true, gemini: false, anthropic: false },
-    })),
+    getAgentEnvironmentStatus: vi.fn(async () =>
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            usage_supported: false,
+            usage_check: null,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
+            problem: "",
+          },
+          {
+            name: "claude",
+            label: "Claude Code",
+            config_reference: "cli_agents/claude/default.yml",
+            provisioned: true,
+            credentials_saved: false,
+            authentication_failed: false,
+            usage_supported: false,
+            usage_check: null,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
+            problem: "",
+          },
+        ],
+      }),
+    ),
+    getProjectConfig: vi.fn(async () => projectConfig({ description: "Demo project" })),
     getProviders: vi.fn(async () => PROVIDERS),
     importAvatarFromProvider: vi.fn(async () => ({ avatar_timestamp: 2 })),
     getRoleOptions: vi.fn(async () => ({
@@ -399,48 +412,7 @@ vi.mock("./providers/branvil/api", async (importOriginal) => {
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 beforeEach(() => {
-  vi.clearAllMocks();
   localStorage.clear();
-  // Restore the default existing-project responses so that first-setup tests,
-  // which install persistent `mockResolvedValue` overrides, do not leak into
-  // subsequent existing-project tests.
-  vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
-  vi.mocked(getTeam).mockResolvedValue({
-    project: { name: "Demo", language_code: "en", language_name: "English" },
-    default_person_id: "",
-    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
-  });
-  vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
-  vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
-    environmentStatus({
-      tools: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          config_reference: "cli_agents/codex/default.yml",
-          provisioned: true,
-          credentials_saved: true,
-          authentication_failed: false,
-          usage_supported: false,
-          usage_check: null,
-          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
-          problem: "",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          config_reference: "cli_agents/claude/default.yml",
-          provisioned: true,
-          credentials_saved: false,
-          authentication_failed: false,
-          usage_supported: false,
-          usage_check: null,
-          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
-          problem: "",
-        },
-      ],
-    }),
-  );
 });
 
 afterEach(() => {

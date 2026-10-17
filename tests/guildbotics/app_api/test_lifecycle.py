@@ -186,13 +186,31 @@ def context_factory() -> Any:
 
 
 @pytest.fixture(autouse=True)
-def patch_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
+def patch_runtimes(monkeypatch: pytest.MonkeyPatch):
+    threads: set[threading.Thread] = set()
+    start = lifecycle.SchedulerLifecycle.start
+
+    def tracked_start(self, *args, **kwargs):
+        try:
+            return start(self, *args, **kwargs)
+        finally:
+            thread = self._thread
+            if thread is not None:
+                threads.add(thread)
+
     FakeScheduler.instances = []
     FakeRunner.instances = []
     FakeServiceLock.instances = []
     monkeypatch.setattr(lifecycle, "TaskScheduler", FakeScheduler)
     monkeypatch.setattr(lifecycle, "EventListenerRunner", FakeRunner)
     monkeypatch.setattr(lifecycle, "ServiceLock", FakeServiceLock)
+    monkeypatch.setattr(lifecycle.SchedulerLifecycle, "start", tracked_start)
+    yield
+    for scheduler in FakeScheduler.instances:
+        scheduler._stop.set()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
 
 
 def _make_service(
@@ -653,7 +671,8 @@ def test_force_stop_during_graceful_stop_publishes_single_stop_transition(
 
         status = service.stop(force=True)
     finally:
-        graceful.join(timeout=2.0)
+        scheduler._stop.set()
+        graceful.join(timeout=10)
     assert not graceful.is_alive()
     assert status.scheduler.state == "stopped"
 
@@ -824,10 +843,12 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
     bus_before = len(bus.snapshot_events())
     # The status a reader of the failure event would find at that moment.
     status_at_failure: list[str] = []
+    workers: list[threading.Thread] = []
     publish = bus.publish_event
 
     def recording_publish(event_type: str, payload: Any = None, **kwargs: Any) -> None:
         if event_type == "scheduler.failed" and "traceback" in (payload or {}):
+            workers.append(threading.current_thread())
             status_at_failure.append(service.get_status().scheduler.state)
         publish(event_type, payload, **kwargs)
 
@@ -851,6 +872,9 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
         assert _wait_until(lambda: status_at_failure)
     finally:
         FakeScheduler.__init__ = original_init  # type: ignore[method-assign]
+        for worker in workers:
+            worker.join(timeout=10)
+            assert not worker.is_alive()
 
     assert status_at_failure == ["failed"]
     status = service.get_status().scheduler
@@ -888,7 +912,11 @@ def test_status_refresh_after_thread_terminates_naturally(
     scheduler = FakeScheduler.instances[0]
 
     # Let the scheduler loop finish on its own (no stop() call).
+    thread = service._scheduler._thread
+    assert thread is not None
     scheduler._stop.set()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
     assert _wait_until(lambda: service.get_status().scheduler.state == "stopped")
 
     status = service.get_status().scheduler

@@ -58,7 +58,6 @@ function renderWith(ui: React.ReactElement) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
 });
 

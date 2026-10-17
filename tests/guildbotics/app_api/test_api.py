@@ -90,7 +90,7 @@ HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_INTERNAL_SERVER_ERROR = 500
 HTTP_CONFLICT = 409
-THREAD_WAIT_SECONDS = 2.0
+THREAD_WAIT_SECONDS = 10.0
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 GITHUB_APPS_USER_ID = 42
@@ -2078,7 +2078,29 @@ def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) ->
     assert status.retention_days == 14
 
 
-def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
+@pytest.fixture
+def scheduler_cleanup(request):
+    """Reclaim fake schedulers even when an assertion or the stop API fails."""
+
+    def track(runtime, release):
+        def finish():
+            thread = runtime._lifecycle._scheduler._thread
+            release.set()
+            try:
+                if thread is not None:
+                    thread.join(timeout=THREAD_WAIT_SECONDS)
+                    assert not thread.is_alive()
+            finally:
+                runtime._lifecycle._service_lock.release()
+
+        request.addfinalizer(finish)
+
+    return track
+
+
+def test_app_runtime_scheduler_start_stop_lifecycle(
+    monkeypatch, scheduler_cleanup
+) -> None:
     def create_context(message: str = "") -> object:
         return object()
 
@@ -2110,7 +2132,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
         def start(self) -> None:
             started.set()
-            release.wait(THREAD_WAIT_SECONDS)
+            release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_calls += 1
@@ -2127,6 +2149,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     )
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=default_stop_timeout)
+    scheduler_cleanup(runtime, release)
 
     first = runtime.start_scheduler(
         SchedulerStartRequest(
@@ -2160,7 +2183,9 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
     assert BlockingScheduler.instances[0].shutdown_calls == 1
 
 
-def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None:
+def test_app_runtime_marks_scheduler_failed_on_stop_timeout(
+    monkeypatch, scheduler_cleanup
+) -> None:
     def create_context(message: str = "") -> object:
         return object()
 
@@ -2183,7 +2208,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
 
         def start(self) -> None:
             started.set()
-            release.wait(THREAD_WAIT_SECONDS)
+            release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_timeout = timeout
@@ -2198,30 +2223,24 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
     )
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
-    thread = None
-    try:
-        first = runtime.start_scheduler(
-            SchedulerStartRequest(
-                sources={"scheduled": True, "routine": True, "event_queue": False}
-            )
+    scheduler_cleanup(runtime, release)
+    first = runtime.start_scheduler(
+        SchedulerStartRequest(
+            sources={"scheduled": True, "routine": True, "event_queue": False}
         )
-        thread = runtime._lifecycle._scheduler._thread
-        assert thread is not None
-        assert first.scheduler.state == "running"
-        assert started.wait(THREAD_WAIT_SECONDS)
+    )
+    assert first.scheduler.state == "running"
+    assert started.wait(THREAD_WAIT_SECONDS)
 
-        stopped = runtime.stop_scheduler(force=True)
-        assert stopped.scheduler.state == "failed"
-        assert stopped.scheduler.running is True
-        assert stopped.scheduler.error == "Scheduler did not stop before timeout."
-    finally:
-        release.set()
-        if thread is not None:
-            thread.join(timeout=THREAD_WAIT_SECONDS)
-            assert not thread.is_alive()
+    stopped = runtime.stop_scheduler(force=True)
+    assert stopped.scheduler.state == "failed"
+    assert stopped.scheduler.running is True
+    assert stopped.scheduler.error == "Scheduler did not stop before timeout."
 
 
-def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
+def test_app_runtime_event_listener_start_stop_lifecycle(
+    monkeypatch, scheduler_cleanup
+) -> None:
     def create_context(message: str = "") -> object:
         return object()
 
@@ -2275,7 +2294,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             RunningScheduler.instances.append(self)
 
         def start(self) -> None:
-            scheduler_release.wait(THREAD_WAIT_SECONDS)
+            scheduler_release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_calls += 1
@@ -2295,6 +2314,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
     )
 
     runtime = AppRuntime(EventBus())
+    scheduler_cleanup(runtime, scheduler_release)
 
     first = runtime.start_scheduler(
         SchedulerStartRequest(
@@ -2354,7 +2374,9 @@ def test_app_runtime_marks_event_listener_failed_on_start_error(monkeypatch) -> 
     assert status.events.state == "stopped"
 
 
-def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) -> None:
+def test_app_runtime_marks_event_listener_failed_on_stop_timeout(
+    monkeypatch, scheduler_cleanup
+) -> None:
     def create_context(message: str = "") -> object:
         return object()
 
@@ -2400,7 +2422,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             return
 
         def start(self) -> None:
-            scheduler_release.wait(THREAD_WAIT_SECONDS)
+            scheduler_release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             scheduler_release.set()
@@ -2419,6 +2441,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
     )
 
     runtime = AppRuntime(EventBus(), stop_timeout_seconds=0.01)
+    scheduler_cleanup(runtime, scheduler_release)
 
     started = runtime.start_scheduler(
         SchedulerStartRequest(

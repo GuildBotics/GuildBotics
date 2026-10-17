@@ -36,7 +36,6 @@ function mount(engine: "llm" | "cli" | "jev" | null = "llm") {
   return { ...view, onApiKeyChange };
 }
 beforeEach(async () => {
-  vi.resetAllMocks();
   await i18n.changeLanguage("en");
   vi.mocked(getDecisionOptions).mockResolvedValue({
     credential_present: false,

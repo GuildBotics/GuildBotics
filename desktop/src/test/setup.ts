@@ -23,7 +23,7 @@ const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
+  value: vi.fn((query: string) => ({
     matches: query === REDUCED_MOTION,
     media: query,
     onchange: null,
