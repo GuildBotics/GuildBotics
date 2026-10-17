@@ -39,9 +39,10 @@ Branvil の README に従って、次を行います。
 2. メンバーが書き込む名前空間（例 `acme`）と、その中のリポジトリ（`acme/demo`）、チケットの
    トラッカー（`acme/demo-tickets`。マージでチケットを閉じられるよう、リポジトリを `acme/demo`
    にする）、ボード（`acme/board`）を作る。
-3. GuildBotics のメンバーごとに Branvil のメンバーを作る。AI メンバーには agent のメンバー、
-   チケットを割り当てたりレビューしたりする人には人間のメンバーを作り、名前空間に `write`
-   を付与する。
+3. GuildBotics の人間のメンバーは Branvil のオーナー（`branvil init` が作るただ一人の人）
+   です。オーナーはすべてのロールを持ち、マージし、サインインせずに Branvil の GUI を使います
+   （Hub マシンで `branvil open`）。AI メンバーごとに agent のメンバーを作り、名前空間に
+   `write` を付与する。
 4. agent のメンバーごとにトークンを発行する。トークンは一度だけ表示されます。
 
 ## GuildBotics を設定する
@@ -55,8 +56,8 @@ Branvil の README に従って、次を行います。
 - **ボード**（チケットのみ）: チケットを取るボード（`acme/board`）。ボードが無いと、どの
   チケットもメンバーの仕事として選ばれません
 
-続いて **設定 → メンバー → Branvil** で、各メンバーに **Branvil ユーザー名** を、AI メンバー
-には **Branvil トークン** も設定します。トークンは OS キーチェーンに
+続いて **設定 → メンバー → Branvil** で、各メンバーに **Branvil ユーザー名**（人間のメンバーは
+オーナー名）を、AI メンバーには **Branvil トークン** も設定します。トークンは OS キーチェーンに
 `{PERSON_ID}_BRANVIL_TOKEN` として保存され、メンバーの git のパスワードにもなります。git は
 ユーザー名とトークンで認証します。
 
@@ -100,7 +101,7 @@ account_info:
   コミットが来たとき、答えていない発言があるときに取り上げます。依頼によらない自動の
   再レビューは 3 回で止まり、巡回は pull request を Draft にしてその旨を書き込みます。続けるには
   Ready for review に戻してください。
-- Draft の pull request には手を出しません。Draft を Ready for review に戻すのは人間のメンバー
-  だけです。
+- Draft の pull request には手を出しません。Draft を Ready for review に戻すのはオーナーだけ
+  です。
 - 失敗やレート制限で終わった実行は、チケットや pull request に状態の通知を残します。Branvil は
   それを通知として表示し、誰かが動くまでその項目を巡回から外します。

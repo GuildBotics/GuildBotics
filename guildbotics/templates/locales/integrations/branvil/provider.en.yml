@@ -3,5 +3,5 @@ en:
   board_missing: "No board is configured for the ticket service: no ticket is selected as a member's work."
   board: "The board %{board} was read."
   access: "Branvil accepted the member's token as the member's."
-  human_configured: "The Branvil username is configured for this human member."
-  human_missing: "The Branvil username is not configured for this human member."
+  human_configured: "The Branvil username (the Branvil owner's name) is configured for this human member."
+  human_missing: "The Branvil username is not configured for this human member; set the Branvil owner's name."

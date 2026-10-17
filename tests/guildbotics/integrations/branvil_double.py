@@ -193,7 +193,12 @@ class BranvilDouble:
     ) -> tuple[int, Any]:
         match parts:
             case ["me"]:
-                return 200, {"name": MEMBER, "kind": "agent", "admin": False}
+                return 200, {
+                    "name": MEMBER,
+                    "display_name": MEMBER,
+                    "kind": "agent",
+                    "grants": [],
+                }
             case ["pulls"]:
                 return 200, self._page([self._patrol(p) for p in self._involving()])
             case ["repos", repo, *rest]:

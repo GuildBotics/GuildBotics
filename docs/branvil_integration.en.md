@@ -43,9 +43,10 @@ Following the Branvil README:
    repositories (`acme/demo`), a tracker for the tickets (`acme/demo-tickets`, whose
    repository is `acme/demo` so that a merge can close its tickets), and a board
    (`acme/board`).
-3. Create a Branvil member for each GuildBotics member: an agent member for each AI
-   member, and the humans who assign tickets and review. Grant the members `write` on
-   the namespace.
+3. The GuildBotics human member is Branvil's owner, the one person `branvil init`
+   creates. The owner has every role, merges, and uses Branvil's GUI without signing
+   in (`branvil open` on the Hub machine). Create an agent member for each AI member and
+   grant it `write` on the namespace.
 4. Issue a token for each agent member. Branvil shows it once.
 
 ## Configure GuildBotics
@@ -60,7 +61,7 @@ and for the tickets, and enter:
   Without a board, no ticket is selected as a member's work
 
 Then, under **Setup → Members → Branvil**, give each member its **Branvil username**
-and, for an AI member, its **Branvil token**. The token is stored in the OS keychain as
+(for the human member, the owner's name) and, for an AI member, its **Branvil token**. The token is stored in the OS keychain as
 `{PERSON_ID}_BRANVIL_TOKEN` and is also the member's git password: git authenticates
 with the username and the token.
 
@@ -103,6 +104,6 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   commits land after its last review, or when there is a statement it has not answered.
   Automatic re-review stops after 3 rounds: the patrol makes the pull request a draft
   and says so on it. Mark it ready for review to go on.
-- Draft pull requests are left alone. Only a human member makes a draft ready for review.
+- Draft pull requests are left alone. Only the owner makes a draft ready for review.
 - A run that fails or is rate-limited leaves a status notice on the ticket or the pull
   request; Branvil shows it as a notice, and it holds the item until someone acts on it.

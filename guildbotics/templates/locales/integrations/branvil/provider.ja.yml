@@ -3,5 +3,5 @@ ja:
   board_missing: "チケットサービスにボードが設定されていません。どのチケットもメンバーの仕事として選ばれません。"
   board: "ボード %{board} を読み取りました。"
   access: "Branvil がメンバーのトークンをメンバー本人のものとして受け付けました。"
-  human_configured: "この人間のメンバーに Branvil のユーザー名が設定されています。"
-  human_missing: "この人間のメンバーに Branvil のユーザー名が設定されていません。"
+  human_configured: "この人間のメンバーに Branvil のユーザー名（Branvil のオーナー名）が設定されています。"
+  human_missing: "この人間のメンバーに Branvil のユーザー名が設定されていません。Branvil のオーナー名を設定してください。"
