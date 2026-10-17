@@ -86,7 +86,6 @@ function renderAlerts(initial?: WorkspaceSyncStatus) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getWorkspaceSecrets).mockResolvedValue(secrets());
 });
 

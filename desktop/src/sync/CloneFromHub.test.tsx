@@ -71,7 +71,6 @@ function renderButton(onCloned = vi.fn(), destination = "/tmp/second") {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(syncStatus(null));
   vi.mocked(getHubStatus).mockResolvedValue({
     hosted: false,

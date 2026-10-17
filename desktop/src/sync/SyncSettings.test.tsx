@@ -116,7 +116,6 @@ async function lookUpHub(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getWorkspaceSecrets).mockResolvedValue({
     enabled: false,
     hub_reachable: false,

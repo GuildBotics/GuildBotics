@@ -75,7 +75,6 @@ function renderCard() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.mocked(getWorkspaceSecrets).mockResolvedValue(secrets());
 });
 
