@@ -212,7 +212,8 @@ def _hub_port(services: Mapping[str, Mapping[str, Any]]) -> int | None:
 
 BRANVIL = Provider(
     name=PROVIDER,
-    secret_keys=frozenset({"BRANVIL_TOKEN"}),
+    # The token's ID names the token a save replaces, for it to be revoked.
+    secret_keys=frozenset({"BRANVIL_TOKEN", "BRANVIL_TOKEN_ID"}),
     account_info_keys=frozenset({"branvil_username"}),
     workspace_secret_keys=frozenset({"BRANVIL_ADMIN_TOKEN"}),
     code_hosting_service=lambda logger, person, team: BranvilCodeHostingService(

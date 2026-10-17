@@ -115,46 +115,89 @@ async def test_a_token_branvil_takes_for_the_agents_is_kept(double: BranvilDoubl
     ],
     ids=["refused", "another_members", "reissue"],
 )
-async def test_a_token_is_issued_again_and_replaces_guildbotics_one_once_saved(
+async def test_a_token_is_issued_again_beside_the_one_held(
     double: BranvilDouble, held: str, account: dict[str, Any]
 ):
     name = account["username"]
     double.member("alice", "agent")
-    earlier = double.issue(name, "guildbotics")["id"]
-    form = BranvilAccount.model_validate(account)
 
-    await form.prepare(_member(secrets={"BRANVIL_TOKEN": held}))
-    _, secrets = form.stored("alice", False)
+    _, secrets = await _saved(account, _member(secrets={"BRANVIL_TOKEN": held}))
+
     issued = double.tokens[secrets["BRANVIL_TOKEN"]]
-
     assert issued["member"] == name
-    # Until the save is done the token issued before keeps working.
-    assert earlier in {t["id"] for t in double.tokens.values()}
+    assert secrets["BRANVIL_TOKEN_ID"] == issued["id"]
 
-    await form.saved()
 
-    assert [t for t in double.tokens.values() if t["label"] == "guildbotics"] == [
-        issued
+def _holding(double: BranvilDouble) -> tuple[SavedMember, str]:
+    """An agent holding a GuildBotics token, and the token."""
+    issued = double.issue(MEMBER, "guildbotics")
+    token = next(value for value, record in double.tokens.items() if record is issued)
+    held = {"BRANVIL_TOKEN": token, "BRANVIL_TOKEN_ID": double.tokens[token]["id"]}
+    return _member(secrets=held), token
+
+
+async def _reissued(member: SavedMember) -> tuple[BranvilAccount, dict[str, str]]:
+    form = BranvilAccount.model_validate({"username": MEMBER, "reissue": True})
+    await form.prepare(member)
+    return form, form.stored(member.person_id, member.human)[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved", "revoked"), [(True, "held"), (False, "issued")], ids=["saved", "refused"]
+)
+async def test_a_settled_save_revokes_the_token_it_replaced_or_issued(
+    double: BranvilDouble, saved: bool, revoked: str
+):
+    member, held = _holding(double)
+    form, secrets = await _reissued(member)
+    tokens = {"held": held, "issued": secrets["BRANVIL_TOKEN"]}
+    # Until the save is settled the token held keeps working.
+    assert set(tokens.values()) <= set(double.tokens)
+
+    await form.settled(saved)
+
+    assert {v for v, t in double.tokens.items() if t["label"] == "guildbotics"} == {
+        token for name, token in tokens.items() if name != revoked
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["earlier", "later"])
+async def test_an_earlier_save_settling_late_keeps_the_later_saves_token(
+    double: BranvilDouble, first: str
+):
+    member, held = _holding(double)
+    earlier, stored = await _reissued(member)
+    # The later save reads the member the earlier one stored.
+    later, kept = await _reissued(_member(secrets=stored))
+    settling = [earlier, later] if first == "earlier" else [later, earlier]
+
+    for form in settling:
+        await form.settled(True)
+
+    assert [v for v, t in double.tokens.items() if t["label"] == "guildbotics"] == [
+        kept["BRANVIL_TOKEN"]
     ]
+    assert held not in double.tokens
 
 
 @pytest.mark.asyncio
 async def test_a_keychain_that_fails_after_the_save_fails_no_save(
     double: BranvilDouble, monkeypatch: pytest.MonkeyPatch
 ):
-    earlier = double.issue(MEMBER, "guildbotics")["id"]
-    form = BranvilAccount.model_validate({"username": MEMBER, "reissue": True})
-    await form.prepare(_member(secrets={"BRANVIL_TOKEN": TOKEN}))
+    member, held = _holding(double)
+    form, _ = await _reissued(member)
 
     def locked(self: KeyringSecretStore, key: str) -> str:
         raise SecretStoreError("keychain is locked")
 
     monkeypatch.setattr(KeyringSecretStore, "get", locked)
 
-    await form.saved()
+    await form.settled(True)
 
-    # The earlier token keeps working until a save issues another.
-    assert earlier in {t["id"] for t in double.tokens.values()}
+    # The token replaced keeps working.
+    assert held in double.tokens
 
 
 @pytest.mark.asyncio

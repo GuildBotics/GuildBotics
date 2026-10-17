@@ -6,6 +6,7 @@ Branvil."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from html import unescape
 from pathlib import Path
@@ -16,7 +17,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from guildbotics.app_api import api
 from guildbotics.integrations.branvil import setup as branvil_setup
+from guildbotics.setup import setup_service
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
@@ -39,6 +42,7 @@ from tests.guildbotics.integrations.branvil_double import (
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
+HTTP_SERVER_ERROR = 500
 CALLBACK_BASE = "http://127.0.0.1:5173"
 OPERATIONS = "/config/providers/branvil"
 SERVICES = {
@@ -424,18 +428,94 @@ def test_a_reissue_the_save_refuses_keeps_the_token_the_member_holds(
 
     assert refused.status_code == HTTP_CONFLICT
     assert _store(workspace).get("ALICE_BRANVIL_TOKEN") == token
-    assert double.tokens[token]["member"] == "alice"
+    # The token issued for the refused save is revoked; the one held is not.
+    assert [v for v, t in double.tokens.items() if t["member"] == "alice"] == [token]
 
-    # The next save that is done revokes all but the token it keeps: the one
-    # issued for the refused save too.
-    reissued = _update(
+
+def test_a_save_failing_after_issuing_a_token_revokes_it(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connect_admin()
+    _add(client, workspace, _member("alice"))
+    token = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    respond = double.respond
+
+    def no_accounts(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT" and request.url.path.endswith("/github"):
+            raise httpx.ConnectError("refused", request=request)
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", no_accounts)
+    github = {"account_type": "machine_user", "username": "a", "access_token": "ghp_a"}
+
+    failed = _update(
+        client,
+        workspace,
+        _member("alice", branvil={"username": "alice", "reissue": True}, github=github),
+    )
+
+    assert failed.status_code == HTTP_BAD_REQUEST
+    assert [v for v, t in double.tokens.items() if t["member"] == "alice"] == [token]
+
+
+def test_a_save_failing_once_written_keeps_the_token_it_stored(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connect_admin()
+    _add(client, workspace, _member("alice"))
+
+    def unwritable(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    # The secrets are stored first, then the member's file is not.
+    monkeypatch.setattr(setup_service, "save_yaml_file", unwritable)
+
+    failed = _update(
         client,
         workspace,
         _member("alice", branvil={"username": "alice", "reissue": True}),
     )
-    assert reissued.status_code == HTTP_OK
+
+    assert failed.status_code == HTTP_SERVER_ERROR
+    stored = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    assert double.tokens[stored]["member"] == "alice"
+
+
+def test_a_save_settling_late_keeps_the_token_a_later_save_stored(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connect_admin()
+    _add(client, workspace, _member("alice"))
+    first = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    late: list[tuple[Any, bool]] = []
+    settle = api.settle_accounts
+
+    async def settling_later_once(member: Any, saved: bool) -> None:
+        if late:
+            await settle(member, saved)
+        else:
+            late.append((member, saved))
+
+    monkeypatch.setattr(api, "settle_accounts", settling_later_once)
+    reissue = _member("alice", branvil={"username": "alice", "reissue": True})
+
+    # Save A is stored but not settled yet; save B reads the member A stored.
+    assert _update(client, workspace, reissue).status_code == HTTP_OK
+    assert _update(client, workspace, reissue).status_code == HTTP_OK
     kept = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    asyncio.run(settle(*late[0]))
+
     assert [v for v, t in double.tokens.items() if t["member"] == "alice"] == [kept]
+    assert first not in double.tokens
 
 
 def test_a_save_stays_done_when_branvil_revokes_no_earlier_token(

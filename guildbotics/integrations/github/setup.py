@@ -175,8 +175,10 @@ class GitHubAccount(MemberAccount):
             {key: value for key, value in values.items() if value},
         )
 
-    async def saved(self) -> None:
-        _registrations.discard(self.app_registration_id)
+    async def settled(self, saved: bool) -> None:
+        # A refused save may be retried with the same registration.
+        if saved:
+            _registrations.discard(self.app_registration_id)
 
     @classmethod
     def credential(cls, member: SavedMember) -> HostCredential | None:

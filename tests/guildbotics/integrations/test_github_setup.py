@@ -524,7 +524,8 @@ async def test_a_save_stores_the_registrations_ids_and_key_until_saved(
     )
 
     stored = account.stored("alice", False)
-    # A save that fails after the claim retries with the same registration.
+    await account.settled(False)
+    # A save refused after the claim retries with the same registration.
     assert account.stored("alice", False) == stored
     assert stored == (
         {
@@ -536,7 +537,7 @@ async def test_a_save_stores_the_registrations_ids_and_key_until_saved(
         {"GITHUB_PRIVATE_KEY": api.pem},
     )
 
-    await account.saved()
+    await account.settled(True)
 
     with pytest.raises(SetupError) as error:
         account.stored("alice", False)
@@ -566,7 +567,7 @@ async def test_a_member_save_keeps_the_key_only_in_the_secret_store(
     )
 
     SimplePersonSetupService().write_person(member)
-    await settle_accounts(member)
+    await settle_accounts(member, saved=True)
 
     person_file = config_dir / "team/members/alice/person.yml"
     account_info = load_yaml_file(person_file)["account_info"]

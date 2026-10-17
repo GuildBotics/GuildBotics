@@ -994,11 +994,11 @@ def _stored_accounts(
     return account_info, secrets
 
 
-async def settle_accounts(config: PersonSetupInput) -> None:
-    """Tell each account the member was saved, after the save releases the
-    workspace's lock."""
+async def settle_accounts(config: PersonSetupInput, saved: bool) -> None:
+    """Tell each account how the save :func:`prepare_accounts` was for
+    ended, outside the workspace's lock."""
     for account in config.accounts.values():
-        await account.saved()
+        await account.settled(saved)
 
 
 async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> None:

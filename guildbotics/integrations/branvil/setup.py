@@ -356,6 +356,18 @@ class AccountView(BaseModel):
     has_token: bool = False
 
 
+@dataclass(frozen=True)
+class _Issued:
+    """The token a save issued an agent, and the one it replaces."""
+
+    url: str
+    name: str
+    token: str
+    token_id: str
+    #: The ID of the token the member held; empty for none.
+    replaced: str
+
+
 class BranvilAccount(MemberAccount):
     """A member's Branvil account: the Branvil member it is. A human is
     Branvil's owner. An agent is the agent of its name, created unless it is
@@ -366,10 +378,7 @@ class BranvilAccount(MemberAccount):
     username: str = ""
     #: Issue an agent a new token though Branvil takes the one it holds.
     reissue: bool = False
-    _token: str = PrivateAttr("")
-    #: Branvil's ID of the token issued, and where: the save keeps it, and
-    #: only then are the agent's other GuildBotics tokens revoked.
-    _issued: tuple[str, str, str] | None = PrivateAttr(None)
+    _issued: _Issued | None = PrivateAttr(None)
 
     @field_validator("username")
     @classmethod
@@ -385,8 +394,8 @@ class BranvilAccount(MemberAccount):
         member's picture.
 
         A new token is issued beside the one the member holds, which keeps
-        working until :meth:`saved`: a save that is refused afterwards loses
-        no credential."""
+        working until :meth:`settled`: a save that is refused afterwards
+        loses no credential."""
         url = branvil_url(member.services)
         if not url:
             return
@@ -406,8 +415,13 @@ class BranvilAccount(MemberAccount):
                         f"/members/{segment(self.username)}/tokens",
                         {"label": _TOKEN_LABEL},
                     )
-                    self._token = str(issued["token"])
-                    self._issued = (url, self.username, str(issued["id"]))
+                    self._issued = _Issued(
+                        url=url,
+                        name=self.username,
+                        token=str(issued["token"]),
+                        token_id=str(issued["id"]),
+                        replaced=member.get_secret("BRANVIL_TOKEN_ID"),
+                    )
                 for host in sorted(_UPSTREAMS & set(member.credentials)):
                     await admin.call(
                         "PUT",
@@ -420,19 +434,31 @@ class BranvilAccount(MemberAccount):
         self, person_id: str, human: bool
     ) -> tuple[dict[str, str], dict[str, str]]:
         info = {"branvil_username": self.username} if self.username else {}
-        return info, {"BRANVIL_TOKEN": self._token} if self._token else {}
+        issued = self._issued
+        if issued is None:
+            return info, {}
+        return info, {
+            "BRANVIL_TOKEN": issued.token,
+            "BRANVIL_TOKEN_ID": issued.token_id,
+        }
 
-    async def saved(self) -> None:
-        """Revoke the agent's GuildBotics tokens but the one just saved. If
-        Branvil refuses, they keep working until a save issues another."""
-        if self._issued is None:
+    async def settled(self, saved: bool) -> None:
+        """Revoke the token the save replaced, or, when the save was refused,
+        the one issued for it: never a token another save holds. If Branvil
+        refuses, the token keeps working."""
+        issued = self._issued
+        if issued is None:
             return
-        url, name, kept = self._issued
+        token_id = issued.replaced if saved else issued.token_id
+        if not token_id:
+            return
         try:
-            async with Admin(url) as admin:
-                await _revoke(admin, name, kept)
+            async with Admin(issued.url) as admin:
+                await _delete_token(admin, issued.name, token_id)
         except (ServiceError, SecretStoreError) as exc:
-            _LOGGER.warning("The earlier Branvil tokens of %s stay: %s", name, exc)
+            _LOGGER.warning(
+                "Branvil token %s of %s stays: %s", token_id, issued.name, exc
+            )
 
     @classmethod
     async def avatar_changed(cls, member: SavedMember) -> None:
@@ -479,15 +505,20 @@ async def _picture(admin: Admin, name: str, member: SavedMember) -> None:
         )
 
 
-async def _revoke(admin: Admin, name: str, kept: str = "") -> None:
-    """Revoke the GuildBotics tokens of Branvil's member ``name`` but
-    ``kept``."""
-    tokens = f"/members/{segment(name)}/tokens"
-    for token in await admin.items(tokens):
-        if token.get("label") == _TOKEN_LABEL and token["id"] != kept:
-            # One revoked meanwhile is as good as revoked here.
-            with suppress(ServiceNotFound):
-                await admin.call("DELETE", f"{tokens}/{segment(str(token['id']))}")
+async def _revoke(admin: Admin, name: str) -> None:
+    """Revoke the GuildBotics tokens of Branvil's member ``name``."""
+    for token in await admin.items(f"/members/{segment(name)}/tokens"):
+        if token.get("label") == _TOKEN_LABEL:
+            await _delete_token(admin, name, str(token["id"]))
+
+
+async def _delete_token(admin: Admin, name: str, token_id: str) -> None:
+    """Revoke the token ``token_id`` of Branvil's member ``name``; one
+    revoked already is as good."""
+    with suppress(ServiceNotFound):
+        await admin.call(
+            "DELETE", f"/members/{segment(name)}/tokens/{segment(token_id)}"
+        )
 
 
 async def _agent(admin: Admin, name: str, display_name: str) -> None:

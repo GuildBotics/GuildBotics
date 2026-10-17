@@ -94,8 +94,9 @@ Under **Setup → Members → Branvil**:
 - An AI member is a Branvil agent: **Create a new agent** (named after the member's ID)
   or **Choose an existing agent**. Saving the member creates the agent unless one was
   chosen, issues its token (labelled `guildbotics`), and keeps the token in the OS
-  keychain as `{PERSON_ID}_BRANVIL_TOKEN`. The tokens issued before are revoked once the
-  save is done (when it is not, the token held before keeps working). No token is ever
+  keychain as `{PERSON_ID}_BRANVIL_TOKEN` (its ID as `{PERSON_ID}_BRANVIL_TOKEN_ID`). The
+  token it replaces is revoked once the save is done; when the save is refused, the token
+  issued for it is revoked instead and the one held before keeps working. No token is ever
   shown or typed. The token is also the member's git password: git authenticates with
   the agent's name and the token. Later saves keep the token while Branvil accepts it as
   the agent's; **Issue a new token when saved** replaces it.
