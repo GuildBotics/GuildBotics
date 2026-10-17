@@ -758,3 +758,128 @@ def test_a_revision_naming_something_outside_config_is_a_bad_request(
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "config_revision_invalid"
+
+
+# -- a member's revisions describe what was read and written -----------------
+
+
+def _member_files(config_dir: Path) -> dict[str, Path]:
+    return {
+        "identity": identity_members_dir() / "alice" / IDENTITY_FILE,
+        "member": config_dir / "team/members/alice" / MEMBER_FILE,
+    }
+
+
+def _change_elsewhere(path: Path) -> None:
+    """Another writer -- a save elsewhere, or synchronization -- changing the
+    file through the shared-write port, as every writer does."""
+    from guildbotics.utils.workspace_sync_port import update_shared_text
+
+    update_shared_text(path, lambda text: (text or "") + "# changed elsewhere\n")
+
+
+@pytest.mark.parametrize("changed", ["identity", "member"])
+def test_a_member_read_never_hands_out_a_revision_newer_than_its_content(
+    client: TestClient,
+    config_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    """A form whose revision is newer than what it shows would save over the
+    change it never showed. Whatever lands while the member is read, saving
+    the form is refused."""
+    from guildbotics.setup.setup_service import SimplePersonSetupService
+
+    write_member(config_dir, {"person_id": "alice", "name": "Alice", "is_active": True})
+    read = SimplePersonSetupService.read_person_config
+
+    def read_then_changed(self, **kwargs):
+        snapshot = read(self, **kwargs)
+        _change_elsewhere(_member_files(config_dir)[changed])
+        return snapshot
+
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            SimplePersonSetupService, "read_person_config", read_then_changed
+        )
+        form = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+
+    response = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json=_member_payload(config_dir, form["revisions"]),
+    )
+
+    assert response.status_code == HTTP_CONFLICT, response.text
+    assert "# changed elsewhere" in _member_files(config_dir)[changed].read_text()
+
+
+@pytest.mark.parametrize("changed", ["identity", "member"])
+def test_a_member_save_answers_with_the_revisions_it_wrote(
+    client: TestClient,
+    config_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    """Each file's revision is read before its lock is released: a writer that
+    gets in right after is a change the open form has not seen, and its next
+    save is refused instead of written over it."""
+    import guildbotics.app_api.api as api_module
+    from guildbotics.utils.fileio import get_identity_config_dir
+
+    write_member(config_dir, {"person_id": "alice", "name": "Alice", "is_active": True})
+    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
+        "revisions"
+    ]
+    write = api_module.apply_config_write
+    locked = get_identity_config_dir() if changed == "identity" else config_dir
+
+    def then_changed(target: Path, *args, **kwargs):
+        receipt = write(target, *args, **kwargs)
+        if target == locked:
+            _change_elsewhere(_member_files(config_dir)[changed])
+        return receipt
+
+    with monkeypatch.context() as patched:
+        patched.setattr(api_module, "apply_config_write", then_changed)
+        saved = client.put(
+            "/config/members/alice",
+            headers=AUTH_HEADERS,
+            json=_member_payload(config_dir, revisions, person_name="Saved"),
+        )
+    assert saved.status_code == HTTP_OK
+
+    again = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json=_member_payload(
+            config_dir, saved.json()["revisions"], person_name="Again"
+        ),
+    )
+
+    assert again.status_code == HTTP_CONFLICT, again.text
+    assert "# changed elsewhere" in _member_files(config_dir)[changed].read_text()
+
+
+def test_a_member_deletion_answers_with_what_it_left(
+    client: TestClient, config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workspace's file is gone when its lock is released; a member of the
+    same ID made right after is not described as the one deleted."""
+    import guildbotics.app_api.api as api_module
+
+    write_member(config_dir, {"person_id": "alice", "name": "Alice"})
+    write = api_module.apply_config_write
+
+    def then_recreated(target: Path, *args, **kwargs):
+        receipt = write(target, *args, **kwargs)
+        if target == config_dir:
+            write_member(config_dir, {"person_id": "alice", "name": "Alice again"})
+        return receipt
+
+    with monkeypatch.context() as patched:
+        patched.setattr(api_module, "apply_config_write", then_recreated)
+        deleted = client.delete("/identities/alice", headers=AUTH_HEADERS)
+
+    assert deleted.status_code == HTTP_OK
+    assert deleted.json()["revisions"]["team/members/alice/member.yml"] == ""

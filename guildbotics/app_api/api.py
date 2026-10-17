@@ -1091,13 +1091,15 @@ def create_app(
     @router.get("/config/members/{person_id}")
     def config_member(person_id: MemberDirectoryName) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
+        # The revisions first, as every config read takes them: a change made
+        # between the two is then newer than what the form is compared against,
+        # and its save is refused rather than written over the change.
+        revisions = _member_revisions(config_dir, person_id)
         snapshot: PersonConfigSnapshot = SimplePersonSetupService().read_person_config(
             config_dir=config_dir,
             person_id=person_id,
         )
-        return snapshot.model_copy(
-            update={"revisions": _member_revisions(config_dir, person_id)}
-        )
+        return snapshot.model_copy(update={"revisions": revisions})
 
     @router.put("/config/members/{person_id}")
     async def config_member_update(
@@ -1146,19 +1148,25 @@ def create_app(
         config_dir = _resolve_member_config_dir(app_runtime)
         service = SimplePersonSetupService()
         await remove_accounts(person_id)
-        if person_id in {
-            member.person_id
-            for member in service.list_person_configs(config_dir=config_dir)
-        }:
+        removed = (
             await config_member_delete(person_id)
-        identity_dir = get_identity_config_dir()
+            if person_id
+            in {
+                member.person_id
+                for member in service.list_person_configs(config_dir=config_dir)
+            }
+            else None
+        )
         receipt = await run_in_threadpool(
             apply_config_write,
-            identity_dir,
+            get_identity_config_dir(),
             lambda: service.delete_identity(person_id=person_id),
-            report=lambda: _member_revisions(config_dir, person_id),
+            report=lambda: _identity_revisions(person_id),
         )
-        return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
+        return ConfigWriteResponse(
+            member=receipt.result,
+            revisions={**(removed.revisions if removed else {}), **receipt.revisions},
+        )
 
     @router.get("/config/providers")
     def config_providers() -> list[ProviderOption]:
@@ -1299,17 +1307,22 @@ def create_app(
 def _member_revisions(config_dir: Path, person_id: str) -> dict[str, str]:
     """Where a member's two files stand: its identity, and the workspace's file
     of it. The names differ, so one mapping holds both."""
-    if not is_valid_person_id(person_id):
-        # A stored directory addressed for repair has no identity of its name.
-        return config_repository(config_dir).revisions(
-            stored_person_config_paths(person_id)
-        )
     return {
-        **config_repository(get_identity_config_dir()).revisions(
-            identity_config_paths(person_id)
+        **_identity_revisions(person_id),
+        **config_repository(config_dir).revisions(
+            stored_person_config_paths(person_id)
         ),
-        **config_repository(config_dir).revisions(member_config_paths(person_id)),
     }
+
+
+def _identity_revisions(person_id: str) -> dict[str, str]:
+    """Where a member's identity stands; nothing for a stored directory
+    addressed for repair, which no identity can have the name of."""
+    if not is_valid_person_id(person_id):
+        return {}
+    return config_repository(get_identity_config_dir()).revisions(
+        identity_config_paths(person_id)
+    )
 
 
 async def _save_member(
@@ -1320,7 +1333,9 @@ async def _save_member(
 
     Its identity and the workspace's file of it are compared and written as
     one write: under the identities' lock and, inside it, the workspace's --
-    the order every span that takes both takes them in.
+    the order every span that takes both takes them in. Each file's revision
+    is read before its own lock is released, so the answer describes what
+    this save wrote rather than what a writer did after it.
 
     A save refused before the write began is settled as refused. One that
     failed after it began may have stored what its accounts obtained, so they
@@ -1335,12 +1350,15 @@ async def _save_member(
         began = True
         return SimplePersonSetupService().save_person(member)
 
-    def write() -> PersonSetupResult:
+    def write() -> ConfigWriteReceipt[PersonSetupResult]:
         return apply_config_write(
             member.config_dir,
             write_workspace,
             expected={k: v for k, v in expected.items() if k not in identity_paths},
-        ).result
+            report=lambda: config_repository(member.config_dir).revisions(
+                member_config_paths(member.person_id)
+            ),
+        )
 
     try:
         await prepare_accounts(member)
@@ -1349,7 +1367,7 @@ async def _save_member(
                 get_identity_config_dir(),
                 write,
                 expected={k: v for k, v in expected.items() if k in identity_paths},
-                report=lambda: _member_revisions(member.config_dir, member.person_id),
+                report=lambda: _identity_revisions(member.person_id),
             )
         )
     except Exception:
@@ -1357,7 +1375,9 @@ async def _save_member(
             await settle_accounts(member, saved=False)
         raise
     await settle_accounts(member, saved=True)
-    return receipt
+    return ConfigWriteReceipt(
+        receipt.result.result, {**receipt.revisions, **receipt.result.revisions}
+    )
 
 
 async def _store_downloaded_avatar(person_id: str, url: str) -> Path:
