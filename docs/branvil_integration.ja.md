@@ -119,7 +119,8 @@ Branvil のリポジトリは、GitHub のリポジトリに追従できます�
   Branvil はブランチを push し、最終的なタイトルと本文で、**作成者の GitHub アカウントとして**
   GitHub に pull request を開きます。そのため、AI メンバーごとの bot アカウントを Branvil にも
   登録してください（`branvil member account <name>`。GuildBotics に登録する Branvil のトークンとは
-  別）。GitHub の読み取りにはオーナーのアカウントを使います。
+  別）。GitHub の読み取りにも、これらの bot アカウントのどれか 1 つを使うので、人のメンバー自身の
+  GitHub トークンは要りません。
 - 出した head に対する GitHub のチェックは、pull request のチェックに `github/<name>` として
   ログ付きで並びます。GitHub で（Windows などで）失敗すると pull request は ready にならず、
   メンバーは Branvil で直します。その後の push は自動で GitHub に届きます。

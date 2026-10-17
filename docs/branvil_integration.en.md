@@ -122,7 +122,8 @@ things:
   merging: Branvil pushes the branch and opens a pull request on GitHub with the final
   title and body, **as the author's GitHub account**. Give each AI member's bot account
   to Branvil for this (`branvil member account <name>`), besides its Branvil token in
-  GuildBotics; the owner's account reads GitHub for Branvil.
+  GuildBotics. One of these bot accounts also reads GitHub for Branvil, so the human
+  member's own GitHub token is not needed.
 - GitHub's checks of the published head appear among the pull request's checks
   (`github/<name>`) with their logs, so a failure on GitHub (Windows, for example) keeps
   the pull request from being ready, and the member fixes it in Branvil; later pushes
