@@ -194,14 +194,7 @@ vi.mock("../api/client", async (importOriginal) => {
       options: [],
       default_command: "workflows/ticket_driven_workflow",
     })),
-    getConfigStatus: vi.fn(async () => ({
-      cwd: "/workspace",
-      workspace: "/workspace",
-      config_dir: "/workspace/.guildbotics/config",
-      project_file: "/workspace/.guildbotics/config/project.yml",
-      project_file_exists: true,
-      storage_dir: "/workspace/.guildbotics",
-    })),
+    getConfigStatus: vi.fn(async () => configStatus({ project_file_exists: true })),
     getCliAgentLastTurns: vi.fn(async () => []),
     getInferenceFailures: vi.fn(async () => ({ llm: {}, jev: null })),
     getIntelligenceConfig: vi.fn(async () => ({
@@ -250,16 +243,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
     getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
-    getProjectConfig: vi.fn(async () => ({
-      config_dir: "/workspace/.guildbotics/config",
-      revisions: {},
-      language: "en",
-      description: "Demo project",
-      llm_api_type: "openai",
-      cli_agent: "codex",
-      services: {},
-      provider_api_keys: { openai: true, gemini: false, anthropic: false },
-    })),
+    getProjectConfig: vi.fn(async () => projectConfig({ description: "Demo project" })),
     getProviders: vi.fn(async () => PROVIDERS),
     importAvatarFromProvider: vi.fn(async () => ({ avatar_timestamp: 2 })),
     getRoleOptions: vi.fn(async () => ({
@@ -391,18 +375,9 @@ vi.mock("./providers/slack/api", async (importOriginal) => {
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Reset implementations and unused one-shot responses to each vi.fn default.
+  vi.resetAllMocks();
   localStorage.clear();
-  // Restore the default existing-project responses so that first-setup tests,
-  // which install persistent `mockResolvedValue` overrides, do not leak into
-  // subsequent existing-project tests.
-  vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: true }));
-  vi.mocked(getTeam).mockResolvedValue({
-    project: { name: "Demo", language_code: "en", language_name: "English" },
-    default_person_id: "",
-    members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
-  });
-  vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
   vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
     environmentStatus({
       tools: [
@@ -1441,6 +1416,28 @@ describe("SetupPage", () => {
     expect(vi.mocked(updateProjectConfig).mock.calls[1][0]).toMatchObject({
       expected_revisions: { "team/project.yml": "after-first-save" },
     });
+  });
+
+  // Keep this after the two-save test: its save implementation must not leak.
+  it("keeps the configured provider accounts after saving the project", async () => {
+    const user = userEvent.setup();
+    const project = projectConfig({ services: GITHUB_AND_SLACK });
+    vi.mocked(getProjectConfig).mockResolvedValue(project);
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue(project.description));
+    await user.clear(description);
+    await fill(user, description, "Updated description");
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getProjectConfig).toHaveBeenCalledTimes(2));
+    expect(await getProjectConfig()).toEqual(project);
+
+    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    expect(await screen.findByRole("tab", { name: "GitHub" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Slack" })).toBeInTheDocument();
   });
 
   it("reloads instead of resending when the save is refused as stale", async () => {
