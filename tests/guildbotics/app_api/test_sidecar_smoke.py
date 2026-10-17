@@ -16,10 +16,13 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
 import pytest
+
+from guildbotics.app_api.server import PORT_NOTICE_PREFIX
 
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
@@ -31,12 +34,6 @@ REQUEST_TIMEOUT_SECONDS = 5.0
 
 TOKEN = "smoke-test-token"
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": TOKEN}
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def _can_bind_localhost() -> bool:
@@ -72,8 +69,6 @@ def sidecar(tmp_path: Path) -> Iterator[_Sidecar]:
 
 
 def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
-    port = _find_free_port()
-    base_url = f"http://127.0.0.1:{port}"
     # Fully hermetic: redirect HOME to the tmp tree and drop any inherited config
     # overrides so the subprocess never reads or writes the real ~/.guildbotics.
     # The session token is only accepted through the environment, matching how
@@ -92,7 +87,7 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
             "--host",
             "127.0.0.1",
             "--port",
-            str(port),
+            "0",
         ],
         cwd=str(startup_dir),
         env=env,
@@ -100,8 +95,33 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
         stderr=subprocess.STDOUT,
         text=True,
     )
-    _wait_for_health(base_url, process)
+    # The sidecar holds the port before announcing it, as it does for Desktop.
+    with ThreadPoolExecutor(max_workers=1) as reader:
+        notice = reader.submit(_read_port, process)
+        try:
+            port = notice.result(timeout=STARTUP_TIMEOUT_SECONDS)
+        except BaseException:
+            _terminate(process)
+            raise
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        _wait_for_health(base_url, process)
+    except BaseException:
+        _terminate(process)
+        raise
     return _Sidecar(base_url, process)
+
+
+def _read_port(process: subprocess.Popen[str]) -> int:
+    assert process.stdout is not None
+    output = []
+    for line in process.stdout:
+        if line.startswith(PORT_NOTICE_PREFIX):
+            return int(line.removeprefix(PORT_NOTICE_PREFIX))
+        output.append(line)
+    raise AssertionError(
+        f"Sidecar exited before announcing its port:\n{''.join(output)}"
+    )
 
 
 def _drain_output(process: subprocess.Popen[str]) -> str:

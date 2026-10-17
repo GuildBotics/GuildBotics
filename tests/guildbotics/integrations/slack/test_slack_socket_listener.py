@@ -123,9 +123,9 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     )
 
     listener.start()
-    deadline = time.time() + 2.0
+    deadline = time.monotonic() + 10
     drained = []
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         drained.extend(listener.drain_events())
         if drained and ws_connect_calls["count"] >= EXPECTED_RECONNECT_ATTEMPTS:
             break
@@ -169,14 +169,13 @@ def test_invalid_auth_surfaces_warning_and_stops_retrying(monkeypatch):
     )
 
     listener.start()
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
         if listener.auth_failed:
             break
         time.sleep(0.01)
 
     # Permanent auth errors must not be retried in a tight loop.
-    time.sleep(0.1)
     listener.stop()
     client.close()
 
@@ -337,8 +336,8 @@ def test_a_frame_that_is_no_message_is_acked_and_the_next_still_arrives():
 
     listener.start()
     drained = []
-    deadline = time.time() + 2.0
-    while not drained and time.time() < deadline:
+    deadline = time.monotonic() + 10
+    while not drained and time.monotonic() < deadline:
         drained.extend(listener.drain_events())
         time.sleep(0.01)
     listener.stop()

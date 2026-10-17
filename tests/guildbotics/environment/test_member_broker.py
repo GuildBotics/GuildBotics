@@ -179,26 +179,34 @@ async def test_member_command_starts_from_an_empty_context(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("worker_delay", [0, 0.2])
 async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, start_member_before_timeout, worker_delay
 ) -> None:
     release = threading.Event()
+    entered = threading.Event()
     started: list[list[str]] = []
 
     def run_in_process(arguments, invocation, *, cwd, stdin):
         started.append(arguments)
         if arguments == ["hang"]:
-            release.wait(5)
+            entered.set()
+            release.wait()
         return 0, "done", ""
 
-    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(member_broker, "_rejection_reason", lambda *_: None)
     broker = _active_broker(_context(tmp_path), run_in_process)
     try:
-        timed_out = await broker.execute("turn-1", ["hang"])
+        with monkeypatch.context() as timeout_patch:
+            timeout_patch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+            timed_out = await start_member_before_timeout(
+                entered, broker.execute("turn-1", ["hang"]), worker_delay
+            )
         following = await broker.execute("turn-1", ["help"])
     finally:
         release.set()
+        await broker.settle(abandon=True)
+        await broker.close()
 
     assert timed_out.exit_code == 124
     assert "may still complete" in timed_out.stderr
@@ -211,16 +219,26 @@ async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
 @pytest.mark.parametrize("timed_out", [False, True])
 @pytest.mark.parametrize("fails", [False, True])
 @pytest.mark.parametrize("abandon", [False, True])
+@pytest.mark.parametrize("worker_delay", [0, 0.2])
 async def test_abandon_waits_for_member_writes_even_after_timeout(
-    monkeypatch, tmp_path, transport: str, timed_out: bool, fails: bool, abandon: bool
+    monkeypatch,
+    tmp_path,
+    start_member_before_timeout,
+    transport: str,
+    timed_out: bool,
+    fails: bool,
+    abandon: bool,
+    worker_delay: float,
 ) -> None:
     """Both member entry points retain writes until command cancellation ends."""
     started = asyncio.Event()
+    entered = threading.Event()
     release, finished = threading.Event(), threading.Event()
     writes: list[str] = []
     loop = asyncio.get_running_loop()
 
     def run_in_process(*_args, **_kwargs):
+        entered.set()
         loop.call_soon_threadsafe(started.set)
         assert release.wait(10)
         writes.append("member write")
@@ -241,14 +259,18 @@ async def test_abandon_waits_for_member_writes_even_after_timeout(
 
     broker.serve(host, contextvars.Context())
     if transport == "mcp":
-        call = asyncio.create_task(broker.execute("turn-1", ["help"]))
+        operation = broker.execute("turn-1", ["help"])
     else:
 
         async def receive():
             return {"type": "http.request", "body": b"{}"}
 
         request = Request({"type": "http", "path_params": {"call": "member"}}, receive)
-        call = asyncio.create_task(broker._answer(request))
+        operation = broker._answer(request)
+
+    call = asyncio.create_task(
+        start_member_before_timeout(entered, operation, worker_delay)
+    )
 
     async def never():
         await asyncio.Event().wait()

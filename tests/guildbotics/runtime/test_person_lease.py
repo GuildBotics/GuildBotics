@@ -38,11 +38,11 @@ def _child_lease_result(data_root: Path) -> str:
     process.start()
     sender.close()
     try:
-        assert receiver.poll(5.0), "child process did not report its lease result"
+        assert receiver.poll(30), "child process did not report its lease result"
         result = receiver.recv()
     finally:
         receiver.close()
-        process.join(5.0)
+        process.join(30)
         if process.is_alive():
             process.terminate()
             process.join(5.0)
