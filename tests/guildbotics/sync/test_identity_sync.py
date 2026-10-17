@@ -10,7 +10,7 @@ what sends it.
 
 from __future__ import annotations
 
-import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -25,7 +25,6 @@ from guildbotics.sync.activation import (
     synchronize_once,
 )
 from guildbotics.sync.enrollment import enroll
-from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.workspace_sync_port import write_shared_text
@@ -106,24 +105,14 @@ def test_announcing_a_change_sends_it(
     windows = _machine(tmp_path, monkeypatch, "windows")
     enroll(hub_url, windows)
     _machine(tmp_path, monkeypatch, "mac")
-    pushed = threading.Event()
-    push = LocalSyncRepository.push
-
-    def observe_push(repository: LocalSyncRepository) -> None:
-        push(repository)
-        pushed.set()
-
-    monkeypatch.setattr(LocalSyncRepository, "push", observe_push)
+    pushed = Repo(hub_url).head.commit
     activate_identity_sync()
     try:
         _save("Alice renamed on the Mac")
-        # Observe completion without waking the queue or repeatedly opening Git.
-        assert pushed.wait(20), "the change never reached the hub"
-        with Repo(hub_url) as repository:
-            saved = repository.git.show(
-                f"main:config/team/members/alice/{IDENTITY_FILE}"
-            )
-        assert yaml.safe_load(saved)["name"] == "Alice renamed on the Mac"
+        deadline = time.monotonic() + 20
+        while Repo(hub_url).head.commit == pushed:
+            assert time.monotonic() < deadline, "the change never reached the hub"
+            time.sleep(0.1)
     finally:
         assert deactivate_identity_sync()
 

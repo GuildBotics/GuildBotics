@@ -192,6 +192,7 @@ def test_auth_environment_appends_credential_reset_to_command_config(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_member_auth_environment_passes_provider_credentials_and_resets_helpers(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1270,6 +1271,7 @@ def _only_the_hosts_repositories_get_the_token(
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_publish_current_workspace_commits_with_the_users_hooks_and_pushes_from_the_host(
     member, tmp_path, worker_git_seed, host_git
 ):

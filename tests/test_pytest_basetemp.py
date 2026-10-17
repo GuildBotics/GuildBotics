@@ -46,6 +46,7 @@ def test_pytest_configure_wires_the_windows_basetemp(
     assert not basetemp.exists()
 
 
+@pytest.mark.windows
 def test_windows_default_basetemp_is_short_and_removed(
     root_conftest, fake_platform, monkeypatch, tmp_path: Path
 ) -> None:

@@ -50,6 +50,7 @@ def _child_lock_result(path: Path) -> str:
     return result
 
 
+@pytest.mark.windows
 def test_a_lock_file_nothing_has_written_to_is_still_exclusive(tmp_path: Path) -> None:
     """The first holder locks an empty file, and the second is told to wait.
 
@@ -187,6 +188,7 @@ def test_threads_are_serialized_without_os_help(
     assert overlapped == []
 
 
+@pytest.mark.windows
 def test_a_lock_excludes_another_process(tmp_path: Path) -> None:
     path = tmp_path / "advisory.lock"
 
@@ -196,6 +198,7 @@ def test_a_lock_excludes_another_process(tmp_path: Path) -> None:
     assert _child_lock_result(path) == "acquired"
 
 
+@pytest.mark.windows
 def test_lock_data_survives_a_lock_file_acquiring_never_wrote(tmp_path: Path) -> None:
     """The byte reserved for locking is written by the data writer, not by acquiring."""
     path = tmp_path / "advisory.lock"

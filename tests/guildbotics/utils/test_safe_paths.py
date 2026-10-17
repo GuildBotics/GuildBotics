@@ -20,6 +20,7 @@ from guildbotics.utils.safe_paths import (
 )
 
 
+@pytest.mark.windows
 @pytest.mark.parametrize(
     "shape", ["parent", "repeat", "leaf", "missing_parent", "file_parent"]
 )
@@ -85,6 +86,7 @@ def test_same_link_inode_at_different_locations_is_not_a_cycle(tmp_path, symlink
     assert not resolution.cyclic
 
 
+@pytest.mark.windows
 @pytest.mark.skipif(os.name != "nt", reason="Windows extended UNC reparse target")
 def test_unc_link_target_is_refused_without_becoming_a_relative_name(
     tmp_path, symlinks, monkeypatch
@@ -98,6 +100,7 @@ def test_unc_link_target_is_refused_without_becoming_a_relative_name(
         resolve_host_links(link)
 
 
+@pytest.mark.windows
 def test_missing_directories_are_created_below_checked_parents(tmp_path: Path) -> None:
     target = tmp_path / "new" / "child"
     before = inspect_host_path(target, missing=True)
@@ -109,6 +112,7 @@ def test_missing_directories_are_created_below_checked_parents(tmp_path: Path) -
     assert not after.contains(inspect_host_path(tmp_path))
 
 
+@pytest.mark.windows
 @pytest.mark.parametrize("leaf", [False, True])
 @pytest.mark.parametrize("create", [False, True])
 def test_links_are_refused_before_reading_or_creating(
@@ -124,6 +128,7 @@ def test_links_are_refused_before_reading_or_creating(
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.windows
 def test_regular_file_is_read_through_the_opened_leaf(tmp_path: Path) -> None:
     file = tmp_path / "account.json"
     file.write_bytes(b"account")
@@ -133,6 +138,7 @@ def test_regular_file_is_read_through_the_opened_leaf(tmp_path: Path) -> None:
         inspect_host_path(file)
 
 
+@pytest.mark.windows
 def test_host_file_creation_is_regular_and_never_follows_a_leaf_link(
     tmp_path, symlinks
 ):
@@ -155,12 +161,14 @@ def test_fixed_os_alias_is_normalized_before_inspection() -> None:
     assert inspect_host_path(Path("/var")).path == Path("/private/var")
 
 
+@pytest.mark.windows
 def test_missing_names_use_the_ancestor_filesystem_case_rules(tmp_path: Path) -> None:
     first = inspect_host_path(tmp_path / "private", missing=True)
     second = inspect_host_path(tmp_path / "PRIVATE/child", missing=True)
     assert first.contains(second) is not first.case_sensitive
 
 
+@pytest.mark.windows
 def test_absent_equivalent_unicode_names_on_insensitive_filesystems(tmp_path):
     first = inspect_host_path(tmp_path / "caf\u00e9", missing=True)
     second = inspect_host_path(tmp_path / "cafe\u0301/child", missing=True)
@@ -266,6 +274,7 @@ def test_macos_documents_permission_guidance_keeps_absolute_path(
     assert safe_paths.sys is sys
 
 
+@pytest.mark.windows
 def test_ordinary_rename_does_not_change_the_object_relationship(
     tmp_path: Path,
 ) -> None:
@@ -306,6 +315,7 @@ def test_workspace_ancestry_still_refuses_a_granted_parent(tmp_path, present):
     assert host_path_contains(parent, inspect_host_path(target, missing=True))
 
 
+@pytest.mark.windows
 def test_existing_case_aliases_have_the_same_identity(tmp_path):
     root = tmp_path / "MixedCase"
     (root / "child").mkdir(parents=True)
@@ -324,6 +334,7 @@ def test_firmlink_aliases_have_the_same_ancestry(tmp_path):
     assert inspect_host_path(tmp_path).contains(inspect_host_path(alias / "child"))
 
 
+@pytest.mark.windows
 @pytest.mark.skipif(os.name != "nt", reason="Windows junctions")
 @pytest.mark.parametrize("create", [False, True])
 def test_windows_junction_is_refused_before_creating_children(
@@ -349,6 +360,7 @@ def test_unknown_object_identity_is_refused(tmp_path: Path, monkeypatch) -> None
         inspect_host_path(tmp_path)
 
 
+@pytest.mark.windows
 def test_missing_siblings_are_compared_below_the_opened_ancestor(
     tmp_path: Path,
 ) -> None:
@@ -408,6 +420,7 @@ def test_a_tree_directory_is_made_with_default_permissions_and_left_so(
     assert root.stat().st_mode & 0o777 == 0o755
 
 
+@pytest.mark.windows
 def test_a_missing_tree_directory_is_not_made_or_acted_in_without_create(
     tmp_path: Path,
 ) -> None:
@@ -422,6 +435,7 @@ def test_a_missing_tree_directory_is_not_made_or_acted_in_without_create(
     assert not (tmp_path / "a").exists()
 
 
+@pytest.mark.windows
 def test_a_link_inside_a_tree_is_never_followed(tmp_path: Path, symlinks: None) -> None:
     from pathlib import PurePosixPath
 

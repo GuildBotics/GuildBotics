@@ -461,37 +461,39 @@ uv run --no-sync lint-imports
 uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
 
-Windows の全テストは `git-contracts` と `remainder` の 2 shard に分かれている。
-最初の collection で全 node ID がちょうど 1 つの shard に入ることを検証し、その後の
-2 コマンドを両方実行して全件を走らせる。Windows では `tests/conftest.py` が
+全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
+host の OS 境界の契約テストだけを実行する。同期の競合ルール・状態遷移、validator、
+API の入出力の組み合わせなど、OS に依存しない網羅は Linux に集約する。
+Windows では `tests/conftest.py` が
 `--basetemp` 未指定時に `%USERPROFILE%\tmp` の下へ実行ごとの短い一時 directory を作り、
 終了時に削除する。関連範囲だけの pytest 実行にも同じ設定が適用される。
-PowerShell は既定ではネイティブコマンドの非ゼロ終了を terminating error にしないので、
-`uv` ごとに `$LASTEXITCODE` を検査して `throw` する（検査を省くと、collection や
-git-contracts が失敗しても remainder まで進み、最後のコマンドが成功すると手順全体が
-成功したように見える）:
+PowerShell で複数の確認コマンドを続けて実行する場合は、ネイティブコマンドの非ゼロ終了を
+既定では terminating error にしないので、`uv` ごとに `$LASTEXITCODE` を検査する:
 
 ```powershell
-uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
-if ($LASTEXITCODE -ne 0) { throw "shard verification failed ($LASTEXITCODE)" }
-uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts
-if ($LASTEXITCODE -ne 0) { throw "git-contracts shard failed ($LASTEXITCODE)" }
-uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder
-if ($LASTEXITCODE -ne 0) { throw "remainder shard failed ($LASTEXITCODE)" }
+uv run --no-sync mypy guildbotics
+if ($LASTEXITCODE -ne 0) { throw "mypy failed ($LASTEXITCODE)" }
+uv run --no-sync python -m pytest tests/ -m windows --strict-markers -n 4 --durations=30
+if ($LASTEXITCODE -ne 0) { throw "Windows contracts failed ($LASTEXITCODE)" }
 ```
 
 `$PSNativeCommandUseErrorActionPreference` は PowerShell 7.3 以降にしか無く、
 Windows PowerShell 5.1 では黙って無視されるので使わない。失敗したテストの一時ファイルを
 調べたいときは `--basetemp` を明示して再実行する（明示した directory は自動削除しない）。
 
-CI が付ける `--junitxml` / `--phase-durations-json` は artifact として shard の所要時間を
+CI が付ける `--junitxml` / `--phase-durations-json` は artifact として契約テストの所要時間を
 残すためのもので、手元では `--durations=30` の出力で足りる。
 
-CI の Windows check は `test-windows (git-contracts)` と
-`test-windows (remainder)` の 2 つで、両方が成功して初めて Windows の全 pytest を
-網羅する。`mypy` は `remainder` shard で 1 回だけ実行する。OS で結果が変わらない検査
-（ruff / pylint / CLI reference / Markdown リンク）は Linux のみ。手元の Windows で
-CI と同じ結果にするには、次の 2 つが要る:
+CI の Windows check は `test-windows` の 1 つで、Windows 向け `mypy` もここで実行する。
+OS で結果が変わらない検査（ruff / pylint / CLI reference / Markdown リンク）は Linux のみ。
+Windows の契約は、実ファイルの大小文字・Unicode・長いパス・symlink / junction、
+ファイルの置換とプロセス間 lock、host のプロセス起動・終了、Git for Windows の
+askpass・hook・改行・バイナリを対象とする。これらの境界を変更したときは、実 OS の動作を
+使う代表テストに `windows` を付ける。Windows 以外では skip するテストにも必ず付ける。
+OS API を mock した分岐テストやソースの文字列検査は
+Linux で足り、Linux の microVM 内だけで動く guest のコードも Windows の対象にしない。
+marker は Windows 限定の skip ではないので、選んだ契約も Linux の全件実行に含まれる。
+手元の Windows で CI と同じ結果にするには、次の 2 つが要る:
 
 - **開発者モードを有効にする**（設定 → システム → 開発者向け）。symlink を作る
   テストは、昇格していないセッションでは作成権限が無く skip される（`tests/conftest.py`
