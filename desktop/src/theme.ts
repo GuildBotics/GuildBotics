@@ -181,7 +181,7 @@ export const theme = createTheme({
     }),
     Button: Button.extend({
       vars: (_theme, { color, variant }) => ({
-        root: color === "danger" ? DANGER_BUTTONS[variant ?? "filled"] : {},
+        root: { ...(color === "danger" ? DANGER_BUTTONS[variant ?? "filled"] : undefined) },
       }),
     }),
   },

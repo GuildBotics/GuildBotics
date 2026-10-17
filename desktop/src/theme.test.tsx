@@ -59,6 +59,9 @@ describe("app theme", () => {
           Delete
         </Button>
         <Button color="danger">Force quit</Button>
+        <Button color="danger" variant="default">
+          Discard
+        </Button>
       </>,
     );
 
@@ -71,6 +74,9 @@ describe("app theme", () => {
     const filled = rootStyle("Force quit", ".mantine-Button-root");
     expect(filled.getPropertyValue("--button-bg")).toBe("var(--color-danger)");
     expect(filled.getPropertyValue("--button-hover")).toBe("var(--literal-red-700)");
+
+    const other = rootStyle("Discard", ".mantine-Button-root");
+    expect(other.getPropertyValue("--button-bg")).not.toContain("--color-danger");
   });
 
   it("draws an alert's left line and icon in its tone, and leaves other alerts neutral", () => {
