@@ -5082,7 +5082,6 @@ function MemberDiagnosticsPanel({
             <Alert
               color={diagnosticColor(check.status)}
               icon={diagnosticIcon(check.status)}
-              className={`diagnostic-alert ${check.status}`}
               key={`${check.section}-${check.code}-${check.target}-${index}`}
               title={diagnosticTitle(t, check)}
             >
@@ -6227,7 +6226,6 @@ function ScenarioDiagnosticsSummary({
         <Alert
           color={diagnosticColor(check.status)}
           icon={diagnosticIcon(check.status)}
-          className={`diagnostic-alert ${check.status}`}
           key={`${check.code}-${check.target}-${index}`}
           title={diagnosticTitle(t, check)}
         >

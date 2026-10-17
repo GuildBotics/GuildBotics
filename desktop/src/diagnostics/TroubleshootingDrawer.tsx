@@ -110,9 +110,7 @@ export function TroubleshootingDrawer({
   const header = (
     <>
       <Group gap="xs" justify="space-between">
-        <Badge variant="light" tt="none">
-          {activeLabel}
-        </Badge>
+        <Badge variant="light">{activeLabel}</Badge>
         <Switch
           checked={followTarget}
           label={t("diagnostics.troubleshooting.followTarget")}
