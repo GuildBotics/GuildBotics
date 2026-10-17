@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.models import RejectedChangeModel
 from guildbotics.drivers.live_state import LiveState
-from guildbotics.hub import HubLocation, host
-from guildbotics.hub.connection import hub_remote_url
+from guildbotics.hub import host
+from guildbotics.hub.connection import workspace_id_from_remote_url
 from guildbotics.hub.host import hub_root
 from guildbotics.sync import (
     activation,
@@ -275,6 +275,14 @@ def test_enabling_registers_the_workspace_and_starts_the_queue(
     assert current_sync_manager() is not None
 
 
+def _hub_repository(repository: LocalSyncRepository) -> str:
+    """Which of the hub's repositories ``repository`` synchronizes with: by
+    identifier, since Git spells the path its own way on each OS."""
+    remote = repository.remote_url()
+    assert remote is not None
+    return workspace_id_from_remote_url(remote)
+
+
 def test_enabling_connects_the_identities_to_the_same_hub(
     client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
@@ -285,7 +293,7 @@ def test_enabling_connects_the_identities_to_the_same_hub(
     _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
     identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
     identities = LocalSyncRepository(get_identity_root())
-    assert identities.remote_url() == hub_remote_url(HubLocation(), identity_id)
+    assert _hub_repository(identities) == identity_id
     assert read_workspace_identity(get_identity_root()).workspace_id == identity_id  # type: ignore[union-attr]
 
     other = tmp_path / "other"
@@ -317,7 +325,7 @@ def test_a_connected_workspace_brings_its_identities_to_its_hub(
     _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
 
     identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
-    assert identities.remote_url() == hub_remote_url(HubLocation(), identity_id)
+    assert _hub_repository(identities) == identity_id
 
 
 def test_shutting_down_stops_the_identities_queue_too(
