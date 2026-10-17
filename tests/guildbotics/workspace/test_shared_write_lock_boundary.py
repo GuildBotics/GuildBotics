@@ -627,3 +627,69 @@ def test_a_hand_declared_span_starts_at_the_read(
         f"{operation} read {path} before taking the lock, so what it wrote was "
         "decided from content the queue may have replaced in between"
     )
+
+
+#: Every operation that changes a secret store, run against a store whose
+#: workspace is not the selected one. The key ``K`` exists before each runs.
+STORE_OPERATIONS: dict[str, Callable[[KeyringSecretStore], object]] = {
+    "adopt_received": lambda store: store.adopt_received("K", "fetched", 1),
+    "confirm_shared": lambda store: store.confirm_shared({"K": 1}, sent={"K": "v"}),
+    "delete": lambda store: store.delete("K"),
+    "ensure_initialized": lambda store: store.ensure_initialized(),
+    "rename": lambda store: store.rename("K", "L"),
+    "set": lambda store: store.set("K", "changed"),
+    "set_many": lambda store: store.set_many({"K": "changed", "M": "new"}),
+}
+
+#: The rest of the store's public surface, and why it takes no span.
+STORE_READERS = {
+    "get": "reads one value",
+    "key_state": "reads one key's state",
+    "key_states": "reads every key's state",
+    "keys": "reads the index",
+    "local_generation": "reads this device's record",
+    "shared_generation": "reads the index",
+    "stale_keys": "reads both records",
+    "values": "reads every value",
+    "write_span": "is the span itself",
+}
+
+
+def test_every_public_store_method_is_classified() -> None:
+    """A new way to change a store has to say which lock it holds."""
+    public = {name for name in dir(KeyringSecretStore) if not name.startswith("_")}
+    assert public == set(STORE_OPERATIONS) | set(STORE_READERS)
+
+
+@pytest.mark.parametrize("operation", sorted(STORE_OPERATIONS))
+def test_a_store_change_holds_the_lock_of_the_store_s_own_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """Not the selected workspace's: that queue never commits this index.
+
+    The selected workspace here is ``tmp_path``. A store of another workspace
+    that took the selected one's lock would read its records unprotected from
+    the queue that checks a hub's version of them out. The store's own reads
+    are watched, since one of these changes reads only this device's record.
+    """
+    other = tmp_path / "other"
+    store = KeyringSecretStore(other / ".guildbotics/config")
+    store.set("K", "v")
+    reads: list[tuple[bool, bool]] = []
+    for name in ("_read_index", "_read_local"):
+        original = getattr(store, name)
+
+        def watched(original: Callable[[], object] = original) -> object:
+            reads.append(
+                (shared_write_lock_is_held(other), shared_write_lock_is_held(tmp_path))
+            )
+            return original()
+
+        monkeypatch.setattr(store, name, watched)
+
+    STORE_OPERATIONS[operation](store)
+
+    assert reads, f"{operation} read no record of its store"
+    assert reads[0] == (True, False), (
+        f"{operation} read its first record holding (own, selected) = {reads[0]}"
+    )
