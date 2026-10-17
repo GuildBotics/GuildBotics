@@ -27,9 +27,6 @@ fi
 
 rm -rf "$PROGRAMS_DIR"
 mkdir -p "$PROGRAMS_DIR"
-# A wrapper runs whatever the repository holds, so the installed copy never
-# needs refreshing.
-echo dev >"$PROGRAMS_DIR/build-id"
 cat >"$SIDECAR_PATH" <<SH
 #!/bin/sh
 set -eu
@@ -41,7 +38,19 @@ chmod +x "$SIDECAR_PATH"
 cat >"$CLI_PATH" <<SH
 #!/bin/sh
 set -eu
-cd "$REPO_ROOT"
-exec "$UV_BIN" run --no-sync guildbotics "\$@"
+exec "$UV_BIN" run --project "$REPO_ROOT" --no-sync guildbotics "\$@"
 SH
 chmod +x "$CLI_PATH"
+
+# Source edits are loaded directly, but wrapper edits need a new immutable
+# installed build. Identical wrappers can keep using the same directory.
+"$UV_BIN" run --project "$REPO_ROOT" --no-sync python -c '
+import hashlib
+import pathlib
+import sys
+
+digest = hashlib.sha256()
+for path in sys.argv[1:]:
+    digest.update(pathlib.Path(path).read_bytes())
+print("dev-" + digest.hexdigest())
+' "$SIDECAR_PATH" "$CLI_PATH" >"$PROGRAMS_DIR/build-id"
