@@ -811,7 +811,6 @@ class SimplePersonSetupService:
                 config, account_info, include_initial_defaults=True
             ),
         )
-        _saved(config)
         files = [CreatedFile(path=person_config_file, action="create")]
         if secrets:
             files.append(CreatedFile(path=store.location, action="update"))
@@ -872,7 +871,6 @@ class SimplePersonSetupService:
         person_file = new_person_dir / "person.yml"
         person_file.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(person_file, self.build_person_config(config, account_info))
-        _saved(config)
         files.append(CreatedFile(path=person_file, action="update"))
 
         return PersonSetupResult(files=files)
@@ -996,9 +994,11 @@ def _stored_accounts(
     return account_info, secrets
 
 
-def _saved(config: PersonSetupInput) -> None:
+async def settle_accounts(config: PersonSetupInput) -> None:
+    """Tell each account the member was saved, after the save releases the
+    workspace's lock."""
     for account in config.accounts.values():
-        account.saved()
+        await account.saved()
 
 
 async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> None:

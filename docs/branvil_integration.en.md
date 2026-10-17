@@ -64,7 +64,9 @@ On the Hub machine, where Branvil runs, under **Setup → Integrations** in the 
    GuildBotics to manage Branvil?* Choose **Allow**. (When the browser has no Branvil
    session yet, the page says to run `branvil open` on this machine; it comes back to the
    consent screen once you have entered.) The screen then shows *Connected to Branvil as
-   its owner*.
+   its owner*. The connection is kept only in the workspace it started in: when the app
+   switches to another workspace before the browser comes back, nothing is connected;
+   select the workspace to connect, then connect again.
 3. Choose the **Workspace** the members work in, or create one there. Members write only
    to its repositories and take tickets from its board; reads are not limited.
 
@@ -87,8 +89,9 @@ Under **Setup → Members → Branvil**:
 
 - An AI member is a Branvil agent: **Create a new agent** (named after the member's ID)
   or **Choose an existing agent**. Saving the member creates the agent unless one was
-  chosen, issues its token (labelled `guildbotics`, replacing the one issued before), and
-  keeps the token in the OS keychain as `{PERSON_ID}_BRANVIL_TOKEN`. No token is ever
+  chosen, issues its token (labelled `guildbotics`), and keeps the token in the OS
+  keychain as `{PERSON_ID}_BRANVIL_TOKEN`. The tokens issued before are revoked once the
+  save is done (when it is not, the token held before keeps working). No token is ever
   shown or typed. The token is also the member's git password: git authenticates with
   the agent's name and the token. Later saves keep the token while Branvil accepts it as
   the agent's; **Issue a new token when saved** replaces it.

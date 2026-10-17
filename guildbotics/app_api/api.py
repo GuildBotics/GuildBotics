@@ -166,6 +166,7 @@ from guildbotics.setup.setup_service import (
     person_config_paths,
     prepare_accounts,
     remove_accounts,
+    settle_accounts,
     share_avatar,
     stored_person_config_dir,
     stored_person_config_paths,
@@ -1044,7 +1045,8 @@ def create_app(
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     # A member's save and deletion first reach its providers, outside the
-    # workspace's shared-write lock, which then blocks: hence the thread.
+    # workspace's shared-write lock, which then blocks: hence the thread. A
+    # save reaches them again once it is done.
     @router.post("/config/members")
     async def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
         status = app_runtime.get_config_status()
@@ -1060,6 +1062,7 @@ def create_app(
                 person_config_paths(member.person_id)
             ),
         )
+        await settle_accounts(member)
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.get("/config/members/{person_id}")
@@ -1099,6 +1102,7 @@ def create_app(
                 person_config_paths(request.person_id)
             ),
         )
+        await settle_accounts(member)
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.delete("/config/members/{person_id}")

@@ -20,14 +20,16 @@ one its records name, and one admin token serves both kinds of service.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 import time
 from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from hashlib import sha256
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
@@ -57,8 +59,11 @@ from guildbotics.integrations.provider import (
 )
 from guildbotics.integrations.repository_scope import valid_path
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
-from guildbotics.utils.env_loader import workspace_secret_store
+from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.secret_store import resolve_secret_store
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 
 #: Where Branvil is reached: an origin, which its URLs start with.
 _BASE_URL = re.compile(r"https?://[^/\s?#@]+")
@@ -73,6 +78,7 @@ _TOKEN_LABEL = "guildbotics"
 _UPSTREAMS = frozenset({"github"})
 _CONSENT_TTL_SECONDS = 10 * 60
 _CONNECTED = "connected"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _origin(value: str) -> str:
@@ -159,6 +165,8 @@ class _Consent:
     base_url: str
     redirect_uri: str
     verifier: str
+    #: The workspace the admin token is for: the one selected at the start.
+    config_dir: Path
     created_at: float = field(default_factory=time.time)
     #: Empty while the owner decides; then ``_CONNECTED`` or why not.
     outcome: str = ""
@@ -189,6 +197,7 @@ class Consents:
             redirect_uri=request.callback_base_url.rstrip("/")
             + page_path(PROVIDER, "connected"),
             verifier=secrets.token_urlsafe(48),
+            config_dir=get_workspace_config_dir(),
         )
         self._held[state] = consent
         challenge = urlsafe_b64encode(sha256(consent.verifier.encode()).digest())
@@ -239,9 +248,15 @@ class Consents:
         )
 
     async def _exchange(self, consent: _Consent, query: Mapping[str, str]) -> str:
+        """Exchange the code for the admin token, which Branvil issues in
+        place of the one it gave before, and keep it in the workspace the
+        consent started in, while that is still the one selected: one that
+        is not kept asks to connect again."""
         code = query.get("code", "")
         if query.get("error") or not code:
             return t("integrations.branvil.setup.denied")
+        if consent.config_dir != get_workspace_config_dir():
+            return t("integrations.branvil.setup.workspace_changed")
         try:
             async with administer(consent.base_url, "") as client:
                 answer = await client.post(
@@ -255,10 +270,17 @@ class Consents:
         except ServiceError as exc:
             return str(exc)
         token = str(answer.json()["token"])
-        await asyncio.to_thread(
-            lambda: workspace_secret_store().set("BRANVIL_ADMIN_TOKEN", token)
-        )
-        return _CONNECTED
+        if consent.config_dir == get_workspace_config_dir():
+            try:
+                await asyncio.to_thread(
+                    lambda: resolve_secret_store(consent.config_dir).set(
+                        "BRANVIL_ADMIN_TOKEN", token
+                    )
+                )
+                return _CONNECTED
+            except (SecretStoreError, SharedWriteBusyError) as exc:
+                _LOGGER.warning("The Branvil admin token could not be kept: %s", exc)
+        return t("integrations.branvil.setup.not_kept")
 
 
 def _failed_page(reason: str) -> Page:
@@ -345,6 +367,9 @@ class BranvilAccount(MemberAccount):
     #: Issue an agent a new token though Branvil takes the one it holds.
     reissue: bool = False
     _token: str = PrivateAttr("")
+    #: Branvil's ID of the token issued, and where: the save keeps it, and
+    #: only then are the agent's other GuildBotics tokens revoked.
+    _issued: tuple[str, str, str] | None = PrivateAttr(None)
 
     @field_validator("username")
     @classmethod
@@ -357,7 +382,11 @@ class BranvilAccount(MemberAccount):
         """Name the member, and make an agent ready on Branvil: there, with
         a token Branvil takes for its own, and with its credentials on the
         hosts Branvil publishes to. Either way the Branvil member gets the
-        member's picture."""
+        member's picture.
+
+        A new token is issued beside the one the member holds, which keeps
+        working until :meth:`saved`: a save that is refused afterwards loses
+        no credential."""
         url = branvil_url(member.services)
         if not url:
             return
@@ -375,9 +404,10 @@ class BranvilAccount(MemberAccount):
                     issued = await admin.call(
                         "POST",
                         f"/members/{segment(self.username)}/tokens",
-                        {"label": _TOKEN_LABEL, "replace": True},
+                        {"label": _TOKEN_LABEL},
                     )
                     self._token = str(issued["token"])
+                    self._issued = (url, self.username, str(issued["id"]))
                 for host in sorted(_UPSTREAMS & set(member.credentials)):
                     await admin.call(
                         "PUT",
@@ -391,6 +421,18 @@ class BranvilAccount(MemberAccount):
     ) -> tuple[dict[str, str], dict[str, str]]:
         info = {"branvil_username": self.username} if self.username else {}
         return info, {"BRANVIL_TOKEN": self._token} if self._token else {}
+
+    async def saved(self) -> None:
+        """Revoke the agent's GuildBotics tokens but the one just saved. If
+        Branvil refuses, they keep working until a save issues another."""
+        if self._issued is None:
+            return
+        url, name, kept = self._issued
+        try:
+            async with Admin(url) as admin:
+                await _revoke(admin, name, kept)
+        except (ServiceError, SecretStoreError) as exc:
+            _LOGGER.warning("The earlier Branvil tokens of %s stay: %s", name, exc)
 
     @classmethod
     async def avatar_changed(cls, member: SavedMember) -> None:
@@ -411,18 +453,12 @@ class BranvilAccount(MemberAccount):
         name = member.account_info.get("branvil_username", "")
         if member.human or not url or not name:
             return
-        tokens = f"/members/{segment(name)}/tokens"
         with _refusal():
             async with Admin(url) as admin:
                 try:
-                    issued = await admin.items(tokens)
+                    await _revoke(admin, name)
                 except ServiceNotFound:
                     return
-                for token in issued:
-                    if token.get("label") == _TOKEN_LABEL:
-                        await admin.call(
-                            "DELETE", f"{tokens}/{segment(str(token['id']))}"
-                        )
 
     @classmethod
     def view(
@@ -441,6 +477,17 @@ async def _picture(admin: Admin, name: str, member: SavedMember) -> None:
         await admin.put_file(
             f"/members/{segment(name)}/avatar", member.avatar.read_bytes()
         )
+
+
+async def _revoke(admin: Admin, name: str, kept: str = "") -> None:
+    """Revoke the GuildBotics tokens of Branvil's member ``name`` but
+    ``kept``."""
+    tokens = f"/members/{segment(name)}/tokens"
+    for token in await admin.items(tokens):
+        if token.get("label") == _TOKEN_LABEL and token["id"] != kept:
+            # One revoked meanwhile is as good as revoked here.
+            with suppress(ServiceNotFound):
+                await admin.call("DELETE", f"{tokens}/{segment(str(token['id']))}")
 
 
 async def _agent(admin: Admin, name: str, display_name: str) -> None:

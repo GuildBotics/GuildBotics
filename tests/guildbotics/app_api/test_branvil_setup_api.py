@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from guildbotics.integrations.branvil import setup as branvil_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import KeyringSecretStore
 from tests.guildbotics.app_api.provider_doubles import (
     AUTH_HEADERS,
@@ -37,6 +38,7 @@ from tests.guildbotics.integrations.branvil_double import (
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
+HTTP_CONFLICT = 409
 CALLBACK_BASE = "http://127.0.0.1:5173"
 OPERATIONS = "/config/providers/branvil"
 SERVICES = {
@@ -123,6 +125,82 @@ def test_connecting_keeps_the_admin_token_branvil_issues_on_consent(
         "owner": OWNER,
         "message": "",
     }
+
+
+def test_a_consent_returning_to_another_workspace_connects_neither(
+    client: TestClient, double: BranvilDouble, workspace: Path
+):
+    connect_admin()
+    started = _connect(client)
+    other = workspace / "other"
+    other.mkdir()
+    selected = client.post(
+        "/workspace", json={"workspace_dir": str(other)}, headers=AUTH_HEADERS
+    )
+    assert selected.status_code == HTTP_OK, selected.text
+
+    page = _return(client, double.authorize(started["url"]))
+
+    assert page.status_code == HTTP_BAD_REQUEST
+    assert t("integrations.branvil.setup.workspace_changed") in unescape(page.text)
+    # The code is not exchanged, so the admin token held before still works.
+    assert double.writes == []
+    assert ADMIN in double.tokens
+    assert _store(workspace).get("BRANVIL_ADMIN_TOKEN") == ADMIN
+    assert _store(other).get("BRANVIL_ADMIN_TOKEN") is None
+    assert _operation(client, "connection", state=started["state"]) == {
+        "status": "disconnected",
+        "owner": "",
+        "message": t("integrations.branvil.setup.workspace_changed"),
+    }
+
+
+def test_a_workspace_switched_during_the_exchange_keeps_the_token_in_neither(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    started = _connect(client)
+    other = workspace / "other"
+    respond = double.respond
+
+    def switching(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/apps/token"):
+            monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(other))
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", switching)
+
+    page = _return(client, double.authorize(started["url"]))
+
+    # Branvil has replaced the admin token by then: connect again.
+    assert page.status_code == HTTP_BAD_REQUEST
+    assert t("integrations.branvil.setup.not_kept") in unescape(page.text)
+    assert _store(workspace).get("BRANVIL_ADMIN_TOKEN") is None
+    assert _store(other).get("BRANVIL_ADMIN_TOKEN") is None
+
+
+def test_an_admin_token_the_keychain_cannot_keep_asks_to_connect_again(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    started = _connect(client)
+
+    def locked(self: KeyringSecretStore, key: str, value: str) -> None:
+        raise SecretStoreError("keychain is locked")
+
+    monkeypatch.setattr(KeyringSecretStore, "set", locked)
+
+    page = _return(client, double.authorize(started["url"]))
+
+    assert page.status_code == HTTP_BAD_REQUEST
+    assert t("integrations.branvil.setup.not_kept") in unescape(page.text)
+    assert _operation(client, "connection", state=started["state"])["message"] == (
+        t("integrations.branvil.setup.not_kept")
+    )
 
 
 def test_connecting_to_where_no_branvil_answers_says_so_and_opens_nothing(
@@ -321,6 +399,75 @@ def test_saving_an_agent_creates_it_on_branvil_and_keeps_its_token(
     assert reissued.status_code == HTTP_OK
     assert _store(workspace).get("ALICE_BRANVIL_TOKEN") not in (None, token)
     assert token not in double.tokens
+
+
+def test_a_reissue_the_save_refuses_keeps_the_token_the_member_holds(
+    client: TestClient, double: BranvilDouble, workspace: Path
+):
+    connect_admin()
+    _add(client, workspace, _member("alice"))
+    token = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    read = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    renamed = _update(client, workspace, {**_member("alice"), "person_name": "Ali"})
+    assert renamed.status_code == HTTP_OK
+
+    refused = client.put(
+        "/config/members/alice",
+        json={
+            "config_dir": str(workspace / ".guildbotics/config"),
+            "original_person_id": "alice",
+            "expected_revisions": read["revisions"],
+            **_member("alice", branvil={"username": "alice", "reissue": True}),
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert refused.status_code == HTTP_CONFLICT
+    assert _store(workspace).get("ALICE_BRANVIL_TOKEN") == token
+    assert double.tokens[token]["member"] == "alice"
+
+    # The next save that is done revokes all but the token it keeps: the one
+    # issued for the refused save too.
+    reissued = _update(
+        client,
+        workspace,
+        _member("alice", branvil={"username": "alice", "reissue": True}),
+    )
+    assert reissued.status_code == HTTP_OK
+    kept = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    assert [v for v, t in double.tokens.items() if t["member"] == "alice"] == [kept]
+
+
+def test_a_save_stays_done_when_branvil_revokes_no_earlier_token(
+    client: TestClient,
+    double: BranvilDouble,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connect_admin()
+    _add(client, workspace, _member("alice"))
+    token = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    respond = double.respond
+
+    def no_revoking(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            raise httpx.ConnectError("refused", request=request)
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", no_revoking)
+
+    saved = _update(
+        client,
+        workspace,
+        _member("alice", branvil={"username": "alice", "reissue": True}),
+    )
+
+    assert saved.status_code == HTTP_OK
+    kept = _store(workspace).get("ALICE_BRANVIL_TOKEN")
+    assert {v for v, t in double.tokens.items() if t["member"] == "alice"} == {
+        token,
+        kept,
+    }
 
 
 def test_saving_an_agent_as_a_chosen_one_takes_its_name(

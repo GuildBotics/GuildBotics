@@ -154,12 +154,14 @@ class MemberAccount(SetupItems):
     ``account_info`` entries and the member's secrets, and read back as
     :meth:`view`. What a save needs of the provider itself is done by
     :meth:`prepare` before the save takes the workspace's lock, so that no
-    write waits on a provider.
+    write waits on a provider, and what the save makes safe to undo, by
+    :meth:`saved` once it is done.
     """
 
     async def prepare(self, member: SavedMember) -> None:
         """Obtain from the provider what saving ``member`` needs, which
-        :meth:`stored` then stores.
+        :meth:`stored` then stores. Nothing the stored member relies on is
+        undone: the save may yet be refused.
 
         Raises:
             SetupError: If the provider refuses it; nothing is saved.
@@ -201,8 +203,9 @@ class MemberAccount(SetupItems):
         """
         raise NotImplementedError
 
-    def saved(self) -> None:
-        """The member was saved with :meth:`stored`."""
+    async def saved(self) -> None:
+        """The member was saved with :meth:`stored`; it does not fail the
+        save."""
 
     @classmethod
     def view(

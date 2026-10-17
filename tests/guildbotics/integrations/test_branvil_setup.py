@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import httpx
 import pytest
 
 from guildbotics.integrations.branvil.setup import BranvilAccount
@@ -19,6 +20,8 @@ from guildbotics.integrations.provider import (
     SetupError,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.secret_store import KeyringSecretStore
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
     MEMBER,
@@ -112,18 +115,46 @@ async def test_a_token_branvil_takes_for_the_agents_is_kept(double: BranvilDoubl
     ],
     ids=["refused", "another_members", "reissue"],
 )
-async def test_a_token_is_issued_again_replacing_guildbotics_one(
+async def test_a_token_is_issued_again_and_replaces_guildbotics_one_once_saved(
     double: BranvilDouble, held: str, account: dict[str, Any]
 ):
     name = account["username"]
     double.member("alice", "agent")
-    double.issue(name, "guildbotics")
+    earlier = double.issue(name, "guildbotics")["id"]
+    form = BranvilAccount.model_validate(account)
 
-    _, secrets = await _saved(account, _member(secrets={"BRANVIL_TOKEN": held}))
+    await form.prepare(_member(secrets={"BRANVIL_TOKEN": held}))
+    _, secrets = form.stored("alice", False)
+    issued = double.tokens[secrets["BRANVIL_TOKEN"]]
 
-    assert double.tokens[secrets["BRANVIL_TOKEN"]]["member"] == name
-    # The token issued before is revoked in the same write.
-    assert double.labels(name).count("guildbotics") == 1
+    assert issued["member"] == name
+    # Until the save is done the token issued before keeps working.
+    assert earlier in {t["id"] for t in double.tokens.values()}
+
+    await form.saved()
+
+    assert [t for t in double.tokens.values() if t["label"] == "guildbotics"] == [
+        issued
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_keychain_that_fails_after_the_save_fails_no_save(
+    double: BranvilDouble, monkeypatch: pytest.MonkeyPatch
+):
+    earlier = double.issue(MEMBER, "guildbotics")["id"]
+    form = BranvilAccount.model_validate({"username": MEMBER, "reissue": True})
+    await form.prepare(_member(secrets={"BRANVIL_TOKEN": TOKEN}))
+
+    def locked(self: KeyringSecretStore, key: str) -> str:
+        raise SecretStoreError("keychain is locked")
+
+    monkeypatch.setattr(KeyringSecretStore, "get", locked)
+
+    await form.saved()
+
+    # The earlier token keeps working until a save issues another.
+    assert earlier in {t["id"] for t in double.tokens.values()}
 
 
 @pytest.mark.asyncio
@@ -262,6 +293,33 @@ async def test_deleting_an_agent_revokes_the_tokens_guildbotics_issued(
 
     assert double.labels(MEMBER) == ["cli"]
     assert MEMBER in double.members
+
+
+@pytest.mark.asyncio
+async def test_deleting_revokes_the_rest_when_one_was_revoked_meanwhile(
+    double: BranvilDouble, monkeypatch: pytest.MonkeyPatch
+):
+    double.issue(MEMBER, "guildbotics")
+    double.issue(MEMBER, "guildbotics")
+    respond = double.respond
+    raced: list[str] = []
+
+    def revoked_meanwhile(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE" and not raced:
+            raced.append(request.url.path)
+            respond(request)
+            gone = f"{BASE}/api/v1/members/nobody"
+            return respond(httpx.Request("GET", gone, headers=request.headers))
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", revoked_meanwhile)
+
+    await BranvilAccount.removed(
+        replace(_member(), account_info={"branvil_username": MEMBER})
+    )
+
+    assert raced
+    assert double.labels(MEMBER) == ["cli"]
 
 
 @pytest.mark.asyncio

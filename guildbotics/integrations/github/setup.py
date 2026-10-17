@@ -45,6 +45,7 @@ from guildbotics.integrations.provider import (
     message_page,
     page_path,
 )
+from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.i18n_tool import t
 
 _NAME = "github"
@@ -174,7 +175,7 @@ class GitHubAccount(MemberAccount):
             {key: value for key, value in values.items() if value},
         )
 
-    def saved(self) -> None:
+    async def saved(self) -> None:
         _registrations.discard(self.app_registration_id)
 
     @classmethod
@@ -426,6 +427,8 @@ class AppRegistrationStatus(BaseModel):
 class _Registration(AppRegistrationStatus):
     organization: str
     callback_url: str
+    #: The workspace the registration is for: the one selected at the start.
+    config_dir: Path
     created_at: float = Field(default_factory=time.time)
     pem: str = ""
 
@@ -458,6 +461,7 @@ class AppRegistrations:
             person_id=request.person_id,
             organization=request.organization.strip(),
             callback_url=f"{base}{page_path(_NAME, 'app-callback')}",
+            config_dir=get_workspace_config_dir(),
         )
         registration.start_url = (
             f"{base}{page_path(_NAME, 'app-manifest')}?state={registration.state}"
@@ -548,8 +552,9 @@ class AppRegistrations:
         the same registration; it is discarded once the save succeeded.
 
         Raises:
-            SetupError: The registration is missing, expired or already
-                saved, is not installed yet, or was started for another member.
+            SetupError: The registration is missing, expired, already
+                saved, or started in another workspace, is not installed yet, or
+                was started for another member.
         """
         registration = self._get(state)
         if registration.status != "installed":
@@ -570,7 +575,11 @@ class AppRegistrations:
     def _get(self, state: str, *, status_code: int = 400) -> _Registration:
         self._purge_expired()
         registration = self._registrations.get(state)
-        if registration is None:
+        # One started in another workspace is not this workspace's.
+        if (
+            registration is None
+            or registration.config_dir != get_workspace_config_dir()
+        ):
             raise SetupError(
                 "github_app_registration_not_found",
                 "GitHub App registration was not found or has expired.",
