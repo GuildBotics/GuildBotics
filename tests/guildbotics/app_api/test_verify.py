@@ -6,7 +6,7 @@ from guildbotics.app_api.models import ConfigStatus
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 
 PROVIDER_ENV_KEYS = (
     "OPENAI_API_KEY",
@@ -35,11 +35,13 @@ def _config_status(
     )
 
 
-def _store_secrets(tmp_path: Path, values: dict[str, str]) -> KeyringSecretStore:
-    store = KeyringSecretStore(tmp_path / ".guildbotics/config")
+def _store_secrets(tmp_path: Path, values: dict[str, str]) -> None:
+    """Store each value where GuildBotics keeps it: an API key with the
+    workspace, a member's credential and a connection's with the identities."""
+    workspace = KeyringSecretStore(tmp_path / ".guildbotics/config")
     for key, value in values.items():
+        store = workspace if key.endswith("_API_KEY") else identity_secret_store()
         store.set(key, value)
-    return store
 
 
 def _isolated_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,9 +400,7 @@ def test_verify_accepts_private_key_content_from_keychain(
 
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
-    KeyringSecretStore(tmp_path / ".guildbotics/config").set(
-        "ALICE_GITHUB_PRIVATE_KEY", "pem-content"
-    )
+    identity_secret_store().set("ALICE_GITHUB_PRIVATE_KEY", "pem-content")
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
     team = Team(

@@ -25,13 +25,17 @@ from guildbotics.intelligences.cli_agents import (
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from guildbotics.utils.avatar import avatar_in, find_avatar_file
 from guildbotics.utils.fileio import (
+    get_identity_root,
     get_template_path,
     load_yaml_file,
     save_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import (
+    IDENTITY_FILE,
+    MEMBER_FILE,
     PersonEnvPrefixConflictError,
+    identity_members_dir,
     is_valid_person_id,
     iter_member_config_directories,
     person_config_directory,
@@ -42,10 +46,16 @@ from guildbotics.utils.person_id import (
 )
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
+    identity_secret_store,
     resolve_secret_store,
 )
-from guildbotics.utils.shared_write_lock import shared_write_operation
+from guildbotics.utils.shared_write_lock import (
+    member_write_operation,
+    shared_write_lock,
+    shared_write_operation,
+)
 from guildbotics.utils.workspace_state import register_workspace
+from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -57,10 +67,10 @@ MEMBER_SECRET_NAMES = frozenset().union(
 )
 
 
-def _target_prefix(members: Path, person_id: str, *, exclude: str | None = None) -> str:
+def _target_prefix(person_id: str) -> str:
     """Reject a proposed ID before touching credentials or member files."""
     try:
-        return person_secret_prefix(members, person_id, exclude=exclude)
+        return person_secret_prefix(person_id)
     except PersonEnvPrefixConflictError as conflict:
         raise SetupError(
             "person_env_prefix_conflict",
@@ -92,13 +102,13 @@ class _OwnedSecrets:
         return {name: self.prefix + name for name in sorted(MEMBER_SECRET_NAMES)}
 
 
-def _owned_secrets(config_dir: Path, person_id: str) -> _OwnedSecrets:
+def _owned_secrets(person_id: str) -> _OwnedSecrets:
     """No store and no keys while the keys are shared: they are nobody's own."""
     try:
-        prefix = person_secret_prefix(config_dir / "team/members", person_id)
+        prefix = person_secret_prefix(person_id)
     except PersonEnvPrefixConflictError:
         return _OwnedSecrets(None, "")
-    return _OwnedSecrets(resolve_secret_store(config_dir), prefix)
+    return _OwnedSecrets(identity_secret_store(), prefix)
 
 
 def _service_config(kind: str, item: Mapping[str, Any]) -> dict[str, Any]:
@@ -174,19 +184,7 @@ class ProjectSetupInput(BaseModel):
     def validate_services(
         cls, value: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        services = {kind: _service_config(kind, item) for kind, item in value.items()}
-        for provider in PROVIDERS.values():
-            for key in provider.setup.shared if provider.setup else ():
-                given = {
-                    str(item.get(key))
-                    for item in services.values()
-                    if item["name"] == provider.name
-                }
-                if len(given) > 1:
-                    raise ValueError(
-                        f"{provider.name}: every kind it serves needs the same {key}"
-                    )
-        return services
+        return {kind: _service_config(kind, item) for kind, item in value.items()}
 
 
 class CreatedFile(BaseModel):
@@ -261,6 +259,9 @@ class PersonSetupInput(BaseModel):
     chat_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
+    #: Revisions this form was composed against: the identity's file and the
+    #: workspace's, as the read reported them. A file left out must not exist.
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
 
     _person_id = field_validator("person_id")(validate_person_id)
 
@@ -297,6 +298,19 @@ class PersonConfigSummary(BaseModel):
     person_type: str = ""
     is_active: bool
     roles: list[str] = Field(default_factory=list)
+    #: False for a member of the workspace whose identity is missing, which
+    #: then can only be removed from the workspace.
+    identity: bool = True
+
+
+class IdentitySummary(BaseModel):
+    """A member's identity, whichever workspaces it works in."""
+
+    person_id: str
+    name: str
+    person_type: str = ""
+    #: Whether the workspace asked about has the member.
+    participating: bool
 
 
 class PersonConfigSnapshot(BaseModel):
@@ -320,18 +334,12 @@ class PersonConfigSnapshot(BaseModel):
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
     avatar_timestamp: int = 0
+    #: Whether the workspace has the member yet: False for an identity read
+    #: so that it can be added, whose participation is then the defaults.
+    participating: bool = True
     # Config-relative path -> revision, to be sent back with the save so an
     # edit made elsewhere since this read is refused instead of overwritten.
     revisions: dict[str, str] = Field(default_factory=dict)
-
-
-class PersonUpdateInput(PersonSetupInput):
-    original_person_id: str
-    _original_person_id = field_validator("original_person_id")(
-        validate_member_directory_name
-    )
-    # Revisions this form was composed against; empty for a member being added.
-    expected_revisions: dict[str, str] = Field(default_factory=dict)
 
 
 #: Config files the project screen reads and writes, relative to the config
@@ -344,28 +352,44 @@ PROJECT_CONFIG_PATHS = (
 )
 
 
-def person_config_paths(person_id: str) -> tuple[str, ...]:
-    """Return the config files the member screen reads and writes."""
-    return ((person_config_directory(person_id) / "person.yml").as_posix(),)
+def member_config_paths(person_id: str) -> tuple[str, ...]:
+    """The workspace's file of the member, relative to its config directory."""
+    return ((person_config_directory(person_id) / MEMBER_FILE).as_posix(),)
+
+
+def identity_config_paths(person_id: str) -> tuple[str, ...]:
+    """The member's identity file, relative to the identities' config directory.
+
+    Its name differs from the workspace's file, so the revisions of both share
+    one mapping without either standing for the other.
+    """
+    return ((person_config_directory(person_id) / IDENTITY_FILE).as_posix(),)
 
 
 def stored_person_config_paths(name: str) -> tuple[str, ...]:
     """Revisions of existing configuration addressed for repair."""
-    return ((stored_person_config_directory(name) / "person.yml").as_posix(),)
+    return ((stored_person_config_directory(name) / MEMBER_FILE).as_posix(),)
 
 
 def _project_config_file(config_dir: Path) -> Path:
     return config_dir / "team/project.yml"
 
 
-def _person_config_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / person_config_directory(person_id)
+def _member_file(config_dir: Path, name: str) -> Path:
+    return config_dir / stored_person_config_directory(name) / MEMBER_FILE
+
+
+def _identity_dir(name: str) -> Path:
+    return identity_members_dir() / stored_person_config_directory(name).name
 
 
 def stored_person_config_dir(config_dir: Path, name: str) -> Path:
     path = config_dir / stored_person_config_directory(name)
     members = config_dir / "team/members"
-    if not any(child.name == name for child in iter_member_config_directories(members)):
+    if not any(
+        child.name == name
+        for child in iter_member_config_directories(members, MEMBER_FILE)
+    ):
         raise SetupError("person_not_found", "Member config was not found.")
     return path
 
@@ -380,14 +404,12 @@ def _config_mapping(value: object) -> dict[str, Any]:
 
 
 def _read_member_form(path: Path) -> dict[str, Any]:
+    """A member file as the screens edit it: what it holds, or nothing -- a
+    member may be missing one of its two files, and still be repaired."""
     try:
         return _config_mapping(load_yaml_file(path))
-    except YAMLError:
+    except (YAMLError, FileNotFoundError):
         return {}
-
-
-def _person_config_file(config_dir: Path, person_id: str) -> Path:
-    return _person_config_dir(config_dir, person_id) / "person.yml"
 
 
 def _stored_default_person_id(config_dir: Path) -> str:
@@ -398,23 +420,17 @@ def _stored_default_person_id(config_dir: Path) -> str:
     return str(project_data.get("default_person_id", ""))
 
 
-def _retarget_default_person_id(
-    config_dir: Path, person_id: str, new_person_id: str
-) -> list[CreatedFile]:
-    """Follow a member rename or deletion in the default executor setting.
-
-    Args:
-        config_dir: Workspace config directory holding ``team/project.yml``.
-        person_id: Member the setting may currently point at.
-        new_person_id: Member to point at instead; empty clears the setting.
+def _clear_default_person_id(config_dir: Path, person_id: str) -> list[CreatedFile]:
+    """Stop the default executor setting from naming a member the workspace
+    no longer has.
 
     Returns:
         list[CreatedFile]: The updated project file, or an empty list when the
-        setting pointed at another member.
+        setting named another member.
     """
     if _stored_default_person_id(config_dir) != person_id:
         return []
-    updated = _write_default_person_id(config_dir, new_person_id)
+    updated = _write_default_person_id(config_dir, "")
     return [updated] if updated else []
 
 
@@ -525,11 +541,10 @@ class SimpleProjectSetupService:
                 validate_person_id(person_id)
             except ValueError as exc:
                 raise SetupError("invalid_person_id", str(exc)) from exc
-            person_file = _person_config_file(config_dir, person_id)
-            if not person_file.exists():
+            if not _member_file(config_dir, person_id).exists():
                 raise SetupError("person_not_found", "Member config was not found.")
-            person_data = cast(dict, load_yaml_file(person_file))
-            if str(person_data.get("person_type", "")) == "human":
+            identity = _read_member_form(_identity_dir(person_id) / IDENTITY_FILE)
+            if str(identity.get("person_type", "")) == "human":
                 raise SetupError(
                     "person_not_executable",
                     "A human member cannot be the default command executor.",
@@ -685,60 +700,91 @@ def _model_default(mapping: dict, provider: str) -> str:
 
 
 class SimplePersonSetupService:
-    """Create, change, and remove a workspace's members.
+    """Create, change, and remove members: their identities, which every
+    workspace shares, and their participation in a workspace.
 
-    The writing operations are marked
-    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
-    lays down several config files that only make sense together, and several
-    of them decide what to write by reading the config already there. Either
-    on its own makes the span the whole method rather than the individual
-    writes, which is all the port can see.
+    The writing operations hold the locks of what they change for the whole
+    method: each lays down several files that only make sense together -- a
+    member's secrets, its identity, its participation -- and several of them
+    decide what to write by reading the config already there. Either on its own
+    makes the span the whole method rather than the individual writes, which is
+    all the port can see.
 
-    That decorator locks the selected workspace, while these methods take the
-    config directory as an argument. The two are the same workspace for every
-    caller today -- the Desktop backend selects it before calling, and the CLI
-    resolves it the same way -- and a caller that means a different one has to
-    take the lock for that workspace itself.
+    The workspace's lock is the selected workspace's, while these methods take
+    the workspace's config directory as an argument. The two are
+    the same workspace for every caller today -- the Desktop backend selects it
+    before calling -- and a caller that means a different one has to take the
+    lock for that workspace itself.
     """
 
     def list_person_configs(self, *, config_dir: Path) -> list[PersonConfigSummary]:
-        """Read the member list without requiring a project config or secrets."""
+        """Read the workspace's members without requiring a project config or
+        secrets."""
         members_dir = config_dir / "team/members"
         members = []
-        for person_dir in iter_member_config_directories(members_dir):
-            person_file = person_dir / "person.yml"
+        for person_dir in iter_member_config_directories(members_dir, MEMBER_FILE):
             try:
                 validate_member_directory_name(person_dir.name)
             except ValueError:
                 continue
-            person_data = _read_member_form(person_file)
-            profile = _config_mapping(person_data.get("profile"))
-            configured_roles = _config_mapping(profile.get("roles"))
+            participation = _read_member_form(person_dir / MEMBER_FILE)
+            identity_file = _identity_dir(person_dir.name) / IDENTITY_FILE
+            identity = _read_member_form(identity_file)
+            profile = _config_mapping(participation.get("profile"))
             members.append(
                 PersonConfigSummary(
                     person_id=person_dir.name,
-                    name=str(person_data.get("name", "")),
-                    person_type=str(person_data.get("person_type", "")),
-                    is_active=bool(person_data.get("is_active", False)),
-                    roles=list(configured_roles),
+                    name=str(identity.get("name", "")),
+                    person_type=str(identity.get("person_type", "")),
+                    is_active=bool(participation.get("is_active", False)),
+                    roles=list(_config_mapping(profile.get("roles"))),
+                    identity=identity_file.is_file(),
                 )
             )
         return members
 
+    def list_identities(self, *, config_dir: Path) -> list[IdentitySummary]:
+        """Read every member's identity, and whether this workspace has it."""
+        identities = []
+        for directory in iter_member_config_directories(
+            identity_members_dir(), IDENTITY_FILE
+        ):
+            if not is_valid_person_id(directory.name):
+                continue
+            identity = _read_member_form(directory / IDENTITY_FILE)
+            identities.append(
+                IdentitySummary(
+                    person_id=directory.name,
+                    name=str(identity.get("name", "")),
+                    person_type=str(identity.get("person_type", "")),
+                    participating=_member_file(config_dir, directory.name).is_file(),
+                )
+            )
+        return identities
+
     def read_person_config(
         self, *, config_dir: Path, person_id: str
     ) -> PersonConfigSnapshot:
-        person_file = stored_person_config_dir(config_dir, person_id) / "person.yml"
-        person_data = _read_member_form(person_file)
-        account_info = _config_mapping(person_data.get("account_info"))
-        profile = _config_mapping(person_data.get("profile"))
-        roles = list(_config_mapping(profile.get("roles")))
-        character_data = _config_mapping(profile.get("character"))
-        routine_commands = person_data.get("routine_commands")
+        """Read a member: its identity, and its participation in this
+        workspace -- the defaults when the workspace does not have it yet."""
+        member_file = _member_file(config_dir, person_id)
+        identity_file = _identity_dir(person_id) / IDENTITY_FILE
+        if not member_file.is_file() and not identity_file.is_file():
+            raise SetupError("person_not_found", "Member config was not found.")
+        identity = _read_member_form(identity_file)
+        participation = _read_member_form(member_file)
+        account_info = _config_mapping(identity.get("account_info"))
+        roles = list(
+            _config_mapping(_config_mapping(participation.get("profile")).get("roles"))
+        )
+        character = _config_mapping(
+            _config_mapping(identity.get("profile")).get("character")
+        )
+        routine_commands = participation.get("routine_commands")
 
         channels: list[str] = []
         channel_participation: dict[str, str] = {}
-        raw_channels = person_data.get("message_channels", [])
+        raw_channels = participation.get("message_channels", [])
         if isinstance(raw_channels, list):
             for channel in raw_channels:
                 if not isinstance(channel, dict):
@@ -751,32 +797,32 @@ class SimplePersonSetupService:
                     _config_mapping(channel.get("chat")).get("participation")
                 )
 
-        owned = _owned_secrets(config_dir, person_id)
+        owned = (
+            _owned_secrets(person_id)
+            if is_valid_person_id(person_id)
+            else _OwnedSecrets(None, "")
+        )
         accounts = {
             provider.name: provider.setup.member.view(account_info, owned.has)
             for provider in PROVIDERS.values()
             if provider.setup and provider.setup.member
         }
         avatar_timestamp = 0
-        avatar_path = (
-            find_avatar_file(config_dir, person_id)
-            if is_valid_person_id(person_id)
-            else None
-        )
+        avatar_path = avatar_in(_identity_dir(person_id))
         if avatar_path is not None:
             with contextlib.suppress(Exception):
                 avatar_timestamp = int(avatar_path.stat().st_mtime)
 
         return PersonConfigSnapshot(
             person_id=person_id,
-            person_name=str(person_data.get("name", "")),
-            person_type=str(person_data.get("person_type", "")),
-            is_active=bool(person_data.get("is_active", False)),
+            person_name=str(identity.get("name", "")),
+            person_type=str(identity.get("person_type", "")),
+            is_active=bool(participation.get("is_active", False)),
             git_email=str(account_info.get("git_email", "")),
             roles=roles,
-            speaking_style=str(person_data.get("speaking_style", "")),
-            relationships=str(person_data.get("relationships", "")),
-            character=character_data,
+            speaking_style=str(identity.get("speaking_style", "")),
+            relationships=str(identity.get("relationships", "")),
+            character=character,
             accounts={name: view.model_dump() for name, view in accounts.items()},
             secret_env_keys=owned.keys(),
             chat_channels=channels,
@@ -788,103 +834,89 @@ class SimplePersonSetupService:
                 )
                 if str(command).strip()
             ],
-            task_schedules=_read_task_schedules(person_data.get("task_schedules", [])),
+            task_schedules=_read_task_schedules(
+                participation.get("task_schedules", [])
+            ),
             avatar_timestamp=avatar_timestamp,
+            participating=member_file.is_file(),
         )
 
-    @shared_write_operation
-    def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
-        """Store the member's secrets, then write its config."""
-        # SecretStore first, as in update_person: a store failure leaves no
-        # member config claiming credentials it does not have.
-        prefix = _target_prefix(config.config_dir / "team/members", config.person_id)
-        account_info, secrets = _stored_accounts(config, config.person_id)
-        store = resolve_secret_store(config.config_dir)
+    @member_write_operation
+    def save_person(self, config: PersonSetupInput) -> PersonSetupResult:
+        """Store the member's identity -- its secrets first -- then its
+        participation in the workspace, creating either that does not exist.
+
+        The secrets go first: a store failure leaves no member config claiming
+        credentials it does not have.
+        """
+        # The ID names directories, so it is checked here too, however the
+        # input was made.
+        prefix = _target_prefix(validate_person_id(config.person_id))
+        account_info, secrets = _stored_accounts(config)
+        store = identity_secret_store()
         for name, value in secrets.items():
             store.set(prefix + name, value)
 
-        person_config_file = _person_config_file(config.config_dir, config.person_id)
-        person_config_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(
-            person_config_file,
-            self.build_person_config(
-                config, account_info, include_initial_defaults=True
+        identity_file = _identity_dir(config.person_id) / IDENTITY_FILE
+        member_file = _member_file(config.config_dir, config.person_id)
+        files = [
+            CreatedFile(
+                path=identity_file,
+                action="update" if identity_file.exists() else "create",
             ),
+            CreatedFile(
+                path=member_file, action="update" if member_file.exists() else "create"
+            ),
+        ]
+        identity_file.parent.mkdir(parents=True, exist_ok=True)
+        save_yaml_file(identity_file, build_identity(config, account_info))
+        member_file.parent.mkdir(parents=True, exist_ok=True)
+        save_yaml_file(
+            member_file,
+            build_participation(config, joining=files[1].action == "create"),
         )
-        files = [CreatedFile(path=person_config_file, action="create")]
         if secrets:
             files.append(CreatedFile(path=store.location, action="update"))
         return PersonSetupResult(files=files)
 
     @shared_write_operation
-    def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
-        """Move and update the member's secrets, then its config."""
-        files: list[CreatedFile] = []
-        original_person_file = (
-            stored_person_config_dir(config.config_dir, config.original_person_id)
-            / "person.yml"
-        )
-        if not original_person_file.exists():
-            raise SetupError("person_not_found", "Member config was not found.")
-
-        old_person_dir = original_person_file.parent
-        new_person_dir = _person_config_dir(config.config_dir, config.person_id)
-        new_prefix = _target_prefix(
-            config.config_dir / "team/members",
-            config.person_id,
-            exclude=config.original_person_id,
-        )
-        if new_person_dir.exists() and not old_person_dir.samefile(new_person_dir):
-            raise SetupError("person_id_conflict", "Member ID already exists.")
-
-        # SecretStore first: shared key metadata moves independently of local
-        # value freshness, and a store failure leaves the member config
-        # untouched so the same update can be retried. The values are read
-        # before any key moves, so an unreadable key file changes nothing.
-        account_info, secrets = _stored_accounts(config, config.original_person_id)
-        pending_secrets = {new_prefix + name: value for name, value in secrets.items()}
-        # An ambiguous source owns no keys. Repair only its config; explicitly
-        # supplied secrets use the unique target.
-        old = _owned_secrets(config.config_dir, config.original_person_id)
-        if old.store or pending_secrets:
-            store = old.store or resolve_secret_store(config.config_dir)
-            renamed = False
-            if old.store and old.prefix != new_prefix:
-                indexed = set(store.keys())
-                for name, old_key in old.keys().items():
-                    if old_key in indexed:
-                        store.rename(old_key, new_prefix + name)
-                        renamed = True
-            for key, value in pending_secrets.items():
-                store.set(key, value)
-            if renamed or pending_secrets:
-                files.append(CreatedFile(path=store.location, action="update"))
-
-        if config.original_person_id != config.person_id:
-            old_person_dir.rename(new_person_dir)
-            files.extend(
-                _retarget_default_person_id(
-                    config.config_dir, config.original_person_id, config.person_id
-                )
-            )
-
-        person_file = new_person_dir / "person.yml"
-        person_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(person_file, self.build_person_config(config, account_info))
-        files.append(CreatedFile(path=person_file, action="update"))
-
-        return PersonSetupResult(files=files)
-
-    @shared_write_operation
-    def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
-        files: list[CreatedFile] = []
+    def remove_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
+        """Take the member out of the workspace. Its identity stays, along with
+        everything it holds with other services, for the other workspaces."""
         person_dir = stored_person_config_dir(config_dir, person_id)
-        person_file = person_dir / "person.yml"
+        shutil.rmtree(person_dir)
+        notify_shared_state_changed("delete", [person_dir / MEMBER_FILE])
+        return PersonSetupResult(
+            files=[
+                CreatedFile(path=person_dir / MEMBER_FILE, action="delete"),
+                *_clear_default_person_id(config_dir, person_id),
+            ]
+        )
 
+    def delete_identity(self, *, person_id: str) -> PersonSetupResult:
+        """Delete the member's identity and its secrets.
+
+        A workspace that still has the member cannot load it afterwards, which
+        is why the member is first taken out of the workspace the deletion is
+        made from; another machine's workspaces report it until it is removed
+        from them too.
+        """
+        with shared_write_lock(get_identity_root()):
+            return self._delete_identity(person_id)
+
+    def _delete_identity(self, person_id: str) -> PersonSetupResult:
+        identity_dir = _identity_dir(person_id)
+        if not (identity_dir / IDENTITY_FILE).is_file():
+            raise SetupError("person_not_found", "Member config was not found.")
+        files: list[CreatedFile] = []
         # SecretStore first: indexed keys are removed whether or not this
         # device holds their current generation, and a store failure leaves
-        # the member config intact so the deletion can be retried.
-        owned = _owned_secrets(config_dir, person_id)
+        # the identity intact so the deletion can be retried.
+        owned = (
+            _owned_secrets(person_id)
+            if is_valid_person_id(person_id)
+            else _OwnedSecrets(None, "")
+        )
         if owned.store:
             indexed = sorted(
                 set(owned.keys().values()).intersection(owned.store.keys())
@@ -893,94 +925,89 @@ class SimplePersonSetupService:
                 owned.store.delete(key)
             if indexed:
                 files.append(CreatedFile(path=owned.store.location, action="update"))
-
-        shutil.rmtree(person_dir)
-        files.append(CreatedFile(path=person_file, action="delete"))
-        files.extend(_retarget_default_person_id(config_dir, person_id, ""))
+        shutil.rmtree(identity_dir)
+        notify_shared_state_changed("delete", [identity_dir / IDENTITY_FILE])
+        files.append(CreatedFile(path=identity_dir / IDENTITY_FILE, action="delete"))
         return PersonSetupResult(files=files)
 
-    def build_person_config(
-        self,
-        config: PersonSetupInput,
-        account_info: Mapping[str, str],
-        *,
-        include_initial_defaults: bool = False,
-    ) -> dict:
-        """The member's config, with the ``account_info`` its accounts store."""
-        is_human = config.person_type == "human"
-        role_overrides: dict[str, dict[str, str]] = {
-            role.rstrip(":"): {} for role in config.roles
-        }
-        profile: dict[str, Any] = {
-            "roles": role_overrides,
-        }
-        if config.character and not is_human:
-            profile["character"] = config.character
-        person_config = {
-            "person_id": config.person_id,
-            "name": config.person_name,
-            "is_active": False if is_human else config.is_active,
-            "person_type": config.person_type,
-            "account_info": {
-                "git_user": config.person_name,
-                "git_email": config.git_email,
-                **account_info,
-            },
-            "profile": profile,
-            "speaking_style": "" if is_human else config.speaking_style,
-            "relationships": "" if is_human else config.relationships,
-        }
-        if config.chat_channels and not is_human:
-            chat_channel = _chat_channel(config.config_dir)
-            person_config["message_channels"] = [
-                _message_channel(
-                    chat_channel(channel),
-                    channel,
-                    person_id=config.person_id,
-                    participation=chat_participation(
-                        config.chat_channel_participation.get(channel)
-                    ),
-                )
-                for channel in config.chat_channels
-            ]
-        routine_commands = (
-            []
-            if is_human
-            else [
-                command.strip()
-                for command in config.routine_commands
-                if command.strip()
-            ]
-        )
-        if (
-            include_initial_defaults
-            and not routine_commands
-            and not is_human
-            and Service.TICKET_SERVICE.value in _project_services(config.config_dir)
-        ):
-            routine_commands = [TICKET_WORKFLOW_COMMAND]
-        if routine_commands:
-            person_config["routine_commands"] = routine_commands
-        task_schedules = (
-            []
-            if is_human
-            else [
-                schedule.model_dump()
-                for schedule in config.task_schedules
-                if schedule.command.strip() and schedule.schedules
-            ]
-        )
-        if task_schedules:
-            person_config["task_schedules"] = task_schedules
-        return person_config
+
+def build_identity(
+    config: PersonSetupInput, account_info: Mapping[str, str]
+) -> dict[str, Any]:
+    """The member's identity, with the ``account_info`` its accounts store."""
+    is_human = config.person_type == "human"
+    identity: dict[str, Any] = {
+        "person_id": config.person_id,
+        "name": config.person_name,
+        "person_type": config.person_type,
+        "account_info": {
+            "git_user": config.person_name,
+            "git_email": config.git_email,
+            **account_info,
+        },
+        "speaking_style": "" if is_human else config.speaking_style,
+        "relationships": "" if is_human else config.relationships,
+    }
+    if config.character and not is_human:
+        identity["profile"] = {"character": config.character}
+    return identity
 
 
-def _stored_accounts(
-    config: PersonSetupInput, saved_person_id: str
-) -> tuple[dict[str, str], dict[str, str]]:
+def build_participation(config: PersonSetupInput, *, joining: bool) -> dict[str, Any]:
+    """The member's participation in the workspace ``config`` names.
+
+    A member joining a workspace with a ticket service patrols its board unless
+    the form says what else to do.
+    """
+    is_human = config.person_type == "human"
+    participation: dict[str, Any] = {
+        "is_active": False if is_human else config.is_active,
+        "profile": {"roles": {role.rstrip(":"): {} for role in config.roles}},
+    }
+    if config.chat_channels and not is_human:
+        chat_channel = _chat_channel(config.config_dir)
+        participation["message_channels"] = [
+            _message_channel(
+                chat_channel(channel),
+                channel,
+                person_id=config.person_id,
+                participation=chat_participation(
+                    config.chat_channel_participation.get(channel)
+                ),
+            )
+            for channel in config.chat_channels
+        ]
+    routine_commands = (
+        []
+        if is_human
+        else [command.strip() for command in config.routine_commands if command.strip()]
+    )
+    if (
+        joining
+        and not routine_commands
+        and not is_human
+        and Service.TICKET_SERVICE.value in _project_services(config.config_dir)
+    ):
+        routine_commands = [TICKET_WORKFLOW_COMMAND]
+    if routine_commands:
+        participation["routine_commands"] = routine_commands
+    task_schedules = (
+        []
+        if is_human
+        else [
+            schedule.model_dump()
+            for schedule in config.task_schedules
+            if schedule.command.strip() and schedule.schedules
+        ]
+    )
+    if task_schedules:
+        participation["task_schedules"] = task_schedules
+    return participation
+
+
+def _stored_accounts(config: PersonSetupInput) -> tuple[dict[str, str], dict[str, str]]:
     """The ``account_info`` entries and the secrets, by member-relative name,
-    the member's accounts store; what was set up for the member (an app
-    registration, for one) was set up under its saved ID.
+    the member's accounts store.
 
     Raises:
         SetupError: If an account cannot be stored as the form names it.
@@ -988,7 +1015,7 @@ def _stored_accounts(
     account_info: dict[str, str] = {}
     secrets: dict[str, str] = {}
     for account in config.accounts.values():
-        info, values = account.stored(saved_person_id, config.person_type == "human")
+        info, values = account.stored(config.person_id, config.person_type == "human")
         account_info |= info
         secrets |= values
     return account_info, secrets
@@ -996,32 +1023,28 @@ def _stored_accounts(
 
 async def settle_accounts(config: PersonSetupInput, saved: bool) -> None:
     """Tell each account how the save :func:`prepare_accounts` was for
-    ended, outside the workspace's lock."""
+    ended, outside the lock."""
     for account in config.accounts.values():
         await account.settled(saved)
 
 
-async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> None:
+async def prepare_accounts(config: PersonSetupInput) -> None:
     """Have each account obtain from its provider what saving the member
-    needs, before the save takes the workspace's lock: no write waits on a
-    provider. The member's credentials on each host are handed to every
-    account.
+    needs, before the save takes the lock: no write waits on a provider. The
+    member's credentials on each host are handed to every account.
 
     Raises:
         SetupError: If a provider refuses; nothing is saved.
     """
-    account_info, secrets = _stored_accounts(config, saved_person_id)
-    held = _owned_secrets(config.config_dir, saved_person_id)
+    account_info, secrets = _stored_accounts(config)
+    held = _owned_secrets(config.person_id)
     member = SavedMember(
         person_id=config.person_id,
         name=config.person_name,
         human=config.person_type == "human",
         account_info=account_info,
         get_secret=lambda name: secrets.get(name) or held.value(name),
-        services=_services_of(config.config_dir),
-        avatar=find_avatar_file(config.config_dir, config.person_id)
-        if is_valid_person_id(config.person_id)
-        else None,
+        avatar=find_avatar_file(config.person_id),
     )
     member = replace(
         member,
@@ -1037,55 +1060,47 @@ async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> No
         await account.prepare(member)
 
 
-async def remove_accounts(config_dir: Path, person_id: str) -> None:
+async def remove_accounts(person_id: str) -> None:
     """Have each provider undo what saving the member obtained from it,
-    before the member is deleted.
+    before the member's identity is deleted.
 
     Raises:
         SetupError: If a provider refuses; the member is kept.
     """
-    member = _saved_member(config_dir, person_id)
+    member = _saved_member(person_id)
     for provider in PROVIDERS.values():
         if provider.setup and provider.setup.member:
             await provider.setup.member.removed(member)
 
 
-async def share_avatar(config_dir: Path, person_id: str) -> None:
+async def share_avatar(person_id: str) -> None:
     """Hand the member's picture, which has just changed, to each provider
     its accounts are with.
 
     Raises:
         SetupError: If a provider refuses; the picture stays changed here.
     """
-    member = _saved_member(config_dir, person_id)
+    member = _saved_member(person_id)
     for provider in PROVIDERS.values():
         if provider.setup and provider.setup.member:
             await provider.setup.member.avatar_changed(member)
 
 
-def _saved_member(config_dir: Path, person_id: str) -> SavedMember:
+def _saved_member(person_id: str) -> SavedMember:
     """The saved member ``person_id``, as its accounts see it."""
-    member_dir = stored_person_config_dir(config_dir, person_id)
-    person_data = _read_member_form(member_dir / "person.yml")
+    identity_dir = _identity_dir(person_id)
+    identity = _read_member_form(identity_dir / IDENTITY_FILE)
     return SavedMember(
         person_id=person_id,
-        name=str(person_data.get("name", "")),
-        human=person_data.get("person_type") == "human",
+        name=str(identity.get("name", "")),
+        human=identity.get("person_type") == "human",
         account_info={
             key: str(value)
-            for key, value in _config_mapping(person_data.get("account_info")).items()
+            for key, value in _config_mapping(identity.get("account_info")).items()
         },
-        get_secret=_owned_secrets(config_dir, person_id).value,
-        services=_services_of(config_dir),
-        avatar=avatar_in(member_dir),
+        get_secret=_owned_secrets(person_id).value,
+        avatar=avatar_in(identity_dir),
     )
-
-
-def _services_of(config_dir: Path) -> dict[str, dict[str, Any]]:
-    return {
-        kind: _config_mapping(item)
-        for kind, item in _project_services(config_dir).items()
-    }
 
 
 def _message_channel(

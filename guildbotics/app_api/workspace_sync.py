@@ -13,6 +13,7 @@ member synchronization.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
@@ -68,10 +69,13 @@ from guildbotics.sync import (
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
+    activate_identity_sync,
     activate_workspace_sync,
     clone_workspace,
+    deactivate_identity_sync,
     deactivate_workspace_sync,
     enroll,
+    paused_identity_sync,
     paused_workspace_sync,
     preview_enrollment,
     run_current_sync,
@@ -79,6 +83,7 @@ from guildbotics.sync import (
 )
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
+    get_identity_root,
     get_workspace_root,
     get_workspace_state_path,
 )
@@ -94,6 +99,8 @@ from guildbotics.workspace.identity import (
     read_workspace_identity,
     set_device_display_name,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 #: How long a refresh waits for the repository. It is a courtesy before an
 #: operation, not the operation itself, so it gives up quickly rather than
@@ -447,7 +454,9 @@ class WorkspaceSyncService:
         return self.get_status()
 
     def activate(self) -> WorkspaceSyncStatus:
-        """Start the queue for the selected workspace, if it has a hub."""
+        """Start the queue for the selected workspace, if it has a hub, and
+        bring the identities up to date on the same hub."""
+        self._connect_identities()
         root = _workspace_root()
         manager = activate_workspace_sync(root)
         if manager is not None:
@@ -518,6 +527,16 @@ class WorkspaceSyncService:
             self._stop_relay()
         return stopped
 
+    def shutdown(self) -> None:
+        """Stop the workspace's queue and the identities', as the process ends.
+
+        A workspace switch leaves the identities' queue running: every
+        workspace shares them. Ending the process is what stops it, before a
+        cycle is cut off in the middle of a commit.
+        """
+        self.deactivate()
+        deactivate_identity_sync()
+
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after a failed cycle or repaired shared data.
 
@@ -526,6 +545,7 @@ class WorkspaceSyncService:
         lifecycle operation. A workspace switch waits rather than pairing the
         attempt with another workspace.
         """
+        self._connect_identities()
         with _reporting("sync_retry_failed"):
             result = run_current_sync(
                 lambda manager, root: self._running_status(manager.resume(), root)
@@ -677,6 +697,11 @@ class WorkspaceSyncService:
         with suppress(*_HUB_FAILURES, SyncRepositoryBusyError):
             synchronize_once(_workspace_root(), timeout=REFRESH_LOCK_TIMEOUT_SECONDS)
 
+    def refresh_identities(self) -> None:
+        """Bring the identities up to date, best effort, as :meth:`refresh`."""
+        with suppress(*_HUB_FAILURES, SyncRepositoryBusyError):
+            synchronize_once(get_identity_root(), timeout=REFRESH_LOCK_TIMEOUT_SECONDS)
+
     def hub_target(self) -> tuple[HubLocation, str] | None:
         """Return where this workspace's hub is, or None when it has none.
 
@@ -694,6 +719,59 @@ class WorkspaceSyncService:
             return connection.location_from_remote_url(remote_url, workspace_id), (
                 workspace_id
             )
+
+    def identity_hub_target(self) -> tuple[HubLocation, str] | None:
+        """Return where the identities' hub is, or None when they have none."""
+        root = get_identity_root()
+        identity_id = _workspace_id(root)
+        repository = _repository(root)
+        remote_url = repository.remote_url() if repository is not None else None
+        if identity_id is None or not remote_url:
+            return None
+        with _reporting("hub_unreachable", "hub_unknown"):
+            return connection.location_from_remote_url(remote_url, identity_id), (
+                identity_id
+            )
+
+    def _connect_identities(self) -> None:
+        """Have the identities synchronize through the selected workspace's hub.
+
+        Whichever way a workspace came to have a hub -- connected, copied from
+        one, moved to another -- its members' identities belong on the same
+        one, so they are connected here, where every one of those ends. A hub
+        that cannot be reached leaves them as they are until the next time.
+        """
+        try:
+            workspace = self.hub_target()
+            identities = self.identity_hub_target()
+            if workspace is not None and (
+                identities is None or identities[0] != workspace[0]
+            ):
+                self._enroll_identity(workspace[0])
+        except (AppApiError, SyncStillStoppingError):
+            _LOGGER.warning(
+                "The identities could not be connected to the hub.", exc_info=True
+            )
+        activate_identity_sync()
+
+    def _enroll_identity(self, location: HubLocation) -> None:
+        """Connect the identities to ``location``'s hub.
+
+        The hub holds one repository of them for every workspace. The first
+        machine to connect gives it this machine's; the others join it, as a
+        workspace joins a hub's copy of itself.
+        """
+        root = get_identity_root()
+        with _reporting("hub_register_failed", params={"label": location.label}):
+            identity_id = connection.claim_hub_identity(
+                location, ensure_workspace_identity(root).workspace_id
+            )
+        url = connection.hub_remote_url(location, identity_id)
+        with (
+            _reporting("sync_enable_failed", "sync_enable_failed.members"),
+            paused_identity_sync(),
+        ):
+            enroll(url, root, ssh_public_key_fingerprint=_key_fingerprint())
 
     def _relay_client(self, workspace_id: str, remote_url: str) -> HubRelayClient:
         return HubRelayClient(
@@ -960,6 +1038,7 @@ def _status_model(
         hub_url=hub_url,
         state=status.state,
         local_head=status.local_head,
+        identity_head=_identity_head(),
         remote_head=status.remote_head,
         ahead_count=status.ahead_count,
         behind_count=status.behind_count,
@@ -970,6 +1049,13 @@ def _status_model(
         last_error_detail=status.last_error_detail,
         live_error_code=live_error_code,
     )
+
+
+def _identity_head() -> str | None:
+    """The commit the identities are on: what changes when another machine's
+    edit of a member's name or accounts has been taken in."""
+    repository = _repository(get_identity_root())
+    return repository.head() if repository is not None else None
 
 
 @contextmanager

@@ -47,17 +47,21 @@ VERIFICATION_WS="$(mktemp -d "${TMPDIR:-/tmp}/guildbotics-verify.XXXXXX")"
 mkdir -p "$VERIFICATION_WS/.guildbotics/config"
 export GUILDBOTICS_WORKSPACE_ROOT="$VERIFICATION_WS"
 export GUILDBOTICS_CONFIG_DIR="$VERIFICATION_WS/.guildbotics/config"
+export GUILDBOTICS_IDENTITY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/guildbotics-verify-identity.XXXXXX")"
 C="$GUILDBOTICS_CONFIG_DIR"
-mkdir -p "$C/team/members/tester" "$C/commands" "$C/intelligences" "$VERIFICATION_WS/work"
+I="$GUILDBOTICS_IDENTITY_ROOT/.guildbotics/config"
+mkdir -p "$C/team/members/tester" "$I/team/members/tester" "$C/commands" "$C/intelligences" "$VERIFICATION_WS/work"
 printf 'language: en\ndefault_person_id: tester\n' > "$C/team/project.yml"
-printf 'person_id: tester\nname: Tester\nis_active: false\nperson_type: agent\n' \
-  > "$C/team/members/tester/person.yml"
+printf 'person_id: tester\nname: Tester\nperson_type: agent\n' \
+  > "$I/team/members/tester/identity.yml"
+printf 'is_active: false\n' > "$C/team/members/tester/member.yml"
 uv run --no-sync guildbotics environment build
 ```
 
-Keep both workspace variables set for every command below. The workspace
+Keep the three variables set for every command below. The workspace
 root takes precedence over the config directory; an inherited root must not
-redirect the build or checks to a live workspace. The `tester` member is
+redirect the build or checks to a live workspace. The identity root keeps the
+`tester` member out of this machine's members (`~/.guildbotics/identity`). The `tester` member is
 needed by the contract product-path tests and every tool's turn checks.
 This workspace has no matching Desktop, so its `guildbotics run` commands
 execute locally.

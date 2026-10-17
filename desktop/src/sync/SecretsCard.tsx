@@ -20,12 +20,13 @@ import {
   fetchWorkspaceSecrets,
   getWorkspaceSecrets,
   sendWorkspaceSecrets,
+  type SecretScope,
   type SecretTransferResult,
   type WorkspaceSecretState,
   type WorkspaceSecrets,
 } from "../api/client";
 import { RequestErrorAlert } from "./RequestErrorAlert";
-import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert, secretTone } from "./secretState";
+import { SECRETS_REFETCH_MS, secretAlert, secretTone, secretsQueryKey } from "./secretState";
 
 /** The statuses that mean the value really moved; everything else is shown. */
 const MOVED = new Set(["sent", "fetched"]);
@@ -39,12 +40,13 @@ const MOVED = new Set(["sent", "fetched"]);
  * they go from one OS secret store to the other, and what this screen handles
  * is a key name and a generation number.
  */
-export function SecretsCard() {
+export function SecretsCard({ scope }: { scope: SecretScope }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const queryKey = secretsQueryKey(scope);
   const secrets = useQuery({
-    queryKey: SECRETS_QUERY_KEY,
-    queryFn: getWorkspaceSecrets,
+    queryKey,
+    queryFn: () => getWorkspaceSecrets(scope),
     refetchInterval: SECRETS_REFETCH_MS,
   });
   // A transfer answers per key, and the ones it could not move are the part
@@ -52,7 +54,7 @@ export function SecretsCard() {
   // the hub refused this particular attempt and why.
   const [refused, setRefused] = useState<SecretTransferResult[]>([]);
   const applied = (response: { secrets: WorkspaceSecrets; results: SecretTransferResult[] }) => {
-    queryClient.setQueryData(SECRETS_QUERY_KEY, response.secrets);
+    queryClient.setQueryData(queryKey, response.secrets);
     setRefused(response.results.filter((result) => !MOVED.has(result.status)));
     // A transfer changes what the OS secret store holds, and snapshots other
     // sections have already read stay answered without it -- "is this
@@ -61,7 +63,7 @@ export function SecretsCard() {
     // everything but the secret states this response just delivered is
     // invalidated, the same way joining a workspace invalidates everything.
     void queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey[0] !== SECRETS_QUERY_KEY[0],
+      predicate: (query) => query.queryKey[0] !== queryKey[0],
     });
   };
   // A bulk action names no keys. The lists below are as old as the last poll,
@@ -74,13 +76,15 @@ export function SecretsCard() {
   // record could not be written leaves the hub ahead -- so the states are
   // asked for right away rather than left to the next poll, and the screen
   // shows what the failure left behind next to the message saying why.
-  const refreshStates = () => void queryClient.invalidateQueries({ queryKey: SECRETS_QUERY_KEY });
+  const refreshStates = () => void queryClient.invalidateQueries({ queryKey });
   // One mutation for both directions. The alert below shows its error, which
   // a new attempt clears -- two mutations would keep a failed send on screen
   // through every later fetch, since neither ever resets the other.
   const transfer = useMutation({
     mutationFn: ({ kind, keys }: { kind: "fetch" | "send"; keys: string[] }) =>
-      kind === "send" ? sendWorkspaceSecrets({ keys }) : fetchWorkspaceSecrets({ keys }),
+      kind === "send"
+        ? sendWorkspaceSecrets({ keys }, scope)
+        : fetchWorkspaceSecrets({ keys }, scope),
     onSuccess: applied,
     onError: refreshStates,
   });
@@ -97,9 +101,9 @@ export function SecretsCard() {
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
-        <Title order={4}>{t("sync.secrets.title")}</Title>
+        <Title order={4}>{t(`sync.secrets.title.${scope}`)}</Title>
         <Text c="dimmed" size="sm">
-          {t("sync.secrets.body")}
+          {t(`sync.secrets.scope.${scope}`)} {t("sync.secrets.body")}
         </Text>
         {alert && alert !== "attention" ? (
           <Alert

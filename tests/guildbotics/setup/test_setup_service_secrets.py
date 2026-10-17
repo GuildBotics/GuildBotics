@@ -1,8 +1,9 @@
 """Keychain-backed secret handling in the simple setup service.
 
-These tests pin the workspace to the OS keychain (via the ``fake_keyring``
+These tests pin the stores to the OS keychain (via the ``fake_keyring``
 fixture) and assert that secrets go there while non-secret values stay in
-plain configuration files.
+plain configuration files: a workspace's own keys in its store, and every
+member's in the identities' store, which every workspace shares.
 """
 
 from pathlib import Path
@@ -13,16 +14,17 @@ from guildbotics.integrations.provider import SetupError
 from guildbotics.setup.setup_service import (
     MEMBER_SECRET_NAMES,
     PersonSetupInput,
-    PersonUpdateInput,
     ProjectSetupInput,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import (
     SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
+    identity_secret_store,
 )
 
 
@@ -58,6 +60,10 @@ def _github(**fields) -> dict:
 
 def _config_dir(tmp_path: Path) -> Path:
     return tmp_path / ".guildbotics" / "config"
+
+
+def _identity_file(person_id: str = "alice") -> Path:
+    return identity_members_dir() / person_id / IDENTITY_FILE
 
 
 class TestProjectSecrets:
@@ -115,10 +121,12 @@ class TestPersonSecrets:
         KeyringSecretStore(config_dir).ensure_initialized()
         return config_dir
 
-    def test_write_person_stores_tokens_in_keychain(self, fake_keyring, tmp_path):
+    def test_save_person_stores_tokens_in_the_identities_keychain(
+        self, fake_keyring, tmp_path
+    ):
         config_dir = self._workspace(tmp_path)
 
-        result = SimplePersonSetupService().write_person(
+        result = SimplePersonSetupService().save_person(
             _person_input(
                 config_dir,
                 accounts={
@@ -128,18 +136,20 @@ class TestPersonSecrets:
             )
         )
 
-        store = KeyringSecretStore(config_dir)
+        store = identity_secret_store()
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-secret"
         assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-secret"
-        person = load_yaml_file(config_dir / "team/members/alice/person.yml")
-        assert person["account_info"]["github_installation_id"] == "42"
+        assert KeyringSecretStore(config_dir).keys() == []
+        identity = load_yaml_file(_identity_file())
+        assert identity["account_info"]["github_installation_id"] == "42"
+        assert "ghp-secret" not in _identity_file().read_text()
         assert store.location in {created.path for created in result.files}
         assert not (tmp_path / ".env").exists()
 
     def test_read_person_config_sees_keychain_tokens(self, fake_keyring, tmp_path):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
 
@@ -152,72 +162,54 @@ class TestPersonSecrets:
             name: f"ALICE_{name}" for name in MEMBER_SECRET_NAMES
         }
 
-    @pytest.mark.parametrize(
-        "original, renamed", [("alice", "alice-2"), ("Alice", "alice")]
-    )
-    def test_update_person_rename_moves_keychain_tokens(
-        self, fake_keyring, tmp_path, original, renamed
-    ):
+    def test_saving_under_another_id_is_another_member(self, fake_keyring, tmp_path):
+        """A person ID is immutable: a form saved under another ID makes
+        another member, which takes none of the first one's secrets."""
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
-        members = config_dir / "team/members"
-        if original != "alice":
-            (members / "alice").rename(members / original)
-        project_file = config_dir / "team/project.yml"
-        project_file.write_text(dump_yaml({"default_person_id": original}))
 
-        service.update_person(
-            PersonUpdateInput(
-                **{
-                    **_person_input(config_dir).model_dump(),
-                    "original_person_id": original,
-                    "person_id": renamed,
-                    "person_name": "Alice 2",
-                }
-            )
+        service.save_person(_person_input(config_dir, person_id="alice-2"))
+
+        store = identity_secret_store()
+        assert store.keys() == ["ALICE_GITHUB_ACCESS_TOKEN"]
+        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-secret"
+        assert {path.name for path in identity_members_dir().iterdir()} == {
+            "alice",
+            "alice-2",
+        }
+        snapshot = service.read_person_config(
+            config_dir=config_dir, person_id="alice-2"
         )
+        assert snapshot.accounts["github"]["has_access_token"] is False
 
-        store = KeyringSecretStore(config_dir)
-        prefix = "ALICE_2" if renamed == "alice-2" else "ALICE"
-        assert store.get(f"{prefix}_GITHUB_ACCESS_TOKEN") == "ghp-secret"
-        if renamed == "alice-2":
-            assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
-        assert [child.name for child in members.iterdir()] == [renamed]
-        assert load_yaml_file(project_file)["default_person_id"] == renamed
-
-    def test_update_person_blank_token_keeps_existing_secret(
+    def test_save_person_blank_token_keeps_existing_secret(
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-secret"))
         )
 
-        service.update_person(
-            PersonUpdateInput(
-                **_person_input(
-                    config_dir, accounts=_github(access_token="")
-                ).model_dump(),
-                original_person_id="alice",
-            )
+        service.save_person(
+            _person_input(config_dir, accounts=_github(access_token=""))
         )
 
-        assert KeyringSecretStore(config_dir).get("ALICE_GITHUB_ACCESS_TOKEN") == (
+        assert identity_secret_store().get("ALICE_GITHUB_ACCESS_TOKEN") == (
             "ghp-secret"
         )
 
-    def test_write_person_copies_private_key_content_to_keychain(
+    def test_save_person_copies_private_key_content_to_keychain(
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
         pem_file = tmp_path / "alice.pem"
         pem_file.write_text("-----BEGIN RSA PRIVATE KEY-----\npem\n")
 
-        SimplePersonSetupService().write_person(
+        SimplePersonSetupService().save_person(
             _person_input(
                 config_dir,
                 accounts=_github(
@@ -226,10 +218,10 @@ class TestPersonSecrets:
             )
         )
 
-        store = KeyringSecretStore(config_dir)
+        store = identity_secret_store()
         assert store.get("ALICE_GITHUB_PRIVATE_KEY") == pem_file.read_text()
-        person = load_yaml_file(config_dir / "team/members/alice/person.yml")
-        assert person["account_info"]["github_app_id"] == "7"
+        identity = load_yaml_file(_identity_file())
+        assert identity["account_info"]["github_app_id"] == "7"
         assert pem_file.exists()
 
         snapshot = SimplePersonSetupService().read_person_config(
@@ -238,7 +230,7 @@ class TestPersonSecrets:
         assert snapshot.accounts["github"]["has_private_key"] is True
 
     @pytest.mark.parametrize("content", [None, b"\xff\xfe"])
-    def test_write_person_rejects_an_unreadable_key_file_before_writing(
+    def test_save_person_rejects_an_unreadable_key_file_before_writing(
         self, fake_keyring, tmp_path, content
     ):
         config_dir = self._workspace(tmp_path)
@@ -247,7 +239,7 @@ class TestPersonSecrets:
             pem_file.write_bytes(content)
 
         with pytest.raises(SetupError) as exc_info:
-            SimplePersonSetupService().write_person(
+            SimplePersonSetupService().save_person(
                 _person_input(
                     config_dir,
                     accounts=_github(
@@ -258,66 +250,67 @@ class TestPersonSecrets:
 
         assert exc_info.value.code == "github_private_key_unreadable"
         assert not (config_dir / "team" / "members" / "alice").exists()
-        assert KeyringSecretStore(config_dir).keys() == []
+        assert not _identity_file().parent.exists()
+        assert identity_secret_store().keys() == []
 
-    def test_update_person_rejects_an_unreadable_key_file_before_renaming(
+    def test_save_person_rejects_an_unreadable_key_file_before_changing_the_member(
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-old"))
         )
+        files = (_identity_file(), config_dir / "team/members/alice/member.yml")
+        before = {path: path.read_bytes() for path in files}
 
         with pytest.raises(SetupError) as exc_info:
-            service.update_person(
-                PersonUpdateInput(
-                    **_person_input(
-                        config_dir,
-                        person_id="alice-2",
-                        accounts=_github(private_key_path=tmp_path / "missing.pem"),
-                    ).model_dump(),
-                    original_person_id="alice",
+            service.save_person(
+                _person_input(
+                    config_dir,
+                    person_name="Alice 2",
+                    accounts=_github(
+                        access_token="ghp-new",
+                        private_key_path=tmp_path / "missing.pem",
+                    ),
                 )
             )
 
         assert exc_info.value.code == "github_private_key_unreadable"
-        store = KeyringSecretStore(config_dir)
-        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-old"
-        assert not (config_dir / "team" / "members" / "alice-2").exists()
+        assert identity_secret_store().get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-old"
+        assert {path: path.read_bytes() for path in files} == before
 
-    def test_rename_and_delete_follow_every_member_secret(self, fake_keyring, tmp_path):
-        """Every provider's member secrets move with a rename and go with a
-        delete, whichever provider the member's form named."""
+    def test_only_deleting_the_identity_removes_every_member_secret(
+        self, fake_keyring, tmp_path
+    ):
+        """Every provider's member secrets stay while the member is only taken
+        out of a workspace, and go with its identity, whichever provider the
+        member's form named."""
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(_person_input(config_dir))
-        store = KeyringSecretStore(config_dir)
-        store.set("OPENAI_API_KEY", "workspace-key")
+        service.save_person(_person_input(config_dir))
+        KeyringSecretStore(config_dir).set("OPENAI_API_KEY", "workspace-key")
+        store = identity_secret_store()
         for name in MEMBER_SECRET_NAMES:
             store.set(f"ALICE_{name}", f"value-{name}")
 
-        service.update_person(
-            PersonUpdateInput(
-                **_person_input(config_dir, person_id="alice-2").model_dump(),
-                original_person_id="alice",
-            )
-        )
+        service.remove_person(config_dir=config_dir, person_id="alice")
 
         assert sorted(store.keys()) == sorted(
-            ["OPENAI_API_KEY", *(f"ALICE_2_{name}" for name in MEMBER_SECRET_NAMES)]
+            f"ALICE_{name}" for name in MEMBER_SECRET_NAMES
         )
         for name in MEMBER_SECRET_NAMES:
-            assert store.get(f"ALICE_2_{name}") == f"value-{name}"
+            assert store.get(f"ALICE_{name}") == f"value-{name}"
 
-        service.delete_person(config_dir=config_dir, person_id="alice-2")
+        service.delete_identity(person_id="alice")
 
-        assert store.keys() == ["OPENAI_API_KEY"]
+        assert store.keys() == []
+        assert KeyringSecretStore(config_dir).keys() == ["OPENAI_API_KEY"]
 
-    def test_delete_person_removes_keychain_tokens(self, fake_keyring, tmp_path):
+    def test_delete_identity_removes_keychain_tokens(self, fake_keyring, tmp_path):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(
                 config_dir,
                 accounts={
@@ -327,16 +320,21 @@ class TestPersonSecrets:
             )
         )
 
-        service.delete_person(config_dir=config_dir, person_id="alice")
+        result = service.delete_identity(person_id="alice")
 
-        store = KeyringSecretStore(config_dir)
+        store = identity_secret_store()
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
         assert store.get("ALICE_SLACK_APP_TOKEN") is None
         assert store.keys() == []
+        assert not _identity_file().parent.exists()
+        assert [(created.path, created.action) for created in result.files] == [
+            (store.location, "update"),
+            (_identity_file(), "delete"),
+        ]
 
 
 class TestStaleKeyMetadata:
-    """Shared key metadata follows rename/delete even when the local value
+    """Shared key metadata goes with the identity even when the local value
     is stale (another device holds the current generation)."""
 
     def _workspace(self, tmp_path: Path) -> Path:
@@ -345,8 +343,8 @@ class TestStaleKeyMetadata:
         KeyringSecretStore(config_dir).ensure_initialized()
         return config_dir
 
-    def _make_stale(self, config_dir: Path, key: str) -> None:
-        store = KeyringSecretStore(config_dir)
+    def _make_stale(self, key: str) -> None:
+        store = identity_secret_store()
         # The value written here reached the hub as generation 1 ...
         value = store.get(key)
         assert value is not None
@@ -359,71 +357,45 @@ class TestStaleKeyMetadata:
         store.location.write_text(dump_yaml(index), encoding="utf-8")
         assert store.get(key) is None
 
-    def test_update_person_rename_moves_stale_key_metadata(
-        self, fake_keyring, tmp_path
-    ):
+    def test_delete_identity_removes_stale_key_metadata(self, fake_keyring, tmp_path):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-old"))
         )
-        self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
+        self._make_stale("ALICE_GITHUB_ACCESS_TOKEN")
 
-        service.update_person(
-            PersonUpdateInput(
-                **{
-                    **_person_input(config_dir).model_dump(),
-                    "original_person_id": "alice",
-                    "person_id": "alice-2",
-                }
-            )
-        )
+        service.delete_identity(person_id="alice")
 
-        store = KeyringSecretStore(config_dir)
-        assert "ALICE_GITHUB_ACCESS_TOKEN" not in store.keys()
-        assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.keys()
-        assert "ALICE_2_GITHUB_ACCESS_TOKEN" in store.stale_keys()
+        assert "ALICE_GITHUB_ACCESS_TOKEN" not in identity_secret_store().keys()
 
-    def test_delete_person_removes_stale_key_metadata(self, fake_keyring, tmp_path):
-        config_dir = self._workspace(tmp_path)
-        service = SimplePersonSetupService()
-        service.write_person(
-            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
-        )
-        self._make_stale(config_dir, "ALICE_GITHUB_ACCESS_TOKEN")
-
-        service.delete_person(config_dir=config_dir, person_id="alice")
-
-        assert "ALICE_GITHUB_ACCESS_TOKEN" not in KeyringSecretStore(config_dir).keys()
-
-    def test_update_person_store_failure_leaves_member_config_untouched(
+    def test_save_person_store_failure_leaves_member_config_untouched(
         self, fake_keyring, tmp_path, monkeypatch
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-old"))
         )
+        files = (_identity_file(), config_dir / "team/members/alice/member.yml")
+        before = {path: path.read_bytes() for path in files}
 
-        def _raise(self, old_key, new_key):
+        def _raise(self, key, value):
             raise SecretStoreError("keychain is locked")
 
-        monkeypatch.setattr(KeyringSecretStore, "rename", _raise)
+        monkeypatch.setattr(KeyringSecretStore, "set", _raise)
         with pytest.raises(SecretStoreError):
-            service.update_person(
-                PersonUpdateInput(
-                    **{
-                        **_person_input(config_dir).model_dump(),
-                        "original_person_id": "alice",
-                        "person_id": "alice-2",
-                    }
+            service.save_person(
+                _person_input(
+                    config_dir,
+                    person_name="Alice 2",
+                    accounts=_github(access_token="ghp-new"),
                 )
             )
 
-        assert (config_dir / "team" / "members" / "alice" / "person.yml").exists()
-        assert not (config_dir / "team" / "members" / "alice-2").exists()
+        assert {path: path.read_bytes() for path in files} == before
 
-    def test_write_person_store_failure_writes_no_member_config(
+    def test_save_person_store_failure_writes_no_member_config(
         self, fake_keyring, tmp_path, monkeypatch
     ):
         config_dir = self._workspace(tmp_path)
@@ -433,30 +405,31 @@ class TestStaleKeyMetadata:
 
         monkeypatch.setattr(KeyringSecretStore, "set", _raise)
         with pytest.raises(SecretStoreError):
-            SimplePersonSetupService().write_person(
+            SimplePersonSetupService().save_person(
                 _person_input(config_dir, accounts={"slack": {"bot_token": "xoxb"}})
             )
 
         assert not (config_dir / "team" / "members" / "alice").exists()
+        assert not _identity_file().parent.exists()
 
-    def test_delete_person_store_failure_keeps_member_config(
+    def test_delete_identity_store_failure_keeps_the_identity(
         self, fake_keyring, tmp_path, monkeypatch
     ):
         config_dir = self._workspace(tmp_path)
         service = SimplePersonSetupService()
-        service.write_person(
+        service.save_person(
             _person_input(config_dir, accounts=_github(access_token="ghp-old"))
         )
 
         def _raise(self, key):
             raise SecretStoreError("keychain is locked")
 
-        monkeypatch.setattr(KeyringSecretStore, "delete", _raise)
-        with pytest.raises(SecretStoreError):
-            service.delete_person(config_dir=config_dir, person_id="alice")
+        with monkeypatch.context() as locked:
+            locked.setattr(KeyringSecretStore, "delete", _raise)
+            with pytest.raises(SecretStoreError):
+                service.delete_identity(person_id="alice")
 
-        assert (config_dir / "team" / "members" / "alice" / "person.yml").exists()
+        assert _identity_file().exists()
 
-        monkeypatch.undo()
-        service.delete_person(config_dir=config_dir, person_id="alice")
-        assert not (config_dir / "team" / "members" / "alice").exists()
+        service.delete_identity(person_id="alice")
+        assert not _identity_file().parent.exists()

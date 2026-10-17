@@ -10,7 +10,7 @@
 - [デスクトップアプリでの設定](#デスクトップアプリでの設定)
 - [チャット判断エンジン](#チャット判断エンジン)
 - [定期投稿](#定期投稿)
-- [`person.yml` リファレンス](#personyml-リファレンス)
+- [メンバー設定リファレンス](#メンバー設定リファレンス)
 - [手動での投稿・リアクション](#手動での投稿リアクション)
 - [チャット処理の内部動作](#チャット処理の内部動作)
 
@@ -121,7 +121,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 定期投稿は **巡回** タブの **定期実行コマンド** として設定します（→ [定期投稿](#定期投稿)）。
 
-トークンは OS キーチェーンに保存され、それ以外の設定は `team/members/<person_id>/person.yml` に保存されます。保存形式と、GUI では設定できない項目は [`person.yml` リファレンス](#personyml-リファレンス)を参照してください。
+トークンはメンバーの認証情報として OS キーチェーンに保存され、すべてのワークスペースで共通です。Slack User ID はすべてのワークスペースで共通のメンバーの `identity.yml` に、チャンネルはワークスペースの `team/members/<person_id>/member.yml` に保存されます。保存形式と、GUI では設定できない項目は [メンバー設定リファレンス](#メンバー設定リファレンス)を参照してください。
 
 ## チャット判断エンジン
 
@@ -173,7 +173,7 @@ guildbotics run workflows/chat_post_command channel_name=dev-chat command='examp
 
 チャネルが指定されていない・`channel_name` が解決できない（チャネル名、Bot のチャネル参加、`channels:read` / `groups:read` スコープを確認してください）・`command` が空または引用符が閉じていない場合は、実行が失敗として記録されます。コマンドの出力が空のときは何も投稿せず、成功として扱います。
 
-## `person.yml` リファレンス
+## メンバー設定リファレンス
 
 プロジェクトのチャットが Slack であることは `team/project.yml` に書きます。デスクトップアプリのプロジェクト設定がこれを書き出します。
 
@@ -185,12 +185,10 @@ services:
     # base_url: https://slack.com/api   # プロキシ経由で Slack に届く場合だけ
 ```
 
-デスクトップアプリで保存した Slack 設定は、`team/members/<person_id>/person.yml` に次の形で書き出されます。GUI を使わないサーバーでは、このファイルを直接編集します。
+デスクトップアプリで保存したチャンネルと定期実行は、ワークスペースの `team/members/<person_id>/member.yml` に次の形で書き出されます。GUI を使わないサーバーでは、このファイルを直接編集します。
 
 ```yaml
-# team/members/alice/person.yml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 message_channels:
@@ -212,9 +210,9 @@ task_schedules:
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものがプロジェクトのチャット（`services.chat_service`）で監視対象になります
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
-- `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します
+- すべてのワークスペースで共通のメンバーのアイデンティティ（`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`）の `profile.character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します。人間のメンバーの Slack User ID は、同じファイルの `account_info.slack_user_id` です
 
-Bot Token と App-Level Token は `person.yml` には保存されません。OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
+Bot Token と App-Level Token はどちらのファイルにも保存されません。メンバーの認証情報として、すべてのワークスペースで共有するアイデンティティのストア（`guildbotics secrets --identities`）に保存し、OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
 
 ## 手動での投稿・リアクション
 

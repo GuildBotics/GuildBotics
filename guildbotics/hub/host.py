@@ -52,6 +52,8 @@ class HubSettings(BaseModel):
         ssh_endpoint (str): The ``user@host`` this machine suggests to devices.
             It is a starting point for the user, not something the hub can
             verify: only the user knows which name their machines resolve.
+        identity_id (str): The repository of the members' identities, which
+            every workspace shares; empty until a device registers one.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -60,6 +62,7 @@ class HubSettings(BaseModel):
     hub_id: str
     created_at: str
     ssh_endpoint: str
+    identity_id: str = ""
 
 
 def hub_root() -> Path:
@@ -184,15 +187,55 @@ def create_workspace_repository(workspace_id: str) -> Path:
     return path
 
 
+def claim_identity(identity_id: str) -> str:
+    """Return the identities' repository this hub holds, registering
+    ``identity_id`` as it when the hub holds none.
+
+    The user has one set of identities, so a hub holds one repository of them
+    for every workspace: the first device to connect gives it, and the others
+    join it. It is kept beside the workspaces' repositories, with the same
+    settings and the same Secret transfer, but is no workspace itself.
+
+    Raises:
+        HubNotHostedError: When this machine is not a hub.
+        InvalidWorkspaceIdError: When ``identity_id`` is not a canonical UUID.
+        HubError: When the repository could not be created.
+    """
+    require_uuid(identity_id, "identity_id")
+    if read_hub() is None:
+        raise HubNotHostedError(
+            "This machine is not a hub. Make it one before registering identities."
+        )
+    with held_lock(hub_root() / "hub-create.lock"):
+        settings = read_hub()
+        if settings is None:
+            raise HubNotHostedError("This machine stopped being a hub.")
+        if settings.identity_id:
+            return settings.identity_id
+        create_workspace_repository(identity_id)
+        atomic_write_text(
+            hub_settings_path(),
+            dump_shared_json(
+                settings.model_copy(update={"identity_id": identity_id}).model_dump()
+            ),
+        )
+        return identity_id
+
+
 def list_workspace_ids() -> list[str]:
-    """Return the workspaces this machine hosts, ordered by identifier."""
+    """Return the workspaces this machine hosts, ordered by identifier.
+
+    The identities' repository is not one of them.
+    """
     root = workspaces_root()
     if not root.is_dir():
         return []
+    settings = read_hub()
+    identity_id = settings.identity_id if settings else ""
     return sorted(
         entry.name
         for entry in root.iterdir()
-        if (entry / "repository.git" / "HEAD").is_file()
+        if (entry / "repository.git" / "HEAD").is_file() and entry.name != identity_id
     )
 
 

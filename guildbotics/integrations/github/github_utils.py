@@ -16,7 +16,7 @@ from guildbotics.integrations.github.async_client import (
     get_async_client,
     record_github_auth_failure,
 )
-from guildbotics.utils.env_loader import workspace_secret_store
+from guildbotics.utils.secret_store import identity_secret_store
 
 HTTP_UNAUTHORIZED = 401
 GITHUB_PAGE_SIZE = 100
@@ -171,7 +171,7 @@ def get_person_private_key_pem(person: Person) -> bytes:
     kept out of ``os.environ`` (see ``secret_store.is_environment_secret``).
     """
     key = person.to_person_env_key("GITHUB_PRIVATE_KEY")
-    content = workspace_secret_store().get(key)
+    content = identity_secret_store().get(key)
     if not content:
         raise KeyError(f"Secret '{key}' is not stored in the OS secret store.")
     return content.encode()

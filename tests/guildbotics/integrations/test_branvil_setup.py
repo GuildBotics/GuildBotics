@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
+from guildbotics.integrations.branvil.api import CONNECTION_PATH
 from guildbotics.integrations.branvil.setup import BranvilAccount
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.integrations.provider import (
@@ -19,9 +20,10 @@ from guildbotics.integrations.provider import (
     SavedMember,
     SetupError,
 )
+from guildbotics.utils.fileio import get_identity_config_dir
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
     MEMBER,
@@ -32,17 +34,11 @@ from tests.guildbotics.integrations.branvil_double import (
     serve,
 )
 
-BRANVIL_SERVICES = {
-    "code_hosting_service": {"name": "branvil", "base_url": BASE, "workspace": "a"},
-    "ticket_service": {"name": "branvil", "base_url": BASE, "workspace": "a"},
-}
-
 
 def _member(
     person_id: str = "alice",
     human: bool = False,
     secrets: dict[str, str] | None = None,
-    services: dict[str, Any] | None = None,
     **credentials: HostCredential,
 ) -> SavedMember:
     held = secrets or {}
@@ -52,7 +48,6 @@ def _member(
         human=human,
         account_info={},
         get_secret=lambda name: held.get(name, ""),
-        services=BRANVIL_SERVICES if services is None else services,
         credentials=credentials,
     )
 
@@ -223,30 +218,35 @@ async def test_a_human_is_named_after_the_owner(double: BranvilDouble):
 
 
 @pytest.mark.asyncio
-async def test_nothing_is_set_up_without_guildbotics_connection(
+async def test_an_account_is_stored_as_given_before_any_connection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Every member form carries a Branvil account; one saved before the
+    identities are connected to a Branvil has nothing to set up there."""
+    double = BranvilDouble()
+    serve(double, monkeypatch)
+
+    assert await _saved({"username": "aiko"}, _member()) == (
+        {"branvil_username": "aiko"},
+        {},
+    )
+    assert await _saved({}, _member()) == ({}, {})
+    assert double.writes == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_set_up_with_a_connection_this_machine_has_no_token_of(
     monkeypatch: pytest.MonkeyPatch,
 ):
     serve(BranvilDouble(), monkeypatch)
+    connect_admin()
+    identity_secret_store().delete("BRANVIL_ADMIN_TOKEN")
 
     with pytest.raises(SetupError) as raised:
         await _saved({}, _member())
 
     assert raised.value.code == "branvil"
     assert raised.value.message == t("integrations.branvil.api.not_connected")
-
-
-@pytest.mark.asyncio
-async def test_an_account_of_a_project_without_branvil_is_stored_as_given(
-    double: BranvilDouble,
-):
-    member = _member(services={"chat_service": {"name": "slack"}})
-
-    assert await _saved({"username": "aiko"}, member) == (
-        {"branvil_username": "aiko"},
-        {},
-    )
-    assert await _saved({}, member) == ({}, {})
-    assert double.writes == []
 
 
 @pytest.mark.asyncio
@@ -299,26 +299,26 @@ async def test_a_save_without_a_picture_puts_none(double: BranvilDouble):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("account_info", "services", "given"),
+    ("account_info", "connected", "given"),
     [
-        ({"branvil_username": MEMBER}, None, {MEMBER: b"new"}),
-        ({}, None, {}),
-        ({"branvil_username": MEMBER}, {}, {}),
+        ({"branvil_username": MEMBER}, True, {MEMBER: b"new"}),
+        ({}, True, {}),
+        ({"branvil_username": MEMBER}, False, {}),
     ],
-    ids=["with-account", "no-branvil-member", "no-branvil"],
+    ids=["with-account", "no-branvil-member", "not-connected"],
 )
 async def test_a_changed_picture_is_given_to_the_branvil_member_the_account_names(
     double: BranvilDouble,
     tmp_path,
     account_info: dict[str, str],
-    services: dict[str, Any] | None,
+    connected: bool,
     given: dict[str, bytes],
 ):
+    if not connected:
+        (get_identity_config_dir() / CONNECTION_PATH).unlink()
     picture = tmp_path / "avatar.png"
     picture.write_bytes(b"new")
-    member = replace(
-        _member(services=services), account_info=account_info, avatar=picture
-    )
+    member = replace(_member(), account_info=account_info, avatar=picture)
 
     await BranvilAccount.avatar_changed(member)
 
@@ -375,7 +375,6 @@ async def test_deleting_revokes_the_rest_when_one_was_revoked_meanwhile(
             human=True,
             account_info={"branvil_username": OWNER},
             get_secret=lambda name: "",
-            services=BRANVIL_SERVICES,
         ),
         _member(),
         SavedMember(
@@ -384,7 +383,6 @@ async def test_deleting_revokes_the_rest_when_one_was_revoked_meanwhile(
             human=False,
             account_info={"branvil_username": "ghost"},
             get_secret=lambda name: "",
-            services=BRANVIL_SERVICES,
         ),
     ],
     ids=["human", "no_branvil_name", "gone_from_branvil"],
@@ -435,7 +433,6 @@ def test_github_hands_over_a_machine_users_token_or_an_app(
         human=False,
         account_info=info,
         get_secret=lambda name: secrets.get(name, ""),
-        services={},
     )
 
     assert GITHUB.credential(member) == credential  # type: ignore[union-attr]

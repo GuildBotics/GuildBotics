@@ -31,6 +31,7 @@ from uuid import uuid4
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     atomic_write_bytes,
+    get_identity_root,
     get_workspace_root,
     resolve_from_existing_ancestor,
 )
@@ -95,6 +96,7 @@ class NoOpWorkspaceSyncPort:
 
 
 _port: WorkspaceSyncPort = NoOpWorkspaceSyncPort()
+_identity_port: WorkspaceSyncPort = NoOpWorkspaceSyncPort()
 
 
 def get_workspace_sync_port() -> WorkspaceSyncPort:
@@ -106,6 +108,18 @@ def set_workspace_sync_port(port: WorkspaceSyncPort | None) -> None:
     """Install ``port``, or restore the no-op port when ``port`` is None."""
     global _port
     _port = port if port is not None else NoOpWorkspaceSyncPort()
+
+
+def set_identity_sync_port(port: WorkspaceSyncPort | None) -> None:
+    """Install the port that receives the identities' changes, or restore the
+    no-op port when ``port`` is None.
+
+    The identities are shared files of their own, which no workspace's queue
+    commits, so their changes are announced to this port instead -- with paths
+    relative to the identity root's ``.guildbotics/``.
+    """
+    global _identity_port
+    _identity_port = port if port is not None else NoOpWorkspaceSyncPort()
 
 
 def shared_relative_path(path: Path, workspace_root: Path | None = None) -> str | None:
@@ -158,11 +172,17 @@ def _writing(paths: list[Path], workspace_root: Path | None) -> Iterator[None]:
     the port makes about announcing a change decides whether to take the lock
     for it.
     """
-    if not _shared_subset(paths, workspace_root):
-        yield
+    # The identities are shared files of their own, with a lock of their own.
+    identity_root = get_identity_root()
+    if _shared_subset(paths, identity_root):
+        with shared_write_lock(identity_root):
+            yield
         return
-    with shared_write_lock(workspace_root):
-        yield
+    if _shared_subset(paths, workspace_root):
+        with shared_write_lock(workspace_root):
+            yield
+        return
+    yield
 
 
 def notify_shared_state_changed(
@@ -185,11 +205,16 @@ def notify_shared_state_changed(
     Returns:
         ChangeSet | None: The announced change, or None when nothing shared changed.
     """
-    shared = _shared_subset(paths, workspace_root)
-    if not shared:
+    # The identities first: a writer may name the identity root as the root
+    # it writes, and their changes are their own queue's either way.
+    if shared := _shared_subset(paths, get_identity_root()):
+        port = _identity_port
+    elif shared := _shared_subset(paths, workspace_root):
+        port = get_workspace_sync_port()
+    else:
         return None
     change = ChangeSet(change_id=uuid4().hex, operation=operation, paths=shared)
-    get_workspace_sync_port().shared_state_changed(change)
+    port.shared_state_changed(change)
     return change
 
 

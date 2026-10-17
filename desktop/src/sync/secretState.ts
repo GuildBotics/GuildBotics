@@ -1,4 +1,4 @@
-import type { SecretStatus, WorkspaceSecrets } from "../api/client";
+import type { SecretScope, SecretStatus, WorkspaceSecrets } from "../api/client";
 
 /**
  * How the Secret list is presented.
@@ -11,11 +11,12 @@ import type { SecretStatus, WorkspaceSecrets } from "../api/client";
  */
 
 /**
- * The one query every screen reads the Secret states from. Sharing the key is
- * what keeps the provider hints, the summary band, and the list on one answer
- * -- and to one request, however many of them are on screen.
+ * The one query every screen reads one scope's Secret states from. Sharing the
+ * key is what keeps the provider hints, the summary band, and the list on one
+ * answer -- and to one request, however many of them are on screen. Every
+ * scope's key starts the same, so all of them are told apart from the rest.
  */
-export const SECRETS_QUERY_KEY = ["workspace-secrets"];
+export const secretsQueryKey = (scope: SecretScope) => ["workspace-secrets", scope];
 
 /**
  * How often that answer is renewed.

@@ -27,7 +27,7 @@
 - **連続失敗で停止する回数**: この回数だけ連続で失敗すると、そのメンバーのワーカーを停止します（既定 3 回）
 - **サービス実行に含める**: 巡回実行コマンド / 定期実行コマンド / イベント起動を個別に有効化します
 
-設定内容は `team/members/<person_id>/person.yml` の `routine_commands` と `task_schedules` に保存されます。以降の節は、その保存形式と、GUI を使わないサーバーでファイルを直接編集する場合の参照です。
+設定内容は、ワークスペースの `team/members/<person_id>/member.yml`（そのワークスペースでのメンバーの設定）の `routine_commands` と `task_schedules` に保存されます。以降の節は、その保存形式と、GUI を使わないサーバーでファイルを直接編集する場合の参照です。
 
 ## 巡回実行コマンド
 
@@ -42,8 +42,7 @@
 **設定例**:
 
 ```yaml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 # デフォルトの巡回実行コマンドを上書き（オプション）
@@ -71,8 +70,7 @@ routine_commands:
 **設定例**:
 
 ```yaml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 # 特定の時刻に実行するコマンドをスケジュール
@@ -172,11 +170,9 @@ schedules:
 
 **シナリオ**: 異なるスケジュールを持つ 2 つのエージェント
 
-**エージェント1** (`.guildbotics/config/team/members/agent1/person.yml`):
+**エージェント1** (`.guildbotics/config/team/members/agent1/member.yml`):
 
 ```yaml
-person_id: agent1
-name: Agent One
 is_active: true
 
 # チケット駆動ワークフローを定期実行
@@ -190,11 +186,9 @@ task_schedules:
       - "0 9 * * 1-5" # 平日午前9:00
 ```
 
-**エージェント2** (`.guildbotics/config/team/members/agent2/person.yml`):
+**エージェント2** (`.guildbotics/config/team/members/agent2/member.yml`):
 
 ```yaml
-person_id: agent2
-name: Agent Two
 is_active: true
 
 # コードレビューチェックを定期実行
@@ -220,8 +214,7 @@ task_schedules:
 1 つのコマンドに複数のスケジュールを設定する例:
 
 ```yaml
-person_id: maintenance_bot
-name: Maintenance Bot
+# team/members/maintenance_bot/member.yml
 is_active: true
 
 task_schedules:
@@ -243,8 +236,7 @@ task_schedules:
 複数エージェント間での競合を避けるためのランダム化設定:
 
 ```yaml
-person_id: agent_alpha
-name: Agent Alpha
+# team/members/agent_alpha/member.yml
 is_active: true
 
 task_schedules:

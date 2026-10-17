@@ -59,9 +59,9 @@ def _read_keys(name: str) -> tuple[set[str], set[str]]:
     return secrets, accounts
 
 
-def _workspace_secrets(name: str) -> set[str]:
+def _identity_secrets(name: str) -> set[str]:
     """The names the provider's package reads from or keeps in the
-    workspace's own store, which no member's prefix names."""
+    identities' store without a member's prefix: its connection's."""
     found: set[str] = set()
     for path in sorted((PACKAGE / name).rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -71,7 +71,7 @@ def _workspace_secrets(name: str) -> set[str]:
                 and node.func.attr in {"get", "set"}
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Name)
-                and node.func.value.func.id == "workspace_secret_store"
+                and node.func.value.func.id == "identity_secret_store"
                 and node.args
                 and isinstance(node.args[0], ast.Constant)
             ):
@@ -80,8 +80,8 @@ def _workspace_secrets(name: str) -> set[str]:
 
 
 @pytest.mark.parametrize("name", sorted(PROVIDERS))
-def test_a_provider_declares_exactly_the_workspace_secrets_it_keeps(name):
-    assert PROVIDERS[name].workspace_secret_keys == _workspace_secrets(name)
+def test_a_provider_declares_exactly_the_connection_secrets_it_keeps(name):
+    assert PROVIDERS[name].identity_secret_keys == _identity_secrets(name)
 
 
 @pytest.mark.parametrize("name", sorted(PROVIDERS))

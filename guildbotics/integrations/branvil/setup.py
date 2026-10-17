@@ -5,16 +5,22 @@ Connecting is a browser round trip that Branvil's consent screen ends: the
 screen starts it here, the browser opens Branvil's consent page, and Branvil
 sends the browser back to a page of this local API with a one-time code. The
 code is exchanged here, with the PKCE verifier only this process holds, for
-the admin token: an owner token Branvil labels with the client's name. It is
-kept as the workspace Secret ``BRANVIL_ADMIN_TOKEN``, reaches the other
-machines through the Hub's Secret transfer, and is used by the host alone: to
-list and create workspaces and agents, to issue the agents' tokens, to hand
-Branvil the members' GitHub credentials, and to open Branvil's GUI. Consents
-in flight are held in memory only.
+the admin token: an owner token Branvil labels with the client's name. The
+connection is the identities', not a workspace's: one Branvil holds the members
+of every workspace, and Branvil keeps one token of the label, which a second
+connection would replace. So the token is kept as the identities' Secret
+``BRANVIL_ADMIN_TOKEN``, with the base URL it was given for beside it
+(:data:`~guildbotics.integrations.branvil.api.CONNECTION_PATH`); it reaches the
+other machines through the Hub's Secret transfer, and is used by the host
+alone: to list and create workspaces and agents, to issue the agents' tokens, to
+hand Branvil the members' GitHub credentials, and to open Branvil's GUI.
+Consents in flight are held in memory only.
 
 Every machine reaches Branvil at the same base URL (on a machine other than
-the Hub, Branvil's tunnel forwards it), so the URL the project stores is the
-one its records name, and one admin token serves both kinds of service.
+the Hub, Branvil's tunnel forwards it), so the URL the connection records is the
+one the records name, and one admin token serves every workspace and both kinds
+of service. A member's agent and its token are likewise the identity's, so one
+token serves the member in every workspace.
 """
 
 from __future__ import annotations
@@ -29,7 +35,6 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from hashlib import sha256
-from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
@@ -37,12 +42,14 @@ from pydantic import AfterValidator, BaseModel, Field, PrivateAttr, field_valida
 
 from guildbotics.entities.team import Service, Team
 from guildbotics.integrations.branvil.api import (
+    CONNECTION_PATH,
     DEFAULT_BASE_URL,
     PROVIDER,
     Admin,
     Unauthorized,
     administer,
-    base_url,
+    branvil_url,
+    connection_url,
     health,
     segment,
 )
@@ -59,11 +66,15 @@ from guildbotics.integrations.provider import (
 )
 from guildbotics.integrations.repository_scope import valid_path
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
-from guildbotics.utils.fileio import get_workspace_config_dir
+from guildbotics.utils.fileio import (
+    get_identity_config_dir,
+    get_identity_root,
+    save_yaml_file,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
-from guildbotics.utils.secret_store import resolve_secret_store
-from guildbotics.utils.shared_write_lock import SharedWriteBusyError
+from guildbotics.utils.secret_store import identity_secret_store
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
 #: Where Branvil is reached: an origin, which its URLs start with.
 _BASE_URL = re.compile(r"https?://[^/\s?#@]+")
@@ -100,19 +111,10 @@ WorkspaceName = Annotated[str, Field(min_length=1), AfterValidator(_workspace)]
 
 
 class Workspace(SetupItems):
-    """The Branvil the members reach, and the workspace they work in: they
+    """The workspace of the identities' Branvil the members work in: they
     write only to its repositories and take tickets from its board."""
 
-    base_url: BaseUrl = DEFAULT_BASE_URL
     workspace: WorkspaceName
-
-
-def branvil_url(services: Mapping[str, Mapping[str, Any]]) -> str:
-    """Where the project's services reach Branvil; "" when none is it."""
-    return next(
-        (base_url(item) for item in services.values() if item.get("name") == PROVIDER),
-        "",
-    )
 
 
 @contextmanager
@@ -127,13 +129,13 @@ def _refusal() -> Iterator[None]:
 # -- the connection -----------------------------------------------------------
 
 
-class Branvil(BaseModel):
-    """The Branvil the form names, which may not be saved yet."""
+class Connected(BaseModel):
+    """A request of the Branvil the identities are connected to."""
 
+
+class ConnectStart(BaseModel):
+    #: The Branvil to connect to, as the form names it.
     base_url: BaseUrl = DEFAULT_BASE_URL
-
-
-class ConnectStart(Branvil):
     #: This local API as the user's browser reaches it; Branvil sends the
     #: browser back there.
     callback_base_url: str = Field(min_length=1)
@@ -145,7 +147,7 @@ class ConsentStarted(BaseModel):
     url: str
 
 
-class ConnectionQuery(Branvil):
+class ConnectionQuery(BaseModel):
     #: A consent in flight to follow.
     state: str = ""
 
@@ -154,6 +156,8 @@ class Connection(BaseModel):
     """GuildBotics' connection to Branvil, as the screen shows it."""
 
     status: Literal["connected", "pending", "disconnected"]
+    #: Where the connection reaches Branvil; empty before one is made.
+    base_url: str = ""
     #: The name of Branvil's owner, whose rights the connection has.
     owner: str = ""
     #: Why it is not connected.
@@ -165,8 +169,6 @@ class _Consent:
     base_url: str
     redirect_uri: str
     verifier: str
-    #: The workspace the admin token is for: the one selected at the start.
-    config_dir: Path
     created_at: float = field(default_factory=time.time)
     #: Empty while the owner decides; then ``_CONNECTED`` or why not.
     outcome: str = ""
@@ -197,7 +199,6 @@ class Consents:
             redirect_uri=request.callback_base_url.rstrip("/")
             + page_path(PROVIDER, "connected"),
             verifier=secrets.token_urlsafe(48),
-            config_dir=get_workspace_config_dir(),
         )
         self._held[state] = consent
         challenge = urlsafe_b64encode(sha256(consent.verifier.encode()).digest())
@@ -226,11 +227,16 @@ class Consents:
             del self._held[request.state]
             if consent.outcome != _CONNECTED:
                 return Connection(status="disconnected", message=consent.outcome)
+        url = connection_url()
+        if not url:
+            return Connection(status="disconnected")
         try:
-            async with Admin(request.base_url) as admin:
-                return Connection(status="connected", owner=await admin.owner())
+            async with Admin(url) as admin:
+                return Connection(
+                    status="connected", base_url=url, owner=await admin.owner()
+                )
         except ServiceError as exc:
-            return Connection(status="disconnected", message=str(exc))
+            return Connection(status="disconnected", base_url=url, message=str(exc))
 
     async def page(self, query: Mapping[str, str]) -> Page:
         """Where Branvil sends the browser back: exchange the code for the
@@ -249,14 +255,11 @@ class Consents:
 
     async def _exchange(self, consent: _Consent, query: Mapping[str, str]) -> str:
         """Exchange the code for the admin token, which Branvil issues in
-        place of the one it gave before, and keep it in the workspace the
-        consent started in, while that is still the one selected: one that
-        is not kept asks to connect again."""
+        place of the one it gave before, and keep it as the identities'
+        connection: one that is not kept asks to connect again."""
         code = query.get("code", "")
         if query.get("error") or not code:
             return t("integrations.branvil.setup.denied")
-        if consent.config_dir != get_workspace_config_dir():
-            return t("integrations.branvil.setup.workspace_changed")
         try:
             async with administer(consent.base_url, "") as client:
                 answer = await client.post(
@@ -270,17 +273,21 @@ class Consents:
         except ServiceError as exc:
             return str(exc)
         token = str(answer.json()["token"])
-        if consent.config_dir == get_workspace_config_dir():
-            try:
-                await asyncio.to_thread(
-                    lambda: resolve_secret_store(consent.config_dir).set(
-                        "BRANVIL_ADMIN_TOKEN", token
-                    )
-                )
-                return _CONNECTED
-            except (SecretStoreError, SharedWriteBusyError) as exc:
-                _LOGGER.warning("The Branvil admin token could not be kept: %s", exc)
+        try:
+            await asyncio.to_thread(_keep_connection, consent.base_url, token)
+            return _CONNECTED
+        except (SecretStoreError, SharedWriteBusyError, OSError) as exc:
+            _LOGGER.warning("The Branvil admin token could not be kept: %s", exc)
         return t("integrations.branvil.setup.not_kept")
+
+
+def _keep_connection(base_url: str, token: str) -> None:
+    """Keep the admin token and where it was given, which belong together."""
+    with shared_write_lock(get_identity_root()):
+        identity_secret_store().set("BRANVIL_ADMIN_TOKEN", token)
+        path = get_identity_config_dir() / CONNECTION_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_yaml_file(path, {"base_url": base_url})
 
 
 def _failed_page(reason: str) -> Page:
@@ -299,7 +306,7 @@ class Workspaces(BaseModel):
     workspaces: list[str]
 
 
-class NewWorkspace(Branvil):
+class NewWorkspace(BaseModel):
     name: WorkspaceName
 
 
@@ -314,9 +321,9 @@ class Entry(BaseModel):
     url: str
 
 
-async def _workspaces(request: Branvil, team: Callable[[], Team]) -> Workspaces:
+async def _workspaces(request: Connected, team: Callable[[], Team]) -> Workspaces:
     with _refusal():
-        async with Admin(request.base_url) as admin:
+        async with Admin(branvil_url()) as admin:
             found = await admin.items("/workspaces")
     return Workspaces(workspaces=[str(item["name"]) for item in found])
 
@@ -325,23 +332,23 @@ async def _create_workspace(
     request: NewWorkspace, team: Callable[[], Team]
 ) -> Workspaces:
     with _refusal():
-        async with Admin(request.base_url) as admin:
+        async with Admin(branvil_url()) as admin:
             await admin.call("POST", "/workspaces", {"name": request.name})
-    return await _workspaces(request, team)
+    return await _workspaces(Connected(), team)
 
 
-async def _agents(request: Branvil, team: Callable[[], Team]) -> Agents:
+async def _agents(request: Connected, team: Callable[[], Team]) -> Agents:
     with _refusal():
-        async with Admin(request.base_url) as admin:
+        async with Admin(branvil_url()) as admin:
             found = await admin.items("/members")
     return Agents(
         agents=[str(item["name"]) for item in found if item.get("kind") == "agent"]
     )
 
 
-async def _entry(request: Branvil, team: Callable[[], Team]) -> Entry:
+async def _entry(request: Connected, team: Callable[[], Team]) -> Entry:
     with _refusal():
-        async with Admin(request.base_url) as admin:
+        async with Admin(branvil_url()) as admin:
             link = await admin.call("POST", "/session/links")
     return Entry(url=str(link["url"]))
 
@@ -395,8 +402,10 @@ class BranvilAccount(MemberAccount):
 
         A new token is issued beside the one the member holds, which keeps
         working until :meth:`settled`: a save that is refused afterwards
-        loses no credential."""
-        url = branvil_url(member.services)
+        loses no credential. Before the identities are connected to a
+        Branvil, there is none to make ready: the account is stored as
+        given."""
+        url = connection_url()
         if not url:
             return
         with _refusal():
@@ -463,7 +472,7 @@ class BranvilAccount(MemberAccount):
     @classmethod
     async def avatar_changed(cls, member: SavedMember) -> None:
         """Give the Branvil member the member's new picture."""
-        url = branvil_url(member.services)
+        url = connection_url()
         name = member.account_info.get("branvil_username", "")
         if not url or not name:
             return
@@ -474,8 +483,9 @@ class BranvilAccount(MemberAccount):
     @classmethod
     async def removed(cls, member: SavedMember) -> None:
         """Revoke the tokens GuildBotics issued the agent; the agent stays,
-        as the history names it."""
-        url = branvil_url(member.services)
+        as the history names it. The member's identity is being deleted, so
+        no workspace still uses them."""
+        url = connection_url()
         name = member.account_info.get("branvil_username", "")
         if member.human or not url or not name:
             return
@@ -560,16 +570,14 @@ SETUP = ProviderSetup(
         Service.TICKET_SERVICE: Workspace,
     },
     member=BranvilAccount,
-    # One Branvil per project: the admin token is one workspace Secret.
-    shared=frozenset({"base_url"}),
     credentials_from=_UPSTREAMS,
     operations={
         "connect": Operation(ConnectStart, ConsentStarted, consents.start),
         "connection": Operation(ConnectionQuery, Connection, consents.connection),
-        "workspaces": Operation(Branvil, Workspaces, _workspaces),
+        "workspaces": Operation(Connected, Workspaces, _workspaces),
         "workspaces/create": Operation(NewWorkspace, Workspaces, _create_workspace),
-        "agents": Operation(Branvil, Agents, _agents),
-        "entry": Operation(Branvil, Entry, _entry),
+        "agents": Operation(Connected, Agents, _agents),
+        "entry": Operation(Connected, Entry, _entry),
     },
     pages={"connected": consents.page},
 )

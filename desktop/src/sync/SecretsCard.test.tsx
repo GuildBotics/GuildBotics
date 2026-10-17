@@ -9,6 +9,7 @@ import {
   fetchWorkspaceSecrets,
   getWorkspaceSecrets,
   sendWorkspaceSecrets,
+  type SecretScope,
   type WorkspaceSecrets,
   type WorkspaceSecretState,
 } from "../api/client";
@@ -60,13 +61,13 @@ function secrets(overrides: Partial<WorkspaceSecrets> = {}): WorkspaceSecrets {
   };
 }
 
-function renderCard() {
+function renderCard(scope: SecretScope = "workspace") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <TestMantineProvider>
         <MemoryRouter>
-          <SecretsCard />
+          <SecretsCard scope={scope} />
         </MemoryRouter>
       </TestMantineProvider>
     </QueryClientProvider>,
@@ -79,6 +80,28 @@ beforeEach(() => {
 });
 
 describe("SecretsCard", () => {
+  it("moves the identities' credentials through their own transfers", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({
+        keys: [state({ key: "ALICE_BRANVIL_TOKEN", status: "pending_send", can_send: true })],
+        sendable_keys: ["ALICE_BRANVIL_TOKEN"],
+        pending_count: 1,
+        attention_count: 1,
+      }),
+    );
+    vi.mocked(sendWorkspaceSecrets).mockResolvedValue({ results: [], secrets: secrets() });
+
+    renderCard("identities");
+
+    expect(await screen.findByText(t("sync.secrets.title.identities"))).toBeInTheDocument();
+    expect(getWorkspaceSecrets).toHaveBeenCalledWith("identities");
+    await user.click(screen.getByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }));
+    await waitFor(() =>
+      expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: [] }, "identities"),
+    );
+  });
+
   it("stays out of the way when the workspace has no hub", async () => {
     vi.mocked(getWorkspaceSecrets).mockResolvedValue(secrets({ enabled: false }));
 
@@ -86,7 +109,7 @@ describe("SecretsCard", () => {
 
     await waitFor(() => expect(getWorkspaceSecrets).toHaveBeenCalled());
     await waitFor(() => expect(client.isFetching()).toBe(0));
-    expect(screen.queryByText(t("sync.secrets.title"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("sync.secrets.title.workspace"))).not.toBeInTheDocument();
   });
 
   it("names each key's state without showing anything else about it", async () => {
@@ -147,7 +170,7 @@ describe("SecretsCard", () => {
 
     // Naming the keys would act on a list as old as the last poll: a key
     // changed on another machine since then would be swept up.
-    expect(fetchWorkspaceSecrets).toHaveBeenCalledWith({ keys: [] });
+    expect(fetchWorkspaceSecrets).toHaveBeenCalledWith({ keys: [] }, "workspace");
   });
 
   it("offers nothing to fetch when this machine holds everything", async () => {
@@ -186,7 +209,7 @@ describe("SecretsCard", () => {
       await screen.findByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }),
     );
 
-    expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: [] });
+    expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: [] }, "workspace");
   });
 
   it("names the key when the action is a row rather than a bulk one", async () => {
@@ -204,7 +227,7 @@ describe("SecretsCard", () => {
 
     await user.click(await screen.findByRole("button", { name: t("sync.secrets.send") }));
 
-    expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: ["A_TOKEN"] });
+    expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: ["A_TOKEN"] }, "workspace");
   });
 
   it("marks every other screen's snapshot stale once a transfer moved a value", async () => {
@@ -229,8 +252,8 @@ describe("SecretsCard", () => {
     await waitFor(() => expect(client.getQueryState(["project-config"])?.isInvalidated).toBe(true));
     // The secret states themselves were just delivered by the transfer's own
     // response, so they are the one thing not marked stale.
-    expect(client.getQueryState(["workspace-secrets"])?.isInvalidated).toBe(false);
-    expect(client.getQueryData(["workspace-secrets"])).toEqual(refreshed);
+    expect(client.getQueryState(["workspace-secrets", "workspace"])?.isInvalidated).toBe(false);
+    expect(client.getQueryData(["workspace-secrets", "workspace"])).toEqual(refreshed);
   });
 
   it("says why a transfer failed and asks for the states again", async () => {

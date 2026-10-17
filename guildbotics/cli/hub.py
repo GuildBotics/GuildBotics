@@ -66,6 +66,24 @@ def list_hub_workspaces(output_format: str) -> None:
     _print({"workspaces": host.list_workspace_ids()}, output_format)
 
 
+@hub.group(name="identity")
+def hub_identity() -> None:
+    """Manage the repository of the members' identities, which every workspace
+    shares."""
+
+
+@hub_identity.command(name="claim")
+@click.argument("identity_id")
+@_format_option
+def claim_hub_identity(identity_id: str, output_format: str) -> None:
+    """Show the identities' repository, registering IDENTITY_ID if there is none."""
+    try:
+        claimed = host.claim_identity(identity_id)
+    except (ValueError, host.HubError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print({"identity_id": claimed}, output_format)
+
+
 @hub.group(name="owner")
 def hub_owner() -> None:
     """Inspect or explicitly change a workspace's service owner."""

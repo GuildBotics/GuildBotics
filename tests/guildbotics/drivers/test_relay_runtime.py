@@ -9,6 +9,7 @@ from uuid import uuid4
 from guildbotics.drivers.relay_runtime import OWNER_CACHE_SECONDS, RelayRuntime
 from guildbotics.drivers.service_owner import create_relay_runtime
 from guildbotics.hub.connection import HubEndpoint, HubLocation, hub_remote_url
+from tests.guildbotics.integrations.branvil_double import connect_admin
 
 
 class _Client:
@@ -106,10 +107,9 @@ def test_another_machine_forwards_the_hub_ports_its_saved_services_reach(
 ) -> None:
     workspace_id = "0198ab00-0000-7000-8000-000000000001"
     root = _project(
-        tmp_path,
-        "  code_hosting_service:\n    name: branvil\n"
-        "    base_url: http://127.0.0.1:17900\n    workspace: a\n",
+        tmp_path, "  code_hosting_service:\n    name: branvil\n    workspace: a\n"
     )
+    connect_admin(base_url="http://127.0.0.1:17900")
     remote = hub_remote_url(HubLocation(HubEndpoint("hub")), workspace_id)
 
     runtime = create_relay_runtime(

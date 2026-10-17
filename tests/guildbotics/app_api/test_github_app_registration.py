@@ -27,7 +27,8 @@ from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 from tests.guildbotics.app_api.provider_doubles import (
     AUTH_HEADERS,
     answer,
@@ -294,19 +295,18 @@ def _add(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
 def _update(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
     return client.put(
         "/config/members/alice",
-        json={**_member(tmp_path, **account), "original_person_id": "alice"},
+        json=_member(tmp_path, **account),
         headers=AUTH_HEADERS,
     )
 
 
 def _person_file(tmp_path: Path) -> Path:
-    return tmp_path / ".guildbotics/config/team/members/alice/person.yml"
+    """Where the member's accounts are: its identity."""
+    return identity_members_dir() / "alice" / IDENTITY_FILE
 
 
 def _stored_key(tmp_path: Path) -> str | None:
-    return KeyringSecretStore(tmp_path / ".guildbotics/config").get(
-        "ALICE_GITHUB_PRIVATE_KEY"
-    )
+    return identity_secret_store().get("ALICE_GITHUB_PRIVATE_KEY")
 
 
 Save = Callable[..., httpx.Response]
@@ -432,30 +432,3 @@ def test_member_save_retries_a_registration_after_the_keychain_failed(
     retried = _add(client, tmp_path, app_registration_id=registration)
     assert retried.status_code == HTTP_OK
     assert _stored_key(tmp_path) == _pem()
-
-
-def test_a_registration_survives_renaming_the_member_in_the_same_save(
-    client: TestClient, tmp_path: Path
-) -> None:
-    # The screen starts a registration for the member as saved; renaming the
-    # member in the save that stores it is still that member.
-    assert _add(client, tmp_path, account_type="").status_code == HTTP_OK
-    registration = _installed(client)
-
-    response = client.put(
-        "/config/members/alice",
-        json={
-            **_member(tmp_path, app_registration_id=registration),
-            "person_id": "alice-bot",
-            "original_person_id": "alice",
-        },
-        headers=AUTH_HEADERS,
-    )
-
-    assert response.status_code == HTTP_OK
-    assert (
-        KeyringSecretStore(tmp_path / ".guildbotics/config").get(
-            "ALICE_BOT_GITHUB_PRIVATE_KEY"
-        )
-        == _pem()
-    )

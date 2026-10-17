@@ -37,6 +37,7 @@ function syncStatus(workspaceId: string | null): WorkspaceSyncStatus {
     hub_url: null,
     state: "disabled",
     local_head: null,
+    identity_head: null,
     remote_head: null,
     ahead_count: 0,
     behind_count: 0,

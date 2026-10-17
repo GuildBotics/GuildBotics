@@ -1,10 +1,11 @@
-import { Button, Group, Stack, Text } from "@mantine/core";
+import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { openExternal } from "../../../openExternal";
 import {
+  BRANVIL_BASE_URL,
   ORIGIN,
   branvilKey,
   enterBranvil,
@@ -15,24 +16,23 @@ import {
 
 const POLL_INTERVAL_MS = 2000;
 
-/** GuildBotics' connection to the Branvil at ``baseUrl``; with ``state``, the
- * consent it names while the owner decides, which is polled until then. */
-export function useConnection(baseUrl: string, state = "") {
+/** GuildBotics' connection to Branvil; with ``state``, the consent it names
+ * while the owner decides, which is polled until then. */
+export function useConnection(state = "") {
   const queryClient = useQueryClient();
   return useQuery({
-    queryKey: [...branvilKey("connection", baseUrl), state],
+    queryKey: [...branvilKey("connection"), state],
     queryFn: async () => {
-      const connection = await getConnection(baseUrl, state);
+      const connection = await getConnection(state);
       if (state && connection.status !== "pending") {
         // What the connection lists may now be read: read all of it again.
         void queryClient.invalidateQueries({
           queryKey: ["branvil"],
-          predicate: (query) => query.queryKey[3] !== state,
+          predicate: (query) => query.queryKey[2] !== state,
         });
       }
       return connection;
     },
-    enabled: ORIGIN.test(baseUrl),
     refetchInterval: (query) => (query.state.data?.status === "pending" ? POLL_INTERVAL_MS : false),
   });
 }
@@ -40,9 +40,8 @@ export function useConnection(baseUrl: string, state = "") {
 /** The connection, as the cache holds it, for what is done after a save. */
 export function heldConnection(
   queryClient: ReturnType<typeof useQueryClient>,
-  baseUrl: string,
 ): Connection | undefined {
-  return queryClient.getQueryData([...branvilKey("connection", baseUrl), ""]);
+  return queryClient.getQueryData([...branvilKey("connection"), ""]);
 }
 
 function message(error: unknown): string {
@@ -50,12 +49,15 @@ function message(error: unknown): string {
 }
 
 /** Whether GuildBotics is connected to Branvil, connecting it on the owner's
- * consent in the browser, and the way into Branvil's GUI. */
-export function BranvilConnection({ baseUrl }: { baseUrl: string }) {
+ * consent in the browser, and the way into Branvil's GUI. The connection is
+ * the identities': one Branvil for every workspace. */
+export function BranvilConnection() {
   const { t } = useTranslation();
   const [consent, setConsent] = useState("");
   const [error, setError] = useState("");
-  const connection = useConnection(baseUrl, consent).data;
+  const connection = useConnection(consent).data;
+  const [entered, setBaseUrl] = useState<string | null>(null);
+  const baseUrl = (entered ?? (connection?.base_url || BRANVIL_BASE_URL)).trim();
   const pending = Boolean(consent) && (connection?.status ?? "pending") === "pending";
 
   const run = (action: () => Promise<void>) => async () => {
@@ -71,11 +73,19 @@ export function BranvilConnection({ baseUrl }: { baseUrl: string }) {
     setConsent(started.state);
     await openExternal(started.url);
   });
-  const open = run(async () => openExternal((await enterBranvil(baseUrl)).url));
+  const open = run(async () => openExternal((await enterBranvil()).url));
   const connected = connection?.status === "connected";
 
   return (
     <Stack gap={4}>
+      <TextInput
+        label={t("setup.branvil.baseUrl")}
+        aria-label={t("setup.branvil.baseUrl")}
+        description={t("setup.branvil.baseUrlHint")}
+        value={baseUrl}
+        onChange={(event) => setBaseUrl(event.currentTarget.value)}
+        error={baseUrl && !ORIGIN.test(baseUrl) ? t("setup.branvil.baseUrlInvalid") : undefined}
+      />
       <Group gap="xs">
         {connected ? (
           <>

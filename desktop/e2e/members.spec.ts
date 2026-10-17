@@ -37,8 +37,7 @@ test("adds a second member through the UI and persists it to the backend", async
   // The seeded member is already listed. Scope rows to the list: both the
   // default-executor select and the add-form preview repeat member labels.
   const memberList = page.getByRole("list", { name: "Members" });
-  const memberRow = (label: string) =>
-    memberList.getByRole("listitem").filter({ hasText: label });
+  const memberRow = (label: string) => memberList.getByRole("listitem").filter({ hasText: label });
 
   await expect(memberRow("Local Agent (local-agent)")).toBeVisible({ timeout: 30_000 });
 
@@ -51,7 +50,7 @@ test("adds a second member through the UI and persists it to the backend", async
   await page.getByRole("option", { name: "product" }).click();
 
   // Adding a member is one real `POST /config/members`, and the backend writes
-  // person.yml before it answers. While the request is in flight the form is
+  // the member's files before it answers. While the request is in flight the form is
   // still open, and its identity preview shows the same "name (id)" line as a
   // list row, so a row match alone cannot tell the saved member from the
   // draft: wait for the wire to answer and the form to close before reading
@@ -76,9 +75,21 @@ test("adds a second member through the UI and persists it to the backend", async
   await expect(memberRow("Second Agent (local-agent-2)")).toBeVisible({ timeout: 30_000 });
   await expect(memberRow("Local Agent (local-agent)")).toBeVisible();
 
-  // The REAL backend wrote the new member's person.yml under the temp workspace.
-  const personFile = join(ctx.configDir, "team", "members", "local-agent-2", "person.yml");
-  expect(existsSync(personFile)).toBe(true);
-  const personYaml = readFileSync(personFile, "utf-8");
-  expect(personYaml).toContain("Second Agent");
+  // The REAL backend wrote the new member's identity under the temp home, and
+  // the workspace's file of it under the temp workspace.
+  const identityFile = join(
+    ctx.homeDir,
+    ".guildbotics",
+    "identity",
+    ".guildbotics",
+    "config",
+    "team",
+    "members",
+    "local-agent-2",
+    "identity.yml",
+  );
+  expect(readFileSync(identityFile, "utf-8")).toContain("Second Agent");
+  expect(existsSync(join(ctx.configDir, "team", "members", "local-agent-2", "member.yml"))).toBe(
+    true,
+  );
 });

@@ -16,14 +16,18 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.models import RejectedChangeModel
 from guildbotics.drivers.live_state import LiveState
+from guildbotics.hub import HubLocation, host
+from guildbotics.hub.connection import hub_remote_url
 from guildbotics.hub.host import hub_root
 from guildbotics.sync import (
     activation,
     current_sync_manager,
 )
+from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.utils.sync_lock import sync_lock_path
 from guildbotics.workspace.identity import (
@@ -269,6 +273,66 @@ def test_enabling_registers_the_workspace_and_starts_the_queue(
     assert payload["ahead_count"] == 0
     assert payload["workspace_id"]
     assert current_sync_manager() is not None
+
+
+def test_enabling_connects_the_identities_to_the_same_hub(
+    client: TestClient, workspace: Path, tmp_path: Path
+) -> None:
+    """The members' identities are one repository on the hub for every
+    workspace: the first workspace gives it, a second one joins it, and
+    neither appears among the hub's workspaces."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
+    identities = LocalSyncRepository(get_identity_root())
+    assert identities.remote_url() == hub_remote_url(HubLocation(), identity_id)
+    assert read_workspace_identity(get_identity_root()).workspace_id == identity_id  # type: ignore[union-attr]
+
+    other = tmp_path / "other"
+    (other / ".guildbotics/config").mkdir(parents=True)
+    (other / ".guildbotics/config/team").mkdir()
+    (other / ".guildbotics/config/team/project.yml").write_text("name: other\n")
+    selected = client.post(
+        "/workspace", headers=AUTH_HEADERS, json={"workspace_dir": str(other)}
+    )
+    assert selected.status_code == HTTP_OK, selected.text
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+
+    assert host.read_hub().identity_id == identity_id  # type: ignore[union-attr]
+    assert identity_id not in host.list_workspace_ids()
+    assert len(host.list_workspace_ids()) == 2
+
+
+def test_a_connected_workspace_brings_its_identities_to_its_hub(
+    client: TestClient, workspace: Path
+) -> None:
+    """A workspace connected before its identities were -- or on a machine
+    whose identities lost their hub -- connects them the next time its queue
+    starts, rather than only when synchronization is enabled again."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    identities = LocalSyncRepository(get_identity_root())
+    identities.clear_remote()
+
+    _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+
+    identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
+    assert identities.remote_url() == hub_remote_url(HubLocation(), identity_id)
+
+
+def test_shutting_down_stops_the_identities_queue_too(
+    client: TestClient, workspace: Path
+) -> None:
+    """A workspace switch leaves it running; the end of the process does not,
+    or a cycle is cut off in the middle of a commit."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    assert activation._identity_manager is not None
+
+    workspace_sync.WorkspaceSyncService().shutdown()
+
+    assert activation._identity_manager is None
+    assert current_sync_manager() is None
 
 
 def test_enabling_without_a_hub_reports_why(
@@ -713,6 +777,10 @@ def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
         workspace_sync,
         "enroll",
         lambda *args, **kwargs: running.append(current_sync_manager() is not None),
+    )
+    # The identities have no queue of their own to stop.
+    monkeypatch.setattr(
+        workspace_sync.WorkspaceSyncService, "_enroll_identity", lambda *_: None
     )
 
     response = client.post(

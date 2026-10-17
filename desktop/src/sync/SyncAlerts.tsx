@@ -5,8 +5,13 @@ import { NavLink } from "react-router";
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { getWorkspaceSecrets, getWorkspaceSyncStatus, retryWorkspaceSync } from "../api/client";
-import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert } from "./secretState";
+import {
+  getWorkspaceSecrets,
+  getWorkspaceSyncStatus,
+  retryWorkspaceSync,
+  type SecretScope,
+} from "../api/client";
+import { SECRETS_REFETCH_MS, secretAlert, secretsQueryKey } from "./secretState";
 import { SyncFailureDetail } from "./SyncFailureDetail";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "./syncState";
@@ -42,6 +47,8 @@ export function SyncAlerts() {
     const workspace = status.data.workspace_id;
     const revision = JSON.stringify([
       status.data.local_head,
+      // Another machine's edit of a member's name or accounts arrives here.
+      status.data.identity_head,
       status.data.rejected_changes.map((change) => change.rejection_id).sort(),
     ]);
     const last = previous.current;
@@ -56,8 +63,13 @@ export function SyncAlerts() {
     onSuccess: (next) => queryClient.setQueryData(["workspace-sync"], next),
   });
   const secrets = useQuery({
-    queryKey: SECRETS_QUERY_KEY,
-    queryFn: getWorkspaceSecrets,
+    queryKey: secretsQueryKey("workspace"),
+    queryFn: () => getWorkspaceSecrets("workspace"),
+    refetchInterval: SECRETS_REFETCH_MS,
+  });
+  const identitySecrets = useQuery({
+    queryKey: secretsQueryKey("identities"),
+    queryFn: () => getWorkspaceSecrets("identities"),
     refetchInterval: SECRETS_REFETCH_MS,
   });
   const state = syncIndicatorState(status.data);
@@ -98,8 +110,11 @@ export function SyncAlerts() {
         </Alert>
       ) : null}
       {rejected > 0 ? <RejectedAlert count={rejected} /> : null}
+      {secretAlert(identitySecrets.data) === "attention" ? (
+        <SecretsAlert scope="identities" count={identitySecrets.data?.attention_count ?? 0} />
+      ) : null}
       {secretAlert(secrets.data) === "attention" ? (
-        <SecretsAlert count={secrets.data?.attention_count ?? 0} />
+        <SecretsAlert scope="workspace" count={secrets.data?.attention_count ?? 0} />
       ) : null}
       {liveClientUpdateRequired ? (
         <Alert
@@ -121,10 +136,14 @@ export function SyncAlerts() {
  * each, are on the settings screen -- and so is every transfer, because a value
  * leaving or arriving on a machine is a decision rather than a notification.
  */
-function SecretsAlert({ count }: { count: number }) {
+function SecretsAlert({ scope, count }: { scope: SecretScope; count: number }) {
   const { t } = useTranslation();
   return (
-    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("sync.secrets.title")}>
+    <Alert
+      color="warning"
+      icon={<TriangleAlert size={18} />}
+      title={t(`sync.secrets.title.${scope}`)}
+    >
       <Group align="center" gap="md" wrap="wrap">
         <Text size="sm">{t("sync.secrets.alert.attention", { count })}</Text>
         <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">

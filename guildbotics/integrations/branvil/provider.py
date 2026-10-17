@@ -12,12 +12,12 @@ from guildbotics.integrations.branvil.api import (
     PROVIDER,
     Admin,
     BranvilApi,
-    base_url,
+    branvil_url,
     health,
     username,
 )
 from guildbotics.integrations.branvil.code_hosting import BranvilCodeHostingService
-from guildbotics.integrations.branvil.setup import SETUP, branvil_url
+from guildbotics.integrations.branvil.setup import SETUP
 from guildbotics.integrations.branvil.tickets import BranvilTicketService
 from guildbotics.integrations.provider import (
     Provider,
@@ -67,8 +67,8 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
     kinds = [kind for kind in _KINDS if project.get_service_name(kind) == PROVIDER]
     if not kinds:
         return []
-    # Both kinds reach one Branvil (setup holds them to one base URL).
-    url = base_url(project.get_service_config(kinds[0]))
+    # Every kind reaches the one Branvil the identities are connected to.
+    url = branvil_url()
     checks = [await _reachable(url)]
     if checks[0].status == "error":
         # A token cannot be checked against a Branvil that does not answer.
@@ -206,7 +206,9 @@ def _hub_port(services: Mapping[str, Mapping[str, Any]]) -> int | None:
     """The port of the Branvil the project reaches at a loopback base URL:
     Branvil runs once, on the hub machine, and every machine uses that same
     base URL."""
-    url = urlsplit(branvil_url(services))
+    if not any(item.get("name") == PROVIDER for item in services.values()):
+        return None
+    url = urlsplit(branvil_url())
     return url.port if url.hostname in ("127.0.0.1", "localhost") else None
 
 
@@ -215,7 +217,7 @@ BRANVIL = Provider(
     # The token's ID names the token a save replaces, for it to be revoked.
     secret_keys=frozenset({"BRANVIL_TOKEN", "BRANVIL_TOKEN_ID"}),
     account_info_keys=frozenset({"branvil_username"}),
-    workspace_secret_keys=frozenset({"BRANVIL_ADMIN_TOKEN"}),
+    identity_secret_keys=frozenset({"BRANVIL_ADMIN_TOKEN"}),
     code_hosting_service=lambda logger, person, team: BranvilCodeHostingService(
         person, team
     ),

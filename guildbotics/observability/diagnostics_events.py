@@ -16,9 +16,12 @@ from guildbotics.observability.activity_event_store import (
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.correlation import correlation_fields
-from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
+from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.secret_store import KeyringSecretStore
-from guildbotics.utils.shared_redaction import workspace_secret_values
+from guildbotics.utils.shared_redaction import (
+    secret_config_dirs,
+    stored_secret_values,
+)
 
 _STORE: DiagnosticsStore | None = None
 _STORE_LOCK = threading.Lock()
@@ -26,10 +29,11 @@ _STORE_LOCK = threading.Lock()
 
 def load_required_io_redaction_values() -> tuple[str, ...]:
     """Load the secrets used to redact one group of required IO records."""
-    store = KeyringSecretStore(get_workspace_config_dir())
-    secrets = set(workspace_secret_values())
-    keys = store.keys()
-    secrets.update(value for key in keys if (value := store.get(key)))
+    secrets = set(stored_secret_values())
+    for config_dir in secret_config_dirs():
+        store = KeyringSecretStore(config_dir)
+        keys = store.keys()
+        secrets.update(value for key in keys if (value := store.get(key)))
     return tuple(sorted(secrets, key=len, reverse=True))
 
 

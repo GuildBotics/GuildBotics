@@ -17,9 +17,14 @@ have no cross-device value at all, not because of what they might contain.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.fileio import get_workspace_config_dir
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_identity_config_dir,
+    get_workspace_config_dir,
+)
 
 #: Every shared string is truncated here. Full console and prompt bodies stay
 #: in device-local diagnostics.
@@ -39,20 +44,23 @@ def redact_for_sharing(value: Any) -> Any:
     Returns:
         Any: The same shape, safe to write into shared state.
     """
-    return _redact(value, workspace_secret_values())
+    return _redact(value, stored_secret_values())
 
 
-def workspace_secret_values() -> tuple[str, ...]:
+def stored_secret_values() -> tuple[str, ...]:
     """Secret values currently visible to this process, longest first.
 
-    Read from ``os.environ`` for the keys named in the workspace secrets index
-    -- the realistic way a secret ends up inside an error message -- so
-    recording never has to open the OS keychain.
+    Read from ``os.environ`` for the keys named in the secrets indexes -- the
+    identities', which hold every member's credentials, and the selected
+    workspace's -- the realistic way a secret ends up inside an error message,
+    so recording never has to open the OS keychain.
     """
     try:
         from guildbotics.utils.secret_store import KeyringSecretStore
 
-        keys = KeyringSecretStore(get_workspace_config_dir()).keys()
+        keys: set[str] = set()
+        for config_dir in secret_config_dirs():
+            keys.update(KeyringSecretStore(config_dir).keys())
     except Exception:
         return ()
     values = {
@@ -61,6 +69,15 @@ def workspace_secret_values() -> tuple[str, ...]:
         if (value := os.environ.get(key, "")) and len(value) >= _MIN_MASKED_LENGTH
     }
     return tuple(sorted(values, key=len, reverse=True))
+
+
+def secret_config_dirs() -> tuple[Path, ...]:
+    """The config directories whose secrets index names a secret this process
+    may hold: the identities', and the selected workspace's when one is."""
+    try:
+        return (get_identity_config_dir(), get_workspace_config_dir())
+    except WorkspaceNotConfiguredError:
+        return (get_identity_config_dir(),)
 
 
 def _redact(value: Any, secret_values: tuple[str, ...]) -> Any:

@@ -22,7 +22,7 @@ from guildbotics.integrations.provider import (
     configured_check,
 )
 from guildbotics.runtime.context import Context
-from guildbotics.utils.env_loader import workspace_secret_store
+from guildbotics.utils.secret_store import identity_secret_store
 
 _SECTION = "github"
 #: What each kind of GitHub account authenticates with.
@@ -45,7 +45,7 @@ def _verify(person: Person) -> list[ProviderCheck]:
         else:
             target = person.to_person_env_key(key)
             configured = (key != "github_private_key" and person.has_secret(key)) or (
-                bool(workspace_secret_store().get(target))
+                bool(identity_secret_store().get(target))
             )
         checks.append(
             configured_check(

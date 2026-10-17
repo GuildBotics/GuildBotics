@@ -148,7 +148,7 @@ def test_temp_workspace_init_project_member_team_flow(
             },
         )
         assert member.status_code == HTTP_OK
-        assert (config_dir / "team/members/local-agent/person.yml").exists()
+        assert (config_dir / "team/members/local-agent/member.yml").exists()
 
         team = client.get("/team", headers=AUTH_HEADERS)
 

@@ -6,7 +6,7 @@ export const branvil = {
       branvil: {
         baseUrl: "Base URL",
         baseUrlHint:
-          "Where Branvil is reached, the same on every machine (leave empty for http://127.0.0.1:7878). On a machine other than the Hub, Branvil's tunnel forwards it.",
+          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, GuildBotics forwards it. The connection is the same in every workspace.",
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         workspace: "Workspace",
         workspaceHint:
@@ -89,7 +89,7 @@ export const branvil = {
       branvil: {
         baseUrl: "ベース URL",
         baseUrlHint:
-          "Branvil に届く URL です。すべてのマシンで同じにします（空欄なら http://127.0.0.1:7878）。Hub 以外のマシンでは Branvil のトンネルが転送します。",
+          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは GuildBotics が転送します。接続はすべてのワークスペースで共通です。",
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         workspace: "ワークスペース",
         workspaceHint:

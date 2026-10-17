@@ -26,8 +26,8 @@ vi.mock("../../../openExternal", () => ({ openExternal: vi.fn(async () => {}) })
 
 const t = i18n.getFixedT("en");
 const SERVICES: ProjectServices = {
-  code_hosting_service: { name: "branvil", base_url: BRANVIL_BASE_URL, workspace: "acme" },
-  ticket_service: { name: "branvil", base_url: BRANVIL_BASE_URL, workspace: "acme" },
+  code_hosting_service: { name: "branvil", workspace: "acme" },
+  ticket_service: { name: "branvil", workspace: "acme" },
 };
 
 /** A Branvil the operations answer for: connected unless told otherwise, its
@@ -37,6 +37,7 @@ function branvil({ connected = true } = {}) {
   const workspaces = ["acme", "other"];
   const connection = (owner: string): Connection => ({
     status: owner ? "connected" : "disconnected",
+    base_url: owner ? BRANVIL_BASE_URL : "",
     owner,
     message: owner ? "" : "Not connected.",
   });
@@ -46,7 +47,7 @@ function branvil({ connected = true } = {}) {
       case "connection":
         if (request.state) {
           polls += 1;
-          if (polls < 2) return { status: "pending", owner: "", message: "" };
+          if (polls < 2) return { status: "pending", base_url: "", owner: "", message: "" };
           connected = true;
         }
         return connection(connected ? "otota" : "");
@@ -179,7 +180,6 @@ describe("Branvil connection", () => {
       ),
     ).toBeVisible();
     expect(providerOperation).toHaveBeenCalledWith("branvil", "connection", {
-      base_url: BRANVIL_BASE_URL,
       state: "consent-1",
     });
 
@@ -226,7 +226,7 @@ describe("Branvil service fields", () => {
     branvil();
     renderWithProviders(<Services />);
 
-    // The tickets follow the code host's Branvil.
+    // One connection, the identities', shown with the first kind.
     expect(screen.getAllByLabelText(t("setup.branvil.baseUrl"))).toHaveLength(1);
     expect(
       await screen.findAllByText(t("setup.branvil.connection.connected", { owner: "otota" })),
@@ -238,17 +238,15 @@ describe("Branvil service fields", () => {
 
     await waitFor(() => expect(sent().ticket_service.workspace).toBe("beta"));
     expect(providerOperation).toHaveBeenCalledWith("branvil", "workspaces/create", {
-      base_url: BRANVIL_BASE_URL,
       name: "beta",
     });
     expect(sent().code_hosting_service.workspace).toBe("acme");
   });
 
-  it("refuse what names no Branvil or workspace", () => {
-    const value = { name: "branvil", base_url: "http://hub/x", workspace: "" };
+  it("refuse what names no workspace", () => {
+    const value = { name: "branvil", workspace: "" };
 
     expect(branvilTickets.errors(value, t)).toEqual({
-      base_url: t("setup.branvil.baseUrlInvalid"),
       workspace: t("setup.branvil.workspaceRequired"),
     });
   });

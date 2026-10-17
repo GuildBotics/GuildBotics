@@ -32,6 +32,12 @@ having to know whether a caller already declared a wider one. A config save
 holds the lock across the several files it compares and writes, and the writers
 it calls are the same ones a test, a CLI, or a future caller reaches directly.
 An outer span simply subsumes the inner ones.
+
+The members' identities are shared files of their own, under a root every
+workspace shares (:func:`~guildbotics.utils.fileio.get_identity_root`), with a
+lock of their own. A span that changes both takes the identity root's first
+and the workspace's inside it, and only in that order: taking them the other
+way round in one place is a deadlock against every place that does not.
 """
 
 from __future__ import annotations
@@ -41,8 +47,17 @@ from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 
-from guildbotics.utils.advisory_lock import workspace_reentrant_lock
-from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.advisory_lock import (
+    held_reentrant_keys,
+    workspace_reentrant_lock,
+)
+from guildbotics.utils.fileio import (
+    get_identity_root,
+    get_workspace_local_path,
+    get_workspace_root,
+)
+
+_KEY_PREFIX = "shared-write"
 
 #: How long each side waits for the other. Generous on purpose: a first copy
 #: from a hub restores thousands of files inside this lock, and a save refused
@@ -91,16 +106,37 @@ def shared_write_lock(
         SharedWriteBusyError: When the other side holds it past ``timeout``.
     """
     wait = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+    if workspace_root is not None:
+        _refuse_out_of_order(workspace_root)
     with workspace_reentrant_lock(
         workspace_root,
         path_parts=("run", "shared-write.lock"),
-        key_prefix="shared-write",
+        key_prefix=_KEY_PREFIX,
         timeout=wait,
         timeout_error=lambda locked_path, locked_timeout: SharedWriteBusyError(
             f"Another writer held {locked_path} for longer than {locked_timeout:g}s."
         ),
     ):
         yield
+
+
+def _refuse_out_of_order(workspace_root: Path) -> None:
+    """Refuse the identity root's lock inside another shared-write lock.
+
+    Raises:
+        RuntimeError: When this thread holds a workspace's lock and not yet the
+            identity root's. It is a mistake in the caller, never a race.
+    """
+    identity = (_KEY_PREFIX, get_workspace_root(get_identity_root()))
+    if (_KEY_PREFIX, get_workspace_root(workspace_root)) != identity:
+        return
+    held = held_reentrant_keys()
+    if identity not in held and any(
+        isinstance(key, tuple) and key[0] == _KEY_PREFIX for key in held
+    ):
+        raise RuntimeError(
+            "The identity root's shared-write lock is taken before a workspace's."
+        )
 
 
 def shared_write_operation[**P, R](func: Callable[P, R]) -> Callable[P, R]:
@@ -116,6 +152,19 @@ def shared_write_operation[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         with shared_write_lock():
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+def member_write_operation[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+    """:func:`shared_write_operation` for a change to a member's identity and
+    the selected workspace's file of it together: the identity root's lock,
+    then the workspace's inside it."""
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        with shared_write_lock(get_identity_root()), shared_write_lock():
             return func(*args, **kwargs)
 
     return wrapper

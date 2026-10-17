@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.person_id import IDENTITY_FILE, MEMBER_FILE, identity_members_dir
+from tests.guildbotics.members import write_member
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -73,119 +75,103 @@ def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete
 
 @pytest.mark.parametrize(
     "stored_name",
-    ["con", "aux", "nul", "alice", "Alice", "alice.bak", "alice backup", "あいこ"],
+    ["con", "aux", "nul", "Alice", "alice.bak", "alice backup", "あいこ"],
 )
-@pytest.mark.parametrize("action", ["rename", "delete"])
-def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
-    client, config_dir, stored_name, action
+def test_a_member_stored_under_no_valid_id_is_listed_and_can_be_removed(
+    client, config_dir, stored_name
 ):
+    """No identity can have its name, so the workspace's file of it is all
+    there is: listed with the problem, and removed from the workspace."""
     import os
 
     from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
-    from guildbotics.utils.person_id import MemberConfigError
 
     if os.name == "nt" and stored_name in {"con", "aux", "nul"}:
         pytest.skip("Windows cannot create a legacy reserved directory")
     member = config_dir / "team/members" / stored_name
     member.mkdir(parents=True)
-    person = member / "person.yml"
-    person.write_text(
-        f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(MemberConfigError) as error:
-        YamlTeamLoader(str(config_dir / "team")).load()
-    assert error.value.filename == str(person)
-    assert str(person) in str(error.value)
+    (member / MEMBER_FILE).write_text("is_active: true\n", encoding="utf-8")
+    identity = identity_members_dir() / stored_name / IDENTITY_FILE
+    # The rest of the team loads without it.
+    assert YamlTeamLoader(str(config_dir / "team")).load().members == []
     listing = client.get("/team", headers=AUTH_HEADERS)
     assert stored_name in [p["person_id"] for p in listing.json()["members"]]
-    assert str(person) in listing.json()["problem"]
+    assert str(identity) in listing.json()["problem"]
     read = client.get(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
     assert read.status_code == HTTP_OK
     assert read.json()["person_id"] == stored_name
-    revisions = read.json()["revisions"]
-    if action == "rename":
-        repaired = "alice" if stored_name == "Alice" else "repaired"
-        response = client.put(
-            f"/config/members/{stored_name}",
-            headers=AUTH_HEADERS,
-            json=_member_payload(
-                config_dir,
-                revisions,
-                original_person_id=stored_name,
-                person_id=repaired,
-            ),
-        )
-        assert response.status_code == HTTP_OK
-        names = [child.name for child in member.parent.iterdir()]
-        assert stored_name not in names
-        assert repaired in names
-        assert (
-            safe_load(
-                (config_dir / "team/members" / repaired / "person.yml").read_text(
-                    encoding="utf-8"
-                )
-            )["person_id"]
-            == repaired
-        )
-    else:
-        response = client.request(
-            "DELETE",
-            f"/config/members/{stored_name}",
-            headers=AUTH_HEADERS,
-            json={"config_dir": str(config_dir), "expected_revisions": revisions},
-        )
-        assert response.status_code == HTTP_OK
-        assert not member.exists()
+
+    response = client.delete(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
+
+    assert response.status_code == HTTP_OK
+    assert not member.exists()
     assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
 
 
-@pytest.mark.parametrize("action", ["rename", "delete"])
+def test_an_identity_naming_another_member_is_repaired_by_saving_it(client, config_dir):
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+    from guildbotics.utils.person_id import MemberConfigError
+
+    write_member(config_dir, {"person_id": "alice", "name": "Legacy"})
+    identity = identity_members_dir() / "alice" / IDENTITY_FILE
+    identity.write_text("person_id: bob\nname: Legacy\n", encoding="utf-8")
+    with pytest.raises(MemberConfigError) as error:
+        YamlTeamLoader(str(config_dir / "team")).load()
+    assert error.value.filename == str(identity)
+    read = client.get("/config/members/alice", headers=AUTH_HEADERS)
+
+    response = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json=_member_payload(config_dir, read.json()["revisions"]),
+    )
+
+    assert response.status_code == HTTP_OK
+    assert safe_load(identity.read_text(encoding="utf-8"))["person_id"] == "alice"
+    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+
+
+@pytest.mark.parametrize("action", ["save", "remove"])
 @pytest.mark.parametrize(
-    "content",
+    ("broken", "content"),
     [
-        "",
-        "[alice]",
-        "person_id: [",
-        "person_id: alice\naccount_info: null\nprofile: null\nroutine_commands: null\n",
-        "person_id: alice\naccount_info: []\nprofile: []\nroutine_commands: 123\n",
-        "person_id: alice\nprofile:\n  roles: {123: architect}\n  character: {123: invalid}\n",
+        ("member", ""),
+        ("member", "[broken]"),
+        ("member", "is_active: ["),
+        ("member", "routine_commands: 123\nprofile: []\n"),
+        ("member", "name: Misplaced\n"),
+        ("identity", ""),
+        ("identity", "person_id: ["),
+        ("identity", "person_id: broken\naccount_info: []\nprofile: []\n"),
+        ("identity", "person_id: broken\nis_active: true\n"),
     ],
 )
 def test_invalid_member_data_remains_listed_and_repairable(
-    client, config_dir, content, action
+    client, config_dir, broken, content, action
 ):
-    member = config_dir / "team/members/broken"
-    member.mkdir(parents=True)
-    person = member / "person.yml"
-    person.write_text(content, encoding="utf-8")
+    member = write_member(config_dir, {"person_id": "broken", "name": "Broken"})
+    path = (
+        member / MEMBER_FILE
+        if broken == "member"
+        else identity_members_dir() / "broken" / IDENTITY_FILE
+    )
+    path.write_text(content, encoding="utf-8")
     listing = client.get("/team", headers=AUTH_HEADERS)
     assert listing.status_code == HTTP_OK
     assert "broken" in [p["person_id"] for p in listing.json()["members"]]
-    assert str(person) in listing.json()["problem"]
+    assert str(path) in listing.json()["problem"]
     read = client.get("/config/members/broken", headers=AUTH_HEADERS)
     assert read.status_code == HTTP_OK
-    if action == "rename":
+    if action == "save":
         response = client.put(
             "/config/members/broken",
             headers=AUTH_HEADERS,
             json=_member_payload(
-                config_dir,
-                read.json()["revisions"],
-                original_person_id="broken",
-                person_id="repaired",
+                config_dir, read.json()["revisions"], person_id="broken"
             ),
         )
     else:
-        response = client.request(
-            "DELETE",
-            "/config/members/broken",
-            headers=AUTH_HEADERS,
-            json={
-                "config_dir": str(config_dir),
-                "expected_revisions": read.json()["revisions"],
-            },
-        )
+        response = client.delete("/config/members/broken", headers=AUTH_HEADERS)
     assert response.status_code == HTTP_OK
     assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
 
@@ -198,26 +184,23 @@ def test_directories_without_member_config_are_not_runtime_members(client, confi
     assert listing.json()["members"] == []
 
 
-@pytest.mark.parametrize("action", ["rename", "delete"])
 def test_colliding_members_are_repairable_without_changing_shared_secrets(
-    client, config_dir, monkeypatch, action
+    client, config_dir, monkeypatch
 ):
-    from guildbotics.utils.secret_store import KeyringSecretStore
+    """Two identities whose secrets share a name, though only one of them is in
+    this workspace: deleting one leaves the shared value alone."""
+    from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 
-    for name in ("alice-bak", "alice_bak"):
-        directory = config_dir / "team/members" / name
-        directory.mkdir(parents=True)
-        (directory / "person.yml").write_text(f"person_id: {name}\nname: Test\n")
-    store = KeyringSecretStore(config_dir)
+    write_member(config_dir, {"person_id": "alice-bak", "name": "Test"})
+    other = identity_members_dir() / "alice_bak"
+    other.mkdir(parents=True)
+    (other / IDENTITY_FILE).write_text("person_id: alice_bak\nname: Test\n")
+    store = identity_secret_store()
     store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-shared-token")
     before = store.location.read_bytes()
     listing = client.get("/team", headers=AUTH_HEADERS)
     assert listing.status_code == HTTP_OK
-    for name in ("alice-bak", "alice_bak"):
-        assert (
-            str(config_dir / "team/members" / name / "person.yml")
-            in listing.json()["problem"]
-        )
+    assert str(other / IDENTITY_FILE) in listing.json()["problem"]
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("repair accessed ambiguous secrets")
@@ -229,60 +212,38 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
         assert read.status_code == HTTP_OK
         assert read.json()["accounts"]["slack"]["has_bot_token"] is False
         assert read.json()["secret_env_keys"] == {}
-        if action == "rename":
-            response = client.put(
-                "/config/members/alice-bak",
-                headers=AUTH_HEADERS,
-                json=_member_payload(
-                    config_dir,
-                    read.json()["revisions"],
-                    original_person_id="alice-bak",
-                    person_id="repaired",
-                ),
-            )
-        else:
-            response = client.request(
-                "DELETE",
-                "/config/members/alice-bak",
-                headers=AUTH_HEADERS,
-                json={
-                    "config_dir": str(config_dir),
-                    "expected_revisions": read.json()["revisions"],
-                },
-            )
+        response = client.delete("/identities/alice_bak", headers=AUTH_HEADERS)
         assert response.status_code == HTTP_OK
     assert store.location.read_bytes() == before
     assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-shared-token"
     assert client.get("/team", headers=AUTH_HEADERS).json()["problem"] == ""
 
 
-@pytest.mark.parametrize("action", ["create", "rename"])
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_candidate_namespace_conflict_offers_a_different_id(
-    client, config_dir, action, language
+    client, config_dir, language
 ):
+    """An identity of another workspace counts: the store is the same."""
     for name in ("alice-bak", "bob"):
-        directory = config_dir / "team/members" / name
+        directory = identity_members_dir() / name
         directory.mkdir(parents=True)
-        (directory / "person.yml").write_text(f"person_id: {name}\nname: Test\n")
-    before = {
-        path: path.read_bytes()
-        for path in (config_dir / "team/members").rglob("*")
-        if path.is_file()
-    }
+        (directory / IDENTITY_FILE).write_text(f"person_id: {name}\nname: Test\n")
+    files = [identity_members_dir(), config_dir / "team/members"]
+
+    def stored() -> dict[Path, bytes]:
+        return {
+            path: path.read_bytes()
+            for root in files
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    before = stored()
     payload = _member_payload(config_dir, {}, person_id="alice_bak")
     previous = i18n.get("locale")
     i18n.set("locale", language)
     try:
-        if action == "create":
-            response = client.post(
-                "/config/members", headers=AUTH_HEADERS, json=payload
-            )
-        else:
-            payload["original_person_id"] = "bob"
-            response = client.put(
-                "/config/members/bob", headers=AUTH_HEADERS, json=payload
-            )
+        response = client.post("/config/members", headers=AUTH_HEADERS, json=payload)
         assert response.status_code == HTTP_BAD_REQUEST
         assert response.json()["code"] == "person_env_prefix_conflict"
         assert response.json()["message"] == t(
@@ -292,11 +253,7 @@ def test_candidate_namespace_conflict_offers_a_different_id(
         )
     finally:
         i18n.set("locale", previous)
-    assert {
-        path: path.read_bytes()
-        for path in (config_dir / "team/members").rglob("*")
-        if path.is_file()
-    } == before
+    assert stored() == before
 
 
 @pytest.mark.parametrize("name", ["Alice", "alice.bak", "alice backup", "あいこ"])
@@ -344,7 +301,6 @@ def _member_payload(config_dir: Path, revisions: dict[str, str], **overrides) ->
     payload = {
         "config_dir": str(config_dir),
         "expected_revisions": revisions,
-        "original_person_id": "alice",
         "person_type": "",
         "person_id": "alice",
         "person_name": "Alice",
@@ -507,12 +463,13 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
         },
     )
     assert created.status_code == HTTP_OK
-    person = "team/members/alice/person.yml"
+    identity = "team/members/alice/identity.yml"
+    member = "team/members/alice/member.yml"
 
     stale = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
         "revisions"
     ]
-    assert set(stale) == {person}
+    assert set(stale) == {identity, member}
     applied = client.put(
         "/config/members/alice",
         headers=AUTH_HEADERS,
@@ -528,7 +485,9 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "config_changed"
-    stored = safe_load((config_dir / person).read_text(encoding="utf-8"))
+    stored = safe_load(
+        (identity_members_dir() / "alice" / IDENTITY_FILE).read_text(encoding="utf-8")
+    )
     assert stored["name"] == "From the other machine"
 
 
@@ -704,11 +663,11 @@ def test_saving_twice_from_the_same_screen_is_not_a_conflict(
     assert stored["description"] == "Second"
 
 
-def test_a_member_save_reports_the_paths_it_ended_up_writing(
+def test_a_member_save_reports_both_files_it_wrote(
     client: TestClient, config_dir: Path
 ) -> None:
-    """A rename moves the file, so the revisions that matter afterwards are the
-    new path's, not the ones the request was composed against."""
+    """The identity and the workspace's file of the member are written as one
+    save, so the revisions a following save needs are of both."""
     client.post(
         "/config/members",
         headers=AUTH_HEADERS,
@@ -730,23 +689,40 @@ def test_a_member_save_reports_the_paths_it_ended_up_writing(
     written = client.put(
         "/config/members/alice",
         headers=AUTH_HEADERS,
-        json=_member_payload(config_dir, revisions, person_id="alice2"),
+        json=_member_payload(config_dir, revisions, person_name="Saved once"),
     ).json()
 
-    assert set(written["revisions"]) == {"team/members/alice2/person.yml"}
-    # And that revision is the one a following save must use.
+    assert set(written["revisions"]) == {
+        "team/members/alice/identity.yml",
+        "team/members/alice/member.yml",
+    }
     again = client.put(
-        "/config/members/alice2",
+        "/config/members/alice",
         headers=AUTH_HEADERS,
         json=_member_payload(
-            config_dir,
-            written["revisions"],
-            person_id="alice2",
-            original_person_id="alice2",
-            person_name="Renamed twice",
+            config_dir, written["revisions"], person_name="Saved twice"
         ),
     )
     assert again.status_code == HTTP_OK
+
+
+def test_a_member_keeps_its_id(client: TestClient, config_dir: Path) -> None:
+    """Other workspaces, perhaps on other machines, name the member by its ID,
+    so a save under another ID is refused rather than taken for a rename."""
+    write_member(config_dir, {"person_id": "alice", "name": "Alice"})
+    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
+        "revisions"
+    ]
+
+    response = client.put(
+        "/config/members/alice",
+        headers=AUTH_HEADERS,
+        json=_member_payload(config_dir, revisions, person_id="alice2"),
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "person_id_mismatch"
+    assert not (identity_members_dir() / "alice2").exists()
 
 
 def test_a_file_created_after_the_read_is_not_overwritten_unseen(

@@ -88,7 +88,9 @@ from guildbotics.utils.async_utils import to_thread
 from guildbotics.utils.correlation import bind_span, correlation_fields
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
+    GUILDBOTICS_IDENTITY_ROOT,
     GUILDBOTICS_WORKSPACE_ROOT,
+    get_identity_root,
     get_workspace_config_dir,
 )
 from guildbotics.utils.log_utils import get_logger
@@ -184,6 +186,7 @@ class HostWindow:
             GUILDBOTICS_CONFIG_DIR: guest_path(
                 get_workspace_config_dir(self._workspace_root)
             ),
+            GUILDBOTICS_IDENTITY_ROOT: guest_path(get_identity_root()),
         }
 
     @validate_call

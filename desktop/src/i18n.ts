@@ -251,7 +251,15 @@ const resources = {
           copied: "Copied",
         },
         secrets: {
-          title: "Credentials on this machine",
+          title: {
+            identities: "Members' credentials on this machine",
+            workspace: "This workspace's credentials on this machine",
+          },
+          scope: {
+            identities:
+              "The members' accounts and the services' connections, the same in every workspace.",
+            workspace: "The API keys this workspace uses.",
+          },
           body: "API keys and tokens are kept in each machine's own OS secret store, never in the shared history. What travels between machines is a key name and a generation; the value itself moves only when you send or fetch it.",
           empty: "This workspace has no credentials stored yet.",
           key: "Key",
@@ -1247,6 +1255,18 @@ const resources = {
           personId: "Member ID",
           personIdFixedByAccount:
             "The member ID stays fixed while the {{provider}} account set up for it is pending.",
+          personIdFixed:
+            "A member keeps its ID: other workspaces, on this machine or others, know the member by it.",
+          scopeHint:
+            "The name, character, avatar, and service accounts are the member's own, the same in every workspace. Roles, patrol, chat, and AI settings are for this workspace only.",
+          joinLabel: "Add an existing member",
+          joinHint:
+            "A member another workspace already has: its name, character, and accounts come along.",
+          joinPlaceholder: "Choose a member",
+          removeButton: "Remove from this workspace",
+          removeConfirmTitle: "Remove the member from this workspace?",
+          removeConfirmBody:
+            "{{name}} stops working in this workspace. The member's name, accounts, and credentials stay, for the other workspaces and for adding it again.",
           personName: "Display name",
           roles: "Roles",
           rolesPlaceholder: "Select one or more roles",
@@ -1310,7 +1330,7 @@ const resources = {
           tabHasError: "This tab has incomplete or invalid fields.",
           deleteConfirmTitle: "Delete member?",
           deleteConfirmBody:
-            "This will delete {{name}}'s member settings and related secrets from the OS secret store. This action cannot be undone.",
+            "This deletes {{name}} itself: it leaves this workspace, and its name, accounts, credentials in the OS secret store, and the tokens GuildBotics issued it with the services are deleted for every workspace, on every machine. Another workspace that still has the member cannot use it until the member is removed there too. This action cannot be undone.",
           editingBadge: "Editing: {{id}}",
           changedTitle: "This member's settings have changed",
           changedBody:
@@ -2064,7 +2084,15 @@ const resources = {
           copied: "コピーしました",
         },
         secrets: {
-          title: "このマシンの認証情報",
+          title: {
+            identities: "このマシンのメンバーの認証情報",
+            workspace: "このマシンのワークスペースの認証情報",
+          },
+          scope: {
+            identities:
+              "メンバーの各サービスのアカウントと、サービスへの接続です。すべてのワークスペースで共通です。",
+            workspace: "このワークスペースが使う API キーです。",
+          },
           body: "API キーやトークンは各マシンの OS 秘密ストアに保存され、共有履歴には入りません。マシン間を移動するのは key 名と世代だけで、値そのものは送信・取得を実行したときにだけ移動します。",
           empty: "このワークスペースにはまだ認証情報がありません。",
           key: "キー",
@@ -2748,6 +2776,18 @@ const resources = {
           personId: "メンバーID",
           personIdFixedByAccount:
             "このメンバー用の {{provider}} のアカウントを設定している間は、メンバー ID を変更できません。",
+          personIdFixed:
+            "メンバー ID は変更できません。このマシンや他のマシンのワークスペースが、この ID でメンバーを指しているためです。",
+          scopeHint:
+            "名前・人格・アイコン・各サービスのアカウントは、すべてのワークスペースで共通です。役割・巡回・チャット・AI 設定は、このワークスペースだけの設定です。",
+          joinLabel: "既存のメンバーを追加",
+          joinHint:
+            "ほかのワークスペースにいるメンバーを追加します。名前・人格・アカウントはそのまま引き継がれます。",
+          joinPlaceholder: "メンバーを選択",
+          removeButton: "このワークスペースから外す",
+          removeConfirmTitle: "このワークスペースから外しますか？",
+          removeConfirmBody:
+            "{{name}} はこのワークスペースで作業しなくなります。名前・アカウント・認証情報は残るので、ほかのワークスペースではそのまま使え、あとで追加し直すこともできます。",
           personName: "表示名",
           roles: "ロール",
           rolesPlaceholder: "1つ以上選択",
@@ -2810,7 +2850,7 @@ const resources = {
           tabHasError: "このタブに未入力または形式エラーの項目があります。",
           deleteConfirmTitle: "メンバーを削除しますか？",
           deleteConfirmBody:
-            "{{name}} のメンバー設定と OS 秘密ストア内の関連シークレットを削除します。この操作は元に戻せません。",
+            "{{name}} そのものを削除します。このワークスペースから外し、名前・アカウント・OS 秘密ストア内の認証情報・各サービスで GuildBotics が発行したトークンを、すべてのワークスペースとマシンから削除します。ほかのワークスペースにこのメンバーが残っている場合、そこからも外すまでそのワークスペースでは使えません。この操作は元に戻せません。",
           editingBadge: "編集中: {{id}}",
           changedTitle: "このメンバーの設定が変更されました",
           changedBody:

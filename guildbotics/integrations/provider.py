@@ -138,8 +138,6 @@ class SavedMember:
     #: A secret's value by its member-relative name, as the save leaves it
     #: ("" for none).
     get_secret: Callable[[str], str]
-    #: ``project.services``: each kind's provider name and items.
-    services: Mapping[str, Mapping[str, Any]]
     #: The member's credentials on other hosts, by the name of the provider
     #: that hands each over.
     credentials: Mapping[str, HostCredential] = field(default_factory=dict)
@@ -287,8 +285,6 @@ class ProviderSetup:
     #: The ``chat`` entries of a member's channel, from how the member screen
     #: names it.
     chat_channel: Callable[[str], dict[str, str]] | None = None
-    #: The items every kind it serves must give alike.
-    shared: frozenset[str] = frozenset()
     #: The providers whose member credentials its member accounts are handed
     #: (see :meth:`MemberAccount.credential`): a member's account with one is
     #: edited wherever this provider is used.
@@ -310,9 +306,10 @@ class Provider:
     secret_keys: frozenset[str] = frozenset()
     #: All the ``account_info`` keys the provider's package reads.
     account_info_keys: frozenset[str] = frozenset()
-    #: The workspace Secrets it keeps, by name: no member's, so its package
-    #: reads them from the workspace's store, and the host alone uses them.
-    workspace_secret_keys: frozenset[str] = frozenset()
+    #: The Secrets of its connection, by name: no member's, but kept with the
+    #: identities, since what they connect to is the identities' service. Its
+    #: package reads them from the identities' store; the host alone uses them.
+    identity_secret_keys: frozenset[str] = frozenset()
     code_hosting_service: (
         Callable[[Logger, Person, Team], CodeHostingService] | None
     ) = None

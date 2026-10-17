@@ -271,6 +271,8 @@ class WorkspaceSyncStatus(BaseModel):
     hub_url: str | None = None
     state: str = "disabled"
     local_head: str | None = None
+    #: The commit the members' identities are on, which every workspace shares.
+    identity_head: str | None = None
     remote_head: str | None = None
     ahead_count: int = 0
     behind_count: int = 0
@@ -431,10 +433,6 @@ class TeamSummary(BaseModel):
     # has no member that can execute commands.
     default_person_id: str = ""
     problem: str = ""
-
-
-class MemberDeleteRequest(BaseModel):
-    config_dir: Path
 
 
 class CommandArgumentOption(BaseModel):
@@ -1461,8 +1459,6 @@ class ProviderOption(BaseModel):
     kinds: list[str]
     #: Whether a member's avatar can be imported from it.
     avatar: bool
-    #: The items every kind it serves gives alike.
-    shared: list[str]
     #: The providers whose member credentials it takes: a member's account
     #: with one is edited wherever this provider is used.
     credentials_from: list[str]

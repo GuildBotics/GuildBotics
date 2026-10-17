@@ -1,18 +1,19 @@
 import pytest
 
+from guildbotics.app_api.command_catalog import _command_roots
 from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
     intelligence_config_dir,
 )
 from guildbotics.app_api.models import IntelligenceConfigUpdateRequest
-from guildbotics.app_api.command_catalog import _command_roots
 from guildbotics.commands.discovery import iter_candidate_paths
 from guildbotics.entities.team import Person
 from guildbotics.setup.setup_service import (
     PersonSetupInput,
-    PersonUpdateInput,
-    _person_config_dir,
-    person_config_paths,
+    SimplePersonSetupService,
+    identity_config_paths,
+    member_config_paths,
+    stored_person_config_paths,
 )
 from guildbotics.utils.avatar import get_member_avatar_dir
 from guildbotics.utils.fileio import (
@@ -22,11 +23,13 @@ from guildbotics.utils.fileio import (
     load_person_slot_mapping,
 )
 from guildbotics.utils.person_id import (
+    IDENTITY_FILE,
+    MEMBER_FILE,
+    identity_members_dir,
     is_valid_person_id,
     validate_member_directory_name,
     validate_person_id,
 )
-
 
 _UNSAFE_DIRECTORY_NAMES = [
     "/private/keys",
@@ -43,29 +46,32 @@ _RESERVED_IDS = ["con", "nul", "aux", "prn", "com1", "lpt1"]
 
 
 @pytest.mark.parametrize("value", _UNSAFE_DIRECTORY_NAMES + _RESERVED_IDS)
-def test_person_id_and_stored_directory_input_classes(tmp_path, value):
+def test_person_id_and_stored_directory_input_classes(value):
     assert not is_valid_person_id(value)
     with pytest.raises(ValueError):
         validate_person_id(value)
     if value in _RESERVED_IDS:
+        # A stored directory under a reserved name can still be addressed, so
+        # that it can be repaired.
         assert validate_member_directory_name(value) == value
-        config = PersonUpdateInput(**data_for(tmp_path), original_person_id=value)
-        assert config.original_person_id == value
+        assert stored_person_config_paths(value) == (
+            f"team/members/{value}/{MEMBER_FILE}",
+        )
     else:
         with pytest.raises(ValueError):
             validate_member_directory_name(value)
         with pytest.raises(ValueError):
-            PersonUpdateInput(**data_for(tmp_path), original_person_id=value)
+            stored_person_config_paths(value)
 
 
 _PERSON_PATH_ENTRIES = {
     "person": lambda root, value: Person(person_id=value, name="Aiko"),
     "new": lambda root, value: PersonSetupInput(**data_for(root, value)),
     "clone": lambda root, value: get_member_clone_path(value, root),
-    "avatar": lambda root, value: get_member_avatar_dir(root, value),
-    "config": lambda root, value: get_person_config_path(value, "person.yml"),
-    "config_paths": lambda root, value: person_config_paths(value),
-    "setup_dir": lambda root, value: _person_config_dir(root, value),
+    "avatar": lambda root, value: get_member_avatar_dir(value),
+    "config": lambda root, value: get_person_config_path(value, MEMBER_FILE),
+    "member_paths": lambda root, value: member_config_paths(value),
+    "identity_paths": lambda root, value: identity_config_paths(value),
     "intelligence_revision": lambda root, value: intelligence_config_dir(value),
     "intelligence_scope": lambda root, value: IntelligenceConfigService()._scope_dir(
         root, value
@@ -78,6 +84,9 @@ _PERSON_PATH_ENTRIES = {
         IntelligenceConfigUpdateRequest.model_construct(
             config_dir=root, person_id=value, inherit_team_defaults=True
         )
+    ),
+    "save": lambda root, value: SimplePersonSetupService().save_person(
+        PersonSetupInput.model_construct(**data_for(root, value))
     ),
     "intelligence_mapping": lambda root, value: (
         IntelligenceConfigService()._read_merged_mapping(
@@ -127,8 +136,33 @@ def test_valid_member_identifier_is_preserved(tmp_path):
     )
 
 
+#: A broken member, as (identity file or None, workspace file), and where the
+#: loader reports it, with the reason it gives.
+_BROKEN_MEMBERS = {
+    "fields": (
+        "person_id: Alice\nname: Test\n",
+        "is_active: true\n",
+        "member",
+        ("invalid_fields", {"fields": "person_id"}),
+    ),
+    "yaml": ("person_id: [", "is_active: true\n", "identity", ("invalid_yaml", {})),
+    "mismatch": (
+        "person_id: bob\nname: Test\n",
+        "is_active: true\n",
+        "identity",
+        ("directory_mismatch", {}),
+    ),
+    "misplaced": (
+        "person_id: alice\nname: Test\n",
+        "is_active: true\nname: Test\n",
+        "member",
+        ("invalid_fields", {"fields": "name"}),
+    ),
+}
+
+
 @pytest.mark.parametrize("language", ["en", "ja"])
-@pytest.mark.parametrize("shape", ["id", "directory", "fields", "yaml", "mismatch"])
+@pytest.mark.parametrize("shape", ["id", "directory", *_BROKEN_MEMBERS])
 def test_member_config_messages_use_localized_keys(tmp_path, language, shape):
     import i18n
 
@@ -148,31 +182,48 @@ def test_member_config_messages_use_localized_keys(tmp_path, language, shape):
                 validate("../keys")
             assert str(error.value) == t(f"member_config.{key}")
             return
+        identity_text, member_text, reported, (key, args) = _BROKEN_MEMBERS[shape]
         team = tmp_path / "team"
-        member = team / "members/alice"
-        member.mkdir(parents=True)
+        team.mkdir()
         (team / "project.yml").write_text(
             "name: Test\nlanguage: en\n", encoding="utf-8"
         )
-        path = member / "person.yml"
-        path.write_text(
-            {
-                "fields": "person_id: Alice\nname: Test\n",
-                "yaml": "person_id: [",
-                "mismatch": "person_id: bob\nname: Test\n",
-            }[shape],
-            encoding="utf-8",
-        )
+        paths = {
+            "identity": identity_members_dir() / "alice" / IDENTITY_FILE,
+            "member": team / "members/alice" / MEMBER_FILE,
+        }
+        for path, text in (
+            (paths["identity"], identity_text),
+            (paths["member"], member_text),
+        ):
+            if text is not None:
+                path.parent.mkdir(parents=True)
+                path.write_text(text, encoding="utf-8")
         with pytest.raises(MemberConfigError) as error:
             YamlTeamLoader(str(team)).load()
-        reason = (
-            t("member_config.invalid_fields", fields="person_id")
-            if shape == "fields"
-            else t(
-                f"member_config.{'invalid_yaml' if shape == 'yaml' else 'directory_mismatch'}"
-            )
-        )
+        path = paths[reported]
         assert error.value.filename == str(path)
-        assert str(error.value) == t("member_config.invalid", path=path, reason=reason)
+        assert str(error.value) == t(
+            "member_config.invalid", path=path, reason=t(f"member_config.{key}", **args)
+        )
     finally:
         i18n.set("locale", previous)
+
+
+def test_a_member_whose_identity_has_not_arrived_is_left_out(tmp_path):
+    """The identities travel by a queue of their own, so a member can arrive
+    before its identity; only that member waits."""
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+    from tests.guildbotics.members import write_member
+
+    config = tmp_path / ".guildbotics/config"
+    (config / "team").mkdir(parents=True)
+    (config / "team/project.yml").write_text("name: Test\nlanguage: en\n")
+    write_member(config, {"person_id": "alice", "name": "Alice", "is_active": True})
+    early = config / "team/members/bob"
+    early.mkdir(parents=True)
+    (early / MEMBER_FILE).write_text("is_active: true\n", encoding="utf-8")
+
+    team = YamlTeamLoader(str(config / "team")).load()
+
+    assert [member.person_id for member in team.members] == ["alice"]

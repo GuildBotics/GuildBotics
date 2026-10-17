@@ -137,6 +137,11 @@ def held_lock(
         mutex.release()
 
 
+def held_reentrant_keys() -> frozenset[Hashable]:
+    """The logical locks this thread holds through :func:`reentrant_held_lock`."""
+    return frozenset(_held_depths())
+
+
 @contextmanager
 def reentrant_held_lock(
     path: Path,

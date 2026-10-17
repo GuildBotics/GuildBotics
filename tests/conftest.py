@@ -23,7 +23,11 @@ from guildbotics.intelligences.agent_runtime.wire import (
     HOST_URL_ENV,
     MEMBER_BROKER_TOKEN_ENV,
 )
-from guildbotics.utils.fileio import GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_CONFIG_DIR,
+    GUILDBOTICS_IDENTITY_ROOT,
+    GUILDBOTICS_WORKSPACE_ROOT,
+)
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from tests.git_seed import WorkerGitSeed
@@ -59,6 +63,7 @@ COMMAND_ENVIRONMENT_VARIABLES = frozenset(
         HOST_TOKEN_ENV,
         COMMAND_ENV,
         GUILDBOTICS_CONFIG_DIR,
+        GUILDBOTICS_IDENTITY_ROOT,
         MEMBER_BROKER_TOKEN_ENV,
     }
 )
@@ -487,6 +492,19 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # both are set wherever a test points the home directory somewhere.
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.fixture(autouse=True)
+def _identity_sync_ends_with_its_test():
+    """Stop the identities' synchronization a test started, before its home goes.
+
+    Connecting a workspace to a hub connects the identities too, and their
+    cycles run on a worker thread that would otherwise outlive the test.
+    """
+    yield
+    from guildbotics.sync.activation import deactivate_identity_sync
+
+    deactivate_identity_sync()
 
 
 @pytest.fixture(autouse=True)

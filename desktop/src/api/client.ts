@@ -672,8 +672,6 @@ export type ProviderOption = {
   kinds: ServiceKind[];
   /** Whether a member's avatar can be imported from it. */
   avatar: boolean;
-  /** The items every kind it serves gives alike. */
-  shared: string[];
   /** The providers whose member credentials it is handed: a member's account
    * with one is edited wherever this provider is used. */
   credentials_from: string[];
@@ -727,7 +725,11 @@ type MemberWriteRequestBase = {
   task_schedules?: MemberTaskSchedule[];
 };
 
-export type MemberSetupRequest = MemberWriteRequestBase;
+export type MemberSetupRequest = MemberWriteRequestBase & {
+  /** The revisions of the member's identity and of the workspace's file of it
+   * the form was composed against; a file left out must not exist yet. */
+  expected_revisions?: ConfigRevisions;
+};
 
 export type MemberConfig = {
   revisions: ConfigRevisions;
@@ -751,6 +753,18 @@ export type MemberConfig = {
   routine_commands: string[];
   task_schedules: MemberTaskSchedule[];
   avatar_timestamp?: number;
+  /** Whether this workspace has the member yet: false for an identity read so
+   * that it can be added here. */
+  participating: boolean;
+};
+
+/** A member's identity, whichever workspaces it works in. */
+export type IdentitySummary = {
+  person_id: string;
+  name: string;
+  person_type: MemberPersonType | "";
+  /** Whether the selected workspace has the member. */
+  participating: boolean;
 };
 
 export type MemberTaskSchedule = {
@@ -758,14 +772,7 @@ export type MemberTaskSchedule = {
   schedules: string[];
 };
 
-export type MemberConfigUpdateRequest = MemberWriteRequestBase & {
-  original_person_id: string;
-  expected_revisions?: ConfigRevisions;
-};
-
-export type MemberDeleteRequest = {
-  config_dir: string;
-};
+export type MemberConfigUpdateRequest = MemberSetupRequest;
 
 export type StreamStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -1147,6 +1154,8 @@ export type WorkspaceSyncStatus = {
   hub_url: string | null;
   state: SyncState;
   local_head: string | null;
+  /** The commit the members' identities are on, which every workspace shares. */
+  identity_head: string | null;
   remote_head: string | null;
   ahead_count: number;
   behind_count: number;
@@ -1360,20 +1369,28 @@ export async function cloneWorkspaceFromHub(
   return request("/workspace/sync/clone", { method: "POST", body });
 }
 
-export async function getWorkspaceSecrets(): Promise<WorkspaceSecrets> {
-  return request("/workspace/secrets");
+/** Whose secrets: the selected workspace's, or the identities' -- the
+ * members' credentials and the connections', which every workspace shares. */
+export type SecretScope = "workspace" | "identities";
+
+export async function getWorkspaceSecrets(
+  scope: SecretScope = "workspace",
+): Promise<WorkspaceSecrets> {
+  return request(`/${scope}/secrets`);
 }
 
 export async function sendWorkspaceSecrets(
   body: SecretTransferRequest = {},
+  scope: SecretScope = "workspace",
 ): Promise<SecretTransferResponse> {
-  return request("/workspace/secrets/send", { method: "POST", body });
+  return request(`/${scope}/secrets/send`, { method: "POST", body });
 }
 
 export async function fetchWorkspaceSecrets(
   body: SecretTransferRequest = {},
+  scope: SecretScope = "workspace",
 ): Promise<SecretTransferResponse> {
-  return request("/workspace/secrets/fetch", { method: "POST", body });
+  return request(`/${scope}/secrets/fetch`, { method: "POST", body });
 }
 
 export async function getHubStatus(): Promise<HubStatus> {
@@ -1885,14 +1902,20 @@ export async function updateMemberConfig(
   });
 }
 
-export async function deleteMemberConfig(
-  personId: string,
-  body: MemberDeleteRequest,
-): Promise<ConfigWriteResponse> {
-  return request(`/config/members/${encodeURIComponent(personId)}`, {
-    method: "DELETE",
-    body,
-  });
+/** Take the member out of the workspace; its identity stays for the others. */
+export async function deleteMemberConfig(personId: string): Promise<ConfigWriteResponse> {
+  return request(`/config/members/${encodeURIComponent(personId)}`, { method: "DELETE" });
+}
+
+/** Every member's identity, so that one can be added to the workspace. */
+export async function listIdentities(): Promise<IdentitySummary[]> {
+  return request("/identities");
+}
+
+/** Delete the member everywhere: its identity, and what its accounts obtained
+ * from each service. */
+export async function deleteIdentity(personId: string): Promise<ConfigWriteResponse> {
+  return request(`/identities/${encodeURIComponent(personId)}`, { method: "DELETE" });
 }
 
 export type AvatarMutationResponse = {

@@ -33,6 +33,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
+| [`guildbotics hub identity`](#guildbotics-hub-identity) | Manage the repository of the members' identities, which every workspace shares. |
+| [`guildbotics hub identity claim`](#guildbotics-hub-identity-claim) | Show the identities' repository, registering IDENTITY_ID if there is none. |
 | [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
 | [`guildbotics hub live publish`](#guildbotics-hub-live-publish) | Replace one live snapshot for each non-empty stdin line. |
 | [`guildbotics hub live watch`](#guildbotics-hub-live-watch) | Poll live snapshots and head updates until the SSH connection closes. |
@@ -385,6 +387,7 @@ guildbotics hub [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
+| [`guildbotics hub identity`](#guildbotics-hub-identity) | Manage the repository of the members' identities, which every workspace shares. |
 | [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
 | [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
 | [`guildbotics hub secret`](#guildbotics-hub-secret) | Hold secret values for the devices that share a workspace. |
@@ -397,6 +400,36 @@ Make this machine a hub, or show the hub it already hosts.
 
 ```text
 guildbotics hub create [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub identity`
+
+Manage the repository of the members' identities, which every workspace
+shares.
+
+```text
+guildbotics hub identity [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics hub identity claim`](#guildbotics-hub-identity-claim) | Show the identities' repository, registering IDENTITY_ID if there is none. |
+
+## `guildbotics hub identity claim`
+
+Show the identities' repository, registering IDENTITY_ID if there is none.
+
+```text
+guildbotics hub identity claim [OPTIONS] IDENTITY_ID
 ```
 
 | Option | Description |
@@ -1641,6 +1674,7 @@ guildbotics secrets [OPTIONS] COMMAND [ARGS]...
 | Option | Description |
 | --- | --- |
 | `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
+| `--identities` | Manage the secrets every workspace shares -- the members' credentials and the services' connections -- instead of the workspace's. |
 | `--help` | Show this message and exit. |
 
 | Subcommand | Summary |

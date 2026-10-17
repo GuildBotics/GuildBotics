@@ -33,6 +33,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     hub_url: "user@hub:.guildbotics/hub/workspaces/w/repository.git",
     state: "idle",
     local_head: "abc",
+    identity_head: null,
     remote_head: "abc",
     ahead_count: 0,
     behind_count: 0,

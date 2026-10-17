@@ -106,6 +106,8 @@ GuildBotics では、プロジェクトの設定と状態を置くフォルダ�
 - `.guildbotics/config/team/project.yml`: プロジェクト定義
 - `.guildbotics/config/intelligences/`: LLM と AI CLI ツールの設定
 
+メンバーのアイデンティティ（名前・人格・アイコン・各サービスのアカウント）はすべてのワークスペースで共通なので、メンバーの認証情報とともにワークスペースの外の `~/.guildbotics/identity/` に書き出されます。ワークスペースには、そのワークスペースでのメンバーの設定（役割・巡回・チャットのチャンネル・AI 設定）が置かれます（→ [設定ファイル](#設定ファイル)）。
+
 API キーやアカウントトークンの値は、利用可能な場合は OS キーチェーンに保存され、上記ファイルにはキー名だけが記録されます（→ [API キーとトークンの保存](#api-キーとトークンの保存)）。
 
 プロジェクト設定に続けて、デスクトップアプリで以下を設定します。
@@ -113,7 +115,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 - **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択、LLM API キーの設定
 - **エージェント実行環境**: **ビルド** でこのマシンに環境を作り、表示されるコマンドで選んだツールへログインします。どちらもマシンごとの作業です
 - **連携**: コードホスティング・チケット・チャットに使うサービスを選び（どれも任意）、選んだサービスを設定します。GitHub のチケットでは GitHub Project の URL、独自ステータス名を使う場合の[レーンマッピング](#タスクボードの取り決め)、`Agent` フィールドを設定します。選んだサービスでのメンバーのアカウントは、メンバーのそのサービスのタブで設定します
-- **メンバー**: チームメンバーの追加と設定（GitHub アカウントを割り当てる場合は、上記の認証情報が必要です）
+- **メンバー**: チームメンバーの追加と設定（GitHub アカウントを割り当てる場合は、上記の認証情報が必要です）。名前・人格・アイコン・各サービスのアカウントはすべてのワークスペースで共通で、役割・巡回・チャット・AI 設定はこのワークスペースだけの設定です。メンバー ID は保存後に変更できません。**既存のメンバーを追加** は、ほかのワークスペースにいるメンバーをこのワークスペースに追加します。**このワークスペースから外す** は、このワークスペースからだけメンバーを外します（アイデンティティ・認証情報・各サービスのトークンは残ります）。**削除** は、メンバーをこのワークスペースから外してアイデンティティと認証情報を削除し、Branvil などのサービスで GuildBotics が発行したトークンを無効にします。そのメンバーがまだいるほかのワークスペースでは、そこから外すまでそのメンバーだけが使えません
 - **検証**: **設定を検証** を押すと、LLM、AI CLI ツール、連携先、Git を読み取り専用でチェックします。連携先のデータは更新しません
 
 ### クイックスタート
@@ -352,7 +354,7 @@ Slack でどう振る舞うか（本文で返信する / リアクションだ�
 
 すでに Slack App を作成済みの場合は **登録済みの App を使う** を選び、トークンの貼り付けから始められます。
 
-設定内容はメンバーの `person.yml`（`message_channels`）に保存されます。
+トークンはメンバーの認証情報として保存され、すべてのワークスペースで共通です。チャンネルは、ワークスペースのそのメンバーの `member.yml`（`message_channels`）に保存されます。
 
 チャットイベントを受信するには、**サービス実行** 画面で **イベント起動** を含めてサービスを開始します。決まった時刻の定期投稿（ニュースダイジェストなど）は受信とは別経路で、定期実行コマンドとして `workflows/chat_post_command` を設定します。
 
@@ -369,11 +371,9 @@ Slack App を手動で作成する場合の手順（必要な scope の一覧）
 
 サービスが実行するコマンドは、デスクトップアプリから開始しても `guildbotics start` で開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。定期実行の `.sh` や AI CLI のターンが相対パスで書き出したファイルはここに出ます。
 
-設定内容はメンバーの `person.yml` に保存されます。GUI を使わないサーバーでは、このファイルを直接編集します。
+設定内容はワークスペースの `team/members/<person_id>/member.yml` に保存されます。GUI を使わないサーバーでは、このファイルを直接編集します。
 
 ```yaml
-person_id: alice
-name: Alice
 is_active: true
 
 routine_commands:
@@ -458,6 +458,7 @@ commands:
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
 - **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間とデバイス固有世代を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
+- **2 つのストア:** メンバーの認証情報（`{PERSON_ID}_...`）とサービスへの接続（`BRANVIL_ADMIN_TOKEN`）は、マシン内のすべてのワークスペースで共有するアイデンティティのストアに保存します（インデックスは `~/.guildbotics/identity/.guildbotics/config/secrets.yml`）。LLM API キーなどそれ以外のキーは、ワークスペースのストアに保存します。プロセスはアイデンティティのストア、ワークスペースのストアの順に読み込みます。
 - **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
 - **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
 - **GitHub App 秘密鍵:** メンバー保存時に PEM をキーチェーンへ吸収します。自動登録で発行された鍵はファイルにも画面にも出さず、メンバーを保存するまで Local API のメモリに保持します。鍵の中身は環境変数には出しません。
@@ -471,13 +472,16 @@ guildbotics secrets pull                          # Hub マシンから不足・
 guildbotics secrets push                          # このマシンで入力した値を Hub マシンへ送る
 guildbotics secrets export --file secrets.env     # 引越用にシークレットを書き出し
 guildbotics secrets import secrets.env            # 移行先マシンで読み込み
+guildbotics secrets --identities status           # メンバーの認証情報について同じ操作をする
 ```
 
 複数マシンでワークスペースを共有している場合、値は共有履歴には入らず、利用者が送信・取得を実行した
 ときだけ Hub マシンの OS 秘密ストア経由で移動します。手順は
 [認証情報を各マシンへ配る](#認証情報を各マシンへ配る)を参照してください。
 
-シークレットはワークスペースごとに保存されます（キーチェーンのエントリは、各マシンの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。名前空間はマシンごとのもので、Hub への参加や同期では変わりません。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
+サブコマンドの前に `--identities` を指定すると、アイデンティティのストアを操作します。指定しない場合、CLI はメンバーのキーをワークスペースのストアに保存することを拒否します。メンバーのキーのプレフィックスはすべてのワークスペースで共通なので、`-` と `_` だけが違う 2 つの ID（`foo-bar` と `foo_bar`）は、別のワークスペースであっても同時には存在できません。
+
+ワークスペースのシークレットはワークスペースごとに保存されます（キーチェーンのエントリは、各マシンの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。名前空間はマシンごとのもので、Hub への参加や同期では変わりません。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -507,8 +511,8 @@ guildbotics secrets --workspace /path/to/workspace list
 非シークレットの設定はすべてワークスペース内のプレーンテキストファイルに保存されるため、一度セットアップすれば GUI のない環境（ヘッドレスサーバー等）へ移して CLI だけで運用できます。
 
 1. 移行先で `uv tool install guildbotics` により CLI をインストールします
-2. ワークスペースフォルダを移行先へコピーします
-3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行します（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
+2. ワークスペースフォルダと `~/.guildbotics/identity/`（メンバーのアイデンティティ）を移行先へコピーします
+3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行し、メンバーの認証情報についても `--identities` を付けて同じ操作をします（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
 4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか、実行時の環境変数でシークレットを渡してください
 5. サーバー上でエージェント隔離環境をビルドし、AI CLI ツールへログインします（サーバーには KVM が必要です。[必要なもの](#必要なもの) を参照）:
 
@@ -569,6 +573,8 @@ publisher が heartbeat を止め、状態が失効すると消えます。完�
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
+以下のメンバーのキー（`{PERSON_ID}_...`）と `BRANVIL_ADMIN_TOKEN` は、すべてのワークスペースで共有するアイデンティティのストアに、LLM API キーはワークスペースのストアに保存されます。
+
 **Slack アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
 
 - `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token
@@ -577,12 +583,12 @@ publisher が heartbeat を止め、状態が失効すると消えます。完�
 **GitHub アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
 
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント用の fine-grained PAT
-- GitHub App の ID はメンバー YAML（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
+- GitHub App の ID はメンバーの `identity.yml`（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
 
 **Branvil アクセス**:
 
-- `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。ホストがメンバーの用意と Branvil の GUI を開くのに使います
-- `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行します（Branvil での名前はメンバー YAML の `account_info.branvil_username`）
+- `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。すべてのワークスペースで 1 つです。ホストがメンバーの用意と Branvil の GUI を開くのに使います
+- `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行し、すべてのワークスペースで使います（Branvil での名前はメンバーの `identity.yml` の `account_info.branvil_username`）
 
 OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
 
@@ -607,6 +613,7 @@ guildbotics workspace use /path/to/workspace
 GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
+- すべてのワークスペースで共有するメンバーのアイデンティティは、ワークスペースの `.guildbotics` と同じ構成で `$HOME/.guildbotics/identity/.guildbotics` に保存されます
 - memory、会話の制御状態、task-run 記録、interactive session 記録、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
 - 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
 - エージェント隔離環境の runtime と image は `$HOME/.guildbotics/data/msb` に、AI CLI ツールのログインとセッション（マシン内の全メンバー・全ワークスペースで共有）は `$HOME/.guildbotics/data/agent_environment/<tool>/` に保存されます
@@ -616,6 +623,12 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 1 つのワークスペースを自分の複数のマシンで共有できます。設定・メンバー・memory・チャットの
 処理状態・Activity 履歴が揃い、API キー・メンバーの作業クローン・診断情報・ホットキーは
 作成したマシンに残ります。
+
+メンバーのアイデンティティ（`~/.guildbotics/identity/`）は、ワークスペースを Hub に接続する
+とき（登録・参加・複製・Hub の変更）に、同じ Hub へ接続されます。Hub はすべてのワークスペースに
+共通のアイデンティティのリポジトリを 1 つだけ持ち、最初のマシンがそれを登録し、ほかのマシンは
+ワークスペースと同じ規則（後述）で参加します。このリポジトリは Hub のワークスペース一覧には出ず、
+選択中のワークスペースと並んで同期されます。
 
 共有は **Hub** を経由します。Hub は利用者が選んだ 1 台のマシンで、他のマシンが SSH 経由で
 push / fetch する Git リポジトリを持ちます。サービスではなく、他社が運用するものでもありません。
@@ -711,7 +724,10 @@ API キーとトークンの**値**は共有されません。マシン間を移
 送信・取得を実行したときだけ、SSH の標準入出力を通って移動します。Git リポジトリ、Hub 上の中継
 ファイル、一時ファイルのいずれにも値は書かれません。
 
-一覧と操作は**設定 → 同期**の「このマシンの認証情報」にあります。プロバイダーやメンバーの入力欄には
+一覧と操作は**設定 → 同期**の 2 つのカードにあります。「このマシンのメンバーの認証情報」は
+メンバーの各サービスのアカウントとサービスへの接続（すべてのワークスペースで共通）、「このマシンの
+ワークスペースの認証情報」はこのワークスペースが使う API キーです。どちらのカードも以下のとおりに
+動作します。プロバイダーやメンバーの入力欄には
 状態の表示とこの画面への導線だけを置き、転送のボタンは置いていません。
 
 **macOS を Hub にする場合**は、認証情報を送信・取得する前に Hub のユーザーで GUI ログインし、
@@ -751,6 +767,8 @@ guildbotics secrets status   # このマシンの状態と、対応が必要な 
 guildbotics secrets pull     # 不足・古い値をまとめて取得する
 guildbotics secrets push     # このマシンで入力した値を Hub マシンへ送る
 ```
+
+メンバーの認証情報は、サブコマンドの前に `--identities` を付けて操作します。
 
 OS 秘密ストアがロックされている間は、送信も取得もできません。GuildBotics が平文のファイルへ
 書き出すことはないため、ロックを解除してからやり直してください。
@@ -868,8 +886,8 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 | ------------- | ------------------------------------------------------------------------------------------------------------- |
 | `<workspace>` | そのワークスペースのディレクトリ（「設定 → プロジェクト」の「ワークスペース」欄の値）                         |
 | `<回復用 ID>` | 一覧の「回復用 ID」の値                                                                                       |
-| `<path>`      | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/person.yml`）                                    |
-| `<path>...`   | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/person.yml`） |
+| `<path>`      | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/member.yml`）                                    |
+| `<path>...`   | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/member.yml`） |
 
 1. 退避された内容を読みます。現在採用されている内容との差分を表示します（`+` の行が退避された側）。
 
@@ -933,19 +951,27 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `services.ticket_service`: GitHub の Issue と Projects の設定
 - `services.ticket_service.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
 - `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
-- Branvil では、どちらのサービスも `name: branvil` で、同じ `base_url`（既定 `http://127.0.0.1:7878`）と `workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
+- Branvil では、どちらのサービスも `name: branvil` で、`workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます。Branvil に届く URL は、すべてのワークスペースで共通の接続の設定です（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
 - `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 
-**メンバー設定** (`team/members/<person_id>/person.yml`):
+**メンバーのアイデンティティ** (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`。すべてのワークスペースで共通で、アイコンも同じディレクトリに置きます):
 
-- `person_id`: 一意な識別子（英数字小文字、`-`、`_` のみ）
+- `person_id`: 一意な識別子（英数字小文字、`-`、`_` のみ）。変更できません
 - `name`: 表示名
+- `person_type`: 人間のメンバーは `human`、AI メンバーは `agent`
+- `account_info`: 各サービスのアカウント名（`git_user`、`git_email`、`github_*`、`slack_user_id`、`branvil_username`）
+- `profile.character`: 興味・嗜好・会話参加方針などのプロフィール
+- `speaking_style`、`relationships`
+
+**ワークスペースでのメンバー設定** (ワークスペースの `team/members/<person_id>/member.yml`):
+
 - `is_active`: AI エージェントとして動作するかどうか
 - `profile.roles`: 役割の割り当て
 - `routine_commands`: デフォルトルーチンコマンドの上書き
 - `task_schedules`: cron ベースのスケジュールコマンド
 - `message_channels`: 監視対象チャネル設定（`chat.enabled`, `channel_id`/`name`）。プロジェクトのチャットサービスのチャネル
-- `profile.character`: 興味・嗜好・会話参加方針などのプロフィール
+
+もう一方のファイルに置くべき項目があると、チームの読み込み時に拒否されます。アイデンティティの無いメンバー（別のマシンで削除された、またはまだ同期されていない）は、ワークスペースから外すかアイデンティティが届くまでチームから除かれ、ほかのメンバーはそのまま動きます。
 
 **LLM / AI CLI ツール設定**:
 

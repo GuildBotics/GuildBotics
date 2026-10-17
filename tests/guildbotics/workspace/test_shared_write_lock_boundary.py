@@ -37,9 +37,11 @@ from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
 from guildbotics.setup.setup_service import SimpleProjectSetupService
+from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
+    member_write_operation,
     shared_write_lock,
 )
 from guildbotics.utils.workspace_sync_port import (
@@ -693,3 +695,36 @@ def test_a_store_change_holds_the_lock_of_the_store_s_own_workspace(
     assert reads[0] == (True, False), (
         f"{operation} read its first record holding (own, selected) = {reads[0]}"
     )
+
+
+def test_the_identities_lock_is_refused_inside_a_workspace_s(tmp_path: Path) -> None:
+    """Taking them the other way round in one place deadlocks against every
+    place that takes the identities' first, so it is a mistake on the spot."""
+    with shared_write_lock(tmp_path), pytest.raises(RuntimeError):
+        with shared_write_lock(get_identity_root()):
+            pass
+
+
+def test_a_workspace_s_lock_is_taken_inside_the_identities(tmp_path: Path) -> None:
+    with shared_write_lock(get_identity_root()), shared_write_lock(tmp_path):
+        # Taken again by a writer further in, which re-enters.
+        with shared_write_lock(get_identity_root()):
+            assert shared_write_lock_is_held(tmp_path)
+
+
+def test_a_member_write_holds_both_in_their_order(tmp_path: Path) -> None:
+    """A member's identity and the workspace's file of it are one change."""
+    held: list[tuple[bool, bool]] = []
+
+    @member_write_operation
+    def write() -> None:
+        held.append(
+            (
+                shared_write_lock_is_held(get_identity_root()),
+                shared_write_lock_is_held(tmp_path),
+            )
+        )
+
+    write()
+
+    assert held == [(True, True)]

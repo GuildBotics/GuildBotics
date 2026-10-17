@@ -417,7 +417,12 @@ class AppRuntime:
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
-        from guildbotics.utils.person_id import MemberConfigError
+        from guildbotics.utils.i18n_tool import t
+        from guildbotics.utils.person_id import (
+            IDENTITY_FILE,
+            MemberConfigError,
+            identity_members_dir,
+        )
 
         members: Sequence[Person | PersonConfigSummary]
         problem = ""
@@ -443,7 +448,23 @@ class AppRuntime:
             default_person_id = ""
         else:
             project = context.team.project
-            members = context.team.members
+            # A member whose identity this machine does not have is left out of
+            # the team, and is listed here so that it can be taken out.
+            waiting = [
+                member
+                for member in SimplePersonSetupService().list_person_configs(
+                    config_dir=self.get_config_status().config_dir or Path()
+                )
+                if not member.identity
+            ]
+            members = [*context.team.members, *waiting]
+            problem = "\n".join(
+                t(
+                    "member_config.identity_missing",
+                    path=identity_members_dir() / member.person_id / IDENTITY_FILE,
+                )
+                for member in waiting
+            )
             default_person_id = context.team.get_default_person_id()
         return TeamSummary(
             project=ProjectSummary(

@@ -75,6 +75,9 @@ from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import PROOF_PATH, TOKEN_SUBPROTOCOL
+from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from tests.guildbotics.members import write_member
 
 HTTP_OK = 200
 HTTP_ACCEPTED = 202
@@ -1767,9 +1770,8 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
     app = create_app(session_token="secret", runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
-    member_dir = config_dir / "team/members/alice"
-    member_dir.mkdir(parents=True, exist_ok=True)
-    (member_dir / "person.yml").write_text(
+    write_member(
+        config_dir,
         "\n".join(
             [
                 "person_id: alice",
@@ -1796,7 +1798,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "      enabled: True",
                 "      participation: social",
             ]
-        )
+        ),
     )
     team_dir = config_dir / "team"
     (team_dir / "project.yml").parent.mkdir(parents=True, exist_ok=True)
@@ -1804,9 +1806,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         "language: en\nservices:\n  chat_service:\n    name: slack\n"
     )
     runtime.config_status.project_file_exists = True
-    from guildbotics.utils.secret_store import KeyringSecretStore
-
-    store = KeyringSecretStore(config_dir)
+    store = identity_secret_store()
     store.set("ALICE_GITHUB_ACCESS_TOKEN", "token-a")
     store.set("ALICE_SLACK_BOT_TOKEN", "xoxb-a")
     store.set("ALICE_SLACK_APP_TOKEN", "xapp-a")
@@ -1846,12 +1846,12 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
             headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
-                "original_person_id": "alice",
+                "expected_revisions": payload["revisions"],
                 "person_type": "machine_user",
-                "person_id": "alice-renamed",
+                "person_id": "alice",
                 "person_name": "Alice Updated",
                 "is_active": False,
-                "git_email": "123+alice-renamed@users.noreply.github.com",
+                "git_email": "123+alice-b@users.noreply.github.com",
                 "roles": ["reviewer"],
                 "speaking_style": "updated",
                 "relationships": "updated",
@@ -1868,7 +1868,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 "accounts": {
                     "github": {
                         "account_type": "machine_user",
-                        "username": "alice-renamed",
+                        "username": "alice-b",
                         "access_token": "token-b",
                     },
                     "slack": {"bot_token": "xoxb-b", "app_token": "xapp-b"},
@@ -1879,44 +1879,63 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         )
         assert put_response.status_code == HTTP_OK
 
-        renamed_file = config_dir / "team/members/alice-renamed/person.yml"
-        updated = safe_load(renamed_file.read_text())
-        assert updated["person_id"] == "alice-renamed"
-        assert updated["name"] == "Alice Updated"
-        assert "reviewer" in updated["profile"]["roles"]
-        assert updated["profile"]["character"]["archetype"] == "creative_designer"
-        assert updated["account_info"] == {
-            "git_user": "Alice Updated",
-            "git_email": "123+alice-renamed@users.noreply.github.com",
-            "github_account_type": "machine_user",
-            "github_username": "alice-renamed",
+        # Who the member is and its accounts are its identity, which every
+        # workspace shares; what it does here is this workspace's.
+        identity = safe_load(
+            (identity_members_dir() / "alice" / IDENTITY_FILE).read_text()
+        )
+        assert identity["person_id"] == "alice"
+        assert identity["name"] == "Alice Updated"
+        assert identity["profile"] == {
+            "character": {
+                "archetype": "creative_designer",
+                "traits": ["creative", "playful"],
+                "interests": ["anime"],
+                "conversation_preferences": {
+                    "join_when": ["ux discussion"],
+                    "avoid_when": ["off-topic"],
+                    "contribution_style": ["user perspective"],
+                },
+            }
         }
-        assert updated["message_channels"][0]["name"] == "C09999999"
+        assert identity["account_info"] == {
+            "git_user": "Alice Updated",
+            "git_email": "123+alice-b@users.noreply.github.com",
+            "github_account_type": "machine_user",
+            "github_username": "alice-b",
+        }
+        member = safe_load((config_dir / "team/members/alice/member.yml").read_text())
+        assert member["profile"] == {"roles": {"reviewer": {}}}
+        assert member["message_channels"][0]["name"] == "C09999999"
         # The project's chat is Slack, which names a channel ID as an ID.
-        assert updated["message_channels"][0]["chat"] == {
+        assert member["message_channels"][0]["chat"] == {
             "enabled": True,
             "participation": "muted",
             "channel_id": "C09999999",
         }
-        store = KeyringSecretStore(config_dir)
-        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
-        assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") == "token-b"
-        assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") == "xoxb-b"
-        assert store.get("ALICE_RENAMED_SLACK_APP_TOKEN") == "xapp-b"
+        assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "token-b"
+        assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-b"
+        assert store.get("ALICE_SLACK_APP_TOKEN") == "xapp-b"
+        assert KeyringSecretStore(config_dir).keys() == []
 
-        delete_response = client.request(
-            "DELETE",
-            "/config/members/alice-renamed",
+        # Taken out of the workspace, the member keeps its identity...
+        removed = client.delete(
+            "/config/members/alice",
             headers={"X-GuildBotics-Session-Token": "secret"},
-            json={
-                "config_dir": str(config_dir),
-            },
         )
-        assert delete_response.status_code == HTTP_OK
-    assert not (config_dir / "team/members/alice-renamed/person.yml").exists()
-    store = KeyringSecretStore(config_dir)
-    assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") is None
-    assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") is None
+        assert removed.status_code == HTTP_OK
+        assert not (config_dir / "team/members/alice").exists()
+        assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-b"
+
+        # ...until it is deleted, credentials and all.
+        deleted = client.delete(
+            "/identities/alice",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+        assert deleted.status_code == HTTP_OK
+    assert not (identity_members_dir() / "alice").exists()
+    assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
+    assert store.get("ALICE_SLACK_BOT_TOKEN") is None
 
 
 def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
@@ -1943,17 +1962,16 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
             },
         )
     assert response.status_code == HTTP_OK
-    assert (config_dir / "team/members/new_member/person.yml").exists()
-    assert not (wrong_config_dir / "team/members/new_member/person.yml").exists()
+    assert (config_dir / "team/members/new_member/member.yml").exists()
+    assert not (wrong_config_dir / "team/members/new_member").exists()
 
 
 def test_default_person_endpoint_writes_runtime_config_dir(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
     app = create_app(session_token="secret", runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
-    (config_dir / "team/members/alice").mkdir(parents=True, exist_ok=True)
+    write_member(config_dir, {"person_id": "alice", "name": "Alice"})
     (config_dir / "team/project.yml").write_text("language: en")
-    (config_dir / "team/members/alice/person.yml").write_text("person_id: alice")
     runtime.config_status.project_file_exists = True
 
     with TestClient(app) as client:
@@ -2002,7 +2020,7 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
 
     assert response.status_code == HTTP_OK
     person_config = safe_load(
-        (config_dir / "team/members/local-agent/person.yml").read_text()
+        (identity_members_dir() / "local-agent" / IDENTITY_FILE).read_text()
     )
     assert person_config["person_id"] == "local-agent"
     assert "person_type" not in person_config
@@ -2852,9 +2870,8 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
-            "original_person_id": "bob",
             "person_type": "machine_user",
-            "person_id": "alice",
+            "person_id": "bob",
             "person_name": "Alice",
             "is_active": True,
             "git_email": "1+alice@users.noreply.github.com",
@@ -2865,7 +2882,7 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json() == {
         "code": "person_id_mismatch",
-        "message": "original_person_id must match the path parameter.",
+        "message": "person_id must match the path parameter.",
         "context": {},
     }
 
@@ -2889,7 +2906,6 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
             "kinds": ["ticket_service", "code_hosting_service"],
             "avatar": False,
             # One Branvil per project, handed the members' GitHub credentials.
-            "shared": ["base_url"],
             "credentials_from": ["github"],
         },
         {
@@ -2897,7 +2913,6 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
             "title": "GitHub",
             "kinds": ["ticket_service", "code_hosting_service"],
             "avatar": True,
-            "shared": [],
             "credentials_from": [],
         },
         {
@@ -2905,7 +2920,6 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
             "title": "Slack",
             "kinds": ["chat_service"],
             "avatar": True,
-            "shared": [],
             "credentials_from": [],
         },
     ]

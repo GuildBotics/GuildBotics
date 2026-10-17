@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from guildbotics.entities.team import IDENTITY_FIELDS, PARTICIPATION_FIELDS
 from guildbotics.integrations.provider import SetupError
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup import setup_service
@@ -12,13 +13,14 @@ from guildbotics.setup.setup_service import (
     MEMBER_SECRET_NAMES,
     PersonConfigSnapshot,
     PersonSetupInput,
-    PersonUpdateInput,
     ProjectSetupInput,
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
+from guildbotics.utils.avatar import get_member_avatar_dir
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.person_id import IDENTITY_FILE, MEMBER_FILE, identity_members_dir
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 
 BOARD_URL = "https://github.com/orgs/GuildBotics/projects/1"
 
@@ -308,14 +310,28 @@ def _person(config_dir: Path, **overrides: Any) -> PersonSetupInput:
     return PersonSetupInput(**payload)
 
 
-def _stored_person(config_dir: Path, person_id: str = "alice") -> dict[str, Any]:
-    return load_yaml_file(config_dir / f"team/members/{person_id}/person.yml")
+def _identity_file(person_id: str = "alice") -> Path:
+    return identity_members_dir() / person_id / IDENTITY_FILE
 
 
-def test_write_person_creates_person_config_and_masks_secrets(tmp_path: Path) -> None:
+def _member_file(config_dir: Path, person_id: str = "alice") -> Path:
+    return config_dir / "team/members" / person_id / MEMBER_FILE
+
+
+def _identity(person_id: str = "alice") -> dict[str, Any]:
+    """Who the member is, in every workspace."""
+    return load_yaml_file(_identity_file(person_id))
+
+
+def _participation(config_dir: Path, person_id: str = "alice") -> dict[str, Any]:
+    """What the member does in the workspace of ``config_dir``."""
+    return load_yaml_file(_member_file(config_dir, person_id))
+
+
+def test_save_person_creates_person_config_and_masks_secrets(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
 
-    result = SimplePersonSetupService().write_person(
+    result = SimplePersonSetupService().save_person(
         _person(
             config_dir,
             person_id="alice-bot",
@@ -342,33 +358,137 @@ def test_write_person_creates_person_config_and_masks_secrets(tmp_path: Path) ->
         )
     )
 
-    person_file = config_dir / "team/members/alice-bot/person.yml"
-    assert person_file in {created_file.path for created_file in result.files}
-    person = _stored_person(config_dir, "alice-bot")
-    assert person["person_id"] == "alice-bot"
-    assert set(person["profile"]["roles"]) == {"architect", "project_manager"}
+    identity_file = _identity_file("alice-bot")
+    store = identity_secret_store()
+    assert [(created.path, created.action) for created in result.files] == [
+        (identity_file, "create"),
+        (_member_file(config_dir, "alice-bot"), "create"),
+        (store.location, "update"),
+    ]
+    identity = _identity("alice-bot")
+    assert identity["person_id"] == "alice-bot"
     assert (
-        person["profile"]["character"]["archetype"]
+        identity["profile"]["character"]["archetype"]
         == "strategic_project_manager_architect"
     )
-    assert person["account_info"] == {
+    assert identity["account_info"] == {
         "git_user": "Alice Bot",
         "git_email": "1+alice-bot@users.noreply.github.com",
         "github_account_type": "machine_user",
         "github_username": "alice-bot",
     }
-    assert "secret-token" not in person_file.read_text()
-    assert (
-        KeyringSecretStore(config_dir).get("ALICE_BOT_GITHUB_ACCESS_TOKEN")
-        == "secret-token"
-    )
+    assert set(_participation(config_dir, "alice-bot")["profile"]["roles"]) == {
+        "architect",
+        "project_manager",
+    }
+    assert "secret-token" not in identity_file.read_text()
+    assert store.get("ALICE_BOT_GITHUB_ACCESS_TOKEN") == "secret-token"
+    assert KeyringSecretStore(config_dir).keys() == []
     assert not (tmp_path / ".env").exists()
+
+
+def test_save_person_keeps_identity_and_participation_in_their_own_files(
+    tmp_path: Path,
+) -> None:
+    """Who the member is goes to its identity, what it does in the workspace
+    to the workspace's file, and the team loads them joined."""
+    config_dir = tmp_path / ".guildbotics/config"
+    _write_project(config_dir, {"chat_service": {"name": "slack"}})
+
+    SimplePersonSetupService().save_person(
+        _person(
+            config_dir,
+            relationships="Reports to {pm}.",
+            character={"archetype": "strategic_pm"},
+            chat_channels=["general"],
+            routine_commands=["reports/daily"],
+            task_schedules=[{"command": "reports/weekly", "schedules": ["0 9 * * 1"]}],
+        )
+    )
+
+    identity = _identity()
+    participation = _participation(config_dir)
+    assert set(identity) == IDENTITY_FIELDS
+    assert identity["profile"] == {"character": {"archetype": "strategic_pm"}}
+    assert set(participation) == PARTICIPATION_FIELDS
+    assert participation["profile"] == {"roles": {"architect": {}}}
+    [member] = YamlTeamLoader(str(config_dir / "team")).load().members
+    assert member.person_id == "alice"
+    assert member.name == "Alice"
+    assert member.relationships == "Reports to {pm}."
+    assert member.routine_commands == ["reports/daily"]
+    assert [channel.name for channel in member.message_channels] == ["general"]
+
+
+def test_a_second_workspace_joins_the_same_identity(tmp_path: Path) -> None:
+    """Saving a member into another workspace changes the one identity and
+    gives that workspace its own participation."""
+    first = tmp_path / "first/.guildbotics/config"
+    second = tmp_path / "second/.guildbotics/config"
+    _write_project(second, {"ticket_service": {"name": "local"}})
+    service = SimplePersonSetupService()
+    service.save_person(
+        _person(
+            first,
+            accounts={
+                "github": {
+                    "account_type": "machine_user",
+                    "username": "alice",
+                    "access_token": "token-a",
+                }
+            },
+        )
+    )
+
+    snapshot = service.read_person_config(config_dir=second, person_id="alice")
+    assert snapshot.participating is False
+    assert snapshot.person_name == "Alice"
+    assert snapshot.accounts["github"]["has_access_token"] is True
+    assert [
+        (identity.person_id, identity.participating)
+        for identity in service.list_identities(config_dir=second)
+    ] == [("alice", False)]
+
+    service.save_person(_person(second, person_name="Alice B", is_active=False))
+
+    assert _identity()["name"] == "Alice B"
+    assert _participation(first)["is_active"] is True
+    assert _participation(second)["is_active"] is False
+    # Joining a workspace with tickets patrols its board.
+    assert _participation(second)["routine_commands"] == [
+        "workflows/ticket_driven_workflow"
+    ]
+    assert "routine_commands" not in _participation(first)
+    assert identity_secret_store().get("ALICE_GITHUB_ACCESS_TOKEN") == "token-a"
+    assert [
+        (identity.person_id, identity.participating)
+        for identity in service.list_identities(config_dir=second)
+    ] == [("alice", True)]
+
+
+def test_list_person_configs_reports_a_member_without_its_identity(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    service = SimplePersonSetupService()
+    service.save_person(_person(config_dir))
+    service.save_person(_person(config_dir, person_id="bob", person_name="Bob"))
+    shutil.rmtree(identity_members_dir() / "bob")
+
+    assert [
+        (member.person_id, member.name, member.person_type, member.identity)
+        for member in service.list_person_configs(config_dir=config_dir)
+    ] == [("alice", "Alice", "machine_user", True), ("bob", "", "", False)]
+    # A member whose identity is missing is read so that it can be removed.
+    snapshot = service.read_person_config(config_dir=config_dir, person_id="bob")
+    assert snapshot.participating is True
+    assert snapshot.person_name == ""
 
 
 def test_account_info_merges_every_providers_account(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             accounts={
@@ -383,7 +503,7 @@ def test_account_info_merges_every_providers_account(tmp_path: Path) -> None:
         )
     )
 
-    assert _stored_person(config_dir)["account_info"] == {
+    assert _identity()["account_info"] == {
         "git_user": "Alice",
         "git_email": "1+alice@users.noreply.github.com",
         "github_account_type": "github_apps",
@@ -415,7 +535,7 @@ def test_chat_channels_are_named_as_the_projects_chat_names_them(
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"chat_service": {"name": "slack"}})
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             chat_channels=["#general", "C0123456789"],
@@ -423,7 +543,7 @@ def test_chat_channels_are_named_as_the_projects_chat_names_them(
         )
     )
 
-    assert _stored_person(config_dir)["message_channels"] == [
+    assert _participation(config_dir)["message_channels"] == [
         {
             "name": "general",
             "used_as": ["internal_communication"],
@@ -456,11 +576,11 @@ def test_chat_channels_are_names_without_a_chat_that_reads_ids(
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, services)
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(config_dir, chat_channels=["#C0123456789"])
     )
 
-    [channel] = _stored_person(config_dir)["message_channels"]
+    [channel] = _participation(config_dir)["message_channels"]
     assert channel["channel_info"] == {}
     assert channel["chat"] == {
         "enabled": True,
@@ -469,10 +589,10 @@ def test_chat_channels_are_names_without_a_chat_that_reads_ids(
     }
 
 
-def test_write_human_person_clears_agent_execution_settings(tmp_path: Path) -> None:
+def test_save_human_person_clears_agent_execution_settings(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             person_type="human",
@@ -504,28 +624,28 @@ def test_write_human_person_clears_agent_execution_settings(tmp_path: Path) -> N
         )
     )
 
-    person = _stored_person(config_dir)
-    assert person["is_active"] is False
-    assert person["account_info"] == {
+    identity = _identity()
+    assert identity["account_info"] == {
         "git_user": "Alice",
         "git_email": "alice@example.com",
         "github_account_type": "human",
         "github_username": "alice",
         "slack_user_id": "U012345678",
     }
-    assert person.get("speaking_style", "") == ""
-    assert person.get("relationships", "") == ""
-    assert person["profile"] == {"roles": {"product": {}}}
-    assert "message_channels" not in person
-    assert "routine_commands" not in person
-    assert "task_schedules" not in person
-    assert KeyringSecretStore(config_dir).keys() == []
+    assert identity.get("speaking_style", "") == ""
+    assert identity.get("relationships", "") == ""
+    assert "profile" not in identity
+    assert _participation(config_dir) == {
+        "is_active": False,
+        "profile": {"roles": {"product": {}}},
+    }
+    assert identity_secret_store().keys() == []
 
 
-def test_write_person_handles_braces_in_free_text(tmp_path: Path) -> None:
+def test_save_person_handles_braces_in_free_text(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             person_id="brace-user",
@@ -535,23 +655,24 @@ def test_write_person_handles_braces_in_free_text(tmp_path: Path) -> None:
         )
     )
 
-    person = _stored_person(config_dir, "brace-user")
-    assert person["name"] == "Brace {User}"
-    assert person["speaking_style"] == "Use {structured} notes"
-    assert person["relationships"] == "Depends on {pm}"
+    identity = _identity("brace-user")
+    assert identity["name"] == "Brace {User}"
+    assert identity["speaking_style"] == "Use {structured} notes"
+    assert identity["relationships"] == "Depends on {pm}"
 
 
 def test_read_person_config_exposes_avatar_timestamp(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     service = SimplePersonSetupService()
-    service.write_person(_person(config_dir))
+    service.save_person(_person(config_dir))
 
     # Without an avatar file the timestamp defaults to 0.
     snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
     assert snapshot.avatar_timestamp == 0
 
-    # Once an avatar file exists, its mtime is exposed as an int timestamp.
-    avatar_path = config_dir / "team/members/alice/avatar.png"
+    # Once an avatar file exists in the identity, its mtime is exposed as an
+    # int timestamp.
+    avatar_path = get_member_avatar_dir("alice") / "avatar.png"
     avatar_path.write_bytes(b"image-bytes")
     snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
     assert snapshot.avatar_timestamp == int(avatar_path.stat().st_mtime)
@@ -561,7 +682,7 @@ def test_read_person_config_shows_each_providers_account(tmp_path: Path) -> None
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"chat_service": {"name": "slack"}})
     service = SimplePersonSetupService()
-    service.write_person(
+    service.save_person(
         _person(
             config_dir,
             character={"archetype": "creative_designer"},
@@ -603,13 +724,14 @@ def test_read_person_config_shows_each_providers_account(tmp_path: Path) -> None
     assert snapshot.chat_channels == ["C1"]
     assert snapshot.chat_channel_participation == {"C1": "muted"}
     assert snapshot.character == {"archetype": "creative_designer"}
+    assert snapshot.participating is True
 
 
 def test_member_config_round_trips_patrol_settings(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     service = SimplePersonSetupService()
 
-    service.write_person(
+    service.save_person(
         _person(
             config_dir,
             routine_commands=["workflows/ticket_driven_workflow"],
@@ -632,27 +754,22 @@ def test_member_config_round_trips_patrol_settings(tmp_path: Path) -> None:
         }
     ]
 
-    service.update_person(
-        PersonUpdateInput(
-            **_person(config_dir, routine_commands=[], task_schedules=[]).model_dump(),
-            original_person_id="alice",
-        )
-    )
+    service.save_person(_person(config_dir, routine_commands=[], task_schedules=[]))
 
-    updated = _stored_person(config_dir)
+    updated = _participation(config_dir)
     assert "routine_commands" not in updated
     assert "task_schedules" not in updated
 
 
-def test_write_person_seeds_default_patrol_when_the_project_has_tickets(
+def test_save_person_seeds_default_patrol_when_the_project_has_tickets(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"ticket_service": {"name": "local"}})
 
-    SimplePersonSetupService().write_person(_person(config_dir))
+    SimplePersonSetupService().save_person(_person(config_dir))
 
-    assert _stored_person(config_dir)["routine_commands"] == [
+    assert _participation(config_dir)["routine_commands"] == [
         "workflows/ticket_driven_workflow"
     ]
 
@@ -664,44 +781,41 @@ def test_write_person_seeds_default_patrol_when_the_project_has_tickets(
         pytest.param({"code_hosting_service": {"name": "local"}}, id="no-tickets"),
     ],
 )
-def test_write_person_does_not_seed_default_patrol_without_tickets(
+def test_save_person_does_not_seed_default_patrol_without_tickets(
     tmp_path: Path, services: dict[str, Any] | None
 ) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     if services is not None:
         _write_project(config_dir, services)
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             accounts={"github": {"account_type": "machine_user", "username": "a"}},
         )
     )
 
-    assert "routine_commands" not in _stored_person(config_dir)
+    assert "routine_commands" not in _participation(config_dir)
 
 
-def test_update_person_does_not_seed_default_patrol(tmp_path: Path) -> None:
+def test_saving_a_participating_member_again_does_not_seed_default_patrol(
+    tmp_path: Path,
+) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"ticket_service": {"name": "local"}})
     service = SimplePersonSetupService()
-    service.write_person(_person(config_dir, routine_commands=["reports/daily"]))
+    service.save_person(_person(config_dir, routine_commands=["reports/daily"]))
 
-    service.update_person(
-        PersonUpdateInput(
-            **_person(config_dir, routine_commands=[]).model_dump(),
-            original_person_id="alice",
-        )
-    )
+    service.save_person(_person(config_dir, routine_commands=[]))
 
-    assert "routine_commands" not in _stored_person(config_dir)
+    assert "routine_commands" not in _participation(config_dir)
 
 
-def test_write_person_omits_patrol_and_schedule_for_human(tmp_path: Path) -> None:
+def test_save_person_omits_patrol_and_schedule_for_human(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"ticket_service": {"name": "local"}})
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             person_type="human",
@@ -711,7 +825,7 @@ def test_write_person_omits_patrol_and_schedule_for_human(tmp_path: Path) -> Non
         )
     )
 
-    stored = _stored_person(config_dir)
+    stored = _participation(config_dir)
     assert "routine_commands" not in stored
     assert "task_schedules" not in stored
 
@@ -719,17 +833,17 @@ def test_write_person_omits_patrol_and_schedule_for_human(tmp_path: Path) -> Non
 def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     service = SimplePersonSetupService()
-    service.write_person(_person(config_dir))
-    person_file = config_dir / "team/members/alice/person.yml"
-    person_data = load_yaml_file(person_file)
-    person_data["task_schedules"] = [
+    service.save_person(_person(config_dir))
+    member_file = _member_file(config_dir)
+    participation = load_yaml_file(member_file)
+    participation["task_schedules"] = [
         {"command": "reports/morning_summary", "schedules": ["0 9 * * 1-5"]},
         {"command": "bad", "schedules": ["invalid cron"]},
         "not a schedule",
     ]
     # Hand-written fixture content simulating a user's manual edit; no product
     # writer produces it, so it is written directly rather than through one.
-    person_file.write_text(dump_yaml(person_data), encoding="utf-8")
+    member_file.write_text(dump_yaml(participation), encoding="utf-8")
 
     snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
 
@@ -738,10 +852,12 @@ def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None
     ]
 
 
-def test_update_rename_and_delete_follow_the_member(tmp_path: Path) -> None:
+def test_remove_keeps_the_identity_and_delete_identity_removes_it(
+    tmp_path: Path,
+) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     service = SimplePersonSetupService()
-    service.write_person(
+    service.save_person(
         _person(
             config_dir,
             accounts={
@@ -749,52 +865,42 @@ def test_update_rename_and_delete_follow_the_member(tmp_path: Path) -> None:
                     "account_type": "machine_user",
                     "username": "alice",
                     "access_token": "token-a",
-                }
+                },
+                "slack": {"bot_token": "xoxb-a", "app_token": "xapp-a"},
             },
         )
     )
-
-    service.update_person(
-        PersonUpdateInput(
-            **_person(
-                config_dir,
-                person_id="alice-renamed",
-                person_name="Alice Updated",
-                is_active=False,
-                roles=["reviewer"],
-                character={"archetype": "strategic_pm"},
-                accounts={
-                    "github": {
-                        "account_type": "machine_user",
-                        "username": "alice-renamed",
-                        "access_token": "token-b",
-                    },
-                    "slack": {"bot_token": "xoxb-b", "app_token": "xapp-b"},
-                },
-            ).model_dump(),
-            original_person_id="alice",
-        )
-    )
-
-    renamed = _stored_person(config_dir, "alice-renamed")
-    assert not (config_dir / "team/members/alice").exists()
-    assert renamed["person_id"] == "alice-renamed"
-    assert renamed["name"] == "Alice Updated"
-    assert renamed["account_info"]["github_username"] == "alice-renamed"
-    assert renamed["profile"]["character"] == {"archetype": "strategic_pm"}
-    store = KeyringSecretStore(config_dir)
-    assert sorted(store.keys()) == [
-        "ALICE_RENAMED_GITHUB_ACCESS_TOKEN",
-        "ALICE_RENAMED_SLACK_APP_TOKEN",
-        "ALICE_RENAMED_SLACK_BOT_TOKEN",
+    avatar = get_member_avatar_dir("alice") / "avatar.png"
+    avatar.write_bytes(b"image-bytes")
+    store = identity_secret_store()
+    keys = [
+        "ALICE_GITHUB_ACCESS_TOKEN",
+        "ALICE_SLACK_APP_TOKEN",
+        "ALICE_SLACK_BOT_TOKEN",
     ]
-    assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") == "token-b"
-    assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") == "xoxb-b"
+    assert sorted(store.keys()) == keys
 
-    service.delete_person(config_dir=config_dir, person_id="alice-renamed")
+    service.remove_person(config_dir=config_dir, person_id="alice")
 
-    assert not (config_dir / "team/members/alice-renamed").exists()
+    assert not (config_dir / "team/members/alice").exists()
+    assert _identity()["name"] == "Alice"
+    assert avatar.exists()
+    assert sorted(store.keys()) == keys
+    assert [
+        (identity.person_id, identity.participating)
+        for identity in service.list_identities(config_dir=config_dir)
+    ] == [("alice", False)]
+    with pytest.raises(SetupError) as removed:
+        service.remove_person(config_dir=config_dir, person_id="alice")
+    assert removed.value.code == "person_not_found"
+
+    service.delete_identity(person_id="alice")
+
+    assert not (identity_members_dir() / "alice").exists()
     assert store.keys() == []
+    with pytest.raises(SetupError) as deleted:
+        service.read_person_config(config_dir=config_dir, person_id="alice")
+    assert deleted.value.code == "person_not_found"
 
 
 def test_intelligence_templates_are_copied_byte_for_byte(
@@ -848,7 +954,7 @@ def test_chat_channels_and_their_policies_are_named_without_the_hash(
     config_dir = tmp_path / ".guildbotics/config"
     _write_project(config_dir, {"chat_service": {"name": "slack"}})
 
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person(
             config_dir,
             chat_channels=[" #general ", "  "],
@@ -856,7 +962,7 @@ def test_chat_channels_and_their_policies_are_named_without_the_hash(
         )
     )
 
-    [channel] = _stored_person(config_dir)["message_channels"]
+    [channel] = _participation(config_dir)["message_channels"]
     assert channel["name"] == "general"
     assert channel["chat"]["participation"] == "social"
 

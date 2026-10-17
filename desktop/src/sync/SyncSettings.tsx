@@ -73,7 +73,8 @@ export function SyncSettings() {
       ) : (
         <ConnectCard />
       )}
-      <SecretsCard />
+      <SecretsCard scope="identities" />
+      <SecretsCard scope="workspace" />
       <UnsendableChangesCard />
       <RejectedChangesCard />
       <DevicesCard />

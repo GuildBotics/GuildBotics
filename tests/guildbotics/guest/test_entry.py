@@ -36,6 +36,7 @@ from guildbotics.intelligences.agent_runtime.wire import (
     CommandRequest,
 )
 from guildbotics.utils.fileio import GUILDBOTICS_CONFIG_DIR
+from tests.guildbotics.members import write_member
 
 _PROBE = """
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
@@ -61,9 +62,7 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (config / "team" / "project.yml").write_text(
         "name: demo\nlanguage: en\n", encoding="utf-8"
     )
-    (config / "team" / "members" / "aiko" / "person.yml").write_text(
-        "person_id: aiko\nname: Aiko\nis_active: true\n", encoding="utf-8"
-    )
+    write_member(config, "person_id: aiko\nname: Aiko\nis_active: true\n")
     (config / "commands").mkdir()
     monkeypatch.setenv(GUILDBOTICS_CONFIG_DIR, str(config))
     return config
