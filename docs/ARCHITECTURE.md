@@ -41,7 +41,7 @@ guildbotics/
 ├── setup/           # Workspace and member setup (setup_service) used by the GUI; per-provider setup lives in integrations/<provider>/setup.py
 ├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
 ├── capabilities/    # Member-side code-host/git/chat/memory operations + domain events, judgments (decisions/)
-├── integrations/    # Provider descriptors and per-kind selection, the write scope, the receiving port; GitHub / Slack / local (the reference provider)
+├── integrations/    # Provider descriptors and per-kind selection, the write scope, the receiving port, the patrol / readiness / ticket selection rules; GitHub / Branvil / Slack / local (the reference provider)
 ├── observability/   # Diagnostics and activity record writers, trace status, interactive sessions
 ├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
 ├── hub/             # The bare repositories and relay a hub holds, and reaching one over OpenSSH
@@ -163,8 +163,8 @@ workflow (orchestration)
   `repository/pr_checks`): bundled Python commands combine the pages returned by
   the common code-hosting service. The existing member broker carries each read;
   the host selects fixed REST routes or GraphQL documents, validates continuations,
-  and records observed work targets. The code host's `readiness()` (GitHub:
-  `integrations/github/pull_requests.py`) is the one readiness, shared by the
+  and records observed work targets. The code host's `readiness()` (judged by
+  `integrations/readiness.py` from what the provider reads) is the one readiness, shared by the
   inspection, push, and completion paths. An agent already
   inside a command calls `/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry <name> <args>`
   to run a child in that environment under the main command's access contract.
@@ -224,6 +224,8 @@ flowchart LR
 
     Code --> GitHub["github"]
     Tickets --> GitHub
+    Code --> Branvil["branvil"]
+    Tickets --> Branvil
     Chat --> Slack["slack"]
     Listener --> Slack
     Code --> Local["local"]
@@ -260,6 +262,17 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
 - **Write scope.** Each service's configuration names a scope (an owner on GitHub); a
   write goes only to a repository or tracker directly in it (`check_path`), a push only
   to the code host's.
+- **Selection rules are GuildBotics' own.** GitHub and Branvil decide which pull
+  request asks something of a member (`integrations/pull_request_patrol.py`), whether a
+  head may be reported complete (`integrations/readiness.py`), and whether an assigned
+  ticket is a member's work now (`integrations/ticket_selection.py`) by applying these
+  shared rules to the snapshots they read; the services keep only their own data. The
+  reference provider `local` keeps its own simpler rules by design.
+
+`branvil` (`integrations/branvil/`) is a code host and tickets of a
+[Branvil](branvil_integration.en.md) service that every machine reaches at the same
+base URL. Its API answers raw data (comments with an opaque `meta` carrying a workflow
+status, reviews, threads, checks); the provider applies the rules above to it.
 
 ## 4. Workflow Invocation
 

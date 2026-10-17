@@ -614,6 +614,7 @@ class WorkspaceSyncService:
                 remote_url,
                 status.workspace_id,
                 ensure_device_identity().device_id,
+                workspace_root=workspace_root,
                 on_live_state=self._receive_live_state,
                 on_live_expired=self._receive_live_expired,
                 on_head_updated=manager.wake,

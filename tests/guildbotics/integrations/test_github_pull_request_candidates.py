@@ -297,10 +297,7 @@ async def test_review_limit_converts_the_pr_to_a_draft_then_announces_it(monkeyp
         "",
         pull_url(2),
     )
-    assert (
-        t("integrations.github.code_hosting_service.review_limit_reached", count=3)
-        in body
-    )
+    assert t("integrations.pull_request_patrol.review_limit_reached", count=3) in body
 
     # The draft is the human's: neither patrol acts on it.
     node["comments"]["nodes"].append(_posted(github, 0, "2026-01-09T00:00:00Z"))
@@ -330,8 +327,7 @@ async def test_a_failed_draft_conversion_holds_the_pr_without_the_limit_notice(
     status = parse_workflow_status_comment(body)
     assert status is not None and status.reason == "failed"
     assert (
-        t("integrations.github.code_hosting_service.review_limit_draft_failed", count=3)
-        in body
+        t("integrations.pull_request_patrol.review_limit_draft_failed", count=3) in body
     )
 
     # The failure notice holds the PR until someone else acts on it.

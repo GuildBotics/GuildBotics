@@ -19,6 +19,8 @@ export type ServiceUi = {
     value: ServiceSelection;
     onChange(value: ServiceSelection): void;
     errors: FieldErrors;
+    /** Every kind the project names, as the form holds them. */
+    services: ProjectServices;
   }): ReactNode;
 };
 

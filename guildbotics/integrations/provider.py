@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from html import escape
 from logging import Logger
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -107,13 +109,88 @@ class SetupItems(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class AppCredential(BaseModel):
+    """An app installed for a member on a host: what signs in as it."""
+
+    app_id: str
+    installation_id: str
+    private_key: str
+
+
+class HostCredential(BaseModel):
+    """A member's credential on a host, as the provider of that host hands it
+    to the member's other accounts: a token, or an app."""
+
+    token: str = ""
+    app: AppCredential | None = None
+
+
+@dataclass(frozen=True)
+class SavedMember:
+    """A member as its accounts see it while it is saved or deleted."""
+
+    #: The member's ID, as it is saved.
+    person_id: str
+    name: str
+    human: bool
+    #: The ``account_info`` entries of all its accounts.
+    account_info: Mapping[str, str]
+    #: A secret's value by its member-relative name, as the save leaves it
+    #: ("" for none).
+    get_secret: Callable[[str], str]
+    #: ``project.services``: each kind's provider name and items.
+    services: Mapping[str, Mapping[str, Any]]
+    #: The member's credentials on other hosts, by the name of the provider
+    #: that hands each over.
+    credentials: Mapping[str, HostCredential] = field(default_factory=dict)
+    #: The member's picture, as GuildBotics keeps it; ``None`` for none.
+    avatar: Path | None = None
+
+
 class MemberAccount(SetupItems):
     """A member's account with a provider, as the member screen edits it.
 
     A provider's account is the fields of its form; it is stored as
     ``account_info`` entries and the member's secrets, and read back as
-    :meth:`view`.
+    :meth:`view`. What a save needs of the provider itself is done by
+    :meth:`prepare` before the save takes the workspace's lock, so that no
+    write waits on a provider, and what the save's outcome makes safe to
+    undo, by :meth:`settled` once it is over.
     """
+
+    async def prepare(self, member: SavedMember) -> None:
+        """Obtain from the provider what saving ``member`` needs, which
+        :meth:`stored` then stores. Nothing the stored member relies on is
+        undone: the save may yet be refused.
+
+        Raises:
+            SetupError: If the provider refuses it; nothing is saved.
+        """
+
+    @classmethod
+    async def avatar_changed(cls, member: SavedMember) -> None:
+        """Hand the provider ``member``'s picture, which has just changed, as
+        :meth:`prepare` does on every save.
+
+        Raises:
+            SetupError: If the provider refuses it; the picture stays changed
+                in GuildBotics.
+        """
+
+    @classmethod
+    async def removed(cls, member: SavedMember) -> None:
+        """Undo with the provider what saving ``member`` obtained, before the
+        member is deleted.
+
+        Raises:
+            SetupError: If the provider refuses it; the member is kept.
+        """
+
+    @classmethod
+    def credential(cls, member: SavedMember) -> HostCredential | None:
+        """The member's credential on this provider's host, which its other
+        accounts are handed when it is saved."""
+        return None
 
     def stored(
         self, person_id: str, human: bool
@@ -126,8 +203,9 @@ class MemberAccount(SetupItems):
         """
         raise NotImplementedError
 
-    def saved(self) -> None:
-        """The member was saved with :meth:`stored`."""
+    async def settled(self, saved: bool) -> None:
+        """The save that :meth:`prepare` was for is over: ``saved`` with
+        :meth:`stored`, or refused. It never fails the save."""
 
     @classmethod
     def view(
@@ -158,6 +236,36 @@ class Page:
     status_code: int = 200
 
 
+_PAGE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GuildBotics</title>
+<style>
+body {{ font-family: system-ui, sans-serif; margin: 4rem auto; max-width: 40rem;
+       text-align: center; color: #333; }}
+button {{ font-size: 1rem; padding: 0.5rem 1.5rem; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
+def html_page(body: str, status_code: int = 200) -> Page:
+    """A page of GuildBotics with ``body``, which is HTML."""
+    return Page(html=_PAGE.format(body=body), status_code=status_code)
+
+
+def message_page(*paragraphs: str, status_code: int = 200) -> Page:
+    """A page of GuildBotics saying ``paragraphs``, which are text."""
+    return html_page(
+        "".join(f"<p>{escape(paragraph)}</p>" for paragraph in paragraphs),
+        status_code,
+    )
+
+
 def page_path(provider: str, page: str) -> str:
     """Where a provider's page is served: a page is opened by a browser, which
     carries no session token."""
@@ -179,6 +287,12 @@ class ProviderSetup:
     #: The ``chat`` entries of a member's channel, from how the member screen
     #: names it.
     chat_channel: Callable[[str], dict[str, str]] | None = None
+    #: The items every kind it serves must give alike.
+    shared: frozenset[str] = frozenset()
+    #: The providers whose member credentials its member accounts are handed
+    #: (see :meth:`MemberAccount.credential`): a member's account with one is
+    #: edited wherever this provider is used.
+    credentials_from: frozenset[str] = frozenset()
     operations: Mapping[str, Operation] = field(default_factory=dict)
     #: Pages by name, from the query of the request that opened them.
     pages: Mapping[str, Callable[[Mapping[str, str]], Awaitable[Page]]] = field(
@@ -196,6 +310,9 @@ class Provider:
     secret_keys: frozenset[str] = frozenset()
     #: All the ``account_info`` keys the provider's package reads.
     account_info_keys: frozenset[str] = frozenset()
+    #: The workspace Secrets it keeps, by name: no member's, so its package
+    #: reads them from the workspace's store, and the host alone uses them.
+    workspace_secret_keys: frozenset[str] = frozenset()
     code_hosting_service: (
         Callable[[Logger, Person, Team], CodeHostingService] | None
     ) = None
@@ -214,3 +331,9 @@ class Provider:
     #: What the setup screens ask of it; a provider without one is not offered
     #: there.
     setup: ProviderSetup | None = None
+    #: The port of the hub machine's loopback the project's services reach it
+    #: at (given ``project.services``), which every other machine forwards to
+    #: the hub; ``None`` when it is reached otherwise.
+    hub_port: Callable[[Mapping[str, Mapping[str, Any]]], int | None] = (
+        lambda services: None
+    )

@@ -542,3 +542,30 @@ def test_verify_checks_env_keys_and_github_credentials(
     assert checks["agent_environment"].status == "ok"
     assert checks["cli_agent_environment"].status == "ok"
     assert response.errors == []
+
+
+@pytest.mark.parametrize("held", [True, False])
+def test_verify_checks_the_workspace_secrets_a_used_provider_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held: bool
+) -> None:
+    _isolated_config_env(tmp_path, monkeypatch)
+    config = _config_status(tmp_path)
+    _store_secrets(tmp_path, {"BRANVIL_ADMIN_TOKEN": "bvt_admin"} if held else {})
+    _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
+    _write_cli_agent(tmp_path, "codex")
+    services = {"ticket_service": {"name": "branvil", "workspace": "acme"}}
+
+    response = VerifyService().verify(
+        config=config, team=Team(project=Project(services=services), members=[])
+    )
+    unused = VerifyService().verify(
+        config=config, team=Team(project=Project(), members=[])
+    )
+
+    [check] = [c for c in response.checks if c.code == "provider_secret"]
+    assert (check.status, check.target, check.context) == (
+        "ok" if held else "error",
+        "BRANVIL_ADMIN_TOKEN",
+        {"provider": "branvil"},
+    )
+    assert "provider_secret" not in _checks_by_code(unused)

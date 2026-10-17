@@ -8,7 +8,10 @@ the ids their reads give -- and names its repository, its tracker, and a
 repository outside the member's scope by the paths its provider spells.
 
 GitHub answers from :class:`GitHubDouble`, a GitHub that keeps what it is sent
-and checks that what a request names belongs to what the path says; ``local``
+and checks that what a request names belongs to what the path says; Branvil
+from :class:`~tests.guildbotics.integrations.branvil_double.BranvilDouble`,
+which does the same by Branvil's API, with tickets numbered in the
+repository and the board of its workspace; ``local``
 keeps its files under the test's workspace, with a repository three names deep
 and tickets keyed ``T-<n>`` in a tracker of their own.
 
@@ -38,6 +41,7 @@ from guildbotics.integrations.github.repository_scope import NODE_REPOSITORY
 from guildbotics.integrations.local import store
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
+from tests.guildbotics.integrations import branvil_double
 from tests.guildbotics.local_code_host import tracker, write
 
 MEMBER = "aiko"
@@ -89,21 +93,25 @@ class Harness:
 
 
 def harness(name: str, tmp_path: Path, monkeypatch) -> Harness:
-    return {"github": _github, "local": _local}[name](tmp_path, monkeypatch)
+    return {"branvil": _branvil, "github": _github, "local": _local}[name](
+        tmp_path, monkeypatch
+    )
 
 
-def _services(name: str, scope: str, **board: str) -> tuple[Any, Any]:
+def _services(
+    name: str, scope: str, *, key: str = "owner", **board: str
+) -> tuple[Any, Any]:
     person = Person(
         person_id=MEMBER,
         name="Aiko",
         person_type="agent",
-        account_info={"github_username": LOGIN},
+        account_info={"github_username": LOGIN, "branvil_username": MEMBER},
     )
     project = Project(
         name="demo",
         services={
-            "code_hosting_service": {"name": name, "owner": scope},
-            "ticket_service": {"name": name, "owner": scope, **board},
+            "code_hosting_service": {"name": name, key: scope},
+            "ticket_service": {"name": name, key: scope, **board},
         },
     )
     team = Team(project=project, members=[person])
@@ -237,6 +245,41 @@ def _git(cwd: Path, *args: str) -> None:
         cwd=cwd,
         check=True,
         capture_output=True,
+    )
+
+
+# -- Branvil -------------------------------------------------------------
+
+
+def _branvil(tmp_path: Path, monkeypatch) -> Harness:
+    double = branvil_double.BranvilDouble()
+    branvil_double.serve(double, monkeypatch)
+    monkeypatch.setenv(f"{MEMBER.upper()}_BRANVIL_TOKEN", branvil_double.TOKEN)
+    code, tickets = _services("branvil", branvil_double.SCOPE, key="workspace")
+    return Harness(
+        "branvil",
+        code,
+        tickets,
+        branvil_double.REPO,
+        branvil_double.REPO,
+        branvil_double.THEIR_REPO,
+        branvil_double.THEIR_REPO,
+        double.branch,
+        double.advance,
+        double.branches.pop,
+        double.assign,
+        double.add_artifact,
+        Task(
+            id=double.their_ticket,
+            url=double.their_ticket,
+            title="Theirs",
+            description="",
+            status=Task.READY,
+        ),
+        double.their_comment,
+        f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
+        frozenset({"request_changes", "artifacts"}),
+        double.writes,
     )
 
 

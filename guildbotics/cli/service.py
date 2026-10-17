@@ -168,6 +168,7 @@ def _prepare_service_owner(
             remote_url,
             status.workspace_id,
             device_id,
+            workspace_root=workspace,
             on_head_updated=sync_manager.wake,
         )
         return prepare_relay_service_owner(runtime, device_id)

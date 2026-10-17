@@ -29,7 +29,11 @@ from guildbotics.integrations.github.setup import (
     UserReference,
 )
 from guildbotics.integrations.provider import SetupError
-from guildbotics.setup.setup_service import PersonSetupInput, SimplePersonSetupService
+from guildbotics.setup.setup_service import (
+    PersonSetupInput,
+    SimplePersonSetupService,
+    settle_accounts,
+)
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.secret_store import KeyringSecretStore
 
@@ -520,7 +524,8 @@ async def test_a_save_stores_the_registrations_ids_and_key_until_saved(
     )
 
     stored = account.stored("alice", False)
-    # A save that fails after the claim retries with the same registration.
+    await account.settled(False)
+    # A save refused after the claim retries with the same registration.
     assert account.stored("alice", False) == stored
     assert stored == (
         {
@@ -532,7 +537,7 @@ async def test_a_save_stores_the_registrations_ids_and_key_until_saved(
         {"GITHUB_PRIVATE_KEY": api.pem},
     )
 
-    account.saved()
+    await account.settled(True)
 
     with pytest.raises(SetupError) as error:
         account.stored("alice", False)
@@ -546,22 +551,23 @@ async def test_a_member_save_keeps_the_key_only_in_the_secret_store(
     config_dir = tmp_path / ".guildbotics/config"
     state = await _installed(registrations)
 
-    SimplePersonSetupService().write_person(
-        PersonSetupInput(
-            config_dir=config_dir,
-            person_type="machine_user",
-            person_id="alice",
-            person_name="Alice",
-            is_active=True,
-            accounts={
-                "github": {
-                    "account_type": "github_apps",
-                    "username": "my-bot[bot]",
-                    "app_registration_id": state,
-                }
-            },
-        )
+    member = PersonSetupInput(
+        config_dir=config_dir,
+        person_type="machine_user",
+        person_id="alice",
+        person_name="Alice",
+        is_active=True,
+        accounts={
+            "github": {
+                "account_type": "github_apps",
+                "username": "my-bot[bot]",
+                "app_registration_id": state,
+            }
+        },
     )
+
+    SimplePersonSetupService().write_person(member)
+    await settle_accounts(member, saved=True)
 
     person_file = config_dir / "team/members/alice/person.yml"
     account_info = load_yaml_file(person_file)["account_info"]

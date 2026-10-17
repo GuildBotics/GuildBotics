@@ -2157,9 +2157,7 @@ def test_review_limit_notice_explains_how_to_restart(
 ):
     set_language(language)
     try:
-        message = t(
-            "integrations.github.code_hosting_service.review_limit_reached", count=3
-        )
+        message = t("integrations.pull_request_patrol.review_limit_reached", count=3)
     finally:
         set_language("en")
 

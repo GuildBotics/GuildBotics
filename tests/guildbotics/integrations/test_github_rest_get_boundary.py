@@ -6,6 +6,8 @@ import ast
 from collections import Counter
 from pathlib import Path
 
+from guildbotics.integrations.factory import PROVIDERS
+
 ROOT = Path(__file__).parents[3]
 
 # Every low-level REST GET belongs here. Each value records why a raw request
@@ -81,7 +83,7 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
     ): "single_resource: owner and repository identify one repository",
     (
         "guildbotics/integrations/github/pull_requests.py",
-        "_freshness",
+        "_behind_by",
         "self.get",
         'f"/repos/{item.repository}/compare/'
         "{quote(base_sha, safe='')}...{quote(head_sha, safe='')}\"",
@@ -257,9 +259,12 @@ def _imports_github_integration(tree: ast.AST) -> bool:
 
 def _github_rest_sources() -> list[tuple[str, ast.AST, bool]]:
     sources: list[tuple[str, ast.AST, bool]] = []
-    provider_root = ROOT / "guildbotics" / "integrations" / "github"
+    integrations = ROOT / "guildbotics" / "integrations"
+    provider_root = integrations / "github"
+    # Another provider's paths are its own service's, whatever they spell.
+    others = [integrations / name for name in PROVIDERS if name != "github"]
     for path in sorted((ROOT / "guildbotics").rglob("*.py")):
-        if path.name == "_version.py":
+        if path.name == "_version.py" or any(map(path.is_relative_to, others)):
             continue
         relative_path = path.relative_to(ROOT).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"))

@@ -20,6 +20,15 @@ from tests.guildbotics.app_api.provider_doubles import (
     saved_workspace,
     write_member,
 )
+from tests.guildbotics.integrations.branvil_double import (
+    BASE as BRANVIL,
+)
+from tests.guildbotics.integrations.branvil_double import (
+    MEMBER,
+    BranvilDouble,
+    connect_admin,
+    serve,
+)
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 PNG = b"\x89PNG\r\n\x1a\nimage"
@@ -55,9 +64,7 @@ class RuntimeStub:
 
 @pytest.fixture
 def test_workspace(tmp_path: Path) -> Path:
-    # Setup standard member directory structure
-    member_dir = tmp_path / ".guildbotics/config/team/members/alice"
-    member_dir.mkdir(parents=True, exist_ok=True)
+    write_member(tmp_path, "alice")
     return tmp_path
 
 
@@ -144,6 +151,47 @@ def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
     from guildbotics.workspace.validation import MAX_SHARED_AVATAR_BYTES
 
     assert MAX_AVATAR_BYTES == MAX_SHARED_AVATAR_BYTES
+
+
+# --- handing the avatar to the member's accounts ---------------------------
+
+
+@pytest.mark.parametrize("source", ["upload", "github"])
+def test_a_new_avatar_is_handed_to_the_members_branvil_account(
+    workspace, web, monkeypatch, source: str
+) -> None:
+    double = BranvilDouble()
+    serve(double, monkeypatch)
+    branvil = {"name": "branvil", "base_url": BRANVIL, "workspace": "a"}
+    with saved_workspace(workspace, {"code_hosting_service": branvil}) as client:
+        connect_admin()
+        write_member(
+            workspace,
+            "alice",
+            f"account_info:\n  branvil_username: {MEMBER}\n"
+            "  github_username: alice-git\n",
+        )
+        web(
+            {
+                "api.github.com/users/alice-git": answer(
+                    {"avatar_url": "https://avatars.example/alice.png"}
+                ),
+                "avatars.example/alice.png": _image(),
+            }
+        )
+        if source == "upload":
+            response = client.post(
+                "/config/members/alice/avatar",
+                files={"file": ("avatar.png", io.BytesIO(PNG), "image/png")},
+                headers=AUTH_HEADERS,
+            )
+        else:
+            response = client.post(
+                "/config/members/alice/avatar/github", headers=AUTH_HEADERS
+            )
+
+    assert response.status_code == 200, response.text
+    assert double.avatars == {MEMBER: PNG}
 
 
 # --- importing from a provider -------------------------------------------

@@ -11,12 +11,12 @@ import pytest_asyncio
 
 from guildbotics.entities import Person, Project, Team
 from guildbotics.entities.message import Message
-from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github import api, reads
+from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
-from guildbotics.integrations.github.pull_requests import _fit_log_tails
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
+from guildbotics.integrations.readiness import fit_log_tails
 from guildbotics.runtime.port import (
     ServiceError,
     ServiceNotFound,
@@ -255,7 +255,7 @@ def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
             for i in range(12)
         ],
     }
-    _fit_log_tails(result)
+    fit_log_tails(result)
     assert (
         len(json.dumps(ReadPage(items=[result], target=target).model_dump()).encode())
         <= MAX_PAGE_BYTES

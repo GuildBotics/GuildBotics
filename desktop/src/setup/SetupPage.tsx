@@ -1095,6 +1095,14 @@ function IntegrationsSection({
   const setService = (kind: ServiceKind, value: ServiceSelection | undefined) => {
     const next = { ...services, [kind]: value };
     if (!value) delete next[kind];
+    // The items a provider's kinds give alike follow the kind edited.
+    const shared = providers.find((provider) => provider.name === value?.name)?.shared ?? [];
+    for (const other of SERVICE_KINDS) {
+      const item = next[other];
+      if (value && other !== kind && item?.name === value.name) {
+        next[other] = { ...item, ...Object.fromEntries(shared.map((key) => [key, value[key]])) };
+      }
+    }
     form.setFieldValue("services", next);
   };
   return (
@@ -1138,6 +1146,7 @@ function IntegrationsSection({
                   value={selected}
                   onChange={(value) => setService(kind, value)}
                   errors={errors[kind] ?? {}}
+                  services={services}
                 />
               ) : null}
             </Stack>
@@ -3454,11 +3463,18 @@ function MembersSection({
   const effectiveIsActive = isHumanMember ? false : isActive;
   const configDir = resolveConfigDir(workspaceDir);
   const shouldSeedDefaultRoutine = Boolean(services.ticket_service);
-  // The accounts of the providers the project uses, each in its own tab.
+  // The accounts of the providers the project uses, and of those whose
+  // credentials a used provider is handed, each in its own tab.
   const serviceProviders = useServiceProviders();
   const usedProviders = new Set(Object.values(services).map((service) => service?.name));
+  const accountProviders = new Set([
+    ...usedProviders,
+    ...serviceProviders
+      .filter((provider) => usedProviders.has(provider.name))
+      .flatMap((provider) => provider.credentials_from),
+  ]);
   const accountTabs = serviceProviders.filter(
-    (provider) => usedProviders.has(provider.name) && PROVIDER_UIS[provider.name]?.member,
+    (provider) => accountProviders.has(provider.name) && PROVIDER_UIS[provider.name]?.member,
   );
   const chatProvider = services.chat_service?.name ?? "";
   // The member's chat channels are edited in the chat provider's tab, or in
