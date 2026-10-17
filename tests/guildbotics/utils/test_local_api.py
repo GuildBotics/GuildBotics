@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from collections.abc import Callable, Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
@@ -52,13 +51,15 @@ IMPOSTORS: dict[str, Callable[[str], tuple[int, bytes]]] = {
     "not_an_object": lambda nonce: (200, b"[]"),
     "not_a_string": lambda nonce: (200, b'{"proof": 1}'),
     "non_ascii": lambda nonce: (200, json.dumps({"proof": "é"}).encode()),
-    "slow": lambda nonce: (time.sleep(0.5), (200, b"{}"))[1],
+    "slow": lambda nonce: (200, b"{}"),
 }
 
 
 class _Seen:
     def __init__(self) -> None:
         self.requests: list[tuple[str, dict[str, str], bytes]] = []
+        self.release = threading.Event()
+        self.finished = threading.Event()
 
 
 @pytest.fixture
@@ -68,15 +69,26 @@ def machine_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(params=sorted(IMPOSTORS))
-def impostor(request, machine_state, monkeypatch) -> Iterator[_Seen]:
+def impostor(request, machine_state) -> Iterator[_Seen]:
     """A loopback server on the port a stale discovery record still names."""
     answer = IMPOSTORS[request.param]
     seen = _Seen()
 
     class Handler(BaseHTTPRequestHandler):
         def _serve(self) -> None:
+            try:
+                self._answer()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The slow proof deliberately outlives the client's read timeout.
+                pass
+            finally:
+                seen.finished.set()
+
+        def _answer(self) -> None:
             body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             seen.requests.append((self.path, dict(self.headers), body))
+            if request.param == "slow":
+                assert seen.release.wait(10)
             if self.path == PROOF_PATH:
                 status, content = answer(json.loads(body)["nonce"])
             else:
@@ -100,25 +112,29 @@ def impostor(request, machine_state, monkeypatch) -> Iterator[_Seen]:
         def log_message(self, *args) -> None:
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = HTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
     )
     thread.start()
-    monkeypatch.setattr(local_api, "_PROOF_TIMEOUT_SECONDS", 0.2)
     LocalApiEndpoint(
         port=server.server_address[1],
         token=TOKEN,
         service_instance_id=INSTANCE,
         workspace=machine_state,
     ).publish()
-    yield seen
-    server.shutdown()
-    server.server_close()
-    thread.join()
+    try:
+        yield seen
+    finally:
+        seen.release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def _assert_only_a_nonce_was_sent(seen: _Seen) -> None:
+    seen.release.set()
+    assert seen.finished.wait(10), "the proof handler did not finish"
     assert [path for path, _, _ in seen.requests] == [PROOF_PATH]
     for _, headers, body in seen.requests:
         assert TOKEN not in json.dumps(headers) and TOKEN.encode() not in body
