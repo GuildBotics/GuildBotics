@@ -126,7 +126,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             "repository": str(data["repository"]),
             "body": str(data.get("body") or ""),
             "state": str(data["state"]),
-            "assignees": list(data.get("assignees") or []),
+            "assignees": [],
             "labels": list(data.get("labels") or []),
             "author_type": self.author_type(data.get("author")),
             "head": str(data["head"]),

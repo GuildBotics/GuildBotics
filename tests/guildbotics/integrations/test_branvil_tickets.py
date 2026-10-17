@@ -213,6 +213,24 @@ async def test_only_the_members_open_tickets_on_the_board_are_work(monkeypatch):
 
     assert await tickets.candidates() == []
     assert await tickets.refresh(Task(url=new, title="", description="")) is None
+    # A ticket whose one assignee is someone else is not the member's work,
+    # however it is read.
+    assert await tickets.refresh(Task(url=theirs, title="", description="")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_reads_as_its_one_assignee_or_none(monkeypatch):
+    double, _, tickets = services(monkeypatch)
+    url = double._ticket(TRACKER, "Fix login", "", [])["url"]
+
+    async def assignees() -> list[str]:
+        return (await tickets.read("tickets", url)).items[0]["assignees"]
+
+    assert await assignees() == []
+    double.assign(url)
+    assert await assignees() == [MEMBER]
+    double.assign(url, name="otota")
+    assert await assignees() == ["otota"]
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,8 @@ board can be read.
 
 The ticket workflow and the pull request patrol behave as they do with GitHub:
 
+- A ticket has at most one assignee: the agent that works on it. Assigning another
+  member replaces the assignee, so two members never take up the same ticket.
 - A ticket assigned to the member in the board's **Ready** lane is taken up and moved to
   **In progress**; one in **In progress** is taken up again when someone else has spoken
   since the member last did. Once a pull request refers to the ticket, the patrol

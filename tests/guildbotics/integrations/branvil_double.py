@@ -114,7 +114,7 @@ class BranvilDouble:
         self.tickets[url].update(
             board=board,
             lane=lane,
-            assignees=[{"name": name, "assigned_at": self.now()}],
+            assignee={"name": name, "assigned_at": self.now()},
         )
 
     def add_artifact(self, sha: str, name: str, content: bytes) -> None:
@@ -399,7 +399,7 @@ class BranvilDouble:
                 if ticket["board"] == board
                 and ticket["lane"] in lanes
                 and ticket["state"] == params.get("state", ticket["state"])
-                and MEMBER in [a["name"] for a in ticket["assignees"]]
+                and (ticket["assignee"] or {}).get("name") == MEMBER
             ]
             return self._page(
                 sorted(cards, key=lambda card: LANES.index(card["lane"])), params
@@ -459,7 +459,7 @@ class BranvilDouble:
             "state": "open",
             "state_reason": None,
             "author": author,
-            "assignees": [],
+            "assignee": None,
             "labels": labels,
             "board": None,
             "lane": None,
@@ -506,7 +506,6 @@ class BranvilDouble:
             "base": base,
             "reviewers": [],
             "tickets": body["tickets"],
-            "assignees": [],
             "labels": [],
             "changed_files": 1,
             "created_at": self.now(),

@@ -86,7 +86,7 @@ class BranvilTicketService(BranvilApi, TicketService):
             repository=data.get("repository"),
             body=str(data.get("body") or ""),
             state=str(data["state"]),
-            assignees=[str(assignee["name"]) for assignee in data["assignees"]],
+            assignees=[str(data["assignee"]["name"])] if data["assignee"] else [],
             labels=list(data.get("labels") or []),
             lane=data["lane"] if self._on_board(data) else None,
         )
@@ -272,14 +272,15 @@ class BranvilTicketService(BranvilApi, TicketService):
 
     def _task(self, card: dict[str, Any]) -> Task | None:
         """The card as a task of the member, if it is one: open, in a lane of
-        the member's work on the board, and assigned to the member."""
+        the member's work on the board, and the member is its one assignee."""
         me = username(self.person).casefold()
         if not (
             me
             and card["state"] == "open"
             and self._on_board(card)
             and card["lane"] in _LANES
-            and any(a["name"].casefold() == me for a in card["assignees"])
+            and card["assignee"]
+            and card["assignee"]["name"].casefold() == me
         ):
             return None
         item = _ticket_item(card)
@@ -298,13 +299,7 @@ class BranvilTicketService(BranvilApi, TicketService):
         )
 
     async def _select(self, task: Task, card: dict[str, Any]) -> Task | None:
-        me = username(self.person).casefold()
-        assigned_at = max(
-            str(a.get("assigned_at") or "")
-            for a in card["assignees"]
-            if a["name"].casefold() == me
-        )
-        since = since_assignment(task.comments, assigned_at)
+        since = since_assignment(task.comments, card["assignee"]["assigned_at"])
 
         async def linked_pull() -> str | None:
             return linked_pull_state(
