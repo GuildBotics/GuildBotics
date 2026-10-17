@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guildbotics.utils.person_id import person_config_directory
+from guildbotics.utils.person_id import identity_members_dir, validate_person_id
 
 # Pure (dependency-light) avatar file helpers. Kept free of FastAPI/httpx so
 # that lower layers such as the setup services can locate avatar files
@@ -11,12 +11,13 @@ from guildbotics.utils.person_id import person_config_directory
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
-def get_member_avatar_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / person_config_directory(person_id)
+def get_member_avatar_dir(person_id: str) -> Path:
+    """The member's picture is part of its identity: the same in every workspace."""
+    return identity_members_dir() / validate_person_id(person_id)
 
 
-def find_avatar_file(config_dir: Path, person_id: str) -> Path | None:
-    return avatar_in(get_member_avatar_dir(config_dir, person_id))
+def find_avatar_file(person_id: str) -> Path | None:
+    return avatar_in(get_member_avatar_dir(person_id))
 
 
 def avatar_in(member_dir: Path) -> Path | None:

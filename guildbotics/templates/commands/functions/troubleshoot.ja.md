@@ -23,8 +23,11 @@ inputs:
   - `diagnostics.jsonl`は索引で、すべての実行の節目が古い順に並びます。
   - `sessions/<trace_id>.jsonl`は1実行の完全なトランスクリプトです。
   - `sessions/system-*.jsonl`には、個別の実行に属さないサービス全体のrecordが入ります。
-- `config` — workspaceの設定です。`team/`(プロジェクトとメンバー)、`commands/`(共有のカスタムコマンド)、
+- `config` — workspaceの設定です。`team/`(プロジェクトと、このworkspaceでの各メンバーの設定
+  `team/members/<person_id>/member.yml`)、`commands/`(共有のカスタムコマンド)、
   `team/members/<person_id>/commands/`(メンバー別のコマンド)、`intelligences/`(AIの設定)などがあります。
+- `identities` — すべてのworkspaceで共通のメンバーの情報です。`<person_id>/identity.yml`
+  (名前・人格・アカウント)とメンバーのアイコンがあります。
 - `templates` — `config`に該当ファイルが無いときにGuildBoticsが使うパッケージ同梱の既定値です。
   組み込みコマンドは`commands/`の下にあります。
 

@@ -4,11 +4,10 @@ These tests extend ``test_setup_service.py`` and focus on the file/YAML
 write behaviours that the existing suite did not yet exercise:
 
 - project init file set across workspace / home / custom config locations
-- secret blank-update must not clear an existing secret (same-id update)
+- secret blank-update must not clear an existing secret
 - member add / update / delete secret-key add / update / remove
-- member-id rename moves directory + secret keys + chat channel mapping
-- ``task_schedules`` / ``routine_commands`` YAML round trip
-- character / relationships / speaking_style round trip
+- ``task_schedules`` / ``routine_commands`` YAML round trip (participation)
+- character / relationships / speaking_style round trip (identity)
 
 All filesystem writes use ``tmp_path`` so the real home directory is never
 touched.
@@ -21,7 +20,6 @@ import pytest
 
 from guildbotics.setup.setup_service import (
     PersonSetupInput,
-    PersonUpdateInput,
     ProjectSetupInput,
     SimplePersonSetupService,
     SimpleProjectSetupService,
@@ -31,7 +29,8 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.person_id import IDENTITY_FILE, MEMBER_FILE, identity_members_dir
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 from guildbotics.utils.text_utils import replace_placeholders
 
 # Relative config-dir layout produced by ``write_project`` independent of the
@@ -99,15 +98,16 @@ def _tokens(github: str = "", slack_bot: str = "") -> dict:
     }
 
 
-def _update_input(config_dir: Path, original: str, **overrides) -> PersonUpdateInput:
-    return PersonUpdateInput(
-        **_person_input(config_dir, **overrides).model_dump(),
-        original_person_id=original,
-    )
+def _secrets() -> dict[str, str]:
+    return identity_secret_store().values()
 
 
-def _secrets(config_dir: Path) -> dict[str, str]:
-    return KeyringSecretStore(config_dir).values()
+def _identity(person_id: str = "alice") -> dict:
+    return load_yaml_file(identity_members_dir() / person_id / IDENTITY_FILE)
+
+
+def _participation(config_dir: Path, person_id: str = "alice") -> dict:
+    return load_yaml_file(config_dir / "team/members" / person_id / MEMBER_FILE)
 
 
 # --------------------------------------------------------------------------- #
@@ -286,26 +286,23 @@ def test_write_project_persists_default_lane_map(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# secret blank-update must not clear an existing secret (same-id update)
+# secret blank-update must not clear an existing secret
 # --------------------------------------------------------------------------- #
 
 
-def test_update_person_blank_secret_keeps_existing_value_same_id(
-    tmp_path: Path,
-) -> None:
+def test_save_person_blank_secret_keeps_existing_value(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     service = SimplePersonSetupService()
 
-    service.write_person(
+    service.save_person(
         _person_input(config_dir, accounts=_tokens("github-token", "xoxb-token"))
     )
-    assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
+    assert _secrets()["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
 
     # Update with blank secrets and an unrelated profile change.
-    service.update_person(
-        _update_input(
+    service.save_person(
+        _person_input(
             config_dir,
-            "alice",
             person_name="Alice Updated",
             roles=["reviewer"],
             speaking_style="style-b",
@@ -313,9 +310,12 @@ def test_update_person_blank_secret_keeps_existing_value_same_id(
         )
     )
 
-    env_values = _secrets(config_dir)
+    env_values = _secrets()
     assert env_values["ALICE_GITHUB_ACCESS_TOKEN"] == "github-token"
     assert env_values["ALICE_SLACK_BOT_TOKEN"] == "xoxb-token"
+    assert _identity()["name"] == "Alice Updated"
+    assert _identity()["speaking_style"] == "style-b"
+    assert _participation(config_dir)["profile"] == {"roles": {"reviewer": {}}}
 
 
 # --------------------------------------------------------------------------- #
@@ -328,21 +328,22 @@ def test_member_crud_adds_updates_and_removes_env_keys(tmp_path: Path) -> None:
     service = SimplePersonSetupService()
 
     # add (append): env key created.
-    service.write_person(_person_input(config_dir, accounts=_tokens("token-v1")))
-    assert _secrets(config_dir)["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v1"
+    service.save_person(_person_input(config_dir, accounts=_tokens("token-v1")))
+    assert _secrets()["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v1"
 
     # update (same id): env key value replaced.
-    service.update_person(
-        _update_input(config_dir, "alice", accounts=_tokens("token-v2"))
-    )
-    env_values = _secrets(config_dir)
-    assert env_values["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v2"
+    service.save_person(_person_input(config_dir, accounts=_tokens("token-v2")))
+    assert _secrets()["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v2"
 
-    # delete: secret key removed.
-    service.delete_person(config_dir=config_dir, person_id="alice")
-    env_values = _secrets(config_dir)
-    assert "ALICE_GITHUB_ACCESS_TOKEN" not in env_values
-    assert not (config_dir / "team/members/alice/person.yml").exists()
+    # remove from the workspace: the identity keeps the key.
+    service.remove_person(config_dir=config_dir, person_id="alice")
+    assert not (config_dir / "team/members/alice").exists()
+    assert _secrets()["ALICE_GITHUB_ACCESS_TOKEN"] == "token-v2"
+
+    # delete the identity: secret key removed.
+    service.delete_identity(person_id="alice")
+    assert "ALICE_GITHUB_ACCESS_TOKEN" not in _secrets()
+    assert not (identity_members_dir() / "alice").exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -358,7 +359,7 @@ def _default_person_id(config_dir: Path) -> str:
 def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
-    SimplePersonSetupService().write_person(_person_input(config_dir))
+    SimplePersonSetupService().save_person(_person_input(config_dir))
     service = SimpleProjectSetupService()
 
     result = service.set_default_person(config_dir=config_dir, person_id="alice")
@@ -378,7 +379,7 @@ def test_set_default_person_writes_and_clears_project_setting(tmp_path: Path) ->
 def test_update_project_keeps_the_default_person(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
-    SimplePersonSetupService().write_person(_person_input(config_dir))
+    SimplePersonSetupService().save_person(_person_input(config_dir))
     service = SimpleProjectSetupService()
     service.set_default_person(config_dir=config_dir, person_id="alice")
 
@@ -395,7 +396,7 @@ def test_update_project_keeps_the_default_person(tmp_path: Path) -> None:
 def test_set_default_person_reports_no_change_when_already_set(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
-    SimplePersonSetupService().write_person(_person_input(config_dir))
+    SimplePersonSetupService().save_person(_person_input(config_dir))
     service = SimpleProjectSetupService()
     service.set_default_person(config_dir=config_dir, person_id="alice")
 
@@ -428,7 +429,7 @@ def test_set_default_person_rejects_malformed_ids(
     # rejected before the file lookup can resolve them to a real member.
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
-    SimplePersonSetupService().write_person(_person_input(config_dir))
+    SimplePersonSetupService().save_person(_person_input(config_dir))
 
     with pytest.raises(Exception) as exc_info:
         SimpleProjectSetupService().set_default_person(
@@ -442,7 +443,7 @@ def test_set_default_person_rejects_malformed_ids(
 def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
-    SimplePersonSetupService().write_person(
+    SimplePersonSetupService().save_person(
         _person_input(
             config_dir,
             person_id="hana",
@@ -463,26 +464,12 @@ def test_set_default_person_rejects_human_member(tmp_path: Path) -> None:
     assert _default_person_id(config_dir) == ""
 
 
-def test_default_person_follows_member_rename(tmp_path: Path) -> None:
+def test_default_person_is_cleared_when_the_member_is_removed(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     _seed_project(config_dir)
     service = SimplePersonSetupService()
-    service.write_person(_person_input(config_dir, person_id="old-id"))
-    SimpleProjectSetupService().set_default_person(
-        config_dir=config_dir, person_id="old-id"
-    )
-
-    service.update_person(_update_input(config_dir, "old-id", person_id="new-id"))
-
-    assert _default_person_id(config_dir) == "new-id"
-
-
-def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    _seed_project(config_dir)
-    service = SimplePersonSetupService()
-    service.write_person(_person_input(config_dir))
-    service.write_person(
+    service.save_person(_person_input(config_dir))
+    service.save_person(
         _person_input(
             config_dir,
             person_id="bob",
@@ -493,83 +480,15 @@ def test_default_person_is_cleared_when_the_member_is_deleted(tmp_path: Path) ->
         config_dir=config_dir, person_id="bob"
     )
 
-    service.delete_person(config_dir=config_dir, person_id="alice")
+    service.remove_person(config_dir=config_dir, person_id="alice")
     assert _default_person_id(config_dir) == "bob"
 
-    service.delete_person(config_dir=config_dir, person_id="bob")
+    result = service.remove_person(config_dir=config_dir, person_id="bob")
     assert _default_person_id(config_dir) == ""
-
-
-# --------------------------------------------------------------------------- #
-# member id rename: directory / env key / chat channel mapping are moved
-# --------------------------------------------------------------------------- #
-
-
-def test_member_rename_moves_directory_env_keys_and_channel_mapping(
-    tmp_path: Path,
-) -> None:
-    config_dir = tmp_path / "config"
-    service = SimplePersonSetupService()
-
-    service.write_person(
-        _person_input(
-            config_dir,
-            person_id="old-id",
-            accounts=_tokens("token-keep", "xoxb-keep"),
-            chat_channels=["general"],
-        )
-    )
-    old_dir = config_dir / "team/members/old-id"
-    assert old_dir.exists()
-    old_person = load_yaml_file(old_dir / "person.yml")
-    assert old_person["message_channels"][0]["used_by"] == ["old-id"]
-
-    service.update_person(
-        _update_input(
-            config_dir,
-            "old-id",
-            person_id="new-id",
-            # Blank secrets so we verify the rename PRESERVES existing values.
-            accounts=_tokens(),
-            chat_channels=["general"],
-        )
-    )
-
-    new_dir = config_dir / "team/members/new-id"
-    assert new_dir.exists()
-    assert not old_dir.exists()
-
-    new_person = load_yaml_file(new_dir / "person.yml")
-    assert new_person["person_id"] == "new-id"
-    # Channel ownership mapping follows the new id.
-    assert new_person["message_channels"][0]["used_by"] == ["new-id"]
-
-    env_values = _secrets(config_dir)
-    assert "OLD_ID_GITHUB_ACCESS_TOKEN" not in env_values
-    assert "OLD_ID_SLACK_BOT_TOKEN" not in env_values
-    assert env_values["NEW_ID_GITHUB_ACCESS_TOKEN"] == "token-keep"
-    assert env_values["NEW_ID_SLACK_BOT_TOKEN"] == "xoxb-keep"
-
-
-def test_member_rename_into_existing_id_is_rejected(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    service = SimplePersonSetupService()
-
-    service.write_person(_person_input(config_dir, person_id="alice"))
-    service.write_person(
-        _person_input(
-            config_dir,
-            person_id="bob",
-            git_email="2+bob@users.noreply.github.com",
-        )
-    )
-
-    with pytest.raises(Exception) as exc_info:
-        service.update_person(_update_input(config_dir, "alice", person_id="bob"))
-    assert getattr(exc_info.value, "code", "") == "person_id_conflict"
-    # Both members remain intact.
-    assert (config_dir / "team/members/alice/person.yml").exists()
-    assert (config_dir / "team/members/bob/person.yml").exists()
+    assert [(file.path, file.action) for file in result.files] == [
+        (config_dir / "team/members/bob" / MEMBER_FILE, "delete"),
+        (config_dir / "team/project.yml", "update"),
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -590,7 +509,7 @@ def test_person_routines_and_schedules_yaml_round_trip(tmp_path: Path) -> None:
         {"command": "reports/evening", "schedules": ["0 18 * * *", "30 12 * * 6"]},
     ]
 
-    service.write_person(
+    service.save_person(
         _person_input(
             config_dir,
             routine_commands=routine_commands,
@@ -598,8 +517,8 @@ def test_person_routines_and_schedules_yaml_round_trip(tmp_path: Path) -> None:
         )
     )
 
-    # Raw YAML round trip.
-    stored = load_yaml_file(config_dir / "team/members/alice/person.yml")
+    # Raw YAML round trip: they are what the member does in this workspace.
+    stored = _participation(config_dir)
     assert stored["routine_commands"] == routine_commands
     assert stored["task_schedules"] == task_schedules
 
@@ -629,7 +548,7 @@ def test_person_character_relationships_speaking_style_round_trip(
             "contribution_style": ["clarify", "summarize"],
         },
     }
-    service.write_person(
+    service.save_person(
         _person_input(
             config_dir,
             speaking_style="Concise and direct.",
@@ -638,7 +557,8 @@ def test_person_character_relationships_speaking_style_round_trip(
         )
     )
 
-    stored = load_yaml_file(config_dir / "team/members/alice/person.yml")
+    # Who the member is: the same in every workspace.
+    stored = _identity()
     assert stored["speaking_style"] == "Concise and direct."
     assert stored["relationships"] == "Reports to {pm}; mentors juniors."
     assert stored["profile"]["character"] == character

@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 
-import { getWorkspaceSecrets } from "../api/client";
-import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretNeedsAttention } from "./secretState";
+import { getWorkspaceSecrets, type SecretScope } from "../api/client";
+import { SECRETS_REFETCH_MS, secretNeedsAttention, secretsQueryKey } from "./secretState";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 
 /**
@@ -15,15 +15,24 @@ import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
  * its own, and scattering the buttons across every form that happens to hold a
  * credential would make it an incidental one.
  *
- * Nothing is rendered when the workspace has no hub, when the key is unknown,
+ * Nothing is rendered when the scope has no hub, when the key is unknown,
  * or when this machine is simply in step -- the field's own "configured" text
  * already says that, and repeating it would bury the cases that matter.
+ *
+ * A member's credential is the identities' (``scope`` "identities"), which
+ * every workspace shares; an API key is the workspace's.
  */
-export function SecretStatusHint({ envKey }: { envKey: string | undefined }) {
+export function SecretStatusHint({
+  envKey,
+  scope = "workspace",
+}: {
+  envKey: string | undefined;
+  scope?: SecretScope;
+}) {
   const { t } = useTranslation();
   const secrets = useQuery({
-    queryKey: SECRETS_QUERY_KEY,
-    queryFn: getWorkspaceSecrets,
+    queryKey: secretsQueryKey(scope),
+    queryFn: () => getWorkspaceSecrets(scope),
     refetchInterval: SECRETS_REFETCH_MS,
   });
   if (!envKey || !secrets.data?.enabled) {

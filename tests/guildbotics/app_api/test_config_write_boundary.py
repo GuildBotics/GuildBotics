@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 import guildbotics.app_api.avatar as avatar_module
 import guildbotics.workspace.config_repository as config_repository_module
 from guildbotics.integrations.factory import PROVIDERS
+from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
@@ -97,6 +98,11 @@ ELSEWHERE = {
     (
         "POST",
         "/workspace/secrets/send",
+    ): "one key generation, read-modify-written inside the port's lock",
+    ("POST", "/identities/secrets/fetch"): "OS secret stores; writes no config",
+    (
+        "POST",
+        "/identities/secrets/send",
     ): "one key generation, read-modify-written inside the port's lock",
     ("POST", "/workspace/sync/clone"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
@@ -257,7 +263,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
         headers=AUTH_HEADERS,
         json={
             "config_dir": str(_config_dir(workspace)),
-            "original_person_id": "alice",
             "person_type": "",
             "person_id": "alice",
             "person_name": "Renamed",
@@ -267,11 +272,11 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
             "speaking_style": "concise",
         },
     ),
-    ("DELETE", "/config/members/{person_id}"): lambda client, workspace: client.request(
-        "DELETE",
-        "/config/members/alice",
-        headers=AUTH_HEADERS,
-        json={"config_dir": str(_config_dir(workspace))},
+    ("DELETE", "/config/members/{person_id}"): lambda client, workspace: client.delete(
+        "/config/members/alice", headers=AUTH_HEADERS
+    ),
+    ("DELETE", "/identities/{person_id}"): lambda client, workspace: client.delete(
+        "/identities/alice", headers=AUTH_HEADERS
     ),
     ("PUT", "/config/intelligences"): lambda client, workspace: client.put(
         "/config/intelligences",
@@ -461,7 +466,9 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
         _add_command_file(client)
     _impatient(monkeypatch, config_repository_module)
 
-    with shared_write_lock(workspace):
+    # A member's identity is written under the identities' lock, which every
+    # span that takes both takes first.
+    with shared_write_lock(get_identity_root()), shared_write_lock(workspace):
         response = mutation(client, workspace)
 
     assert response is not None

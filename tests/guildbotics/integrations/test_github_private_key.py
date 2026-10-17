@@ -4,7 +4,7 @@ import pytest
 
 from guildbotics.entities.team import Person
 from guildbotics.integrations.github.github_utils import get_person_private_key_pem
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 
 PEM_FROM_STORE = (
     "-----BEGIN RSA PRIVATE KEY-----\nstore\n-----END RSA PRIVATE KEY-----\n"
@@ -27,8 +27,8 @@ def _pin_workspace(tmp_path, monkeypatch):
 def test_reads_key_content_from_secret_store(
     fake_keyring, tmp_path, monkeypatch, person
 ):
-    config_dir = _pin_workspace(tmp_path, monkeypatch)
-    KeyringSecretStore(config_dir).set("AIKO_GITHUB_PRIVATE_KEY", PEM_FROM_STORE)
+    _pin_workspace(tmp_path, monkeypatch)
+    identity_secret_store().set("AIKO_GITHUB_PRIVATE_KEY", PEM_FROM_STORE)
 
     assert get_person_private_key_pem(person) == PEM_FROM_STORE.encode()
 

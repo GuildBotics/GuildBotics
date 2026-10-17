@@ -43,7 +43,9 @@ from guildbotics.observability.diagnostics_events import (
     start_system_session,
 )
 from guildbotics.sync.activation import (
+    activate_identity_sync,
     activate_workspace_sync,
+    deactivate_identity_sync,
     deactivate_workspace_sync,
 )
 from guildbotics.sync.local_repository import LocalSyncRepository
@@ -99,6 +101,7 @@ def start(
 
     relay_runtime: RelayRuntime | None = None
     try:
+        activate_identity_sync()
         sync_manager = activate_workspace_sync(workspace)
         relay_runtime = (
             _prepare_service_owner(workspace, sync_manager)
@@ -120,6 +123,7 @@ def start(
             relay_runtime.stop()
         if not deactivate_workspace_sync():
             get_logger().warning("The synchronization queue did not stop cleanly.")
+        deactivate_identity_sync()
         clear_stop_request(request_path)
         service_lock.release()
 

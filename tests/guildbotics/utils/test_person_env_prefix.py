@@ -1,4 +1,8 @@
-"""Member namespaces must be unambiguous before any secret access."""
+"""Member namespaces must be unambiguous before any secret access.
+
+Every member's secrets live in the one identities' store, so the namespace is
+the identities': two members collide whether or not they share a workspace.
+"""
 
 from pathlib import Path
 
@@ -12,18 +16,21 @@ from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup.setup_service import (
     MEMBER_SECRET_NAMES,
     PersonSetupInput,
-    PersonUpdateInput,
     SimplePersonSetupService,
 )
 from guildbotics.utils.env_loader import read_workspace_secrets
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.person_id import (
+    IDENTITY_FILE,
     MemberConfigError,
     PersonEnvPrefixConflictError,
     ambiguous_person_secret,
+    identity_members_dir,
+    is_member_secret,
     person_secret_prefix,
 )
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from tests.guildbotics.members import write_member
 
 
 @pytest.fixture
@@ -35,11 +42,18 @@ def namespace_workspace(tmp_path, monkeypatch):
     return config
 
 
-def stored_member(config: Path, name: str) -> Path:
-    path = config / "team/members" / name / "person.yml"
+def stored_identity(name: str) -> Path:
+    """An identity that no workspace has; returns its file."""
+    path = identity_members_dir() / name / IDENTITY_FILE
     path.parent.mkdir(parents=True)
     path.write_text(f"person_id: {name}\nname: Test\n", encoding="utf-8")
     return path
+
+
+def stored_member(config: Path, name: str) -> Path:
+    """A member of the workspace; returns its identity file."""
+    write_member(config, {"person_id": name, "name": "Test"})
+    return identity_members_dir() / name / IDENTITY_FILE
 
 
 def member_input(config, **overrides):
@@ -65,31 +79,35 @@ def member_input(config, **overrides):
         ("aiko_1-2", "AIKO_1_2"),
     ],
 )
-def test_person_prefix_format_is_shared(tmp_path, name, prefix):
-    assert person_secret_prefix(tmp_path, name) == f"{prefix}_"
+def test_person_prefix_format_is_shared(name, prefix):
+    assert person_secret_prefix(name) == f"{prefix}_"
 
 
-def test_prefix_is_refused_while_another_member_shares_it(namespace_workspace):
-    members = namespace_workspace / "team/members"
-    stored_member(namespace_workspace, "alice-bak")
+@pytest.mark.parametrize("in_workspace", [True, False])
+def test_prefix_is_refused_while_another_identity_shares_it(
+    namespace_workspace, in_workspace
+):
+    if in_workspace:
+        stored_member(namespace_workspace, "alice-bak")
+    else:
+        stored_identity("alice-bak")
 
     with pytest.raises(PersonEnvPrefixConflictError) as error:
-        person_secret_prefix(members, "alice_bak")
+        person_secret_prefix("alice_bak")
 
-    assert error.value.conflicts == [members / "alice-bak"]
-    # A rename's source does not conflict with its own target.
-    assert person_secret_prefix(members, "alice_bak", exclude="alice-bak") == (
-        "ALICE_BAK_"
-    )
+    assert error.value.conflicts == [identity_members_dir() / "alice-bak"]
+    # The identity holding the prefix alone owns it.
+    assert person_secret_prefix("alice-bak") == "ALICE_BAK_"
 
 
 def test_a_key_is_ambiguous_by_the_member_of_its_longest_prefix(
     namespace_workspace,
 ):
-    for name in ("alice-bak", "alice_bak", "alice_bak_other", "bob"):
-        stored_member(namespace_workspace, name)
+    stored_member(namespace_workspace, "alice-bak")
+    for name in ("alice_bak", "alice_bak_other", "bob"):
+        stored_identity(name)
 
-    ambiguous = ambiguous_person_secret(namespace_workspace / "team/members")
+    ambiguous = ambiguous_person_secret()
 
     assert ambiguous("ALICE_BAK_SLACK_BOT_TOKEN") is True
     assert ambiguous("ALICE_BAK_OTHER_SLACK_BOT_TOKEN") is False
@@ -97,24 +115,55 @@ def test_a_key_is_ambiguous_by_the_member_of_its_longest_prefix(
     assert ambiguous("OPENAI_API_KEY") is False
 
 
-def test_repair_can_store_new_credentials_at_unique_target(namespace_workspace):
+def test_a_member_secret_is_one_under_a_stored_identitys_prefix(namespace_workspace):
+    stored_member(namespace_workspace, "alice")
+    stored_identity("bob")
+
+    assert is_member_secret("ALICE_SLACK_BOT_TOKEN") is True
+    assert is_member_secret("BOB_GITHUB_ACCESS_TOKEN") is True
+    assert is_member_secret("OPENAI_API_KEY") is False
+
+
+def test_an_unrelated_member_saves_credentials_while_others_collide(
+    namespace_workspace,
+):
     config = namespace_workspace
     stored_member(config, "alice-bak")
-    stored_member(config, "alice_bak")
-    store = KeyringSecretStore(config)
+    stored_identity("alice_bak")
+    store = identity_secret_store()
     store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-existing")
-    SimplePersonSetupService().update_person(
-        PersonUpdateInput(
-            **member_input(
-                config,
-                person_id="repaired",
-                accounts={"slack": {"bot_token": "fake-new"}},
-            ).model_dump(),
-            original_person_id="alice-bak",
+
+    SimplePersonSetupService().save_person(
+        member_input(
+            config, person_id="carol", accounts={"slack": {"bot_token": "fake-new"}}
         )
     )
+
     assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-existing"
-    assert store.get("REPAIRED_SLACK_BOT_TOKEN") == "fake-new"
+    assert store.get("CAROL_SLACK_BOT_TOKEN") == "fake-new"
+
+
+def test_deleting_one_identity_gives_the_other_its_keys(namespace_workspace):
+    """A collision is repaired by deleting one of the identities. The keys,
+    untouched while they were nobody's own, stay for the one that remains."""
+    config = namespace_workspace
+    stored_member(config, "alice-bak")
+    stored_identity("alice_bak")
+    store = identity_secret_store()
+    store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-existing")
+    service = SimplePersonSetupService()
+
+    service.delete_identity(person_id="alice_bak")
+
+    assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-existing"
+    [member] = YamlTeamLoader(str(config / "team")).load().members
+    assert member.person_id == "alice-bak"
+    service.save_person(
+        member_input(
+            config, person_id="alice-bak", accounts={"slack": {"bot_token": "fake-new"}}
+        )
+    )
+    assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-new"
 
 
 def forbid_store(monkeypatch):
@@ -129,32 +178,37 @@ def forbid_store(monkeypatch):
     "existing, target",
     [("alice-bak", "alice_bak"), ("Alice", "alice"), ("alıce", "alice")],
 )
-@pytest.mark.parametrize("action", ["create", "rename"])
+@pytest.mark.parametrize("in_workspace", [True, False])
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_save_refuses_other_namespace_owner_before_secrets(
-    namespace_workspace, monkeypatch, existing, target, action, language
+    namespace_workspace, monkeypatch, existing, target, in_workspace, language
 ):
     config = namespace_workspace
-    other = stored_member(config, existing)
-    original = stored_member(config, "bob")
-    before = {path: path.read_bytes() for path in (other, original)}
+    if in_workspace:
+        stored_member(config, existing)
+    else:
+        stored_identity(existing)
+    stored_member(config, "bob")
+    files = [
+        path
+        for root in (config, identity_members_dir())
+        for path in root.rglob("*")
+        if path.is_file()
+    ]
+    before = {path: path.read_bytes() for path in files}
     forbid_store(monkeypatch)
     service = SimplePersonSetupService()
     previous = i18n.get("locale")
     i18n.set("locale", language)
     try:
         with pytest.raises(SetupError) as error:
-            data = member_input(
-                config,
-                person_id=target,
-                accounts={"slack": {"bot_token": "fake-new-token"}},
-            )
-            if action == "create":
-                service.write_person(data)
-            else:
-                service.update_person(
-                    PersonUpdateInput(**data.model_dump(), original_person_id="bob")
+            service.save_person(
+                member_input(
+                    config,
+                    person_id=target,
+                    accounts={"slack": {"bot_token": "fake-new-token"}},
                 )
+            )
         assert error.value.code == "person_env_prefix_conflict"
         assert target in str(error.value) and existing in str(error.value)
         assert str(error.value) == t(
@@ -162,19 +216,29 @@ def test_save_refuses_other_namespace_owner_before_secrets(
         )
     finally:
         i18n.set("locale", previous)
-    assert original.exists() and other.exists()
-    assert {path: path.read_bytes() for path in (other, original)} == before
-    assert {directory.name for directory in (config / "team/members").iterdir()} == {
+    assert {path: path.read_bytes() for path in files} == before
+    assert {directory.name for directory in identity_members_dir().iterdir()} == {
         existing,
         "bob",
     }
+    assert {directory.name for directory in (config / "team/members").iterdir()} == (
+        {existing, "bob"} if in_workspace else {"bob"}
+    )
 
 
+@pytest.mark.parametrize("other_in_workspace", [True, False])
 @pytest.mark.parametrize("names", [("alice-bak", "alice_bak"), ("Alice", "alıce")])
 def test_load_refuses_all_colliding_configs_even_invalid_ones(
-    namespace_workspace, names
+    namespace_workspace, names, other_in_workspace
 ):
-    paths = [stored_member(namespace_workspace, name) for name in names]
+    paths = [
+        stored_member(namespace_workspace, names[0]),
+        (
+            stored_member(namespace_workspace, names[1])
+            if other_in_workspace
+            else stored_identity(names[1])
+        ),
+    ]
     paths[0].write_text("person_id: [", encoding="utf-8")
     with pytest.raises(MemberConfigError) as error:
         YamlTeamLoader(str(namespace_workspace / "team")).load()
@@ -182,15 +246,15 @@ def test_load_refuses_all_colliding_configs_even_invalid_ones(
         assert str(path) in str(error.value)
 
 
-@pytest.mark.parametrize("action", ["snapshot", "rename", "delete"])
+@pytest.mark.parametrize("action", ["snapshot", "remove", "delete"])
 @pytest.mark.parametrize("names", [("alice-bak", "alice_bak"), ("Alice", "alıce")])
 def test_repair_preserves_ambiguous_secrets_without_access(
-    namespace_workspace, monkeypatch, tmp_path, names, action
+    namespace_workspace, monkeypatch, names, action
 ):
     config = namespace_workspace
+    prefix = person_secret_prefix(names[0])
     paths = [stored_member(config, name) for name in names]
-    store = KeyringSecretStore(config)
-    prefix = person_secret_prefix(tmp_path, names[0])
+    store = identity_secret_store()
     keys = [prefix + name for name in MEMBER_SECRET_NAMES]
     for key in keys:
         store.set(key, "fake-existing-value")
@@ -210,18 +274,13 @@ def test_repair_preserves_ambiguous_secrets_without_access(
                 for field, value in view.items()
                 if field.startswith("has_")
             )
-        elif action == "rename":
-            service.update_person(
-                PersonUpdateInput(
-                    **member_input(config, person_id="repaired").model_dump(),
-                    original_person_id=names[0],
-                )
-            )
-            assert not paths[0].exists()
-            assert (config / "team/members/repaired/person.yml").exists()
+        elif action == "remove":
+            service.remove_person(config_dir=config, person_id=names[0])
+            assert not (config / "team/members" / names[0]).exists()
+            assert paths[0].exists()
         else:
-            service.delete_person(config_dir=config, person_id=names[0])
-            assert not paths[0].exists()
+            service.delete_identity(person_id=names[0])
+            assert not paths[0].parent.exists()
     assert paths[1].exists()
     assert store.location.read_bytes() == before
     for key in keys:
@@ -236,7 +295,8 @@ def test_live_person_refuses_secret_after_collision_appears(
 
     person = Person(person_id="alice-bak", name="Test")
     stored_member(namespace_workspace, "alice-bak")
-    stored_member(namespace_workspace, "alice_bak")
+    # The other identity is in no workspace: it still shares the store.
+    stored_identity("alice_bak")
     monkeypatch.setenv("ALICE_BAK_SLACK_BOT_TOKEN", "fake-env-value")
     forbid_store(monkeypatch)
     with pytest.raises(MemberConfigError):
@@ -251,11 +311,12 @@ def test_live_person_refuses_secret_after_collision_appears(
 def test_bulk_secret_read_skips_ambiguous_keys_only(namespace_workspace, monkeypatch):
     config = namespace_workspace
     stored_member(config, "alice-bak")
-    stored_member(config, "alice_bak")
-    stored_member(config, "alice_bak_other")
-    store = KeyringSecretStore(config)
+    stored_identity("alice_bak")
+    stored_identity("alice_bak_other")
+    store = identity_secret_store()
     store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-ambiguous")
     store.set("ALICE_BAK_OTHER_SLACK_BOT_TOKEN", "fake-unique")
+    KeyringSecretStore(config).set("OPENAI_API_KEY", "fake-workspace")
     original = KeyringSecretStore.get
 
     def guarded_get(self, key):
@@ -264,5 +325,6 @@ def test_bulk_secret_read_skips_ambiguous_keys_only(namespace_workspace, monkeyp
 
     monkeypatch.setattr(KeyringSecretStore, "get", guarded_get)
     assert read_workspace_secrets() == {
-        "ALICE_BAK_OTHER_SLACK_BOT_TOKEN": "fake-unique"
+        "ALICE_BAK_OTHER_SLACK_BOT_TOKEN": "fake-unique",
+        "OPENAI_API_KEY": "fake-workspace",
     }

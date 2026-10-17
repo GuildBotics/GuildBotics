@@ -12,6 +12,7 @@ import {
   ApiRequestError,
   buildAgentEnvironment,
   cloneWorkspaceFromHub,
+  deleteIdentity,
   deleteMemberConfig,
   getCommandOptions,
   getRoutineCommandOptions,
@@ -26,6 +27,7 @@ import {
   getProviders,
   getRoleOptions,
   getTeam,
+  listIdentities,
   getWorkspaceSyncStatus,
   importAvatarFromProvider,
   initConfig,
@@ -147,6 +149,7 @@ vi.mock("../api/client", async (importOriginal) => {
       hub_url: null,
       state: "disabled",
       local_head: null,
+      identity_head: null,
       remote_head: null,
       ahead_count: 0,
       behind_count: 0,
@@ -161,6 +164,8 @@ vi.mock("../api/client", async (importOriginal) => {
       devices: [],
     })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
+    deleteIdentity: vi.fn(async () => configWriteResponse()),
+    listIdentities: vi.fn(async () => []),
     getLlmProviders: vi.fn(async () => [
       {
         provider: "openai",
@@ -1084,10 +1089,10 @@ describe("SetupPage", () => {
     expect(screen.getByLabelText(t("setup.github.owner"))).toBeInTheDocument();
   });
 
-  it("keeps the items a provider's kinds share alike", async () => {
+  it("names one Branvil connection for every kind, outside the services", async () => {
     const user = userEvent.setup();
     vi.mocked(getProviders).mockResolvedValue([BRANVIL, ...PROVIDERS]);
-    const branvil = { name: "branvil", base_url: "http://127.0.0.1:7878", workspace: "acme" };
+    const branvil = { name: "branvil", workspace: "acme" };
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({ services: { code_hosting_service: branvil, ticket_service: branvil } }),
     );
@@ -1096,18 +1101,15 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Existing project"));
     await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    // The tickets' Branvil is the code host's: its base URL is edited once.
-    const [baseUrl] = await screen.findAllByLabelText(t("setup.branvil.baseUrl"));
-    expect(screen.getAllByLabelText(t("setup.branvil.baseUrl"))).toHaveLength(1);
-    await user.clear(baseUrl);
-    await fill(user, baseUrl, "http://hub:7878");
+    // The connection is the identities': its base URL is shown once, and the
+    // services keep only the workspace.
+    expect(await screen.findAllByLabelText(t("setup.branvil.baseUrl"))).toHaveLength(1);
     await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
-    const shared = { ...branvil, base_url: "http://hub:7878" };
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual({
-      code_hosting_service: shared,
-      ticket_service: shared,
+      code_hosting_service: branvil,
+      ticket_service: branvil,
     });
   });
 
@@ -1683,7 +1685,6 @@ const PROVIDERS: ProviderOption[] = [
     title: "GitHub",
     kinds: ["code_hosting_service", "ticket_service"],
     avatar: true,
-    shared: [],
     credentials_from: [],
   },
   {
@@ -1691,19 +1692,16 @@ const PROVIDERS: ProviderOption[] = [
     title: "Slack",
     kinds: ["chat_service"],
     avatar: true,
-    shared: [],
     credentials_from: [],
   },
 ];
 
-/** Branvil, which keeps one base URL for its kinds and is handed the
- * members' GitHub credentials. */
+/** Branvil, which is handed the members' GitHub credentials. */
 const BRANVIL: ProviderOption = {
   name: "branvil",
   title: "Branvil",
   kinds: ["code_hosting_service", "ticket_service"],
   avatar: false,
-  shared: ["base_url"],
   credentials_from: ["github"],
 };
 
@@ -1737,6 +1735,7 @@ function memberConfig(): MemberConfig {
     chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
+    participating: true,
   };
 }
 
@@ -2417,6 +2416,7 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
+    participating: true,
     ...overrides,
   };
 }
@@ -2530,6 +2530,7 @@ describe("MembersSection", () => {
         enabled: true,
         workspace_id: "workspace-a",
         local_head: "before",
+        identity_head: null,
         rejected_changes: [],
       };
       vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(sync);
@@ -2555,6 +2556,7 @@ describe("MembersSection", () => {
       queryClient.setQueryData(["workspace-sync"], {
         ...sync,
         local_head: "adopted",
+        identity_head: null,
         rejected_changes: rejected
           ? [
               {
@@ -3101,10 +3103,39 @@ describe("MembersSection", () => {
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
     const [personId, body] = vi.mocked(updateMemberConfig).mock.calls[0];
     expect(personId).toBe("alice");
-    expect(body).toMatchObject({
-      original_person_id: "alice",
-      person_id: "alice",
-      person_name: "Alice Cooper",
+    expect(body).toMatchObject({ person_id: "alice", person_name: "Alice Cooper" });
+    expect(body).not.toHaveProperty("original_person_id");
+    // Other workspaces know the member by its ID.
+    expect(screen.getByLabelText("Member ID")).toBeDisabled();
+  });
+
+  it("adds a member another workspace has, as its identity was read", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listIdentities).mockResolvedValue([
+      { person_id: "bob", name: "Bob", person_type: "agent", participating: false },
+    ]);
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        person_id: "bob",
+        person_name: "Bob",
+        participating: false,
+        revisions: { "team/members/bob/identity.yml": "rev-1" },
+      }),
+    );
+    renderSetupPage("/setup?section=members");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.members.newButton") }));
+    await user.click(await screen.findByRole("combobox", { name: t("setup.members.joinLabel") }));
+    await user.click(await screen.findByRole("option", { name: "Bob (bob)" }));
+    await waitFor(() => expect(screen.getByLabelText("Display name")).toHaveValue("Bob"));
+    expect(screen.getByLabelText("Member ID")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
+
+    await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(addMemberConfig).mock.calls[0][0]).toMatchObject({
+      person_id: "bob",
+      person_name: "Bob",
+      expected_revisions: { "team/members/bob/identity.yml": "rev-1" },
     });
   });
 
@@ -3492,10 +3523,10 @@ describe("MembersSection", () => {
       const deletion = pending<Awaited<ReturnType<typeof deleteMemberConfig>>>();
       vi.mocked(deleteMemberConfig).mockReturnValueOnce(deletion.promise);
       await editAlice(user);
-      await user.click(screen.getByRole("button", { name: t("setup.members.deleteButton") }));
+      await user.click(screen.getByRole("button", { name: t("setup.members.removeButton") }));
       await user.click(
         within(screen.getByRole("dialog")).getByRole("button", {
-          name: t("setup.members.deleteButton"),
+          name: t("setup.members.removeButton"),
         }),
       );
       await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
@@ -3504,31 +3535,6 @@ describe("MembersSection", () => {
         expect(screen.getByRole("button", { name: t(`setup.members.${name}`) })).toBeDisabled();
       }
       deletion.settle(configWriteResponse());
-    });
-
-    it("saves a registration for a member renamed in the same save", async () => {
-      const user = userEvent.setup();
-      await editAlice(user);
-      await selectGitHubAccountType(user, "GitHub Apps");
-      await register(user);
-      await fill(
-        user,
-        screen.getByLabelText(t("setup.members.githubResolvedIdentity")),
-        installed.username,
-      );
-      await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), installed.git_email);
-      await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
-      await user.clear(screen.getByLabelText("Member ID"));
-      await fill(user, screen.getByLabelText("Member ID"), "alice-2");
-      await user.click(await screen.findByRole("tab", { name: "GitHub" }));
-
-      const body = await save(user);
-
-      expect(body).toMatchObject({ original_person_id: "alice", person_id: "alice-2" });
-      expect(githubAccount(body).app_registration_id).toBe("registration-1");
-      expect(
-        await screen.findByText(t("setup.members.githubAppRegistration.saved")),
-      ).toBeInTheDocument();
     });
 
     it("asks to register again when the registration expired before the save", async () => {
@@ -3761,27 +3767,33 @@ describe("MembersSection", () => {
     });
   });
 
-  it("deletes a member after confirming in the modal", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
-    renderSetupPage("/setup?section=members");
+  it.each([
+    ["removeButton", "removeConfirmTitle", deleteMemberConfig],
+    ["deleteButton", "deleteConfirmTitle", deleteIdentity],
+  ] as const)(
+    "takes the member out after confirming %s in the modal",
+    async (button, title, call) => {
+      const user = userEvent.setup();
+      vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
+      renderSetupPage("/setup?section=members");
 
-    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
-    await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
+      await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+      await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
 
-    // The footer Delete button opens the confirmation modal; the modal's own
-    // Delete button performs the deletion.
-    await user.click(await screen.findByRole("button", { name: t("setup.members.deleteButton") }));
-    expect(await screen.findByText(t("setup.members.deleteConfirmTitle"))).toBeInTheDocument();
-    const modal = screen.getByRole("dialog");
-    await user.click(within(modal).getByRole("button", { name: t("setup.members.deleteButton") }));
+      // The footer button opens the confirmation modal; the modal's own
+      // button performs it.
+      await user.click(await screen.findByRole("button", { name: t(`setup.members.${button}`) }));
+      expect(await screen.findByText(t(`setup.members.${title}`))).toBeInTheDocument();
+      const modal = screen.getByRole("dialog");
+      await user.click(within(modal).getByRole("button", { name: t(`setup.members.${button}`) }));
 
-    await waitFor(() => expect(deleteMemberConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(deleteMemberConfig).mock.calls[0]).toEqual([
-      "alice",
-      { config_dir: "/workspace/.guildbotics/config" },
-    ]);
-  });
+      await waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(call).mock.calls[0]).toEqual(["alice"]);
+      expect(
+        button === "removeButton" ? deleteIdentity : deleteMemberConfig,
+      ).not.toHaveBeenCalled();
+    },
+  );
 
   it("reloads a saved member after leaving the members section during first setup", async () => {
     const user = userEvent.setup();

@@ -27,7 +27,7 @@ Service-wide settings live on the **Service** screen.
 - **Stop after consecutive failures**: stops that member's worker after this many consecutive failures (default 3)
 - **Include in service run**: enables patrol commands / scheduled commands / event triggers individually
 
-These settings are stored in `team/members/<person_id>/person.yml` as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file directly on a server without the GUI.
+These settings are stored in the workspace's `team/members/<person_id>/member.yml` (the member's participation in that workspace) as `routine_commands` and `task_schedules`. The sections below describe that stored format, and serve as the reference when you edit the file directly on a server without the GUI.
 
 ## Patrol Commands
 
@@ -42,8 +42,7 @@ These settings are stored in `team/members/<person_id>/person.yml` as `routine_c
 **Example**:
 
 ```yaml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 # Override the default patrol commands (optional)
@@ -71,8 +70,7 @@ routine_commands:
 **Example**:
 
 ```yaml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 # Schedule commands to run at specific times
@@ -172,11 +170,9 @@ Some real-world schedule configurations.
 
 **Scenario**: two agents with different schedules
 
-**Agent 1** (`.guildbotics/config/team/members/agent1/person.yml`):
+**Agent 1** (`.guildbotics/config/team/members/agent1/member.yml`):
 
 ```yaml
-person_id: agent1
-name: Agent One
 is_active: true
 
 # Run the ticket-driven workflow on patrol
@@ -190,11 +186,9 @@ task_schedules:
       - "0 9 * * 1-5" # Weekdays at 9:00 AM
 ```
 
-**Agent 2** (`.guildbotics/config/team/members/agent2/person.yml`):
+**Agent 2** (`.guildbotics/config/team/members/agent2/member.yml`):
 
 ```yaml
-person_id: agent2
-name: Agent Two
 is_active: true
 
 # Run code review checks on patrol
@@ -220,8 +214,7 @@ Press **Run** on the **Service** screen in the desktop app (on a server without 
 Configuring several schedules for one command:
 
 ```yaml
-person_id: maintenance_bot
-name: Maintenance Bot
+# team/members/maintenance_bot/member.yml
 is_active: true
 
 task_schedules:
@@ -243,8 +236,7 @@ task_schedules:
 Randomized settings that avoid contention between agents:
 
 ```yaml
-person_id: agent_alpha
-name: Agent Alpha
+# team/members/agent_alpha/member.yml
 is_active: true
 
 task_schedules:

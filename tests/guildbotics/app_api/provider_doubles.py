@@ -24,7 +24,8 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.secret_store import identity_secret_store
+from tests.guildbotics import members
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
@@ -94,14 +95,13 @@ def saved_workspace(
 def write_member(
     workspace: Path, person_id: str, body: str = "", **secrets: str
 ) -> None:
-    """A saved member, its ``person.yml`` ending in ``body``, holding
-    ``secrets`` by their member-relative names."""
-    directory = workspace / ".guildbotics/config/team/members" / person_id
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "person.yml").write_text(
-        f"person_id: {person_id}\nname: {person_id.title()}\n{body}"
+    """A saved member of ``workspace``, described whole ending in ``body``,
+    holding ``secrets`` by their member-relative names."""
+    members.write_member(
+        workspace / ".guildbotics/config",
+        f"person_id: {person_id}\nname: {person_id.title()}\n{body}",
     )
-    store = KeyringSecretStore(workspace / ".guildbotics/config")
+    store = identity_secret_store()
     prefix = person_id.upper().replace("-", "_") + "_"
     for name, value in secrets.items():
         store.set(prefix + name, value)

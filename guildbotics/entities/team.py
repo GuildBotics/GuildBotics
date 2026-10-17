@@ -7,7 +7,6 @@ from langcodes import Language
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from guildbotics.entities.task import ScheduledCommand
-from guildbotics.utils.fileio import get_config_path
 from guildbotics.utils.person_id import person_secret_prefix, validate_person_id
 
 KNOWN_LANGUAGE_NAMES = {
@@ -207,6 +206,26 @@ class Role(BaseModel):
         return f"{self.id}. {self.summary} {self.description}"
 
 
+#: The fields of a member's identity file: who the member is, the same in
+#: every workspace. ``profile`` holds its ``character`` here.
+IDENTITY_FIELDS = frozenset(
+    {
+        "person_id",
+        "name",
+        "person_type",
+        "account_info",
+        "profile",
+        "speaking_style",
+        "relationships",
+    }
+)
+#: The fields of a workspace's participation file: what the member does there.
+#: ``profile`` holds its ``roles`` here, from the workspace's role definitions.
+PARTICIPATION_FIELDS = frozenset(
+    {"is_active", "profile", "message_channels", "routine_commands", "task_schedules"}
+)
+
+
 class Person(BaseModel):
     """
     A class representing a person of the team.
@@ -299,8 +318,7 @@ class Person(BaseModel):
         return scheduled_commands
 
     def to_person_env_key(self, key) -> str:
-        prefix = person_secret_prefix(get_config_path("team/members"), self.person_id)
-        return prefix + key.upper()
+        return person_secret_prefix(self.person_id) + key.upper()
 
     def get_account_info(self, key: str) -> str:
         """Return a non-secret account identifier from person configuration."""

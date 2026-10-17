@@ -23,9 +23,12 @@ entry of `directories` is an absolute path, mounted read-only:
   - `diagnostics.jsonl` is the index: the milestones of every execution, newest last.
   - `sessions/<trace_id>.jsonl` is one execution's full transcript.
   - `sessions/system-*.jsonl` holds service-wide records that belong to no single execution.
-- `config` — the workspace configuration: `team/` (the project and its members),
-  `commands/` (shared custom commands), `team/members/<person_id>/commands/` (one member's
-  own commands), `intelligences/` (AI settings) and so on.
+- `config` — the workspace configuration: `team/` (the project and what each member does in
+  this workspace, `team/members/<person_id>/member.yml`), `commands/` (shared custom commands),
+  `team/members/<person_id>/commands/` (one member's own commands), `intelligences/` (AI
+  settings) and so on.
+- `identities` — who each member is, the same in every workspace: `<person_id>/identity.yml`
+  (name, character, accounts) and the member's picture.
 - `templates` — the packaged defaults GuildBotics falls back to when `config` has no such file,
   including the built-in commands under `commands/`.
 

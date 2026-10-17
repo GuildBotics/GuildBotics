@@ -33,6 +33,7 @@ from guildbotics.intelligences.brains.factory import (
     BrainConfig,
 )
 from guildbotics.utils.i18n_tool import set_language, t
+from tests.guildbotics.members import write_member
 from tests.guildbotics.slot_mappings import use_brain_slots, use_model_slots
 
 _WINDOW_FAILURES = {
@@ -45,11 +46,7 @@ _WINDOW_FAILURES = {
 @pytest.fixture
 def command_api(tmp_path, monkeypatch, language):
     config = tmp_path / ".guildbotics/config"
-    member = config / "team/members/aiko"
-    member.mkdir(parents=True)
-    (member / "person.yml").write_text(
-        "person_id: aiko\nname: Aiko\nis_active: true\n", encoding="utf-8"
-    )
+    write_member(config, "person_id: aiko\nname: Aiko\nis_active: true\n")
     (config / "team/project.yml").write_text(
         f"name: demo\nlanguage: {language}\n", encoding="utf-8"
     )

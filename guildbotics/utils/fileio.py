@@ -11,6 +11,7 @@ import yaml  # type: ignore
 CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
 GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
+GUILDBOTICS_IDENTITY_ROOT = "GUILDBOTICS_IDENTITY_ROOT"
 
 # Installed launchers may enter through a symlink/junction. Canonicalize the
 # trusted package once, before any mount inspection, and share that spelling.
@@ -47,6 +48,26 @@ def get_machine_root() -> Path:
     hosts one.
     """
     return Path.home() / ".guildbotics"
+
+
+def get_identity_root() -> Path:
+    """Return the root of the members' identities, which every workspace shares.
+
+    A member is one person -- a name, a character, accounts with each service
+    and their credentials -- whichever workspace it works in, so that much is
+    kept once per machine rather than in each workspace. The root is laid out
+    like a workspace root, with ``.guildbotics/config``, ``state``, and
+    ``local`` under it, so the stores, locks, and synchronization that take a
+    workspace root take this one unchanged. A command's isolated environment
+    is told where it is mounted through ``GUILDBOTICS_IDENTITY_ROOT``.
+    """
+    configured = os.getenv(GUILDBOTICS_IDENTITY_ROOT, "").strip()
+    return Path(configured) if configured else get_machine_root() / "identity"
+
+
+def get_identity_config_dir() -> Path:
+    """Return ``<identity root>/.guildbotics/config``."""
+    return get_identity_root() / CONFIG_PATH
 
 
 def get_machine_state_root() -> Path:

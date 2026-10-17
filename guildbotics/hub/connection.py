@@ -278,6 +278,24 @@ def create_hub_workspace(location: HubLocation, workspace_id: str) -> None:
     run_hub_command(location.endpoint, ["workspace", "create", workspace_id])
 
 
+def claim_hub_identity(location: HubLocation, identity_id: str) -> str:
+    """Return the identities' repository a hub holds, registering
+    ``identity_id`` as it when the hub holds none."""
+    if location.endpoint is None:
+        return host.claim_identity(identity_id)
+    output = run_hub_command(
+        location.endpoint, ["identity", "claim", identity_id, "--format", "json"]
+    )
+    try:
+        return host.require_uuid(str(json.loads(output)["identity_id"]), "identity_id")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HubUnreachableError(
+            f"{location.endpoint.target} did not answer with an identity "
+            "repository. Check that GuildBotics is installed there and on the "
+            "PATH used by SSH sessions."
+        ) from exc
+
+
 def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
     """Read the host key a hub machine presents, without trusting it.
 

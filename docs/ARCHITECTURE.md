@@ -749,15 +749,25 @@ the process cwd or a member working clone.
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/service.lock` — state needed _before_ a workspace is chosen                  |
-| Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json`, and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
+| Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json` (including `identity_id`, the identities' repository), and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
+| Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials and connection Secrets such as `BRANVIL_ADMIN_TOKEN`), `config/connections/branvil.yml` |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
-| Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
+| Config             | `<workspace>/.guildbotics/config`                                                                | project YAML, each member's participation (`team/members/<person_id>/member.yml`), `secrets.yml` (key names and generations), transcript settings                                                                 |
 | Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
 | Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this device's keychain namespace and held generations), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
 
 Invariants:
 
 - Machine state root is always derived from `HOME` and never from the workspace.
+- A member is split in two files. Its identity (`person_id`, `name`, `person_type`,
+  `account_info`, `profile.character`, `speaking_style`, `relationships`) is the same in
+  every workspace and lives under the identity root; its participation in a workspace
+  (`is_active`, `profile.roles`, `message_channels`, `routine_commands`,
+  `task_schedules`) and its `intelligences/` and `commands/` overrides live in that
+  workspace (`IDENTITY_FIELDS` / `PARTICIPATION_FIELDS` in `entities/team.py`). Team
+  loading refuses a field in the other file's place and leaves out a workspace
+  member whose identity this machine does not have (yet). A `person_id` never
+  changes.
 - Workspace root is resolved only from `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`,
   `GUILDBOTICS_CONFIG_DIR` when it is `<ws>/.guildbotics/config`, or
   `active-workspace.json`. Missing workspace is an error for writes.
@@ -820,6 +830,17 @@ that was moved or renamed reconnects to the same hub repository, and every cycle
 that the local copy and the hub's copy name the same workspace. A hub machine may host
 several workspaces, and each workspace chooses its hub; joining and service ownership
 are per workspace, never per machine.
+
+**Identities.** The identity root is a second synchronized root of the same shape, with
+its own ID, its own queue (`activate_identity_sync()`, running beside the selected
+workspace's and untouched by a workspace switch), and its own shared-write lock. A span
+that changes a member's identity and a workspace's file of it together takes the identity
+root's lock outside the workspace's (`member_write_operation`). Connecting a workspace to
+a hub (registering, joining, copying, or changing hubs) connects the identities to the
+same hub: the hub holds exactly one identities repository, recorded as `identity_id` in
+`hub.json` by `guildbotics hub identity claim`. The first machine registers it, and the
+others join it by the same rules as a workspace join. It is not listed among the hub's
+workspaces.
 
 **Hub.** A machine the user chooses, holding one bare Git repository per workspace under
 `~/.guildbotics/hub` (`guildbotics/hub/host.py`). Every repository is configured
@@ -999,6 +1020,12 @@ waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately
 `OSError` family: synchronization catches that family to mean the cycle failed and
 would otherwise report a failure over a save that is merely in progress.
 
+The identity root is a shared root of its own with a lock of its own. A span that changes
+both a member's identity and the selected workspace's file of it takes the identity root's
+lock first and the workspace's inside it (`member_write_operation`); taking them the other
+way round is refused as a programming error, since it would deadlock against every span
+that takes them in order.
+
 Which writers must take it is not decided writer by writer. Every write to a shared path
 goes through the sync port, and the port takes the lock for it, so a writer that composes
 what it writes without reading anything has nothing to declare and no way to forget.
@@ -1089,20 +1116,26 @@ not the repository lock.
 Secrets = LLM provider API keys (`models/<provider>/default.yml` `api_key_env`) and
 person secrets, whose member-relative names each provider's descriptor declares
 (`Provider.secret_keys`, e.g. `GITHUB_ACCESS_TOKEN` / `SLACK_BOT_TOKEN`). Non-secret
-account identifiers live in `person.yml` `account_info`.
+account identifiers live in the member's `identity.yml` `account_info`. Members'
+credentials, and the Secrets of a provider's connection (`Provider.identity_secret_keys`,
+e.g. `BRANVIL_ADMIN_TOKEN`), are kept in the identities' store
+(`identity_secret_store()`), shared by every workspace; the workspace's store keeps the
+rest. `guildbotics secrets --identities` manages the identities' store, and the CLI
+refuses a member's key in a workspace's store. Loading into the environment reads the
+identities' store, then the workspace's; a key both hold is taken from the identities'.
 
 A member's secret keys come only from `person_secret_prefix()` in
 `utils/person_id.py` (prefix: replace `-` with `_`, uppercase, then `_`); a key is
 that prefix followed by the member-relative name. It returns the prefix a member
 owns alone and raises `PersonEnvPrefixConflictError` naming the colliding config
-files when another stored member directory, including an invalid config awaiting
-repair, derives the same prefix. Creation and rename reject an occupied prefix;
+files when another stored identity, including an invalid one awaiting repair,
+derives the same prefix. The namespace is the identities', not a workspace's: two
+members that never share a workspace still collide. Creation rejects an occupied prefix;
 team loading reports the colliding config files and refuses execution. Runtime
 key resolution and bulk loading do not read ambiguous member secrets
 (`ambiguous_person_secret()`: the member of the longest prefix a key has is
 shared). Setup keeps these members editable with secret-presence flags and key
-names cleared: renaming or deleting one preserves the ambiguous old keys, and a
-renamed member needs its own secrets entered again.
+names cleared: deleting one preserves the ambiguous keys.
 `tests/guildbotics/test_person_secret_boundary.py` classifies every secret store
 access and member key spelling in the package.
 
@@ -1136,6 +1169,9 @@ access and member key spelling in the package.
   distribution point they are taken from. A transfer happens only when the user asks
   for one, over the standard input and output of one `guildbotics hub secret`
   command run through OpenSSH: no relay file, no Git object, no temporary file.
+  The identities' store is transferred the same way, under the identities'
+  repository ID (`/identities/secrets*` in the Local API, `guildbotics secrets
+  --identities` in the CLI).
   Entries are framed as a JSON header line plus the exact bytes it declares, so a
   value crosses a Windows machine unaltered and nothing that reads, logs, or reports
   a header can carry one. No encryption is layered on top: OpenSSH already

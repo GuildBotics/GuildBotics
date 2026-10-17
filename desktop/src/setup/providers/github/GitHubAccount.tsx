@@ -383,7 +383,12 @@ function AccountPanel({
           value={form.accessToken}
           onChange={(event) => set({ accessToken: event.currentTarget.value })}
           error={fieldErrors.accessToken}
-          description={<SecretStatusHint envKey={context.secretEnvKeys.GITHUB_ACCESS_TOKEN} />}
+          description={
+            <SecretStatusHint
+              envKey={context.secretEnvKeys.GITHUB_ACCESS_TOKEN}
+              scope="identities"
+            />
+          }
         />
       ) : null}
       {form.accountType === "human" ? (

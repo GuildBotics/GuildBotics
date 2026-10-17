@@ -263,11 +263,11 @@ class TestHubTransfers:
             lambda *_: f"/hub/{WORKSPACE_ID}/repository.git",
         )
         monkeypatch.setattr(secrets_cli, "hub_secret_client", lambda *_: hub_secrets)
-        monkeypatch.setattr(secrets_cli, "commit_and_push_once", lambda **_: None)
+        monkeypatch.setattr(secrets_cli, "commit_and_push_once", lambda *_, **__: None)
         monkeypatch.setattr(
             secrets_cli,
             "synchronize_once",
-            lambda **_: order.append("refresh") if order is not None else None,
+            lambda *_, **__: order.append("refresh") if order is not None else None,
         )
         hub_secrets.order = order
         return workspace

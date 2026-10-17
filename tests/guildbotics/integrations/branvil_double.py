@@ -863,11 +863,17 @@ def serve(double: BranvilDouble, monkeypatch: Any) -> None:
     monkeypatch.setattr(api, "_client", served)
 
 
-def connect_admin(token: str = ADMIN) -> None:
-    """Hold ``token`` as this machine's admin token for Branvil."""
-    from guildbotics.utils.env_loader import workspace_secret_store
+def connect_admin(token: str = ADMIN, base_url: str = BASE) -> None:
+    """Hold ``token`` as the identities' admin token for the Branvil at
+    ``base_url``, as a consent leaves them connected."""
+    from guildbotics.integrations.branvil.api import CONNECTION_PATH
+    from guildbotics.utils.fileio import get_identity_config_dir, save_yaml_file
+    from guildbotics.utils.secret_store import identity_secret_store
 
-    workspace_secret_store().set("BRANVIL_ADMIN_TOKEN", token)
+    identity_secret_store().set("BRANVIL_ADMIN_TOKEN", token)
+    path = get_identity_config_dir() / CONNECTION_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_yaml_file(path, {"base_url": base_url})
 
 
 def services(

@@ -38,6 +38,7 @@ NAMES_SUFFIX = re.compile(rf"(?<![A-Z0-9])({'|'.join(SUFFIXES)})(?![A-Z0-9_])")
 STORE_ACQUISITIONS = {
     "resolve_secret_store",
     "KeyringSecretStore",
+    "identity_secret_store",
     "workspace_secret_store",
 }
 #: Calls that reach a member's keys only through the entry.
@@ -57,13 +58,13 @@ STORE_ELSEWHERE = {
         "the LLM provider API key named by the model config"
     ),
     ("app_api/verify.py", "VerifyService._check_credentials"): (
-        "the workspace Secrets the configured providers' descriptors declare"
+        "the connection Secrets the configured providers' descriptors declare"
     ),
     ("integrations/branvil/api.py", "Admin.client"): (
-        "Branvil's admin token, a workspace Secret of the provider"
+        "Branvil's admin token, the identities' connection Secret"
     ),
-    ("integrations/branvil/setup.py", "Consents._exchange"): (
-        "Branvil's admin token, a workspace Secret of the provider"
+    ("integrations/branvil/setup.py", "_keep_connection"): (
+        "Branvil's admin token, the identities' connection Secret"
     ),
     ("app_api/workspace_secrets.py", "WorkspaceSecretService._store"): (
         "Hub transfers of keys the user picks from the secrets index"
@@ -94,7 +95,10 @@ STORE_ELSEWHERE = {
     ("utils/secret_store.py", "resolve_secret_store"): (
         "returns the store; each caller is an acquisition of its own"
     ),
-    ("utils/shared_redaction.py", "workspace_secret_values"): (
+    ("utils/secret_store.py", "identity_secret_store"): (
+        "returns the store; each caller is an acquisition of its own"
+    ),
+    ("utils/shared_redaction.py", "stored_secret_values"): (
         "reads the key index only to mask values in shared records"
     ),
 }

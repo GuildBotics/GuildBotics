@@ -3,8 +3,9 @@ Branvil API, the addresses of tickets and pull requests, and the comments and
 reactions on them.
 
 Branvil is reached at one base URL, the same on every machine (Branvil's own
-tunnel forwards it to the Hub elsewhere), so the URLs it is known by are the
-ones recorded: a ticket is ``{base}/{repository}/-/tickets/{number}``, a pull
+tunnel forwards it to the Hub elsewhere), which the identities' connection
+records: one Branvil serves every workspace, whose members' identities and
+admin token are the identities'. The URLs it is known by are the ones recorded: a ticket is ``{base}/{repository}/-/tickets/{number}``, a pull
 request ``{base}/{repository}/-/pulls/{number}``; a repository
 (``{workspace}/{name}``) numbers each from 1. Its API names a repository as
 one percent-encoded path segment.
@@ -22,7 +23,7 @@ error code.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
@@ -49,8 +50,9 @@ from guildbotics.runtime.resources import (
     WorkKind,
     WorkTarget,
 )
-from guildbotics.utils.env_loader import workspace_secret_store
+from guildbotics.utils.fileio import get_identity_config_dir, load_yaml_dict
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.secret_store import identity_secret_store
 
 DEFAULT_BASE_URL = "http://127.0.0.1:7878"
 PROVIDER = "branvil"
@@ -64,9 +66,20 @@ _NUMBER = re.compile(r"[1-9][0-9]{0,9}")
 _WRITTEN = re.compile(r"/api/v1/repos/([^/]+)(?:/.*)?")
 
 
-def base_url(config: Mapping[str, Any]) -> str:
-    """Where a service's configuration says Branvil is reached."""
-    return str(config.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+#: The identities' connection to Branvil, under their config directory:
+#: where Branvil is reached, beside the admin token their store keeps.
+CONNECTION_PATH = "connections/branvil.yml"
+
+
+def connection_url() -> str:
+    """Where the identities' connection reaches Branvil; "" before one is made."""
+    connection = load_yaml_dict(get_identity_config_dir() / CONNECTION_PATH)
+    return str(connection.get("base_url") or "").rstrip("/")
+
+
+def branvil_url() -> str:
+    """Where Branvil is reached: as connected, or at its default address."""
+    return connection_url() or DEFAULT_BASE_URL
 
 
 def username(person: Person) -> str:
@@ -307,7 +320,7 @@ class Calls:
 
 class Admin(Calls):
     """Branvil as GuildBotics administers it with the admin token, which
-    this machine's workspace Secrets hold once the owner consented."""
+    the identities' Secrets hold once the owner consented."""
 
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url
@@ -327,7 +340,7 @@ class Admin(Calls):
             ServiceError: If this machine holds none.
         """
         if self._client is None:
-            token = workspace_secret_store().get("BRANVIL_ADMIN_TOKEN")
+            token = identity_secret_store().get("BRANVIL_ADMIN_TOKEN")
             if not token:
                 raise Unauthorized(t("integrations.branvil.api.not_connected"))
             self._client = administer(self.base_url, token)
@@ -352,7 +365,7 @@ class BranvilApi(Calls):
         config = team.project.get_service_config(service)
         self.person = person
         self.team = team
-        self.base_url = base_url(config)
+        self.base_url = branvil_url()
         #: The workspace the member writes in and takes tickets from: the scope.
         self.workspace = str(config.get("workspace") or "")
         self._client: httpx.AsyncClient | None = None

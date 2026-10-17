@@ -108,7 +108,7 @@ function AccountPanel({
         value={form[token]}
         onChange={(event) => set({ [token]: event.currentTarget.value })}
         error={fieldErrors[token]}
-        description={<SecretStatusHint envKey={context.secretEnvKeys[secret]} />}
+        description={<SecretStatusHint envKey={context.secretEnvKeys[secret]} scope="identities" />}
       />
     );
   };

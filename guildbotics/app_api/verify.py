@@ -14,6 +14,7 @@ from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
 from guildbotics.intelligences.llm_providers import provider_env_keys, provider_of
 from guildbotics.utils.env_loader import workspace_secret_store
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
+from guildbotics.utils.secret_store import identity_secret_store
 
 
 def resolve_default_model_provider() -> str:
@@ -208,14 +209,14 @@ class VerifyService:
             *(
                 self._check(
                     "provider_secret",
-                    bool(workspace_secret_store().get(key)),
+                    bool(identity_secret_store().get(key)),
                     f"{key} is configured.",
                     f"{key} is not configured.",
                     target=key,
                     context={"provider": provider.name},
                 )
                 for provider in providers
-                for key in sorted(provider.workspace_secret_keys)
+                for key in sorted(provider.identity_secret_keys)
             ),
             *(
                 VerifyCheck(

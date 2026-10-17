@@ -192,23 +192,11 @@ async def test_a_refused_token_is_reported_and_no_workspace_read(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize(
-    ("items", "stored"),
-    [
-        (
-            {"workspace": "acme"},
-            {"base_url": "http://127.0.0.1:7878", "workspace": "acme"},
-        ),
-        (
-            {"workspace": "acme", "base_url": "http://hub.local:9000/"},
-            {"base_url": "http://hub.local:9000", "workspace": "acme"},
-        ),
-    ],
-)
-def test_the_services_store_an_origin_and_a_workspace(
-    items: dict[str, Any], stored: dict[str, Any]
-):
-    assert Workspace.model_validate(items).model_dump() == stored
+def test_the_services_store_a_workspace():
+    """Where Branvil is, is the identities' connection's to say."""
+    assert Workspace.model_validate({"workspace": "acme"}).model_dump() == {
+        "workspace": "acme"
+    }
     # The code host and the tickets name the same items.
     assert set(BRANVIL.setup.services.values()) == {Workspace}  # type: ignore[union-attr]
 
@@ -219,52 +207,46 @@ def test_the_services_store_an_origin_and_a_workspace(
         {"workspace": ""},
         {"workspace": "acme/team"},
         {"workspace": ".."},
-        {"workspace": "acme", "base_url": "ftp://hub"},
-        {"workspace": "acme", "base_url": "http://hub/branvil"},
+        {"workspace": "acme", "base_url": "http://hub:7878"},
         {"workspace": "acme", "board": "acme/board"},
         {"owner": "acme"},
     ],
 )
-def test_the_services_refuse_what_names_no_branvil_or_workspace(
+def test_the_services_refuse_what_names_no_workspace(
     items: dict[str, Any],
 ):
     with pytest.raises(ValidationError):
         Workspace.model_validate(items)
 
 
+BRANVIL_SERVICES = {"code_hosting_service": {"name": "branvil", "workspace": "a"}}
+
+
 @pytest.mark.parametrize(
-    ("services", "ports"),
+    ("services", "connection", "ports"),
     [
-        ({"code_hosting_service": {"name": "branvil", "workspace": "a"}}, {7878}),
+        (BRANVIL_SERVICES, None, {7878}),
+        (BRANVIL_SERVICES, "http://127.0.0.1:17900", {17900}),
         (
-            {
-                "code_hosting_service": {
-                    "name": "branvil",
-                    "base_url": "http://127.0.0.1:17900",
-                },
-                "ticket_service": {
-                    "name": "branvil",
-                    "base_url": "http://127.0.0.1:17900",
-                },
-            },
-            {17900},
-        ),
-        (
-            {
-                "ticket_service": {
-                    "name": "branvil",
-                    "base_url": "http://localhost:7900",
-                }
-            },
+            {"ticket_service": {"name": "branvil", "workspace": "a"}},
+            "http://localhost:7900",
             {7900},
         ),
-        ({"ticket_service": {"name": "branvil", "base_url": "http://hub:7878"}}, set()),
-        ({"code_hosting_service": {"name": "github", "owner": "acme"}}, set()),
-        ({}, set()),
+        (BRANVIL_SERVICES, "http://hub:7878", set()),
+        (
+            {"code_hosting_service": {"name": "github", "owner": "acme"}},
+            "http://127.0.0.1:17900",
+            set(),
+        ),
+        ({}, None, set()),
     ],
-    ids=["default", "both-kinds", "localhost", "elsewhere", "no-branvil", "none"],
+    ids=["default", "connected", "localhost", "elsewhere", "no-branvil", "none"],
 )
 def test_the_hub_port_is_branvils_loopback_port(
-    services: dict[str, Any], ports: set[int]
+    services: dict[str, Any], connection: str | None, ports: set[int]
 ) -> None:
+    """The port of the Branvil the identities are connected to, for a
+    workspace whose services use it."""
+    if connection is not None:
+        connect_admin(base_url=connection)
     assert hub_ports(services) == ports

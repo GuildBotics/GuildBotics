@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { SecretStatusHint } from "../../../sync/SecretStatusHint";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
-import { branvilKey, branvilUrl, listAgents } from "./api";
+import { branvilKey, listAgents } from "./api";
 import { BranvilConnection, heldConnection, useConnection } from "./BranvilConnection";
 
 /** A member's stored Branvil account, as the backend shows it. */
@@ -54,11 +54,10 @@ function AgentChoice({
   error?: string;
 }) {
   const { t } = useTranslation();
-  const baseUrl = branvilUrl(context.services);
-  const connected = useConnection(baseUrl).data?.status === "connected";
+  const connected = useConnection().data?.status === "connected";
   const agents = useQuery({
-    queryKey: branvilKey("agents", baseUrl),
-    queryFn: () => listAgents(baseUrl),
+    queryKey: branvilKey("agents"),
+    queryFn: listAgents,
     enabled: connected,
   });
   return (
@@ -101,10 +100,9 @@ function AccountPanel({
 }) {
   const { t } = useTranslation();
   const set = (fields: Partial<BranvilForm>) => onChange((current) => ({ ...current, ...fields }));
-  const baseUrl = branvilUrl(context.services);
   return (
     <Stack>
-      {baseUrl ? <BranvilConnection baseUrl={baseUrl} /> : null}
+      <BranvilConnection />
       {context.human ? (
         <Text size="sm">
           {form.stored
@@ -118,7 +116,7 @@ function AccountPanel({
             {form.storedToken
               ? t("setup.branvil.member.tokenSet")
               : t("setup.branvil.member.tokenMissing")}
-            <SecretStatusHint envKey={context.secretEnvKeys.BRANVIL_TOKEN} />
+            <SecretStatusHint envKey={context.secretEnvKeys.BRANVIL_TOKEN} scope="identities" />
           </Text>
           <Checkbox
             label={t("setup.branvil.member.reissue")}
@@ -151,11 +149,10 @@ export const branvilAccount: MemberAccountUi<BranvilForm> = {
   // The save named the member on Branvil: as chosen, after the member, or,
   // for a human, after the owner.
   saved(form, { failure, context, queryClient }) {
-    const baseUrl = branvilUrl(context.services);
-    if (failure !== undefined || !baseUrl) return form;
-    void queryClient.invalidateQueries({ queryKey: branvilKey("agents", baseUrl) });
+    if (failure !== undefined) return form;
+    void queryClient.invalidateQueries({ queryKey: branvilKey("agents") });
     const named = context.human
-      ? (heldConnection(queryClient, baseUrl)?.owner ?? "")
+      ? (heldConnection(queryClient)?.owner ?? "")
       : form.choice === "existing"
         ? form.chosen
         : context.personId.trim();

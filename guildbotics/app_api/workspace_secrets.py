@@ -46,6 +46,7 @@ from guildbotics.secrets import (
 )
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
+    get_identity_config_dir,
     get_workspace_config_dir,
 )
 from guildbotics.utils.keychain import SecretStoreError
@@ -69,10 +70,13 @@ _HUB_FAILURES = (
 
 
 class WorkspaceSecretService:
-    """Secret states and the two explicit transfers, for one workspace."""
+    """Secret states and the two explicit transfers, for the selected
+    workspace's store or, with ``identities``, for the store every workspace
+    shares: the members' credentials and the connections'."""
 
-    def __init__(self, sync_service: WorkspaceSyncService):
+    def __init__(self, sync_service: WorkspaceSyncService, *, identities: bool = False):
         self._sync = sync_service
+        self._identities = identities
 
     def get_secrets(self) -> WorkspaceSecrets:
         """Report every key this workspace knows, on both machines."""
@@ -94,7 +98,7 @@ class WorkspaceSecretService:
         sending from is read out of ``config/secrets.yml``, and a device that
         has been offline would otherwise send from an old one.
         """
-        self._sync.refresh()
+        self._refresh()
         transfer, store = self._require_transfer()
         with _reporting("secret_send_failed"):
             try:
@@ -123,7 +127,7 @@ class WorkspaceSecretService:
         which generation is the current one is read out of
         ``config/secrets.yml``, and only that generation is ever adopted.
         """
-        self._sync.refresh()
+        self._refresh()
         transfer, store = self._require_transfer()
         with _reporting("secret_fetch_failed"):
             outcomes = (
@@ -160,14 +164,26 @@ class WorkspaceSecretService:
             )
         return transfer, store
 
+    def _refresh(self) -> None:
+        if self._identities:
+            self._sync.refresh_identities()
+        else:
+            self._sync.refresh()
+
     def _store(self) -> KeyringSecretStore | None:
+        if self._identities:
+            return KeyringSecretStore(get_identity_config_dir())
         try:
             return KeyringSecretStore(get_workspace_config_dir())
         except WorkspaceNotConfiguredError:
             return None
 
     def _transfer(self, store: KeyringSecretStore) -> SecretTransfer | None:
-        target = self._sync.hub_target()
+        target = (
+            self._sync.identity_hub_target()
+            if self._identities
+            else self._sync.hub_target()
+        )
         if target is None:
             return None
         location, workspace_id = target

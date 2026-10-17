@@ -193,12 +193,13 @@ credential state and cannot be shared with a turn; otherwise select the file in 
 real directory. The preview shows the refusal and offers no unsafe grant. Status
 polling retries an unavailable input store and clears its dedicated alert after recovery.
 Member IDs accept lowercase letters, digits, `_` and `-`, excluding Windows reserved names.
-Invalid stored configurations show their filename and can be edited, renamed or deleted
-in setup, while runtime loading remains refused until repair. Existing directory names
-such as `Alice`, `alice.bak`, names with internal spaces, and Unicode names are addressable
-for repair. Names with separators, drive or stream suffixes, control characters, or trailing
+Invalid stored configurations show their filename and can be edited or removed from the
+workspace in setup, while runtime loading remains refused until repair. A member ID cannot
+be changed. Existing directory names such as `Alice`, `alice.bak`, names with internal
+spaces, and Unicode names are shown and can be removed from the workspace. Names with separators, drive or stream suffixes, control characters, or trailing
 dots or spaces must be renamed or removed on disk using the reported filename.
-Directories without `person.yml` are not members. Copying checks the 20MiB
+A workspace's directory without `member.yml` is not a member, and an identity directory
+without `identity.yml` is not an identity. Copying checks the 20MiB
 limit throughout the read, including files that grow during the copy. Workspace
 locations must be outside their own grants and
 the exchange directory. Move an existing workspace out of those locations before
@@ -272,8 +273,12 @@ admission; turns cannot create such links because protected files are not mounte
   declares it (`inspects`), parts of the workspace's own state are bound
   read-only at their host paths. `diagnostics` is the recorded runs
   (`.guildbotics/local/run`); `config` is the workspace
-  configuration (`.guildbotics/config`) and the packaged templates it falls back
-  to (`templates` inside the GuildBotics code mount above). The bundled troubleshooting command (`assistants/troubleshoot`) is the only
+  configuration (`.guildbotics/config`), the members' identities (`identities`:
+  `~/.guildbotics/identity/.guildbotics/config/team/members`, which every command's
+  environment also mounts read-only, naming the identity root in
+  `GUILDBOTICS_IDENTITY_ROOT`), and the
+  packaged templates it falls back to (`templates` inside the GuildBotics code mount
+  above). The bundled troubleshooting command (`assistants/troubleshoot`) is the only
   one that declares it today; it reads the records against the commands and
   settings they ran with. The declaration is independent of `read_only`: what a turn may change and what it needs to
   read are separate questions.

@@ -35,7 +35,8 @@ from guildbotics.setup.setup_service import (
     settle_accounts,
 )
 from guildbotics.utils.fileio import load_yaml_file
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
+from guildbotics.utils.secret_store import identity_secret_store
 
 BASE_URL = "http://127.0.0.1:8765"
 APP_ID = 1978826
@@ -566,15 +567,15 @@ async def test_a_member_save_keeps_the_key_only_in_the_secret_store(
         },
     )
 
-    SimplePersonSetupService().write_person(member)
+    SimplePersonSetupService().save_person(member)
     await settle_accounts(member, saved=True)
 
-    person_file = config_dir / "team/members/alice/person.yml"
+    person_file = identity_members_dir() / "alice" / IDENTITY_FILE
     account_info = load_yaml_file(person_file)["account_info"]
     assert account_info["github_app_id"] == str(APP_ID)
     assert account_info["github_installation_id"] == str(LATEST_INSTALLATION)
     assert api.pem not in person_file.read_text(encoding="utf-8")
-    assert KeyringSecretStore(config_dir).get("ALICE_GITHUB_PRIVATE_KEY") == api.pem
+    assert identity_secret_store().get("ALICE_GITHUB_PRIVATE_KEY") == api.pem
     with pytest.raises(SetupError):
         await registrations.status(AppRegistrationRef(state=state), _no_team)
 

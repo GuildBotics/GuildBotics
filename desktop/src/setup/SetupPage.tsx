@@ -86,6 +86,7 @@ import {
   type ProjectSetupRequest,
   ApiRequestError,
   addMemberConfig,
+  deleteIdentity,
   deleteMemberConfig,
   getCommandOptions,
   getRoutineCommandOptions,
@@ -94,6 +95,7 @@ import {
   getLlmProviders,
   type LlmProviderInfo,
   getMemberConfig,
+  listIdentities,
   getProjectConfig,
   getRoleOptions,
   getTeam,
@@ -1095,14 +1097,6 @@ function IntegrationsSection({
   const setService = (kind: ServiceKind, value: ServiceSelection | undefined) => {
     const next = { ...services, [kind]: value };
     if (!value) delete next[kind];
-    // The items a provider's kinds give alike follow the kind edited.
-    const shared = providers.find((provider) => provider.name === value?.name)?.shared ?? [];
-    for (const other of SERVICE_KINDS) {
-      const item = next[other];
-      if (value && other !== kind && item?.name === value.name) {
-        next[other] = { ...item, ...Object.fromEntries(shared.map((key) => [key, value[key]])) };
-      }
-    }
     form.setFieldValue("services", next);
   };
   return (
@@ -3077,7 +3071,12 @@ function MembersSection({
   // being created has nothing stored to have a state yet.
   const [memberSecretEnvKeys, setMemberSecretEnvKeys] = useState<Record<string, string>>({});
   const [savingMember, setSavingMember] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // Which deletion the confirmation is for: taking the member out of this
+  // workspace, or deleting the member everywhere.
+  const [deleteConfirm, setDeleteConfirm] = useState<"remove" | "identity" | null>(null);
+  // An existing member being added to this workspace: its identity is read,
+  // so the save is compared against it rather than creating a new one.
+  const [joiningPersonId, setJoiningPersonId] = useState<string | null>(null);
   const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
   const routineDefaultDismissedRef = useRef(false);
@@ -3412,6 +3411,8 @@ function MembersSection({
     mutationFn: addMemberConfig,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["team"] });
+      queryClient.invalidateQueries({ queryKey: ["identities"] });
+      setJoiningPersonId(null);
       queryClient.invalidateQueries({ queryKey: ["command-options"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler"] });
       memberDiagnosticsMutation.reset();
@@ -3442,12 +3443,34 @@ function MembersSection({
       setEditingPersonId(personId.trim());
     },
   });
+  const identities = useQuery({
+    queryKey: ["identities"],
+    queryFn: listIdentities,
+    enabled: hasPersistedProject,
+  });
+  const joinableIdentities = (identities.data ?? []).filter((identity) => !identity.participating);
+  const joinMemberMutation = useMutation({
+    mutationFn: (memberId: string) => getMemberConfig(memberId),
+    onSuccess: (snapshot) => {
+      memberDiagnosticsMutation.reset();
+      clearForm();
+      setMemberRevisions(snapshot.revisions);
+      fillFormFromMember(snapshot);
+      setJoiningPersonId(snapshot.person_id);
+      setEditingPersonId(null);
+      setMode("add");
+    },
+  });
   const deleteMemberMutation = useMutation({
-    mutationFn: ({ targetPersonId, configDir }: { targetPersonId: string; configDir: string }) =>
-      deleteMemberConfig(targetPersonId, {
-        config_dir: configDir,
-      }),
+    mutationFn: ({
+      targetPersonId,
+      everywhere,
+    }: {
+      targetPersonId: string;
+      everywhere: boolean;
+    }) => (everywhere ? deleteIdentity(targetPersonId) : deleteMemberConfig(targetPersonId)),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["identities"] });
       queryClient.invalidateQueries({ queryKey: ["team"] });
       memberDiagnosticsMutation.reset();
       clearForm();
@@ -3458,7 +3481,10 @@ function MembersSection({
   // What answers a pending save, reload or delete lands on the form that sent
   // it, so the form stays on its member until then.
   const memberFormBusy =
-    savingMember || memberConfigMutation.isPending || deleteMemberMutation.isPending;
+    savingMember ||
+    memberConfigMutation.isPending ||
+    joinMemberMutation.isPending ||
+    deleteMemberMutation.isPending;
 
   const effectiveIsActive = isHumanMember ? false : isActive;
   const configDir = resolveConfigDir(workspaceDir);
@@ -3467,8 +3493,16 @@ function MembersSection({
   // credentials a used provider is handed, each in its own tab.
   const serviceProviders = useServiceProviders();
   const usedProviders = new Set(Object.values(services).map((service) => service?.name));
+  // A member's accounts are its identity's, so one it already has with a
+  // provider this project does not use (another workspace's) stays in view.
+  const heldAccounts = Object.entries(
+    (mode === "edit" ? currentMember.data : joinMemberMutation.data)?.accounts ?? {},
+  )
+    .filter(([, view]) => Object.values(view).some(Boolean))
+    .map(([name]) => name);
   const accountProviders = new Set([
     ...usedProviders,
+    ...heldAccounts,
     ...serviceProviders
       .filter((provider) => usedProviders.has(provider.name))
       .flatMap((provider) => provider.credentials_from),
@@ -3813,11 +3847,7 @@ function MembersSection({
         if (!memberRevisions) return;
         await updateMemberMutation.mutateAsync({
           originalPersonId: editingPersonId,
-          body: {
-            ...request,
-            original_person_id: editingPersonId,
-            expected_revisions: memberRevisions,
-          },
+          body: { ...request, expected_revisions: memberRevisions },
         });
         memberWritten = true;
         setAccounts(settledAccounts());
@@ -3826,7 +3856,13 @@ function MembersSection({
         }
         return;
       }
-      await addMemberMutation.mutateAsync(request);
+      // An existing member is added as its identity was read, so an edit
+      // made to it meanwhile, here or on another machine, is not replaced.
+      await addMemberMutation.mutateAsync(
+        joiningPersonId && memberRevisions
+          ? { ...request, expected_revisions: memberRevisions }
+          : request,
+      );
       memberWritten = true;
       // The added member's form is cleared by now; what its accounts do after
       // a save still happens.
@@ -3867,11 +3903,14 @@ function MembersSection({
     memberDiagnosticsMutation.reset();
     setMode("add");
     setEditingPersonId(null);
+    setJoiningPersonId(null);
+    setMemberRevisions(null);
     clearForm({ withDefaults: true });
   };
 
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
+    setJoiningPersonId(null);
     setAccounts({});
     setMemberRevisions(null);
     setEditingPersonId(memberId);
@@ -3881,32 +3920,39 @@ function MembersSection({
   };
 
   const handleDeleteMember = async () => {
-    if (!editingPersonId || !configDir.trim()) {
+    if (!editingPersonId || !deleteConfirm) {
       return;
     }
     await deleteMemberMutation.mutateAsync({
       targetPersonId: editingPersonId,
-      configDir,
+      everywhere: deleteConfirm === "identity",
     });
-    setDeleteConfirmOpen(false);
+    setDeleteConfirm(null);
   };
 
   return (
     <Card withBorder radius="md" p="lg">
       <Modal
-        opened={deleteConfirmOpen}
-        onClose={() => setDeleteConfirmOpen(false)}
-        title={t("setup.members.deleteConfirmTitle")}
+        opened={deleteConfirm !== null}
+        onClose={() => setDeleteConfirm(null)}
+        title={
+          deleteConfirm === "identity"
+            ? t("setup.members.deleteConfirmTitle")
+            : t("setup.members.removeConfirmTitle")
+        }
         centered
       >
         <Stack>
           <Text size="sm">
-            {t("setup.members.deleteConfirmBody", {
-              name: personName || editingPersonId || "",
-            })}
+            {t(
+              deleteConfirm === "identity"
+                ? "setup.members.deleteConfirmBody"
+                : "setup.members.removeConfirmBody",
+              { name: personName || editingPersonId || "" },
+            )}
           </Text>
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => setDeleteConfirmOpen(false)}>
+            <Button variant="default" onClick={() => setDeleteConfirm(null)}>
               {t("setup.members.cancelButton")}
             </Button>
             <Button
@@ -3914,7 +3960,9 @@ function MembersSection({
               loading={deleteMemberMutation.isPending}
               onClick={() => void handleDeleteMember()}
             >
-              {t("setup.members.deleteButton")}
+              {deleteConfirm === "identity"
+                ? t("setup.members.deleteButton")
+                : t("setup.members.removeButton")}
             </Button>
           </Group>
         </Stack>
@@ -4026,6 +4074,25 @@ function MembersSection({
             <Text fw={600}>
               {formMode === "edit" ? t("setup.members.editTitle") : t("setup.members.addTitle")}
             </Text>
+            <Text size="sm" c="dimmed">
+              {t("setup.members.scopeHint")}
+            </Text>
+            {formMode === "add" && joinableIdentities.length > 0 ? (
+              <Select
+                label={t("setup.members.joinLabel")}
+                description={t("setup.members.joinHint")}
+                placeholder={t("setup.members.joinPlaceholder")}
+                data={joinableIdentities.map((identity) => ({
+                  value: identity.person_id,
+                  label: `${identity.name} (${identity.person_id})`,
+                }))}
+                value={joiningPersonId}
+                disabled={memberFormBusy}
+                onChange={(value) => (value ? joinMemberMutation.mutate(value) : startAddMode())}
+                clearable
+                maw={360}
+              />
+            ) : null}
             {formMode === "edit" && memberChanged ? (
               <Alert color="warning" title={t("setup.members.changedTitle")}>
                 <Stack gap="xs">
@@ -4196,13 +4263,21 @@ function MembersSection({
                     onChange={(event) => setPersonId(event.currentTarget.value)}
                     // An account set up for this member (an app registered for
                     // it, for one) is for the member it was set up for.
-                    disabled={formMode === "add" && personIdHolder !== undefined}
+                    // Other workspaces, perhaps on other machines, know the
+                    // member by its ID, so a member keeps the one it has.
+                    disabled={
+                      formMode === "edit" ||
+                      joiningPersonId !== null ||
+                      personIdHolder !== undefined
+                    }
                     description={
-                      formMode === "add" && personIdHolder !== undefined
-                        ? t("setup.members.personIdFixedByAccount", {
-                            provider: personIdHolder.title,
-                          })
-                        : undefined
+                      formMode === "edit" || joiningPersonId !== null
+                        ? t("setup.members.personIdFixed")
+                        : personIdHolder !== undefined
+                          ? t("setup.members.personIdFixedByAccount", {
+                              provider: personIdHolder.title,
+                            })
+                          : undefined
                     }
                     error={memberErrors.personId}
                   />
@@ -4538,15 +4613,25 @@ function MembersSection({
             <Group justify="space-between" className="form-footer">
               <Box>
                 {formMode === "edit" ? (
-                  <Button
-                    color="danger"
-                    variant="default"
-                    loading={deleteMemberMutation.isPending}
-                    disabled={memberFormBusy}
-                    onClick={() => setDeleteConfirmOpen(true)}
-                  >
-                    {t("setup.members.deleteButton")}
-                  </Button>
+                  <Group gap="xs">
+                    <Button
+                      variant="default"
+                      loading={deleteMemberMutation.isPending && deleteConfirm === "remove"}
+                      disabled={memberFormBusy}
+                      onClick={() => setDeleteConfirm("remove")}
+                    >
+                      {t("setup.members.removeButton")}
+                    </Button>
+                    <Button
+                      color="danger"
+                      variant="default"
+                      loading={deleteMemberMutation.isPending && deleteConfirm === "identity"}
+                      disabled={memberFormBusy}
+                      onClick={() => setDeleteConfirm("identity")}
+                    >
+                      {t("setup.members.deleteButton")}
+                    </Button>
+                  </Group>
                 ) : null}
               </Box>
               <Stack gap="xs" align="flex-end">

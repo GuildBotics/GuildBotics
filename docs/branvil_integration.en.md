@@ -34,7 +34,7 @@ Hub machine                                 another machine
   is forwarded.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
-  on every machine, and the shared project settings name one `base_url`. A repository
+  on every machine, and GuildBotics' connection to Branvil names one base URL. A repository
   numbers its tickets (`#1`) apart from its pull requests (`!1`).
 
 When nothing forwards the port, every Branvil operation fails with "Branvil is not
@@ -54,35 +54,39 @@ Following the Branvil README:
 
 Members and their tokens are not created in Branvil: GuildBotics does that.
 
-Connect one GuildBotics workspace to a Branvil. GuildBotics keeps its members and its connection to
-Branvil per workspace, so connecting or saving members in a second workspace revokes the other's
-connection and tokens.
+Several GuildBotics workspaces can use one Branvil. The connection to Branvil and each
+member's agent and token belong with the members' identities, which every workspace
+shares, so connecting once serves every workspace, and each workspace chooses the Branvil
+workspace its members work in.
 
 ## Connect GuildBotics to Branvil
 
 On the Hub machine, where Branvil runs, under **Setup → Integrations** in the desktop app:
 
-1. Choose **Branvil** for the code host and for the tickets. Both use one Branvil, at one
-   **Base URL** (leave it empty for `http://127.0.0.1:7878`).
-2. Press **Connect to Branvil**. The browser opens Branvil's consent screen: *Allow
+1. Choose **Branvil** for the code host and for the tickets. Both use the one Branvil
+   GuildBotics is connected to.
+2. Check the **Base URL** next to **Connect to Branvil** (`http://127.0.0.1:7878` unless
+   changed), then press **Connect to Branvil**. The browser opens Branvil's consent screen: *Allow
    GuildBotics to manage Branvil?* Choose **Allow**. (When the browser has no Branvil
    session yet, the page says to run `branvil open` on this machine; it comes back to the
    consent screen once you have entered.) The screen then shows *Connected to Branvil as
-   its owner*. The connection is kept only in the workspace it started in: when the app
-   switches to another workspace before the browser comes back, nothing is connected;
-   select the workspace to connect, then connect again.
+   its owner*. The connection, with its base URL, is the same in every workspace:
+   another workspace that chooses Branvil is connected already.
 3. Choose the **Workspace** the members work in, or create one there. Members write only
    to its repositories and take tickets from its board; reads are not limited.
 
 Branvil issues GuildBotics an owner token labelled `app:GuildBotics`. GuildBotics keeps
-it in the OS keychain as the workspace Secret `BRANVIL_ADMIN_TOKEN` and uses it only in
+it in the OS keychain as `BRANVIL_ADMIN_TOKEN`, in the identities' store that every
+workspace shares, and the base URL beside it in
+`~/.guildbotics/identity/.guildbotics/config/connections/branvil.yml`. It uses the token only in
 its own process on the machine (the setup screens and the checks): no member, command, or
 isolated environment receives it. To revoke it, delete the token under Branvil's
 **Settings → Members → owner → Tokens**, then connect again.
 
-On the other machines there is nothing to connect: send the Secrets from the Hub machine
-and fetch them under **Credentials on this machine** (the admin token and the members'
-tokens alike). No machine issues them again.
+On the other machines there is nothing to connect: the connection's file reaches them with
+the members' identities, and the Secrets are sent from the Hub machine and fetched under
+**Members' credentials on this machine** (the admin token and the members' tokens alike).
+No machine issues them again.
 
 **Open Branvil**, next to the connection, opens Branvil's GUI in the system browser from
 any machine: GuildBotics asks Branvil for a single-use entry link with the admin token.
@@ -98,8 +102,9 @@ Under **Setup → Members → Branvil**:
   token it replaces is revoked once the save is done; when the save is refused, the token
   issued for it is revoked instead and the one held before keeps working. No token is ever
   shown or typed. The token is also the member's git password: git authenticates with
-  the agent's name and the token. Later saves keep the token while Branvil accepts it as
-  the agent's; **Issue a new token when saved** replaces it.
+  the agent's name and the token. The agent and its token are the member's in every
+  workspace: a save in any workspace keeps the token while Branvil accepts it as the
+  agent's; **Issue a new token when saved** replaces it.
 - The human member is Branvil's owner: its Branvil name is filled in with the owner's
   when the member is saved.
 - The member's **GitHub** tab is shown too. When an AI member has a GitHub account there
@@ -108,8 +113,9 @@ Under **Setup → Members → Branvil**:
 - The member's avatar is Branvil's picture of its agent (or of the owner, for the human
   member): GuildBotics hands it over on every save and whenever the avatar is uploaded or
   imported. It is set in GuildBotics only.
-- Deleting an AI member revokes the `guildbotics` tokens of its agent. The agent stays in
-  Branvil, as its history names it.
+- Removing a member from a workspace (**Remove from this workspace**) revokes nothing: the
+  other workspaces keep using its token. Deleting an AI member (**Delete**) revokes the
+  `guildbotics` tokens of its agent. The agent stays in Branvil, as its history names it.
 
 Saving an AI member and deleting one reach Branvil, so they need Branvil to be reachable
 and GuildBotics to be connected on that machine; otherwise nothing is saved or deleted,
@@ -121,15 +127,13 @@ Without the GUI, the same settings are in `team/project.yml`:
 services:
   code_hosting_service:
     name: branvil
-    base_url: http://127.0.0.1:7878
     workspace: acme
   ticket_service:
     name: branvil
-    base_url: http://127.0.0.1:7878
     workspace: acme
 ```
 
-and in each member's `person.yml`, which a save of the member writes:
+and in each member's `identity.yml`, which a save of the member writes:
 
 ```yaml
 account_info:

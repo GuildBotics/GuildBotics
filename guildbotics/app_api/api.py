@@ -98,7 +98,6 @@ from guildbotics.app_api.models import (
     LlmProvidersResponse,
     LocalApiProofRequest,
     LocalApiProofResponse,
-    MemberDeleteRequest,
     MemoryEventsResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
@@ -154,25 +153,26 @@ from guildbotics.integrations.provider import Operation, Page, SetupError, page_
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.setup.setup_service import (
     PROJECT_CONFIG_PATHS,
+    IdentitySummary,
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonSetupResult,
-    PersonUpdateInput,
     ProjectConfigSnapshot,
     ProjectSetupInput,
     ProjectSetupResult,
     SimplePersonSetupService,
     SimpleProjectSetupService,
-    person_config_paths,
+    identity_config_paths,
+    member_config_paths,
     prepare_accounts,
     remove_accounts,
     settle_accounts,
     share_avatar,
-    stored_person_config_dir,
     stored_person_config_paths,
 )
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
+    get_identity_config_dir,
     get_template_path,
     load_yaml_file,
 )
@@ -187,6 +187,7 @@ from guildbotics.utils.person_id import (
     MemberConfigError,
     MemberDirectoryName,
     PersonId,
+    is_valid_person_id,
 )
 from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
@@ -270,6 +271,7 @@ def create_app(
     # machine they travel to is the workspace's hub, so the two services share
     # one answer to "where is the hub" instead of resolving it twice.
     secret_service = WorkspaceSecretService(sync_service)
+    identity_secret_service = WorkspaceSecretService(sync_service, identities=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -297,7 +299,7 @@ def create_app(
             finally:
                 try:
                     app_runtime.stop_scheduler(force=True)
-                    sync_service.deactivate()
+                    sync_service.shutdown()
                     await app_runtime.close_cli_agent_usage()
                 finally:
                     if added_app_handler:
@@ -613,6 +615,25 @@ def create_app(
     ) -> SecretTransferResponse:
         """Take values from the hub into this device's own secret store."""
         return secret_service.fetch(request)
+
+    @router.get("/identities/secrets")
+    def identity_secrets() -> WorkspaceSecrets:
+        """Report which of the identities' keys this device and the hub hold."""
+        return identity_secret_service.get_secrets()
+
+    @router.post("/identities/secrets/send")
+    def identity_secrets_send(
+        request: SecretTransferRequest,
+    ) -> SecretTransferResponse:
+        """Hand this device's values of the identities' keys to the hub."""
+        return identity_secret_service.send(request)
+
+    @router.post("/identities/secrets/fetch")
+    def identity_secrets_fetch(
+        request: SecretTransferRequest,
+    ) -> SecretTransferResponse:
+        """Take the identities' values from the hub into this device's store."""
+        return identity_secret_service.fetch(request)
 
     @router.post("/workspace/sync/clone")
     def workspace_sync_clone(request: WorkspaceSyncCloneRequest) -> ConfigStatus:
@@ -1045,31 +1066,35 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
-    # A member's deletion first reaches its providers, outside the
-    # workspace's shared-write lock, which then blocks: hence the thread.
+    # A member's save and deletion first reach its providers, outside the
+    # shared-write locks, which then block: hence the thread.
     @router.post("/config/members")
     async def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
+        """Add a member to the workspace: a new one, or one whose identity
+        another workspace already has, as the form read it."""
         status = app_runtime.get_config_status()
         member = request.model_copy(
             update={"config_dir": status.config_dir or request.config_dir}
         )
-        receipt = await _save_member(
-            member,
-            member.person_id,
-            lambda: SimplePersonSetupService().write_person(member),
-            report=lambda: config_repository(member.config_dir).revisions(
-                person_config_paths(member.person_id)
+        # Whatever the form did not read must still not exist: a member of the
+        # same ID made meanwhile, here or on another machine, is not replaced.
+        absent = dict.fromkeys(
+            (
+                *member_config_paths(member.person_id),
+                *identity_config_paths(member.person_id),
             ),
+            "",
         )
+        receipt = await _save_member(member, {**absent, **member.expected_revisions})
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.get("/config/members/{person_id}")
     def config_member(person_id: MemberDirectoryName) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
-        stored_person_config_dir(config_dir, person_id)
-        revisions = config_repository(config_dir).revisions(
-            stored_person_config_paths(person_id)
-        )
+        # The revisions first, as every config read takes them: a change made
+        # between the two is then newer than what the form is compared against,
+        # and its save is refused rather than written over the change.
+        revisions = _member_revisions(config_dir, person_id)
         snapshot: PersonConfigSnapshot = SimplePersonSetupService().read_person_config(
             config_dir=config_dir,
             person_id=person_id,
@@ -1078,38 +1103,28 @@ def create_app(
 
     @router.put("/config/members/{person_id}")
     async def config_member_update(
-        person_id: MemberDirectoryName, request: PersonUpdateInput
+        person_id: PersonId, request: PersonSetupInput
     ) -> ConfigWriteResponse:
-        if request.original_person_id != person_id:
+        if request.person_id != person_id:
             raise AppApiError(
                 "person_id_mismatch",
                 status_code=400,
             )
         config_dir = _resolve_member_config_dir(app_runtime)
         member = request.model_copy(update={"config_dir": config_dir})
-        receipt = await _save_member(
-            member,
-            member.original_person_id,
-            lambda: SimplePersonSetupService().update_person(member),
-            expected=request.expected_revisions,
-            # The member may have been renamed, so the paths that matter now
-            # are the new ones, not the ones the request was composed against.
-            report=lambda: config_repository(config_dir).revisions(
-                person_config_paths(request.person_id)
-            ),
-        )
+        receipt = await _save_member(member, member.expected_revisions)
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.delete("/config/members/{person_id}")
     async def config_member_delete(
-        person_id: MemberDirectoryName, request: MemberDeleteRequest
+        person_id: MemberDirectoryName,
     ) -> ConfigWriteResponse:
+        """Take the member out of the workspace; its identity stays."""
         config_dir = _resolve_member_config_dir(app_runtime)
-        await remove_accounts(config_dir, person_id)
         receipt = await run_in_threadpool(
             apply_config_write,
             config_dir,
-            lambda: SimplePersonSetupService().delete_person(
+            lambda: SimplePersonSetupService().remove_person(
                 config_dir=config_dir,
                 person_id=person_id,
             ),
@@ -1118,6 +1133,40 @@ def create_app(
             ),
         )
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
+
+    @router.get("/identities")
+    def identities() -> list[IdentitySummary]:
+        """Every member's identity, so that one can be added to the workspace."""
+        return SimplePersonSetupService().list_identities(
+            config_dir=_resolve_member_config_dir(app_runtime)
+        )
+
+    @router.delete("/identities/{person_id}")
+    async def identity_delete(person_id: PersonId) -> ConfigWriteResponse:
+        """Delete the member: undo what its accounts obtained from each
+        provider, take it out of the workspace, then delete its identity."""
+        config_dir = _resolve_member_config_dir(app_runtime)
+        service = SimplePersonSetupService()
+        await remove_accounts(person_id)
+        removed = (
+            await config_member_delete(person_id)
+            if person_id
+            in {
+                member.person_id
+                for member in service.list_person_configs(config_dir=config_dir)
+            }
+            else None
+        )
+        receipt = await run_in_threadpool(
+            apply_config_write,
+            get_identity_config_dir(),
+            lambda: service.delete_identity(person_id=person_id),
+            report=lambda: _identity_revisions(person_id),
+        )
+        return ConfigWriteResponse(
+            member=receipt.result,
+            revisions={**(removed.revisions if removed else {}), **receipt.revisions},
+        )
 
     @router.get("/config/providers")
     def config_providers() -> list[ProviderOption]:
@@ -1131,7 +1180,6 @@ def create_app(
                     if getattr(provider, service.value) is not None
                 ],
                 avatar=provider.setup.avatar_url is not None,
-                shared=sorted(provider.setup.shared),
                 credentials_from=sorted(provider.setup.credentials_from),
             )
             for provider in PROVIDERS.values()
@@ -1173,10 +1221,9 @@ def create_app(
                 "invalid_session_token",
                 status_code=401,
             )
-        config_dir = _resolve_member_config_dir(app_runtime)
         from guildbotics.app_api.avatar import find_avatar_file
 
-        avatar_path = find_avatar_file(config_dir, person_id)
+        avatar_path = find_avatar_file(person_id)
         if avatar_path is not None:
             resp = FileResponse(avatar_path)
             resp.headers["Cache-Control"] = "no-cache"
@@ -1188,7 +1235,6 @@ def create_app(
         person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
     ) -> AvatarMutationResponse:
-        config_dir = _resolve_member_config_dir(app_runtime)
         from guildbotics.app_api.avatar import read_upload, store_avatar
 
         try:
@@ -1197,8 +1243,8 @@ def create_app(
             dest_path = (
                 await run_in_threadpool(
                     apply_config_write,
-                    config_dir,
-                    lambda: store_avatar(config_dir, person_id, content, suffix),
+                    get_identity_config_dir(),
+                    lambda: store_avatar(person_id, content, suffix),
                 )
             ).result
         except ValueError as exc:
@@ -1216,14 +1262,13 @@ def create_app(
                 "avatar_save_failed",
                 status_code=500,
             ) from exc
-        await share_avatar(config_dir, person_id)
+        await share_avatar(person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @router.post("/config/members/{person_id}/avatar/{provider}")
     async def config_member_avatar_import(
         person_id: PersonId, provider: str
     ) -> AvatarMutationResponse:
-        config_dir = _resolve_member_config_dir(app_runtime)
         setup = PROVIDERS[provider].setup if provider in PROVIDERS else None
         if setup is None or setup.avatar_url is None:
             raise AppApiError("avatar_provider_unknown", status_code=404)
@@ -1237,9 +1282,7 @@ def create_app(
             )
         try:
             avatar_url = await setup.avatar_url(person, team)
-            dest_path = await _store_downloaded_avatar(
-                config_dir, person_id, avatar_url
-            )
+            dest_path = await _store_downloaded_avatar(person_id, avatar_url)
         except (AppApiError, SetupError, SharedWriteBusyError):
             raise
         except Exception as exc:
@@ -1251,7 +1294,7 @@ def create_app(
                 params={"provider": setup.title},
                 status_code=500,
             ) from exc
-        await share_avatar(config_dir, person_id)
+        await share_avatar(person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.websocket("/events")
@@ -1261,35 +1304,70 @@ def create_app(
     return app
 
 
-async def _save_member[T](
-    member: PersonSetupInput,
-    saved_person_id: str,
-    write: Callable[[], T],
-    *,
-    expected: Mapping[str, str] | None = None,
-    report: Callable[[], dict[str, str]],
-) -> ConfigWriteReceipt[T]:
-    """Save ``member`` with ``write`` between preparing its accounts with
-    their providers, which no write waits on, and settling them.
+def _member_revisions(config_dir: Path, person_id: str) -> dict[str, str]:
+    """Where a member's two files stand: its identity, and the workspace's file
+    of it. The names differ, so one mapping holds both."""
+    return {
+        **_identity_revisions(person_id),
+        **config_repository(config_dir).revisions(
+            stored_person_config_paths(person_id)
+        ),
+    }
 
-    A save refused before ``write`` began is settled as refused. One that
+
+def _identity_revisions(person_id: str) -> dict[str, str]:
+    """Where a member's identity stands; nothing for a stored directory
+    addressed for repair, which no identity can have the name of."""
+    if not is_valid_person_id(person_id):
+        return {}
+    return config_repository(get_identity_config_dir()).revisions(
+        identity_config_paths(person_id)
+    )
+
+
+async def _save_member(
+    member: PersonSetupInput, expected: Mapping[str, str]
+) -> ConfigWriteReceipt[PersonSetupResult]:
+    """Save ``member`` between preparing its accounts with their providers,
+    which no write waits on, and settling them.
+
+    Its identity and the workspace's file of it are compared and written as
+    one write: under the identities' lock and, inside it, the workspace's --
+    the order every span that takes both takes them in. Each file's revision
+    is read before its own lock is released, so the answer describes what
+    this save wrote rather than what a writer did after it.
+
+    A save refused before the write began is settled as refused. One that
     failed after it began may have stored what its accounts obtained, so they
     are not settled: what they obtained stays rather than what is stored
-    being undone. The write blocks on the workspace's shared-write lock:
-    hence the thread.
+    being undone. The write blocks on the shared-write locks: hence the thread.
     """
+    identity_paths = set(identity_config_paths(member.person_id))
     began = False
 
-    def begin() -> T:
+    def write_workspace() -> PersonSetupResult:
         nonlocal began
         began = True
-        return write()
+        return SimplePersonSetupService().save_person(member)
+
+    def write() -> ConfigWriteReceipt[PersonSetupResult]:
+        return apply_config_write(
+            member.config_dir,
+            write_workspace,
+            expected={k: v for k, v in expected.items() if k not in identity_paths},
+            report=lambda: config_repository(member.config_dir).revisions(
+                member_config_paths(member.person_id)
+            ),
+        )
 
     try:
-        await prepare_accounts(member, saved_person_id)
+        await prepare_accounts(member)
         receipt = await run_in_threadpool(
             lambda: apply_config_write(
-                member.config_dir, begin, expected=expected, report=report
+                get_identity_config_dir(),
+                write,
+                expected={k: v for k, v in expected.items() if k in identity_paths},
+                report=lambda: _identity_revisions(member.person_id),
             )
         )
     except Exception:
@@ -1297,13 +1375,15 @@ async def _save_member[T](
             await settle_accounts(member, saved=False)
         raise
     await settle_accounts(member, saved=True)
-    return receipt
+    return ConfigWriteReceipt(
+        receipt.result.result, {**receipt.revisions, **receipt.result.revisions}
+    )
 
 
-async def _store_downloaded_avatar(config_dir: Path, person_id: str, url: str) -> Path:
+async def _store_downloaded_avatar(person_id: str, url: str) -> Path:
     """Fetch an avatar from a provider and put it in place.
 
-    The download waits on a remote server, so it stays outside the workspace's
+    The download waits on a remote server, so it stays outside the identities'
     shared-write lock; replacing the file is one change to the shared state, so
     it happens inside one. That lock blocks, and this runs on the event loop,
     hence the thread.
@@ -1313,8 +1393,8 @@ async def _store_downloaded_avatar(config_dir: Path, person_id: str, url: str) -
     content, suffix = await download_avatar(url)
     receipt = await run_in_threadpool(
         apply_config_write,
-        config_dir,
-        lambda: store_avatar(config_dir, person_id, content, suffix),
+        get_identity_config_dir(),
+        lambda: store_avatar(person_id, content, suffix),
     )
     return receipt.result
 

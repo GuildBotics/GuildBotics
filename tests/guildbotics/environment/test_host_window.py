@@ -94,7 +94,9 @@ from guildbotics.utils.correlation import (
 )
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
+    GUILDBOTICS_IDENTITY_ROOT,
     GUILDBOTICS_WORKSPACE_ROOT,
+    get_identity_root,
     get_workspace_config_dir,
     get_workspace_root,
 )
@@ -759,12 +761,14 @@ async def test_the_microvm_is_told_the_command_and_its_window(tmp_path, monkeypa
     assert variables[GUILDBOTICS_CONFIG_DIR] == guest_path(
         get_workspace_root() / ".guildbotics" / "config"
     )
+    assert variables[GUILDBOTICS_IDENTITY_ROOT] == guest_path(get_identity_root())
     assert set(variables) == {
         HOST_URL_ENV,
         HOST_TOKEN_ENV,
         COMMAND_ENV,
         GUILDBOTICS_WORKSPACE_ROOT,
         GUILDBOTICS_CONFIG_DIR,
+        GUILDBOTICS_IDENTITY_ROOT,
     }
     # The suite run inside a command inherits them; each test sets them aside.
     assert (

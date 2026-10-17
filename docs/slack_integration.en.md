@@ -10,7 +10,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 - [Configuring in the Desktop App](#configuring-in-the-desktop-app)
 - [Chat Judgment Engine](#chat-judgment-engine)
 - [Scheduled Posts](#scheduled-posts)
-- [`person.yml` Reference](#personyml-reference)
+- [Member Settings Reference](#member-settings-reference)
 - [Posting and Reacting Manually](#posting-and-reacting-manually)
 - [How Chat Handling Works Internally](#how-chat-handling-works-internally)
 
@@ -121,7 +121,7 @@ The member's persona, which influences both what it says and whether it joins (c
 
 Scheduled posts are configured as **Scheduled commands** on the **Patrol** tab (→ [Scheduled Posts](#scheduled-posts)).
 
-Tokens are stored in the OS keychain; everything else is stored in `team/members/<person_id>/person.yml`. For the stored format and the settings that are not available in the GUI, see the [`person.yml` Reference](#personyml-reference).
+Tokens are stored in the OS keychain with the member's credentials, shared by every workspace. The Slack User ID is stored in the member's `identity.yml`, the same in every workspace, and the channels in the workspace's `team/members/<person_id>/member.yml`. For the stored format and the settings that are not available in the GUI, see the [Member Settings Reference](#member-settings-reference).
 
 ## Chat Judgment Engine
 
@@ -173,7 +173,7 @@ guildbotics run workflows/chat_post_command channel_name=dev-chat command='examp
 
 If the channel is not specified or `channel_name` cannot be resolved (check the channel name, the bot's channel membership, and the `channels:read` / `groups:read` scopes), or `command` is empty or has unbalanced quotes, the run fails and is recorded as failed. When the command produces empty output, nothing is posted and the run succeeds.
 
-## `person.yml` Reference
+## Member Settings Reference
 
 The project's chat is Slack when `team/project.yml` names it, which the desktop app's project setup writes:
 
@@ -185,12 +185,10 @@ services:
     # base_url: https://slack.com/api   # only to reach Slack through a proxy
 ```
 
-The Slack settings you save in the desktop app are written to `team/members/<person_id>/person.yml` in the following form. On a server without the GUI, edit this file directly.
+The channels and schedules you save in the desktop app are written to the workspace's `team/members/<person_id>/member.yml` in the following form. On a server without the GUI, edit this file directly.
 
 ```yaml
-# team/members/alice/person.yml
-person_id: alice
-name: Alice
+# team/members/alice/member.yml
 is_active: true
 
 message_channels:
@@ -212,9 +210,9 @@ Key points:
 - Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched on the project's chat (`services.chat_service`)
 - `chat.participation` corresponds to **When to join** in the GUI. `strict` (default) handles explicit mentions and follow-ups in threads it was already invited to, `social` also allows natural participation without a mention in casual channels, and `muted` handles explicit mentions only
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
-- `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine
+- `profile.character` in the member's identity (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace) defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine. A human member's Slack User ID is `account_info.slack_user_id` in the same file
 
-The Bot Token and App-Level Token are not stored in `person.yml`. They are passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
+The Bot Token and App-Level Token are not stored in either file. They are member credentials, kept in the identities' store that every workspace shares (`guildbotics secrets --identities`), and passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
 
 ## Posting and Reacting Manually
 

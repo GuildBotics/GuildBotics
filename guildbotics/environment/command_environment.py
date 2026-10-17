@@ -129,6 +129,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
+from guildbotics.utils.person_id import identity_members_dir
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
 
@@ -193,9 +194,9 @@ def inspected_directories(
         workspace_root: The selected workspace.
 
     Returns:
-        ``diagnostics`` for the recorded runs; ``config`` and ``templates``
-        for the workspace configuration and the packaged defaults commands
-        and settings fall back to.
+        ``diagnostics`` for the recorded runs; ``config``, ``identities``, and
+        ``templates`` for the workspace configuration, the members' identities,
+        and the packaged defaults commands and settings fall back to.
     """
     directories = {
         name: mount.guest
@@ -216,7 +217,14 @@ def _inspected_mounts(
                 "run", workspace_root=workspace_root
             )
         },
-        "config": {"config": get_workspace_config_dir(workspace_root)},
+        # The members' identities, which every workspace shares, are part of
+        # the configuration a command reads: who each member is. Only their
+        # directory: the identities' Secrets index and this device's records
+        # stay closed.
+        "config": {
+            "config": get_workspace_config_dir(workspace_root),
+            "identities": identity_members_dir(),
+        },
     }
     return {
         name: EnvironmentMount(guest_path(path), path, readonly=True)

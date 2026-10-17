@@ -30,6 +30,7 @@ from dotenv import dotenv_values
 
 from guildbotics.utils.fileio import (
     atomic_write_text,
+    get_identity_config_dir,
     get_workspace_config_dir,
     load_yaml_dict,
     save_yaml_file,
@@ -728,6 +729,16 @@ def resolve_secret_store(
     if create_default:
         store.ensure_initialized()
     return store
+
+
+def identity_secret_store() -> KeyringSecretStore:
+    """Return the store every workspace shares: the members' secrets, and the
+    connections' that belong with them, such as a service's admin token.
+
+    Raises:
+        SecretStoreError: When the OS secret store is unavailable.
+    """
+    return resolve_secret_store(get_identity_config_dir())
 
 
 def _parse_key_index(raw: object) -> dict[str, dict[str, Any]]:

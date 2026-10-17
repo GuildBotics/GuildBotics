@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import i18n from "../../i18n";
 import "../../i18n";
 import { branvilAccount, type BranvilForm } from "./branvil/BranvilAccount";
-import { BRANVIL_BASE_URL, branvilUrl } from "./branvil/api";
 import { branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
 import type { AppRegistrationStatus } from "./github/api";
 import { githubAccount, type GitHubForm } from "./github/GitHubAccount";
@@ -502,38 +501,21 @@ describe("branvilAccount", () => {
   });
 });
 
-describe("branvilUrl", () => {
-  it("is the base URL the project's Branvil services name", () => {
-    expect(branvilUrl({})).toBe("");
-    expect(branvilUrl({ code_hosting_service: { name: "github", owner: "a" } })).toBe("");
-    expect(branvilUrl({ ticket_service: { name: "branvil", workspace: "a" } })).toBe(
-      BRANVIL_BASE_URL,
-    );
-    expect(branvilUrl({ ticket_service: { name: "branvil", base_url: " http://hub:9 " } })).toBe(
-      "http://hub:9",
-    );
-  });
-});
-
 describe("branvil services", () => {
-  it("start from what the other kind says of the same Branvil", () => {
-    expect(branvilTickets.initial({})).toEqual({ base_url: BRANVIL_BASE_URL, workspace: "" });
+  it("start from the workspace the other kind names", () => {
+    expect(branvilTickets.initial({})).toEqual({ workspace: "" });
     expect(
-      branvilCodeHosting.initial({
-        ticket_service: { name: "branvil", base_url: "http://hub:9000", workspace: "acme" },
-      }),
-    ).toEqual({ base_url: "http://hub:9000", workspace: "acme" });
+      branvilCodeHosting.initial({ ticket_service: { name: "branvil", workspace: "acme" } }),
+    ).toEqual({ workspace: "acme" });
   });
 
-  it("refuse what names no Branvil or workspace", () => {
-    const value = { name: "branvil", base_url: "http://hub/x", workspace: "acme/team" };
+  it("refuse what names no workspace", () => {
+    const value = { name: "branvil", workspace: "acme/team" };
 
     expect(branvilTickets.errors(value, t)).toEqual({
-      base_url: t("setup.branvil.baseUrlInvalid"),
       workspace: t("setup.branvil.workspaceInvalid"),
     });
     expect(branvilCodeHosting.errors({ ...value, workspace: " " }, t)).toEqual({
-      base_url: t("setup.branvil.baseUrlInvalid"),
       workspace: t("setup.branvil.workspaceRequired"),
     });
     expect(branvilTickets.errors({ name: "branvil", workspace: "acme" }, t)).toEqual({});

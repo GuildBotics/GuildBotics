@@ -265,15 +265,28 @@ test("⑧ the set aside change is described but never handed over", async ({ pag
 test("⑧ refreshes an open member editor after a competing change is set aside", async ({
   page,
 }) => {
-  const { workspace_id: workspaceId } = await syncStatus();
-  const memberPath = "config/team/members/local-agent/person.yml";
-  const memberFile = join(ctx.configDir, "team", "members", "local-agent", "person.yml");
+  // A member's name is its identity's: one repository of the identities on
+  // the hub, beside the workspaces', and a file under this machine's home.
+  const identityId = JSON.parse(readFileSync(join(hubRoot(), "hub.json"), "utf-8"))
+    .identity_id as string;
+  const memberPath = "config/team/members/local-agent/identity.yml";
+  const memberFile = join(
+    ctx.homeDir,
+    ".guildbotics",
+    "identity",
+    ".guildbotics",
+    "config",
+    "team",
+    "members",
+    "local-agent",
+    "identity.yml",
+  );
   await page.goto("/#/setup?section=members&person_id=local-agent");
   const name = page.getByLabel("Display name", { exact: true });
   await expect(name).toHaveValue("Local Agent");
   await name.fill("Unsaved member draft");
 
-  pushFileFromAnotherDevice(workspaceId as string, memberPath, (content) =>
+  pushFileFromAnotherDevice(identityId, memberPath, (content) =>
     content.replace(/^name: .*$/m, "name: Member from another device"),
   );
   writeFileSync(

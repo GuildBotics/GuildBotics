@@ -29,10 +29,15 @@ from guildbotics.sync.activation import (
     commit_and_push_once,
     synchronize_once,
 )
-from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_root
+from guildbotics.utils.fileio import (
+    get_identity_root,
+    get_workspace_config_dir,
+    get_workspace_root,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
 from guildbotics.utils.openssh import OpenSshNotFoundError
+from guildbotics.utils.person_id import is_member_secret
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     SecretKeyState,
@@ -47,12 +52,29 @@ from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 
 
 class _SecretsContext:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, identities: bool):
         self.root = root
-        self.config_dir = get_workspace_config_dir()
+        #: The identities' store, which every workspace shares, rather than
+        #: the workspace's.
+        self.identities = identities
+        self.config_dir = get_workspace_config_dir(root)
 
     def store(self) -> KeyringSecretStore:
         return resolve_secret_store(self.config_dir)
+
+    def set_values(self, values: dict[str, str]) -> None:
+        """Store values, keeping the members' keys out of a workspace's store.
+
+        A member's key in both stores leaves which value a process runs with
+        to load order, so it is refused here rather than resolved there.
+        """
+        if not self.identities and (
+            misplaced := sorted(key for key in values if is_member_secret(key))
+        ):
+            raise click.ClickException(
+                t("cli.secrets.member_key", keys=", ".join(misplaced))
+            )
+        _set_values(self.store(), values)
 
     def transfer(self) -> SecretTransfer:
         """Return the transfer for this workspace's hub.
@@ -82,11 +104,22 @@ class _SecretsContext:
     default=None,
     help="Workspace root to use instead of the persisted active workspace.",
 )
-def secrets(ctx: click.Context, workspace_dir: Path | None) -> None:
+@click.option(
+    "--identities",
+    is_flag=True,
+    help=(
+        "Manage the secrets every workspace shares -- the members' credentials "
+        "and the services' connections -- instead of the workspace's."
+    ),
+)
+def secrets(ctx: click.Context, workspace_dir: Path | None, identities: bool) -> None:
     """Manage workspace secrets (API keys and tokens)."""
+    if identities:
+        ctx.obj = _SecretsContext(get_identity_root(), identities=True)
+        return
     applied_workspace = apply_workspace_option(workspace_dir, load_env=False)
     root = applied_workspace.workspace if applied_workspace else get_workspace_root()
-    ctx.obj = _SecretsContext(root)
+    ctx.obj = _SecretsContext(root, identities=False)
 
 
 @secrets.command(name="status")
@@ -138,7 +171,7 @@ def secrets_push(env: _SecretsContext, keys: tuple[str, ...]) -> None:
     would otherwise send from a generation the others have moved past.
     """
     transfer = env.transfer()
-    _refresh()
+    _refresh(env.root)
     outcomes = _run_transfer(
         lambda: transfer.send(list(keys)) if keys else transfer.send_pending()
     )
@@ -148,7 +181,7 @@ def secrets_push(env: _SecretsContext, keys: tuple[str, ...]) -> None:
     _report(outcomes)
     # The generations just published live in the shared config file, so a
     # machine with no running service still gets them to the hub.
-    _synchronize_generations()
+    _synchronize_generations(env.root)
 
 
 @secrets.command(name="pull")
@@ -165,7 +198,7 @@ def secrets_pull(env: _SecretsContext, keys: tuple[str, ...]) -> None:
     adopted, so an old copy of them would leave nothing to fetch.
     """
     transfer = env.transfer()
-    _refresh()
+    _refresh(env.root)
     outcomes = _run_transfer(
         lambda: transfer.fetch(list(keys)) if keys else transfer.fetch_missing()
     )
@@ -211,7 +244,7 @@ def secrets_set(
         value = from_file.read_text(encoding="utf-8")
     elif value is None:
         value = click.prompt(f"Value for {key}", hide_input=True)
-    _set_values(env.store(), {key: value})
+    env.set_values({key: value})
     click.echo(f"Stored {key}.")
 
 
@@ -253,7 +286,7 @@ def secrets_import(env: _SecretsContext, file: Path) -> None:
     values = read_env_values(file)
     if not values:
         raise click.ClickException(f"no values found in {file}")
-    _set_values(env.store(), values)
+    env.set_values(values)
     click.echo(f"Imported {len(values)} secrets.")
     click.echo(f"Delete {file} once you no longer need it.")
 
@@ -283,7 +316,7 @@ def _report(outcomes: list[SecretTransferOutcome]) -> None:
         click.echo(f"{outcome.key}: {outcome.status}{generation}")
 
 
-def _refresh() -> None:
+def _refresh(root: Path) -> None:
     """Take the current shared files before deciding what to send.
 
     Best effort: a hub that cannot be reached, or a repository something else
@@ -291,13 +324,13 @@ def _refresh() -> None:
     is where it would have been made anyway.
     """
     with suppress(SyncRepositoryBusyError, HubSecretError, HubUnreachableError):
-        synchronize_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
+        synchronize_once(root, timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
 
 
-def _synchronize_generations() -> None:
+def _synchronize_generations(root: Path) -> None:
     """Push the metadata this transfer wrote, on a machine with no service."""
     try:
-        commit_and_push_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
+        commit_and_push_once(root, timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
     except SyncRepositoryBusyError:
         click.echo(
             "The generations were recorded and will be sent by the "

@@ -12,16 +12,14 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.person_id import identity_members_dir
+from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
 from tests.guildbotics.app_api.provider_doubles import (
     answer,
     form_of,
     route_web,
     saved_workspace,
     write_member,
-)
-from tests.guildbotics.integrations.branvil_double import (
-    BASE as BRANVIL,
 )
 from tests.guildbotics.integrations.branvil_double import (
     MEMBER,
@@ -81,7 +79,7 @@ def test_get_avatar_not_found(client: TestClient) -> None:
 
 
 def test_get_avatar_found(client: TestClient, test_workspace: Path) -> None:
-    avatar_file = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
+    avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
 
     response = client.get("/config/members/alice/avatar", headers=AUTH_HEADERS)
@@ -92,7 +90,7 @@ def test_get_avatar_found(client: TestClient, test_workspace: Path) -> None:
 
 def test_get_avatar_with_query_token(client: TestClient, test_workspace: Path) -> None:
     # <img> tags cannot send custom headers, so the token is accepted via query.
-    avatar_file = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
+    avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
 
     response = client.get("/config/members/alice/avatar?token=secret")
@@ -103,7 +101,7 @@ def test_get_avatar_with_query_token(client: TestClient, test_workspace: Path) -
 def test_get_avatar_rejects_missing_token(
     client: TestClient, test_workspace: Path
 ) -> None:
-    avatar_file = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
+    avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
 
     response = client.get("/config/members/alice/avatar")
@@ -123,7 +121,7 @@ def test_post_avatar_upload(client: TestClient, test_workspace: Path) -> None:
     )
     assert response.status_code == 200
 
-    saved_avatar = test_workspace / ".guildbotics/config/team/members/alice/avatar.png"
+    saved_avatar = identity_members_dir() / "alice/avatar.png"
     assert saved_avatar.exists()
     assert saved_avatar.read_bytes() == file_data
     # The response carries the saved file mtime as a deterministic cache-buster.
@@ -162,7 +160,7 @@ def test_a_new_avatar_is_handed_to_the_members_branvil_account(
 ) -> None:
     double = BranvilDouble()
     serve(double, monkeypatch)
-    branvil = {"name": "branvil", "base_url": BRANVIL, "workspace": "a"}
+    branvil = {"name": "branvil", "workspace": "a"}
     with saved_workspace(workspace, {"code_hosting_service": branvil}) as client:
         connect_admin()
         write_member(
@@ -204,11 +202,12 @@ def app_client(workspace: Path) -> Iterator[TestClient]:
 
 
 def _secret(workspace: Path, key: str, value: str) -> None:
-    KeyringSecretStore(workspace / ".guildbotics/config").set(key, value)
+    identity_secret_store().set(key, value)
 
 
 def _avatar(workspace: Path, person_id: str) -> Path:
-    return workspace / ".guildbotics/config/team/members" / person_id / "avatar.png"
+    """The member's picture: part of its identity, in no workspace."""
+    return identity_members_dir() / person_id / "avatar.png"
 
 
 @pytest.fixture

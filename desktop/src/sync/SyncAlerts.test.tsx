@@ -51,6 +51,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     hub_url: "user@hub:.guildbotics/hub/w.git",
     state: "idle",
     local_head: null,
+    identity_head: null,
     remote_head: null,
     ahead_count: 0,
     behind_count: 0,
@@ -94,6 +95,7 @@ afterEach(() => vi.useRealTimers());
 describe("member reads after synchronization", () => {
   it.each([
     ["an adopted head", { local_head: "adopted" }, true],
+    ["another machine's edit of a member's identity", { identity_head: "adopted" }, true],
     ["a newly set aside change", { rejected_changes: [held] }, true],
     ["the same head with new progress", { last_success_at: "2026-10-03T00:00:00Z" }, false],
     ["a different workspace", { workspace_id: "another-workspace", local_head: "other" }, false],
@@ -154,24 +156,27 @@ describe("the synchronization warning band", () => {
     expect(screen.getByText(t("sync.rejected.alert", { count: 1 }))).toBeInTheDocument();
   });
 
-  it("names credentials this machine has to act on, and where to act", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
-    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
-      secrets({ missing_count: 2, attention_count: 2 }),
-    );
-    renderAlerts();
+  it.each(["workspace", "identities"] as const)(
+    "names the %s credentials this machine has to act on, and where to act",
+    async (scope) => {
+      vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
+      vi.mocked(getWorkspaceSecrets).mockImplementation(async (asked) =>
+        asked === scope ? secrets({ missing_count: 2, attention_count: 2 }) : secrets(),
+      );
+      renderAlerts();
 
-    expect(await screen.findByText(t("sync.secrets.title"))).toBeInTheDocument();
-    expect(screen.getByText(t("sync.secrets.alert.attention", { count: 2 }))).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: t("sync.secrets.hint.link") })).toBeInTheDocument();
-  });
+      expect(await screen.findByText(t(`sync.secrets.title.${scope}`))).toBeInTheDocument();
+      expect(screen.getByText(t("sync.secrets.alert.attention", { count: 2 }))).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: t("sync.secrets.hint.link") })).toBeInTheDocument();
+    },
+  );
 
   it("says nothing about credentials while every machine is in step", async () => {
     vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
     renderAlerts();
 
     await waitFor(() => expect(getWorkspaceSecrets).toHaveBeenCalled());
-    expect(screen.queryByText(t("sync.secrets.title"))).toBe(null);
+    expect(screen.queryByText(t("sync.secrets.title.workspace"))).toBe(null);
   });
 
   it("shows an unreachable hub and a set aside change at the same time", async () => {

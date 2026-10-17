@@ -36,9 +36,12 @@ from guildbotics.sync.manager import (
     GitSyncStatus,
     build_git_sync_manager,
 )
-from guildbotics.utils.fileio import WorkspaceNotConfiguredError
+from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_identity_root
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
-from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
+from guildbotics.utils.workspace_sync_port import (
+    set_identity_sync_port,
+    set_workspace_sync_port,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -142,6 +145,8 @@ def _one_shot_manager(
     """Return a ready manager while the caller holds the lifecycle lock."""
     root = LocalSyncRepository(workspace_root).workspace_root
     manager = _manager if _workspace == root else None
+    if _identity_manager is not None and _identity == root:
+        manager = _identity_manager
     if manager is not None:
         return manager
     repository = LocalSyncRepository(root)
@@ -328,3 +333,75 @@ def _connected_repository(workspace_root: Path | None) -> LocalSyncRepository | 
         return repository if repository.has_remote() else None
     except (WorkspaceNotConfiguredError, SyncRepositoryError, OSError):
         return None
+
+
+#: The identities' queue: the same queue as a workspace's, on the identity
+#: root, which every workspace shares. It runs beside the selected workspace's
+#: and is not stopped by a workspace switch.
+_identity_manager: GitSyncManager | None = None
+_identity: Path | None = None
+
+
+def activate_identity_sync() -> None:
+    """Synchronize the identities when they have a hub, and do so now.
+
+    Called by a process that changes identities or works with them, on start
+    and whenever a workspace is selected, connected, or synchronized again,
+    which is when another machine's changes are most likely to matter.
+    Idempotent: a running queue is woken for a cycle.
+    """
+    global _identity_manager, _identity
+    with _lock:
+        if _identity_manager is not None:
+            _identity_manager.start()
+            _identity_manager.wake()
+            return
+        repository = _connected_repository(get_identity_root())
+        if repository is None:
+            return
+        manager = build_git_sync_manager(repository.workspace_root)
+        set_identity_sync_port(manager)
+        manager.start()
+        _identity_manager = manager
+        _identity = repository.workspace_root
+
+
+@contextmanager
+def paused_identity_sync() -> Iterator[None]:
+    """Hold the identities' repository alone, with no queue running in it.
+
+    Raises:
+        SyncStillStoppingError: When the queue could not be stopped.
+    """
+    with _lock:
+        if not _stop_identity_locked():
+            raise SyncStillStoppingError(
+                "The identities' synchronization queue has not finished stopping. "
+                "Try again in a moment."
+            )
+        with sync_repository_lock(get_identity_root()):
+            yield
+
+
+def deactivate_identity_sync() -> bool:
+    """Stop the identities' queue.
+
+    Returns:
+        bool: Whether it stopped.
+    """
+    with _lock:
+        return _stop_identity_locked()
+
+
+def _stop_identity_locked() -> bool:
+    """Stop the identities' queue. The caller holds the activation lock."""
+    global _identity_manager, _identity
+    if _identity_manager is None:
+        return True
+    if not _identity_manager.stop():
+        LOGGER.warning("The identities' queue is still finishing its last cycle.")
+        return False
+    set_identity_sync_port(None)
+    _identity_manager = None
+    _identity = None
+    return True

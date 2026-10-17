@@ -106,6 +106,8 @@ In GuildBotics, the folder that holds a project's settings and state is called t
 - `.guildbotics/config/team/project.yml`: project definition
 - `.guildbotics/config/intelligences/`: LLM and AI CLI tool settings
 
+Each member's identity (name, character, avatar, and service accounts) is the same in every workspace, so it is written outside the workspace, to `~/.guildbotics/identity/`, together with the members' credentials. The workspace keeps what each member does there (roles, patrol, chat channels, AI settings) (→ [Configuration Files](#configuration-files)).
+
 API keys and account tokens are stored in the OS keychain when one is available, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
 
 After project setup, configure the following in the desktop app:
@@ -113,7 +115,7 @@ After project setup, configure the following in the desktop app:
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
 - **Integrations**: choose the service for code hosting, tickets, and chat (each is optional) and configure the chosen one. For GitHub tickets, enter the GitHub Project URL, configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field. A member's account with a chosen service is set on that service's tab of the member
-- **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
+- **Members**: add and configure team members (assigning a GitHub account needs the credentials above). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace, deletes its identity and credentials, and revokes the tokens GuildBotics issued it on services such as Branvil; another workspace that still has the member leaves it out until it is removed there too
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
 
 ### Quick Start
@@ -353,7 +355,7 @@ First choose Slack under **Setup → Integrations → Chat** in the desktop app;
 
 If you already have a Slack App, choose **Use a registered app** and start from pasting the tokens.
 
-These settings are stored in the member's `person.yml` (`message_channels`).
+The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
@@ -370,11 +372,9 @@ The patrol interval and the number of consecutive failures that stops a worker a
 
 Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started from the desktop app or with `guildbotics start`: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
 
-These settings are stored in the member's `person.yml`. On a server without the GUI, edit that file directly.
+These settings are stored in the workspace's `team/members/<person_id>/member.yml`. On a server without the GUI, edit that file directly.
 
 ```yaml
-person_id: alice
-name: Alice
 is_active: true
 
 routine_commands:
@@ -458,6 +458,7 @@ For all front matter options, context injection, and command composition, see th
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
 - **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. This machine's keychain namespace and the generations it holds are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
+- **Two stores:** the members' credentials (`{PERSON_ID}_...`) and the services' connections (`BRANVIL_ADMIN_TOKEN`) are kept in the identities' store, shared by every workspace on the machine (its index is `~/.guildbotics/identity/.guildbotics/config/secrets.yml`). The workspace's store keeps the other keys, such as LLM API keys. A process reads the identities' store first, then the workspace's.
 - **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
 - **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
 - **GitHub App private key:** member save absorbs the PEM into the keychain. A key from auto-registration is never written to a file or shown on screen: the Local API holds it in memory until the member is saved. The key material is never exposed in environment variables.
@@ -471,13 +472,16 @@ guildbotics secrets pull                          # fetch missing or outdated va
 guildbotics secrets push                          # give the hub the values entered here
 guildbotics secrets export --file secrets.env     # export secrets for a move
 guildbotics secrets import secrets.env            # import them on the new machine
+guildbotics secrets --identities status           # the same, for the members' credentials
 ```
 
 When a workspace is shared between machines, values never enter the shared history: they
 move through the hub machine's OS secret store, and only when you send or fetch them. See
 [Share credentials with each machine](#share-credentials-with-each-machine).
 
-Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in each machine's `.guildbotics/local/secrets.json`. The namespace belongs to the machine and does not change when it joins a hub or synchronizes. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
+`--identities` before the subcommand makes it act on the identities' store; without it, the CLI refuses to store a member's key in a workspace. A member's key prefix is shared by every workspace, so two IDs that differ only in `-` and `_` (`foo-bar` and `foo_bar`) cannot both exist, even in different workspaces.
+
+A workspace's secrets are stored per workspace (keychain entries are namespaced by the `store_id` in each machine's `.guildbotics/local/secrets.json`. The namespace belongs to the machine and does not change when it joins a hub or synchronizes. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
@@ -509,8 +513,8 @@ so switch in this order:
 All non-secret configuration is stored as plain text files inside the workspace, so once you have set things up you can move them to an environment without a GUI (a headless server, for example) and operate with the CLI alone.
 
 1. Install the CLI on the target machine with `uv tool install guildbotics`
-2. Copy the workspace folder to the target machine
-3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target (delete the export file afterwards). Keychain entries themselves never leave the machine
+2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine
+3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain entries themselves never leave the machine
 4. On servers without a keychain, set up an OS secret store or pass the secrets as environment variables at run time
 5. Build the isolated agent environment on the server and log in to the AI CLI tool there (the server needs KVM; see [What You Need](#what-you-need)):
 
@@ -576,6 +580,8 @@ same input again after the result has been pushed.
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
+The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in the identities' store, shared by every workspace; the LLM API keys are kept in the workspace's store.
+
 **Slack access** (per member, format: `{PERSON_ID}_...`):
 
 - `{PERSON_ID}_SLACK_BOT_TOKEN`: Slack Bot Token
@@ -584,12 +590,12 @@ same input again after the result has been pushed.
 **GitHub access** (per member, format: `{PERSON_ID}_...`):
 
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: fine-grained PAT for a machine account
-- GitHub App IDs live in the member YAML (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
+- GitHub App IDs live in the member's `identity.yml` (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
 
 **Branvil access**:
 
-- `BRANVIL_ADMIN_TOKEN`: the token Branvil issues GuildBotics when its owner allows the connection; the host uses it to set up members and to open Branvil's GUI
-- `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved (its Branvil name is `account_info.branvil_username` in the member YAML)
+- `BRANVIL_ADMIN_TOKEN`: the token Branvil issues GuildBotics when its owner allows the connection, one for every workspace; the host uses it to set up members and to open Branvil's GUI
+- `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved and used in every workspace (its Branvil name is `account_info.branvil_username` in the member's `identity.yml`)
 
 Secrets stored in the OS keychain are loaded automatically. GuildBotics does not read a workspace `.env`.
 
@@ -614,6 +620,7 @@ The process cwd is never treated as a workspace. From the selected workspace, `G
 GuildBotics stores three kinds of local data:
 
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
+- The members' identities, shared by every workspace, are stored in `$HOME/.guildbotics/identity/.guildbotics`, laid out like a workspace's `.guildbotics`
 - Shared workspace state — memory, chat control, task-run records, interactive session records, activity events — is stored in `<workspace>/.guildbotics/state`
 - Device-local data — diagnostics, transcripts, chat cache, member clones, the built agent environment (`local/agent_environment/snapshots`) — is stored in `<workspace>/.guildbotics/local`
 - The isolated agent environment's runtime and its images live in `$HOME/.guildbotics/data/msb`; the AI CLI tools' logins and sessions, shared by every member and workspace on the machine, live in `$HOME/.guildbotics/data/agent_environment/<tool>/`
@@ -623,6 +630,12 @@ GuildBotics stores three kinds of local data:
 One workspace can be shared by several of your machines. Settings, members, memory, chat
 state, and activity history are kept in step; API keys, member clones, diagnostics, and
 hotkeys stay on the machine they were made on.
+
+The members' identities (`~/.guildbotics/identity/`) are connected to the same hub whenever
+a workspace is: registering, joining, copying, or changing the hub. The hub keeps one
+repository of them for every workspace; the first machine registers it, and the others join
+it by the same rules as a workspace (below). It is not listed among the hub's workspaces, and
+it is synchronized beside the selected workspace.
 
 Sharing runs through a **hub**: one machine you choose, holding a Git repository the others
 push to and fetch from over SSH. It is not a service and it is not hosted by anyone else —
@@ -720,7 +733,10 @@ machine's secret store is the distribution point, and a value moves only when yo
 fetch it, over the standard input and output of one SSH command. It is never written to
 the Git repository, to a relay file on the hub, or to a temporary file.
 
-The list and the transfers are under **Settings → Sync → Credentials on this machine**.
+The lists and the transfers are under **Settings → Sync**, in two cards: **Members' credentials
+on this machine** (the members' accounts and the services' connections, the same in every
+workspace) and **This workspace's credentials on this machine** (the API keys this workspace
+uses). Each card works as described below.
 The provider and member forms where a value is typed show its state and link here; they
 carry no transfer buttons of their own.
 
@@ -766,6 +782,8 @@ guildbotics secrets status   # this machine's state, and which keys need attenti
 guildbotics secrets pull     # fetch everything missing or outdated, in one exchange
 guildbotics secrets push     # give the hub the values entered on this machine
 ```
+
+Add `--identities` before the subcommand for the members' credentials.
 
 While an OS secret store is locked, nothing can be sent or fetched. GuildBotics never falls
 back to a plaintext file, so unlock it and try again.
@@ -891,8 +909,8 @@ fill in the placeholders as follows.
 | --- | --- |
 | `<workspace>` | The workspace directory, as shown in the "Workspace" field under "Settings → Project" |
 | `<recovery ID>` | The value in the "Recovery ID" column |
-| `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/person.yml`) |
-| `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/person.yml`) |
+| `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/member.yml`) |
+| `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/member.yml`) |
 
 1. Read what was set aside. This shows the difference from what is in use now (`+` lines
    are the set aside side):
@@ -961,19 +979,27 @@ discarding; the activity history record stays either way.
 - `services.ticket_service`: GitHub issues and Projects settings
 - `services.ticket_service.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
 - `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
-- With Branvil, both services are `name: branvil` with the same `base_url` (default `http://127.0.0.1:7878`) and a `workspace` (members write only to its repositories and take tickets from its board) (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
+- With Branvil, both services are `name: branvil` with a `workspace` (members write only to its repositories and take tickets from its board). Where Branvil is reached is part of the connection, shared by every workspace (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
-**Member settings** (`team/members/<person_id>/person.yml`):
+**Member identity** (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace; the avatar sits beside it):
 
-- `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only)
+- `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only). It cannot be changed
 - `name`: display name
+- `person_type`: `human` for the human member, `agent` for an AI member
+- `account_info`: account names with each service (`git_user`, `git_email`, `github_*`, `slack_user_id`, `branvil_username`)
+- `profile.character`: profile such as interests, preferences, and conversation participation policy
+- `speaking_style`, `relationships`
+
+**Member participation** (`team/members/<person_id>/member.yml` in the workspace):
+
 - `is_active`: whether the member runs as an AI agent
 - `profile.roles`: role assignment
 - `routine_commands`: override the default patrol commands
 - `task_schedules`: cron-based scheduled commands
 - `message_channels`: watched channel settings (`chat.enabled`, `channel_id`/`name`), on the project's chat service
-- `profile.character`: profile such as interests, preferences, and conversation participation policy
+
+A field in the other file is refused when the team is loaded. A workspace member whose identity is missing (deleted on another machine, or not synchronized yet) is left out of the team, and the rest of the team works, until it is removed from the workspace or the identity arrives.
 
 **LLM / AI CLI tool settings**:
 
