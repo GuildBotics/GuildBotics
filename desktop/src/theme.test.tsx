@@ -18,38 +18,64 @@ function rootStyle(text: string, selector: string) {
   return root.style;
 }
 
+function badgeColors(style: CSSStyleDeclaration) {
+  return ["--badge-bg", "--badge-color", "--badge-bd"].map((name) => style.getPropertyValue(name));
+}
+
+const TONES = ["success", "warning", "danger", "info"];
+
 describe("app theme", () => {
-  it("keeps badge text as written and gives each badge colour its tokens", () => {
+  it.each([
+    ["neutral", "var(--color-bg-hover)", "var(--color-text-subtle)", "var(--color-border-subtle)"],
+    [
+      "info",
+      "var(--color-bg-hover-subtle)",
+      "var(--color-text-subtle)",
+      "var(--color-border-subtle)",
+    ],
+    ...["success", "warning", "danger"].map((tone) => [
+      tone,
+      `var(--color-${tone}-bg)`,
+      `var(--color-${tone}-text)`,
+      `var(--color-${tone}-border)`,
+    ]),
+  ])("gives a %s badge its tokens and keeps its text as written", (color, bg, text, border) => {
     renderThemed(
-      <>
-        <Badge color="neutral" variant="light">
-          codex
-        </Badge>
-        <Badge color="warning" variant="light">
-          pending
-        </Badge>
-        <Badge color="danger" variant="outline">
-          memory
-        </Badge>
-      </>,
+      <Badge color={color} variant="light">
+        codex
+      </Badge>,
     );
 
-    const neutral = rootStyle("codex", ".mantine-Badge-root");
-    expect(neutral.textTransform).toBe("none");
-    expect(neutral.getPropertyValue("--badge-radius")).toBe("6px");
-    expect(neutral.getPropertyValue("--badge-bg")).toBe("var(--color-bg-hover)");
-    expect(neutral.getPropertyValue("--badge-color")).toBe("var(--color-text-subtle)");
-    expect(neutral.getPropertyValue("--badge-bd")).toBe("1px solid var(--color-border-subtle)");
+    const style = rootStyle("codex", ".mantine-Badge-root");
+    expect(style.textTransform).toBe("none");
+    expect(style.getPropertyValue("--badge-radius")).toBe("6px");
+    expect(badgeColors(style)).toEqual([bg, text, `1px solid ${border}`]);
+  });
 
-    const warning = rootStyle("pending", ".mantine-Badge-root");
-    expect(warning.getPropertyValue("--badge-bg")).toBe("var(--color-warning-bg)");
-    expect(warning.getPropertyValue("--badge-color")).toBe("var(--color-warning-text)");
-    expect(warning.getPropertyValue("--badge-bd")).toBe("1px solid var(--color-warning-border)");
+  it("gives an outline badge its tokens whatever its colour", () => {
+    renderThemed(
+      <Badge color="danger" variant="outline">
+        memory
+      </Badge>,
+    );
 
-    const outline = rootStyle("memory", ".mantine-Badge-root");
-    expect(outline.getPropertyValue("--badge-bg")).toBe("transparent");
-    expect(outline.getPropertyValue("--badge-color")).toBe("var(--color-text-muted)");
-    expect(outline.getPropertyValue("--badge-bd")).toBe("1px solid var(--color-border)");
+    expect(badgeColors(rootStyle("memory", ".mantine-Badge-root"))).toEqual([
+      "transparent",
+      "var(--color-text-muted)",
+      "1px solid var(--color-border)",
+    ]);
+  });
+
+  it("leaves Mantine's colours on other badges but keeps their text as written", () => {
+    renderThemed(
+      <Badge color="gray" variant="light">
+        skill
+      </Badge>,
+    );
+
+    const style = rootStyle("skill", ".mantine-Badge-root");
+    expect(style.textTransform).toBe("none");
+    expect(style.getPropertyValue("--badge-bg")).toBe("var(--mantine-color-gray-light)");
   });
 
   it("outlines a light danger button and fills a filled one with the danger tokens", () => {
@@ -73,34 +99,54 @@ describe("app theme", () => {
 
     const filled = rootStyle("Force quit", ".mantine-Button-root");
     expect(filled.getPropertyValue("--button-bg")).toBe("var(--color-danger)");
+    expect(filled.getPropertyValue("--button-color")).toBe("var(--mantine-color-white)");
     expect(filled.getPropertyValue("--button-hover")).toBe("var(--literal-red-700)");
 
     const other = rootStyle("Discard", ".mantine-Button-root");
     expect(other.getPropertyValue("--button-bg")).not.toContain("--color-danger");
   });
 
-  it("draws an alert's left line and icon in its tone, and leaves other alerts neutral", () => {
+  it.each(TONES)("draws a %s alert, its left line, and its icon in its tone", (tone) => {
     renderThemed(
-      <>
-        <Alert color="warning" title="Environment" icon={<span>!</span>}>
-          Not ready
-        </Alert>
-        <Alert color="yellow" title="Live" icon={<span>?</span>}>
-          Watching
-        </Alert>
-      </>,
+      <Alert color={tone} title="Environment" icon={<span>!</span>}>
+        Not ready
+      </Alert>,
     );
 
-    const warning = rootStyle("Not ready", ".mantine-Alert-root");
-    expect(warning.borderLeftWidth).toBe("4px");
-    expect(warning.borderLeftColor).toBe("var(--color-warning)");
-    expect(warning.getPropertyValue("--alert-bg")).toBe("var(--color-warning-bg)");
-    expect(warning.getPropertyValue("--alert-color")).toBe("var(--color-warning-text)");
-    expect(rootStyle("!", ".mantine-Alert-icon").color).toBe("var(--color-warning)");
+    const style = rootStyle("Not ready", ".mantine-Alert-root");
+    expect(style.getPropertyValue("--alert-bg")).toBe(`var(--color-${tone}-bg)`);
+    expect(style.getPropertyValue("--alert-bd")).toBe(`1px solid var(--color-${tone}-border)`);
+    expect(style.getPropertyValue("--alert-color")).toBe(`var(--color-${tone}-text)`);
+    expect(style.borderLeftWidth).toBe("4px");
+    expect(style.borderLeftColor).toBe(`var(--color-${tone})`);
+    expect(rootStyle("Not ready", ".mantine-Alert-message").color).toBe(
+      `var(--color-${tone}-text)`,
+    );
+    expect(rootStyle("!", ".mantine-Alert-icon").color).toBe(`var(--color-${tone})`);
+  });
 
-    const other = rootStyle("Watching", ".mantine-Alert-root");
-    expect(other.borderLeftColor).toBe("var(--color-border)");
-    expect(other.getPropertyValue("--alert-bg")).toBe("var(--color-bg-panel-subtle)");
+  it("draws other alerts on the panel colours with a neutral line and icon", () => {
+    renderThemed(
+      <Alert color="yellow" title="Live" icon={<span>?</span>}>
+        Watching
+      </Alert>,
+    );
+
+    const style = rootStyle("Watching", ".mantine-Alert-root");
+    expect(style.getPropertyValue("--alert-bg")).toBe("var(--color-bg-panel-subtle)");
+    expect(style.getPropertyValue("--alert-bd")).toBe("1px solid var(--color-border-subtle)");
+    expect(style.getPropertyValue("--alert-color")).toBe("var(--color-text-main)");
+    expect(style.borderLeftColor).toBe("var(--color-border)");
+    expect(rootStyle("Watching", ".mantine-Alert-message").color).toBe("var(--color-text-subtle)");
     expect(rootStyle("?", ".mantine-Alert-icon").color).toBe("");
+  });
+
+  it("gives every alert the panel's radius, padding, and shadow", () => {
+    renderThemed(<Alert color="danger">Failed</Alert>);
+
+    const style = rootStyle("Failed", ".mantine-Alert-root");
+    expect(style.getPropertyValue("--alert-radius")).toBe("10px");
+    expect(style.padding).toBe("12px 16px");
+    expect(style.boxShadow).toBe("var(--shadow-premium)");
   });
 });
