@@ -1548,16 +1548,19 @@ async def test_cancelled_command_waits_for_member_write_before_discarding_vm(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["vm", "gateway"])
+@pytest.mark.parametrize("worker_delay", [0, 0.2])
 async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
-    tmp_path, monkeypatch, stage
+    tmp_path, monkeypatch, stage, start_member_before_timeout, worker_delay
 ):
     """A timeout remains prompt, but cancellation during teardown drains it."""
     started, tearing_down, torn_down = (asyncio.Event() for _ in range(3))
     release = threading.Event()
+    entered = threading.Event()
     loop = asyncio.get_running_loop()
     posted = tmp_path / "posted.txt"
 
     def run_in_process(*_args, **_kwargs):
+        entered.set()
         loop.call_soon_threadsafe(started.set)
         assert release.wait(10)
         posted.write_text("member write", encoding="utf-8")
@@ -1593,11 +1596,11 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
             monkeypatch.setattr(target, "close", slow_close)
             with monkeypatch.context() as timeout_patch:
                 timeout_patch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
-                call = asyncio.create_task(
-                    shared._broker.execute(shared._broker.turn_grant, ["help"])
+                result = await start_member_before_timeout(
+                    entered,
+                    shared._broker.execute(shared._broker.turn_grant, ["help"]),
+                    worker_delay,
                 )
-                await asyncio.wait_for(started.wait(), 10)
-                result = await call
             assert result.exit_code == 124
 
     task = asyncio.create_task(run_command())
@@ -1646,7 +1649,7 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
     ],
 )
 async def test_member_teardown_tests_report_checkpoint_failure(
-    tmp_path, monkeypatch, run_test, arguments, failure_at
+    tmp_path, monkeypatch, run_test, arguments, failure_at, start_member_before_timeout
 ):
     """All four checkpoints surface producer failures without hanging."""
     module = sys.modules[__name__]
@@ -1685,6 +1688,12 @@ async def test_member_teardown_tests_report_checkpoint_failure(
         monkeypatch.setattr(module, "_command", command)
     monkeypatch.setattr(module, "_begin", begin)
     before = asyncio.all_tasks()
+    if run_test is test_cancellation_during_teardown_waits_for_timed_out_member_write:
+        arguments = {
+            **arguments,
+            "start_member_before_timeout": start_member_before_timeout,
+            "worker_delay": 0.2,
+        }
 
     async def check():
         with pytest.raises(RuntimeError) as caught:

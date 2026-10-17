@@ -1587,7 +1587,7 @@ async def test_force_stop_scheduler_cancels_manual_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_bus = EventBus()
-    runtime = AppRuntime(event_bus, stop_timeout_seconds=10)
+    runtime = AppRuntime(event_bus)
     started = asyncio.Event()
     cancelled = {"value": False}
 

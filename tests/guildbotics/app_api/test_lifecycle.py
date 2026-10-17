@@ -186,13 +186,31 @@ def context_factory() -> Any:
 
 
 @pytest.fixture(autouse=True)
-def patch_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
+def patch_runtimes(monkeypatch: pytest.MonkeyPatch):
+    threads: set[threading.Thread] = set()
+    start = lifecycle.SchedulerLifecycle.start
+
+    def tracked_start(self, *args, **kwargs):
+        try:
+            return start(self, *args, **kwargs)
+        finally:
+            thread = self._thread
+            if thread is not None:
+                threads.add(thread)
+
     FakeScheduler.instances = []
     FakeRunner.instances = []
     FakeServiceLock.instances = []
     monkeypatch.setattr(lifecycle, "TaskScheduler", FakeScheduler)
     monkeypatch.setattr(lifecycle, "EventListenerRunner", FakeRunner)
     monkeypatch.setattr(lifecycle, "ServiceLock", FakeServiceLock)
+    monkeypatch.setattr(lifecycle.SchedulerLifecycle, "start", tracked_start)
+    yield
+    for scheduler in FakeScheduler.instances:
+        scheduler._stop.set()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
 
 
 def _make_service(
@@ -653,7 +671,8 @@ def test_force_stop_during_graceful_stop_publishes_single_stop_transition(
 
         status = service.stop(force=True)
     finally:
-        graceful.join(timeout=2.0)
+        scheduler._stop.set()
+        graceful.join(timeout=10)
     assert not graceful.is_alive()
     assert status.scheduler.state == "stopped"
 
