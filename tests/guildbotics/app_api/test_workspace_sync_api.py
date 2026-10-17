@@ -283,6 +283,7 @@ def _hub_repository(repository: LocalSyncRepository) -> str:
     return workspace_id_from_remote_url(remote)
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_enabling_connects_the_identities_to_the_same_hub(
     client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
@@ -311,6 +312,7 @@ def test_enabling_connects_the_identities_to_the_same_hub(
     assert len(host.list_workspace_ids()) == 2
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_a_connected_workspace_brings_its_identities_to_its_hub(
     client: TestClient, workspace: Path
 ) -> None:
