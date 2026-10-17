@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from html import escape
 from logging import Logger
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -142,6 +143,8 @@ class SavedMember:
     #: The member's credentials on other hosts, by the name of the provider
     #: that hands each over.
     credentials: Mapping[str, HostCredential] = field(default_factory=dict)
+    #: The member's picture, as GuildBotics keeps it; ``None`` for none.
+    avatar: Path | None = None
 
 
 class MemberAccount(SetupItems):
@@ -160,6 +163,16 @@ class MemberAccount(SetupItems):
 
         Raises:
             SetupError: If the provider refuses it; nothing is saved.
+        """
+
+    @classmethod
+    async def avatar_changed(cls, member: SavedMember) -> None:
+        """Hand the provider ``member``'s picture, which has just changed, as
+        :meth:`prepare` does on every save.
+
+        Raises:
+            SetupError: If the provider refuses it; the picture stays changed
+                in GuildBotics.
         """
 
     @classmethod
@@ -315,3 +328,9 @@ class Provider:
     #: What the setup screens ask of it; a provider without one is not offered
     #: there.
     setup: ProviderSetup | None = None
+    #: The port of the hub machine's loopback the project's services reach it
+    #: at (given ``project.services``), which every other machine forwards to
+    #: the hub; ``None`` when it is reached otherwise.
+    hub_port: Callable[[Mapping[str, Mapping[str, Any]]], int | None] = (
+        lambda services: None
+    )

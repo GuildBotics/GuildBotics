@@ -287,6 +287,10 @@ class Calls:
     async def get(self, path: str, **params: Any) -> Any:
         return _json(await self.client().get(path, params=params))
 
+    async def put_file(self, path: str, content: bytes) -> Any:
+        """What Branvil answers to a file put at ``path`` (a picture)."""
+        return _json(await self.client().put(path, content=content))
+
     async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:
         """Every item of the collection at ``path``."""
         found: list[dict[str, Any]] = []

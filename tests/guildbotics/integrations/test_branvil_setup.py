@@ -1,7 +1,7 @@
 """A member's Branvil account as a save and a deletion make it: the agent
 GuildBotics creates or is given, the token it issues and keeps, the human
-named after the owner, the GitHub credential it hands Branvil, and the
-tokens it revokes."""
+named after the owner, the GitHub credential and the picture it hands
+Branvil, and the tokens it revokes."""
 
 from __future__ import annotations
 
@@ -197,6 +197,58 @@ async def test_the_agents_github_credential_is_handed_to_branvil(
     await _saved({"username": MEMBER}, member)
 
     assert double.accounts == {(MEMBER, "github"): sent}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("human", [False, True], ids=["agent", "owner"])
+async def test_a_save_gives_the_branvil_member_the_members_picture(
+    double: BranvilDouble, tmp_path, human: bool
+):
+    picture = tmp_path / "avatar.png"
+    picture.write_bytes(b"\x89PNG picture")
+    member = replace(
+        _member(human=human, secrets={"BRANVIL_TOKEN": TOKEN}), avatar=picture
+    )
+
+    await _saved({"username": OWNER if human else MEMBER}, member)
+
+    assert double.avatars == {OWNER if human else MEMBER: b"\x89PNG picture"}
+
+
+@pytest.mark.asyncio
+async def test_a_save_without_a_picture_puts_none(double: BranvilDouble):
+    await _saved({"username": MEMBER}, _member(secrets={"BRANVIL_TOKEN": TOKEN}))
+
+    assert double.avatars == {}
+    assert not [w for w in double.writes if w.endswith("/avatar")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("account_info", "services", "given"),
+    [
+        ({"branvil_username": MEMBER}, None, {MEMBER: b"new"}),
+        ({}, None, {}),
+        ({"branvil_username": MEMBER}, {}, {}),
+    ],
+    ids=["with-account", "no-branvil-member", "no-branvil"],
+)
+async def test_a_changed_picture_is_given_to_the_branvil_member_the_account_names(
+    double: BranvilDouble,
+    tmp_path,
+    account_info: dict[str, str],
+    services: dict[str, Any] | None,
+    given: dict[str, bytes],
+):
+    picture = tmp_path / "avatar.png"
+    picture.write_bytes(b"new")
+    member = replace(
+        _member(services=services), account_info=account_info, avatar=picture
+    )
+
+    await BranvilAccount.avatar_changed(member)
+
+    assert double.avatars == given
 
 
 @pytest.mark.asyncio

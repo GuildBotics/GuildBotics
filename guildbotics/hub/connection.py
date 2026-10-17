@@ -458,6 +458,30 @@ def hub_ssh_command(endpoint: HubEndpoint, arguments: list[str]) -> list[str]:
     ]
 
 
+def hub_forward_command(endpoint: HubEndpoint, port: int) -> list[str]:
+    """Build the OpenSSH argv that forwards this machine's loopback ``port``
+    to the same port of the hub machine's loopback, until it is stopped.
+
+    ``ExitOnForwardFailure`` makes it end at once when the port cannot be
+    bound here, rather than stay connected forwarding nothing.
+    """
+    return [
+        ssh_executable(),
+        "-N",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=2",
+        "-L",
+        f"127.0.0.1:{port}:127.0.0.1:{port}",
+        endpoint.target,
+    ]
+
+
 def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:
     """Return the host key a hub presents, read by the client that will use it.
 

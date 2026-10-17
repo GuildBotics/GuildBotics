@@ -15,29 +15,34 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 ```text
 Hub のマシン                                ほかのマシン
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ branvil tunnel --via <hub>   │
+│ branvil serve                │            │ GuildBotics (forwards)       │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
-│ GuildBotics                  │            │ GuildBotics                  │
+│ GuildBotics                  │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
 - Branvil は GuildBotics の Hub を置くマシンで 1 つだけ動かし、loopback でだけ待ち受けます。
 - すべてのマシンが同じベース URL（既定 `http://127.0.0.1:7878`）で Branvil に届きます。
-  Hub のマシンでは Branvil そのもの、ほかのマシンでは Branvil のトンネルが、Hub 同期と同じ
-  SSH 接続で同じローカルポートを Hub へ転送します。GuildBotics 自身はトンネルを持ちません。
+  Hub のマシンでは Branvil そのものです。ほかのマシンでは、GuildBotics（Desktop か
+  `guildbotics start` のサービス）が、動いているあいだ、Hub 同期と同じ SSH 接続でそのローカル
+  ポートを Hub へ転送します。そのマシンでほかに動かすものはありません。GuildBotics が動いていない
+  あいだ（`git` や Branvil の GUI を使うとき）は、`branvil tunnel --via <hub>` が代わりに
+  転送します。先にポートを取ったほうが転送し、もう一方は待ちます。ポートが空けば、GuildBotics は
+  10 秒以内に引き継ぎます。転送するのは、ベース URL が loopback（`127.0.0.1` か `localhost`）の
+  ときだけです。
 - どのマシンでも同じベース URL であることで、記録した URL がどこでも有効になります。チケットは
   `{base}/{repository}/-/tickets/{n}`、pull request は `{base}/{repository}/-/pulls/{n}` で、
   共有するプロジェクト設定の `base_url` は 1 つです。リポジトリはチケット（`#1`）を
   pull request（`!1`）とは別に番号付けします。
 
-トンネルが切れていると、Branvil の操作はすべて「Branvil に届きません」で失敗し、
+どれも転送していないと、Branvil の操作はすべて「Branvil に届きません」で失敗し、
 **設定 → 検証** は「Branvil に届きません」と報告します。
 
 ## Branvil を準備する
 
 Branvil の README に従って、次を行います。
 
-1. Hub のマシンで Branvil を、GuildBotics を動かすほかのマシンでトンネルを動かす。
+1. Hub のマシンで Branvil を動かす。ほかのマシンでは、GuildBotics が動いていればほかに要るものはない。
    `branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
    GuildBotics の人間のメンバーです。オーナーは何でもでき、マージし、Branvil の GUI を使います。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
@@ -89,6 +94,9 @@ GuildBotics はこれをワークスペースのシークレット `BRANVIL_ADMI
 - メンバーの **GitHub** タブも表示されます。AI メンバーにそこで GitHub のアカウント
   （マシンユーザーのトークンか GitHub App）があれば、保存のたびに Branvil に渡します。Branvil は
   そのアカウントとしてメンバーの pull request を出します（下記）。
+- メンバーのアイコンは、Branvil ではそのエージェント（人間のメンバーならオーナー）の画像に
+  なります。保存のたびと、アイコンをアップロードまたは取り込んだときに、GuildBotics が渡します。
+  設定するのは GuildBotics だけです。
 - AI メンバーを削除すると、そのエージェントの `guildbotics` のトークンを取り消します。
   エージェントは履歴が名前を指すので Branvil に残ります。
 

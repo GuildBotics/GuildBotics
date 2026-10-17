@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -122,6 +123,26 @@ def test_connecting_keeps_the_admin_token_branvil_issues_on_consent(
         "owner": OWNER,
         "message": "",
     }
+
+
+def test_connecting_to_where_no_branvil_answers_says_so_and_opens_nothing(
+    client: TestClient, double: BranvilDouble, monkeypatch: pytest.MonkeyPatch
+):
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    monkeypatch.setattr(double, "respond", refused)
+
+    response = client.post(
+        f"{OPERATIONS}/connect",
+        json={"base_url": BASE, "callback_base_url": CALLBACK_BASE},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code != HTTP_OK
+    assert response.json()["message"] == t(
+        "integrations.branvil.api.unreachable", base_url=BASE
+    )
 
 
 def test_a_denied_consent_connects_nothing(

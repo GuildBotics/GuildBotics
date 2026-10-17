@@ -41,6 +41,7 @@ from guildbotics.integrations.branvil.api import (
     Unauthorized,
     administer,
     base_url,
+    health,
     segment,
 )
 from guildbotics.integrations.provider import (
@@ -172,6 +173,10 @@ class Consents:
     async def start(
         self, request: ConnectStart, team: Callable[[], Team]
     ) -> ConsentStarted:
+        """The consent screen to open: only once Branvil answers there, as the
+        browser would otherwise show nothing but a failed page."""
+        with _refusal():
+            await health(request.base_url)
         deadline = time.time() - _CONSENT_TTL_SECONDS
         self._held = {
             state: consent
@@ -351,7 +356,8 @@ class BranvilAccount(MemberAccount):
     async def prepare(self, member: SavedMember) -> None:
         """Name the member, and make an agent ready on Branvil: there, with
         a token Branvil takes for its own, and with its credentials on the
-        hosts Branvil publishes to."""
+        hosts Branvil publishes to. Either way the Branvil member gets the
+        member's picture."""
         url = branvil_url(member.services)
         if not url:
             return
@@ -359,6 +365,7 @@ class BranvilAccount(MemberAccount):
             async with Admin(url) as admin:
                 if member.human:
                     self.username = self.username or await admin.owner()
+                    await _picture(admin, self.username, member)
                     return
                 self.username = self.username or member.person_id
                 await _agent(admin, self.username, member.name)
@@ -377,12 +384,24 @@ class BranvilAccount(MemberAccount):
                         f"/members/{segment(self.username)}/accounts/{host}",
                         member.credentials[host].model_dump(exclude_defaults=True),
                     )
+                await _picture(admin, self.username, member)
 
     def stored(
         self, person_id: str, human: bool
     ) -> tuple[dict[str, str], dict[str, str]]:
         info = {"branvil_username": self.username} if self.username else {}
         return info, {"BRANVIL_TOKEN": self._token} if self._token else {}
+
+    @classmethod
+    async def avatar_changed(cls, member: SavedMember) -> None:
+        """Give the Branvil member the member's new picture."""
+        url = branvil_url(member.services)
+        name = member.account_info.get("branvil_username", "")
+        if not url or not name:
+            return
+        with _refusal():
+            async with Admin(url) as admin:
+                await _picture(admin, name, member)
 
     @classmethod
     async def removed(cls, member: SavedMember) -> None:
@@ -412,6 +431,15 @@ class BranvilAccount(MemberAccount):
         return AccountView(
             username=str(account_info.get("branvil_username", "")),
             has_token=has_secret("BRANVIL_TOKEN"),
+        )
+
+
+async def _picture(admin: Admin, name: str, member: SavedMember) -> None:
+    """Give the Branvil member ``name`` the member's picture, if it has one;
+    the same picture again changes nothing there."""
+    if member.avatar is not None:
+        await admin.put_file(
+            f"/members/{segment(name)}/avatar", member.avatar.read_bytes()
         )
 
 

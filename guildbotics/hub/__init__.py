@@ -19,6 +19,11 @@ hub reads only its ``observed_at``, to expire it by the one contract in
 :mod:`guildbotics.utils.live_freshness`, and what a snapshot means is the
 device's (``guildbotics.drivers.relay_runtime``).
 
+A machine other than the hub also reaches services that run on the hub
+machine at a loopback port, at the same address there
+(:mod:`guildbotics.hub.forward`, over the same SSH connection). Which ports
+those are is decided above the hub.
+
 The hub knows nothing about what the repositories contain. Shared state and its
 rules belong to :mod:`guildbotics.workspace`, and turning local writes into
 commits belongs to :mod:`guildbotics.sync`.

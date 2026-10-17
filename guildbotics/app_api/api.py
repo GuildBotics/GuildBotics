@@ -166,6 +166,7 @@ from guildbotics.setup.setup_service import (
     person_config_paths,
     prepare_accounts,
     remove_accounts,
+    share_avatar,
     stored_person_config_dir,
     stored_person_config_paths,
 )
@@ -1184,7 +1185,7 @@ def create_app(
         raise AppApiError("avatar_not_found", status_code=404)
 
     @router.post("/config/members/{person_id}/avatar")
-    def config_member_avatar_upload(
+    async def config_member_avatar_upload(
         person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
     ) -> AvatarMutationResponse:
@@ -1193,9 +1194,13 @@ def create_app(
 
         try:
             content, suffix = read_upload(file)
-            dest_path = apply_config_write(
-                config_dir,
-                lambda: store_avatar(config_dir, person_id, content, suffix),
+            # The write lock blocks, and this runs on the event loop.
+            dest_path = (
+                await run_in_threadpool(
+                    apply_config_write,
+                    config_dir,
+                    lambda: store_avatar(config_dir, person_id, content, suffix),
+                )
             ).result
         except ValueError as exc:
             # Validation failures (e.g. too large) carry a safe, stable message.
@@ -1212,6 +1217,7 @@ def create_app(
                 "avatar_save_failed",
                 status_code=500,
             ) from exc
+        await share_avatar(config_dir, person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @router.post("/config/members/{person_id}/avatar/{provider}")
@@ -1246,6 +1252,7 @@ def create_app(
                 params={"provider": setup.title},
                 status_code=500,
             ) from exc
+        await share_avatar(config_dir, person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.websocket("/events")

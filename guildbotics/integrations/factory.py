@@ -1,7 +1,7 @@
 """The one place a provider is chosen: each kind of service is the provider
 ``project.services`` names for it."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from logging import Logger
 from typing import Any
 
@@ -22,6 +22,16 @@ from guildbotics.utils.i18n_tool import t
 PROVIDERS: dict[str, Provider] = {
     provider.name: provider for provider in (BRANVIL, GITHUB, LOCAL, SLACK)
 }
+
+
+def hub_ports(services: Mapping[str, Mapping[str, Any]]) -> set[int]:
+    """The ports of the hub machine the project's services are reached at,
+    which every other machine forwards to the hub."""
+    return {
+        port
+        for provider in PROVIDERS.values()
+        if (port := provider.hub_port(services)) is not None
+    }
 
 
 def configured_providers(team: Team) -> list[Provider]:

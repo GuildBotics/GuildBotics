@@ -15,32 +15,37 @@ the exact `branvil` commands, are in the Branvil README.
 ```text
 Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ branvil tunnel --via <hub>   │
+│ branvil serve                │            │ GuildBotics (forwards)       │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
-│ GuildBotics                  │            │ GuildBotics                  │
+│ GuildBotics                  │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
 - Branvil runs once, on the machine that hosts the GuildBotics Hub, and listens on
   loopback only.
 - Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default. On
-  the Hub machine that is Branvil itself; on any other machine, Branvil's tunnel
-  forwards the same local port to the Hub over the SSH connection the Hub sync already
-  uses. GuildBotics has no tunnel of its own.
+  the Hub machine that is Branvil itself. On any other machine, GuildBotics (Desktop,
+  or the service of `guildbotics start`) forwards that local port to the Hub over the
+  SSH connection the Hub sync already uses, for as long as it runs, so nothing else
+  needs to run there. While GuildBotics is not running, `branvil tunnel --via <hub>`
+  forwards it instead (for `git` or Branvil's GUI). Whichever of them binds the port
+  first forwards it; the other waits, and GuildBotics takes the port over within
+  10 seconds once it is free. Only a loopback base URL (`127.0.0.1` or `localhost`)
+  is forwarded.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
   on every machine, and the shared project settings name one `base_url`. A repository
   numbers its tickets (`#1`) apart from its pull requests (`!1`).
 
-When the tunnel is down, every Branvil operation fails with "Branvil is not reachable at
-…", and **Setup → Verification** reports *Branvil is not reachable*.
+When nothing forwards the port, every Branvil operation fails with "Branvil is not
+reachable at …", and **Setup → Verification** reports *Branvil is not reachable*.
 
 ## Prepare Branvil
 
 Following the Branvil README:
 
-1. Run Branvil on the Hub machine, and the tunnel on every other machine that runs
-   GuildBotics. `branvil init` creates Branvil's owner, the one person who uses it: the
+1. Run Branvil on the Hub machine. Other machines need nothing more while GuildBotics
+   runs there. `branvil init` creates Branvil's owner, the one person who uses it: the
    GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
@@ -92,6 +97,9 @@ Under **Setup → Members → Branvil**:
 - The member's **GitHub** tab is shown too. When an AI member has a GitHub account there
   (a machine user's token, or a GitHub App), every save hands it to Branvil, which
   publishes the member's pull requests as that account (below).
+- The member's avatar is Branvil's picture of its agent (or of the owner, for the human
+  member): GuildBotics hands it over on every save and whenever the avatar is uploaded or
+  imported. It is set in GuildBotics only.
 - Deleting an AI member revokes the `guildbotics` tokens of its agent. The agent stays in
   Branvil, as its history names it.
 

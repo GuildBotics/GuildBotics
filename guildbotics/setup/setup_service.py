@@ -23,6 +23,7 @@ from guildbotics.intelligences.cli_agents import (
     cli_agent_name_from_path,
 )
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+from guildbotics.utils.avatar import avatar_in, find_avatar_file
 from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
@@ -757,8 +758,6 @@ class SimplePersonSetupService:
             if provider.setup and provider.setup.member
         }
         avatar_timestamp = 0
-        from guildbotics.utils.avatar import find_avatar_file
-
         avatar_path = (
             find_avatar_file(config_dir, person_id)
             if is_valid_person_id(person_id)
@@ -1020,6 +1019,9 @@ async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> No
         account_info=account_info,
         get_secret=lambda name: secrets.get(name) or held.value(name),
         services=_services_of(config.config_dir),
+        avatar=find_avatar_file(config.config_dir, config.person_id)
+        if is_valid_person_id(config.person_id)
+        else None,
     )
     member = replace(
         member,
@@ -1042,9 +1044,30 @@ async def remove_accounts(config_dir: Path, person_id: str) -> None:
     Raises:
         SetupError: If a provider refuses; the member is kept.
     """
-    person_file = stored_person_config_dir(config_dir, person_id) / "person.yml"
-    person_data = _read_member_form(person_file)
-    member = SavedMember(
+    member = _saved_member(config_dir, person_id)
+    for provider in PROVIDERS.values():
+        if provider.setup and provider.setup.member:
+            await provider.setup.member.removed(member)
+
+
+async def share_avatar(config_dir: Path, person_id: str) -> None:
+    """Hand the member's picture, which has just changed, to each provider
+    its accounts are with.
+
+    Raises:
+        SetupError: If a provider refuses; the picture stays changed here.
+    """
+    member = _saved_member(config_dir, person_id)
+    for provider in PROVIDERS.values():
+        if provider.setup and provider.setup.member:
+            await provider.setup.member.avatar_changed(member)
+
+
+def _saved_member(config_dir: Path, person_id: str) -> SavedMember:
+    """The saved member ``person_id``, as its accounts see it."""
+    member_dir = stored_person_config_dir(config_dir, person_id)
+    person_data = _read_member_form(member_dir / "person.yml")
+    return SavedMember(
         person_id=person_id,
         name=str(person_data.get("name", "")),
         human=person_data.get("person_type") == "human",
@@ -1054,10 +1077,8 @@ async def remove_accounts(config_dir: Path, person_id: str) -> None:
         },
         get_secret=_owned_secrets(config_dir, person_id).value,
         services=_services_of(config_dir),
+        avatar=avatar_in(member_dir),
     )
-    for provider in PROVIDERS.values():
-        if provider.setup and provider.setup.member:
-            await provider.setup.member.removed(member)
 
 
 def _services_of(config_dir: Path) -> dict[str, dict[str, Any]]:

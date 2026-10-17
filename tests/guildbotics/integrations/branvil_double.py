@@ -113,6 +113,8 @@ class BranvilDouble:
         self.tokens: dict[str, dict[str, str]] = {}
         #: The members' accounts on other hosts: (member, host) -> credential.
         self.accounts: dict[tuple[str, str], dict[str, Any]] = {}
+        #: The members' pictures.
+        self.avatars: dict[str, bytes] = {}
         self.workspaces = [SCOPE, THEIRS]
         #: The consent codes not yet exchanged.
         self._codes: dict[str, dict[str, str]] = {}
@@ -228,7 +230,10 @@ class BranvilDouble:
         parts = [unquote(part) for part in path.removeprefix("/api/v1/").split("/")]
         if parts == ["health"]:
             return httpx.Response(200, json={"service": "branvil", "api": 1})
-        body = json.loads(request.content) if request.content else {}
+        # A picture is put as it is; everything else is JSON.
+        body: Any = request.content
+        if not path.endswith("/avatar"):
+            body = json.loads(request.content) if request.content else {}
         try:
             if parts == ["apps", "token"]:
                 status, answer = self._exchange(body)
@@ -259,7 +264,7 @@ class BranvilDouble:
         self,
         method: str,
         parts: list[str],
-        body: dict,
+        body: Any,
         params: dict[str, str],
         me: dict[str, Any],
     ) -> tuple[int, Any]:
@@ -294,7 +299,7 @@ class BranvilDouble:
         raise _missing("/".join(parts))
 
     def _members(
-        self, method: str, rest: list[str], body: dict, params: dict
+        self, method: str, rest: list[str], body: Any, params: dict
     ) -> tuple[int, Any]:
         match method, rest:
             case "GET", []:
@@ -336,6 +341,9 @@ class BranvilDouble:
                     if (t["member"], t["id"]) != (name, token_id)
                 }
                 return 204, None
+            case "PUT", [name, "avatar"]:
+                self.avatars[name] = body
+                return 200, self.members[name]
             case "PUT", [name, "accounts", host]:
                 assert set(body) in ({"token"}, {"app"}), body
                 self.accounts[name, host] = body

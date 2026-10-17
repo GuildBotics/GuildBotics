@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from guildbotics.entities.team import Person
 from guildbotics.integrations.branvil.setup import Workspace
-from guildbotics.integrations.factory import PROVIDERS
+from guildbotics.integrations.factory import PROVIDERS, hub_ports
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
@@ -230,3 +230,41 @@ def test_the_services_refuse_what_names_no_branvil_or_workspace(
 ):
     with pytest.raises(ValidationError):
         Workspace.model_validate(items)
+
+
+@pytest.mark.parametrize(
+    ("services", "ports"),
+    [
+        ({"code_hosting_service": {"name": "branvil", "workspace": "a"}}, {7878}),
+        (
+            {
+                "code_hosting_service": {
+                    "name": "branvil",
+                    "base_url": "http://127.0.0.1:17900",
+                },
+                "ticket_service": {
+                    "name": "branvil",
+                    "base_url": "http://127.0.0.1:17900",
+                },
+            },
+            {17900},
+        ),
+        (
+            {
+                "ticket_service": {
+                    "name": "branvil",
+                    "base_url": "http://localhost:7900",
+                }
+            },
+            {7900},
+        ),
+        ({"ticket_service": {"name": "branvil", "base_url": "http://hub:7878"}}, set()),
+        ({"code_hosting_service": {"name": "github", "owner": "acme"}}, set()),
+        ({}, set()),
+    ],
+    ids=["default", "both-kinds", "localhost", "elsewhere", "no-branvil", "none"],
+)
+def test_the_hub_port_is_branvils_loopback_port(
+    services: dict[str, Any], ports: set[int]
+) -> None:
+    assert hub_ports(services) == ports

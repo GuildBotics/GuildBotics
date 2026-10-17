@@ -3,7 +3,9 @@ that every machine reaches at the same base URL."""
 
 from __future__ import annotations
 
-from typing import cast
+from collections.abc import Mapping
+from typing import Any, cast
+from urllib.parse import urlsplit
 
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.branvil.api import (
@@ -15,7 +17,7 @@ from guildbotics.integrations.branvil.api import (
     username,
 )
 from guildbotics.integrations.branvil.code_hosting import BranvilCodeHostingService
-from guildbotics.integrations.branvil.setup import SETUP
+from guildbotics.integrations.branvil.setup import SETUP, branvil_url
 from guildbotics.integrations.branvil.tickets import BranvilTicketService
 from guildbotics.integrations.provider import (
     Provider,
@@ -200,6 +202,14 @@ async def _workspace(
     )
 
 
+def _hub_port(services: Mapping[str, Mapping[str, Any]]) -> int | None:
+    """The port of the Branvil the project reaches at a loopback base URL:
+    Branvil runs once, on the hub machine, and every machine uses that same
+    base URL."""
+    url = urlsplit(branvil_url(services))
+    return url.port if url.hostname in ("127.0.0.1", "localhost") else None
+
+
 BRANVIL = Provider(
     name=PROVIDER,
     secret_keys=frozenset({"BRANVIL_TOKEN"}),
@@ -213,4 +223,5 @@ BRANVIL = Provider(
     verify=_verify,
     diagnose=_diagnose,
     setup=SETUP,
+    hub_port=_hub_port,
 )
