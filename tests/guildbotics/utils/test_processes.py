@@ -2,11 +2,28 @@ from __future__ import annotations
 
 import errno
 import plistlib
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from guildbotics.utils import processes
+
+
+@pytest.mark.windows
+def test_native_process_lifecycle() -> None:
+    """Exercise real process handles, including their ctypes types on Windows."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert processes.pid_exists(child.pid)
+        processes.force_terminate_pid(child.pid)
+        assert child.wait(timeout=10) != 0
+        assert not processes.pid_exists(child.pid)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
 
 
 def test_launching_app_name_walks_parents_and_reads_bundle_name(

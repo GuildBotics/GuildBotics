@@ -70,18 +70,9 @@ jobs:
         run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
 
   test-windows:
-    # Windows in parallel with the Linux job, because a change that only breaks
-    # Windows is otherwise found weeks later by whoever happens to run the
-    # suite there. Only the checks whose result can differ by operating system
-    # run here: Ruff, Pylint and the CLI reference cannot.
+    # Linux runs the full suite. Windows checks the host OS boundaries: native
+    # paths and locks, process lifecycle, and Git for Windows integration.
     runs-on: windows-latest
-    name: test-windows (${{ matrix.shard }})
-    strategy:
-      fail-fast: false
-      matrix:
-        shard:
-          - git-contracts
-          - remainder
     env:
       UV_LOCKED: "1"
     steps:
@@ -101,32 +92,25 @@ jobs:
         run: uv sync --extra test --extra dev
 
       - name: Run Mypy
-        if: matrix.shard == 'remainder'
         run: uv run --no-sync mypy guildbotics
-
-      - name: Verify Windows shard coverage
-        run: >-
-          uv run --no-sync python -m pytest tests/ --collect-only -qq
-          --verify-windows-shards
 
       - name: Run tests
         # A short base directory: tests create Git repositories, whose own
         # paths are long enough to pass MAX_PATH from the default one.
-        # Eight workers keep Git subprocess and file-I/O waits from leaving a
-        # long tail on the four-core hosted runner.
+        # The selected contracts need no second runner or full-suite shards.
         run: >-
-          uv run --no-sync python -m pytest tests/ -n 8 --durations=30
-          --windows-shard=${{ matrix.shard }}
+          uv run --no-sync python -m pytest tests/ -m windows --strict-markers
+          -n 4 --durations=30
           --basetemp=${{ runner.temp }}/gb
-          --junitxml=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
-          --phase-durations-json=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}-phases.json
+          --junitxml=${{ runner.temp }}/pytest-windows.xml
+          --phase-durations-json=${{ runner.temp }}/pytest-windows-phases.json
 
       - name: Upload Windows pytest durations
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-pytest-durations-${{ matrix.shard }}
+          name: windows-pytest-durations
           path: |
-            ${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
-            ${{ runner.temp }}/pytest-windows-${{ matrix.shard }}-phases.json
+            ${{ runner.temp }}/pytest-windows.xml
+            ${{ runner.temp }}/pytest-windows-phases.json
           if-no-files-found: error

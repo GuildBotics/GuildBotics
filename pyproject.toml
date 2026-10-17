@@ -92,7 +92,10 @@ redis = [
 
 
 [tool.pytest.ini_options]
-markers = ["real_device(opt_in): test using a real device with an explicit opt-in"]
+markers = [
+  "real_device(opt_in): test using a real device with an explicit opt-in",
+  "windows: exercises a host OS boundary that must also work on real Windows",
+]
 # A test that waits for something that never comes fails instead of stopping
 # the suite. Far above what any test takes, even on the slowest CI runner;
 # tests on the device's real agent environment say how long they may take.

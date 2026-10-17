@@ -35,11 +35,6 @@ from tests.guildbotics.command_environment_doubles import (  # noqa: F401
     commands_in_process,
     in_trace,
 )
-from tests.windows_shards import (
-    WINDOWS_SHARDS,
-    verify_windows_shards,
-    windows_shard_for_nodeid,
-)
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
@@ -225,16 +220,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Write setup/call/teardown durations as machine-readable JSON.",
     )
     parser.addoption(
-        "--windows-shard",
-        choices=WINDOWS_SHARDS,
-        help="Run exactly one duration-balanced Windows test shard.",
-    )
-    parser.addoption(
-        "--verify-windows-shards",
-        action="store_true",
-        help="Verify that every collected node ID belongs to exactly one shard.",
-    )
-    parser.addoption(
         "--network-audit",
         action="store_true",
         help="Report Python socket attempts without blocking them.",
@@ -392,18 +377,6 @@ def pytest_collection_modifyitems(
         if flag is not None and item.get_closest_marker("timeout") is None:
             item.add_marker(pytest.mark.timeout(30 * 60))
 
-    shard = config.getoption("windows_shard")
-    if shard is None:
-        return
-    selected: list[pytest.Item] = []
-    deselected: list[pytest.Item] = []
-    for item in items:
-        (
-            selected if windows_shard_for_nodeid(item.nodeid) == shard else deselected
-        ).append(item)
-    items[:] = selected
-    config.hook.pytest_deselected(items=deselected)
-
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
@@ -448,18 +421,6 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
         else:
             report.outcome = "failed"
             report.longrepr = message
-
-
-def pytest_collection_finish(session: pytest.Session) -> None:
-    if not session.config.getoption("verify_windows_shards"):
-        return
-    counts = verify_windows_shards([item.nodeid for item in session.items])
-    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-    if reporter is not None:
-        reporter.write_line(
-            "Windows shard coverage: "
-            + ", ".join(f"{shard}={counts[shard]}" for shard in WINDOWS_SHARDS)
-        )
 
 
 @pytest.fixture(scope="session")

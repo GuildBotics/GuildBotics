@@ -275,6 +275,7 @@ def test_unavailable_old_session_lock_does_not_block_new_sessions(
 
 
 @pytest.mark.parametrize("action", ["save", "copy", "close"])
+@pytest.mark.windows
 def test_session_operations_never_reopen_a_swapped_ancestor(tmp_path, symlinks, action):
     from guildbotics.utils.safe_paths import UnsafePathError
 
@@ -423,6 +424,7 @@ def test_save_command_input_file_rejects_unsupported_content_type(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.windows
 def test_save_command_input_file_removes_partial_oversized_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -493,6 +495,7 @@ def test_store_lives_where_no_microvm_writes_by_default(tmp_path: Path) -> None:
         store.close()
 
 
+@pytest.mark.windows
 def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) -> None:
     store = CommandInputFileStore(root=tmp_path / "inputs")
     store.start()
@@ -513,6 +516,7 @@ def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) 
     assert source.exists()
 
 
+@pytest.mark.windows
 def test_store_removes_orphaned_sessions_on_start(tmp_path: Path) -> None:
     orphan = tmp_path / "inputs/session-orphaned"
     orphan.mkdir(parents=True)
@@ -526,6 +530,7 @@ def test_store_removes_orphaned_sessions_on_start(tmp_path: Path) -> None:
     store.close()
 
 
+@pytest.mark.windows
 def test_store_preserves_another_active_session(tmp_path: Path) -> None:
     first = CommandInputFileStore(root=tmp_path / "inputs")
     first.start()

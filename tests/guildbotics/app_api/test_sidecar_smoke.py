@@ -245,6 +245,7 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
         _terminate(running_sidecar.process)
 
 
+@pytest.mark.windows
 def test_sidecar_shuts_down_cleanly(sidecar: _Sidecar) -> None:
     process = sidecar.process
     assert process.poll() is None  # still running

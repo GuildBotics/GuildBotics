@@ -208,6 +208,7 @@ def _wait_for(condition) -> None:
         time.sleep(0.005)
 
 
+@pytest.mark.windows
 def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
     for attempt in range(100):
         path = tmp_path / str(attempt) / "stop-request.json"

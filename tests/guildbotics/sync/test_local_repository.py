@@ -100,6 +100,7 @@ def test_initialize_lets_git_reach_long_paths(tmp_path: Path) -> None:
     assert git.config("--get", "core.longpaths") == "true"
 
 
+@pytest.mark.windows
 def test_a_path_longer_than_windows_allows_is_staged(tmp_path: Path) -> None:
     """Git writes and removes the file itself, so the test needs no long-path support."""
     repository = _workspace(tmp_path)
@@ -197,9 +198,12 @@ def test_commit_without_staged_changes_creates_nothing(tmp_path: Path) -> None:
     assert repository.head() == head
 
 
-def test_paths_with_spaces_survive_scanning_and_diffing(tmp_path: Path) -> None:
+@pytest.mark.windows
+def test_paths_with_spaces_and_unicode_survive_scanning_and_diffing(
+    tmp_path: Path,
+) -> None:
     repository = _workspace(tmp_path)
-    name = "state/chat_state/a channel/thread 1.json"
+    name = "state/chat_state/日本語 a channel/thread [1].json"
     path = tmp_path / ".guildbotics" / name
     path.parent.mkdir(parents=True)
     path.write_text("{}")
@@ -285,6 +289,7 @@ def test_ahead_behind_counts_each_side(tmp_path: Path) -> None:
     assert repository.ahead_behind(first, second) == (0, 1)
 
 
+@pytest.mark.windows
 def test_remote_git_kills_a_command_that_never_answers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -304,6 +309,7 @@ def test_remote_git_kills_a_command_that_never_answers(
 
 
 @pytest.mark.parametrize("returncode", [0, 128])
+@pytest.mark.windows
 def test_remote_git_decodes_utf8_and_keeps_non_utf8_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
 ) -> None:
