@@ -150,6 +150,10 @@ def _run_remote_git(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        # Git emits UTF-8; SSH diagnostics may use a different code page.
+        # These are display messages, never paths used for a later operation.
+        errors="replace",
         start_new_session=os.name == "posix",
     )
     try:

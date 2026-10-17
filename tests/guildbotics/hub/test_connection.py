@@ -15,8 +15,95 @@ from guildbotics.hub.connection import (
     HubUnreachableError,
     InvalidHubEndpointError,
 )
+from tests.subprocess_output import process_output
 
 WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
+
+
+def test_hub_commands_decode_the_remote_cli_utf8_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = "C:/Users/日本語のメモリ検索/repository.git\n"
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp932")
+    monkeypatch.setattr(
+        connection,
+        "hub_ssh_command",
+        lambda *_args: process_output(output.encode("utf-8")),
+    )
+
+    assert connection.run_hub_command(HubEndpoint(host="hub.local"), []) == output
+
+
+@pytest.mark.parametrize(
+    "operation", [connection.run_hub_command, connection.run_hub_stream]
+)
+def test_hub_failures_report_diagnostics_without_exposing_stdout(
+    monkeypatch: pytest.MonkeyPatch, operation
+) -> None:
+    monkeypatch.setattr(
+        connection,
+        "hub_ssh_command",
+        lambda *_args: process_output(b"private-stdout", b"fatal: invalid \x81", 1),
+    )
+
+    with pytest.raises(HubUnreachableError, match="fatal: invalid") as caught:
+        operation(HubEndpoint(host="hub.local"), [])
+
+    assert "private-stdout" not in str(caught.value)
+
+
+def test_hub_commands_reject_invalid_utf8_protocol_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        connection, "hub_ssh_command", lambda *_args: process_output(b"\xff")
+    )
+
+    with pytest.raises(UnicodeDecodeError):
+        connection.run_hub_command(HubEndpoint(host="hub.local"), [])
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_openssh_tools_keep_the_local_code_page_and_tolerate_bad_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    output = "日本語のコメント".encode("cp932") + b"\x81"
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp932")
+    command = process_output(output, output, returncode)
+
+    if returncode:
+        with pytest.raises(HubUnreachableError, match="日本語のコメント"):
+            connection._run(command, "read a fingerprint")
+    else:
+        assert connection._run(command, "read a fingerprint") == output.decode(
+            "cp932", "replace"
+        )
+
+
+@pytest.mark.parametrize("operation", ["scan", "known"])
+def test_host_key_reads_tolerate_undecodable_console_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    output = b"hub.local ssh-ed25519 AAAAC3Nz " + b"\x81"
+    diagnostic = "日本語のコメント".encode("cp932") + b"\x81"
+    run = subprocess.run
+
+    def emit(_command, **kwargs):
+        return run(process_output(output, diagnostic), **kwargs)
+
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp932")
+    monkeypatch.setattr(subprocess, "run", emit)
+    endpoint = HubEndpoint(host="hub.local")
+    if operation == "scan":
+        monkeypatch.setattr(connection, "ssh_executable", lambda: "ssh")
+        with pytest.raises(HubUnreachableError, match="日本語のコメント"):
+            connection._scan_host_keys(endpoint)
+    else:
+        known = tmp_path / "known_hosts"
+        known.write_text("", encoding="utf-8")
+        monkeypatch.setattr(connection, "_known_hosts_path", lambda: known)
+        monkeypatch.setattr(connection, "keygen_executable", lambda: "ssh-keygen")
+        assert connection._known_host_keys(endpoint) == {("ssh-ed25519", "AAAAC3Nz")}
 
 
 @pytest.mark.parametrize(

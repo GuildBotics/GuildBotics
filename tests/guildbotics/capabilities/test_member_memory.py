@@ -1,5 +1,6 @@
 import json
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.workspace.identity import device_identity_path
+from tests.subprocess_output import process_output
 
 EXPECTED_DIGEST_N = 3
 
@@ -221,6 +223,44 @@ def test_recall_uses_rg_for_meta_only(
     assert f"**/{member_memory.BODY_FILE}" not in captured["command"]
     assert "--fixed-strings" in captured["command"]
     assert "--ignore-case" in captured["command"]
+
+
+@pytest.mark.parametrize("meta_only", [False, True])
+def test_recall_decodes_rg_json_as_utf8_with_cp932_default(
+    monkeypatch: pytest.MonkeyPatch, person: Person, meta_only: bool
+) -> None:
+    service = MemberMemoryService(person)
+    title = "日本語のメモリ検索"
+    recorded = service.record(scope="team", title=title, body=title)
+    filename = member_memory.META_FILE if meta_only else member_memory.BODY_FILE
+    output = json.dumps(
+        {
+            "type": "match",
+            "data": {
+                "path": {
+                    "text": str(service.root / "team" / recorded["doc_id"] / filename)
+                },
+                "lines": {"text": title + "\n"},
+            },
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    run = member_memory.subprocess.run
+
+    def run_rg(_command: list[str], **kwargs: Any) -> Any:
+        # Use real subprocess decoding, but emit fixed UTF-8 bytes without rg.
+        return run(process_output(output), **kwargs)
+
+    monkeypatch.setattr(member_memory.shutil, "which", lambda _name: "rg")
+    monkeypatch.setattr(member_memory.subprocess, "_text_encoding", lambda: "cp932")
+    monkeypatch.setattr(member_memory.subprocess, "run", run_rg)
+
+    results = service.recall(queries=[title], meta_only=meta_only)["results"]
+
+    assert len(results) == 1
+    assert results[0]["doc_id"] == recorded["doc_id"]
+    assert results[0]["title"] == title
+    assert results[0]["snippet"] == title
 
 
 def test_recall_warns_when_rg_is_missing(

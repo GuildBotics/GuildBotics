@@ -219,8 +219,11 @@ def artifacts(repository: str, sha: str) -> list[str]:
     )
 
 
-def git(repository: str, *args: str) -> str:
+def git(repository: str, *args: str, errors: str = "strict") -> str:
     """What git prints in the repository's bare repository.
+
+    Paths and refs are UTF-8; only display patches may replace non-UTF-8
+    file content. Keep bytes until decoding so paths retain their newlines.
 
     Raises:
         ServiceNotFound: If there is none.
@@ -236,13 +239,13 @@ def git(repository: str, *args: str) -> str:
         env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         capture_output=True,
         check=False,
-        text=True,
     )
     if ran.returncode != 0:
         raise ServiceError(
-            f"git {args[0]} failed in {repository}: {ran.stderr.strip()}"
+            f"git {args[0]} failed in {repository}: "
+            f"{ran.stderr.decode('utf-8', 'replace').strip()}"
         )
-    return ran.stdout.strip()
+    return ran.stdout.decode("utf-8", errors).strip()
 
 
 def branch_tip(repository: str, branch: str) -> str:
