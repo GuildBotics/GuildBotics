@@ -1,5 +1,4 @@
 import json
-import sys
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -20,6 +19,7 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.workspace.identity import device_identity_path
+from tests.subprocess_output import process_output
 
 EXPECTED_DIGEST_N = 3
 
@@ -249,15 +249,7 @@ def test_recall_decodes_rg_json_as_utf8_with_cp932_default(
 
     def run_rg(_command: list[str], **kwargs: Any) -> Any:
         # Use real subprocess decoding, but emit fixed UTF-8 bytes without rg.
-        return run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))",
-                output.hex(),
-            ],
-            **kwargs,
-        )
+        return run(process_output(output), **kwargs)
 
     monkeypatch.setattr(member_memory.shutil, "which", lambda _name: "rg")
     monkeypatch.setattr(member_memory.subprocess, "_text_encoding", lambda: "cp932")

@@ -404,10 +404,8 @@ def run_hub_command(endpoint: HubEndpoint, arguments: list[str]) -> str:
     The hub machine runs GuildBotics itself, so the hub's own command is what
     creates its repositories -- this side never reaches in with raw Git.
     """
-    return _run(
-        hub_ssh_command(endpoint, arguments),
-        f"run a hub command on {endpoint.target}",
-    )
+    # The remote CLI writes UTF-8, independently of the local SSH code page.
+    return run_hub_stream(endpoint, arguments).decode("utf-8")
 
 
 def run_hub_stream(
@@ -505,6 +503,7 @@ def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:
                 command,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
                 stdin=subprocess.DEVNULL,
                 timeout=COMMAND_TIMEOUT_SECONDS,
@@ -552,6 +551,7 @@ def _known_host_keys(endpoint: HubEndpoint) -> set[tuple[str, str]]:
         [keygen, "-F", endpoint.host],
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
@@ -605,6 +605,9 @@ def _run(command: list[str], action: str, stdin: str | None = None) -> str:
             input=stdin,
             capture_output=True,
             text=True,
+            # OpenSSH tools follow the client locale; diagnostics can contain
+            # bytes from another machine and must not hide the exit status.
+            errors="replace",
             check=False,
             timeout=COMMAND_TIMEOUT_SECONDS,
         )

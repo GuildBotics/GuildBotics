@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import time
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from guildbotics.sync.local_repository import (
     SyncRepositoryError,
     _run_remote_git,
 )
+from tests.subprocess_output import process_output
 
 
 def _workspace(root: Path) -> LocalSyncRepository:
@@ -299,6 +301,24 @@ def test_remote_git_kills_a_command_that_never_answers(
             timeout=0.5,
         )
     assert time.monotonic() - started < 10
+
+
+@pytest.mark.parametrize("returncode", [0, 128])
+def test_remote_git_decodes_utf8_and_keeps_non_utf8_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    repository = _workspace(tmp_path)
+    diagnostic = "日本語のパス".encode("utf-8") + b"\xff"
+    command = process_output(b"answered\n", diagnostic, returncode)
+    monkeypatch.setattr(Git, "GIT_PYTHON_GIT_EXECUTABLE", command[0])
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp932")
+
+    if returncode:
+        with pytest.raises(HubCommandError) as caught:
+            _run_remote_git(repository._repo(), *command[1:])
+        assert str(caught.value) == diagnostic.decode("utf-8", "replace")
+    else:
+        assert _run_remote_git(repository._repo(), *command[1:]) == "answered\n"
 
 
 def test_remote_git_returns_output_and_reports_failures(

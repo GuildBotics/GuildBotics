@@ -644,7 +644,9 @@ def _files(repository: str, item: dict[str, Any]) -> list[dict[str, Any]]:
     statuses = {"A": "added", "D": "removed", "M": "modified"}
     changes = []
     for status, path in zip(names[::2], names[1::2], strict=False):
-        diff = store.git(repository, "diff", "--no-color", span, "--", path)
+        diff = store.git(
+            repository, "diff", "--no-color", span, "--", path, errors="replace"
+        )
         hunks = diff[diff.find("\n@@") + 1 :] if "\n@@" in diff else None
         lines = (hunks or "").splitlines()
         added = sum(line.startswith("+") for line in lines)
