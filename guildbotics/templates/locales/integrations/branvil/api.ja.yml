@@ -1,5 +1,5 @@
 ja:
-  authentication: "Branvil がメンバーのトークンを拒否しました。メンバーの Branvil トークンを確認してください。"
+  authentication: "Branvil がメンバーのトークンを拒否しました。メンバーの Branvil の設定でトークンを再発行してください。"
   not_found: "Branvil にその項目がありません: %{message}"
   unsupported: "Branvil はこの操作を提供していません: %{message}"
   head_moved: "pull request の head が、メンバーが読んだコミットではなくなりました。新しいコミットを読んでから、現在の head に対してもう一度送ってください。"
@@ -9,7 +9,9 @@ ja:
   unreachable: "%{base_url} の Branvil に届きません。Hub 以外のマシンでは、Branvil のトンネルが動いているか確認してください。"
   not_branvil: "%{base_url} のサービスは Branvil の API v1 ではありません。"
   invalid: "Branvil が不正な応答を返しました。"
-  token_missing: "メンバーに Branvil トークンがありません。メンバーの設定で %{name} を設定してください。"
+  token_missing: "このマシンにメンバーの Branvil トークン（%{name}）がありません。メンバーを保存して発行するか、「このマシンの認証情報」で Hub から取得してください。"
+  not_connected: "このマシンの GuildBotics は Branvil に接続していません。設定 → 連携で接続するか、「このマシンの認証情報」で BRANVIL_ADMIN_TOKEN を Hub から取得してください。"
+  admin_refused: "Branvil が GuildBotics の接続を拒否しました。設定 → 連携で Branvil にもう一度接続してください。"
   username_missing: "メンバーに Branvil のユーザー名（account_info.branvil_username）がありません。"
   identity_mismatch: "メンバーの Branvil トークンは '%{name}' のもので、メンバーの Branvil ユーザー名 '%{username}' のものではありません。"
   not_ticket: "%{url} は Branvil のチケットの URL ではありません。"

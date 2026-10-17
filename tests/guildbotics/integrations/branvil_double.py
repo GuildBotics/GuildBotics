@@ -22,6 +22,16 @@ moves them to ``done``; a workspace board's closed items are the closed
 tickets and pull requests of the workspace's repositories; and a gone
 branch's commit is ``""`` with no ``behind_by``.
 
+Its administration answers as Branvil's public admin API does: a token is
+its member's, the owner's (the admin token GuildBotics holds, labelled
+``app:GuildBotics``) administers members, their tokens and accounts,
+workspaces and entry links, and an agent may not (``403 forbidden``). A
+token issued with ``replace`` revokes the member's tokens of its label; the
+labels Branvil uses itself are refused. The consent screen is
+:meth:`BranvilDouble.authorize`, which answers the owner's choice with where
+Branvil sends the browser; its code is exchanged once, for the redirect it
+was given and the verifier of its challenge, for a new admin token.
+
 ``writes`` lists the writes it accepted, as ``"<method> <path>"``.
 """
 
@@ -29,17 +39,24 @@ from __future__ import annotations
 
 import json
 import logging
+from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from itertools import count
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 import httpx
 
 BASE = "http://127.0.0.1:7878"
 MEMBER = "aiko"
 TOKEN = "bvt_aiko"
+#: Branvil's owner, the GuildBotics human.
+OWNER = "otota"
+#: The owner's token Branvil issued GuildBotics on the owner's consent.
+ADMIN = "bvt_admin"
+APP_LABEL = "app:GuildBotics"
 SCOPE = "acme"
 REPO = f"{SCOPE}/demo"
 #: Another workspace, outside the scope.
@@ -91,11 +108,59 @@ class BranvilDouble:
         self._ticks = count()
         self._ids = count(1)
         self._revisions = count(1)
+        self.members: dict[str, dict[str, Any]] = {}
+        #: Every token, by its value: its member, label and id.
+        self.tokens: dict[str, dict[str, str]] = {}
+        #: The members' accounts on other hosts: (member, host) -> credential.
+        self.accounts: dict[tuple[str, str], dict[str, Any]] = {}
+        self.workspaces = [SCOPE, THEIRS]
+        #: The consent codes not yet exchanged.
+        self._codes: dict[str, dict[str, str]] = {}
+        self.member(OWNER, "owner")
+        self.member(MEMBER, "agent")
+        self.issue(OWNER, APP_LABEL, ADMIN)
+        self.issue(MEMBER, "cli", TOKEN)
         theirs = self._ticket(THEIR_REPO, "Theirs", "", [], author="them")
         self.their_ticket = theirs["url"]
         self.their_comment = self._entry(theirs["url"], "comments", "them", "Hi")["id"]
 
     # -- what the contracts do besides the API --------------------------------
+
+    def member(self, name: str, kind: str) -> dict[str, Any]:
+        self.members[name] = {
+            "name": name,
+            "display_name": name.title(),
+            "kind": kind,
+            "accounts": [],
+        }
+        return self.members[name]
+
+    def issue(self, member: str, label: str, token: str = "") -> dict[str, str]:
+        """A token of ``member`` labelled ``label``."""
+        token = token or f"bvt_{next(self._ids)}"
+        self.tokens[token] = {"member": member, "label": label, "id": f"tok_{token}"}
+        return self.tokens[token]
+
+    def labels(self, member: str) -> list[str]:
+        """The labels of ``member``'s tokens."""
+        return sorted(t["label"] for t in self.tokens.values() if t["member"] == member)
+
+    def authorize(self, url: str, allow: bool = True) -> str:
+        """Where Branvil sends the browser once the owner answers the consent
+        screen at ``url``."""
+        parts = urlsplit(url)
+        query = dict(parse_qsl(parts.query))
+        assert f"{parts.scheme}://{parts.netloc}{parts.path}" == f"{BASE}/-/authorize"
+        assert query["code_challenge_method"] == "S256"
+        redirect = query["redirect_uri"]
+        assert urlsplit(redirect).hostname in ("127.0.0.1", "localhost", "::1")
+        if not allow:
+            answer = {"error": "access_denied", "state": query["state"]}
+        else:
+            code = f"code_{next(self._ids)}"
+            self._codes[code] = query
+            answer = {"code": code, "state": query["state"]}
+        return f"{redirect}?{urlencode(answer)}"
 
     def branch(self, name: str) -> None:
         self.branches[name] = f"{name.replace('/', '-')}-sha"
@@ -165,33 +230,148 @@ class BranvilDouble:
             return httpx.Response(200, json={"service": "branvil", "api": 1})
         body = json.loads(request.content) if request.content else {}
         try:
-            if request.headers.get("authorization") != f"Bearer {TOKEN}":
-                raise Refusal(401, "unauthorized")
-            status, answer = self._route(
-                request.method, parts, body, dict(request.url.params)
-            )
+            if parts == ["apps", "token"]:
+                status, answer = self._exchange(body)
+            else:
+                bearer = request.headers.get("authorization", "")
+                token = self.tokens.get(bearer.removeprefix("Bearer "))
+                if token is None:
+                    raise Refusal(401, "unauthorized")
+                status, answer = self._route(
+                    request.method,
+                    parts,
+                    body,
+                    dict(request.url.params),
+                    self.members[token["member"]],
+                )
         except Refusal as refusal:
             error = {"code": refusal.code, "message": refusal.message}
             return httpx.Response(refusal.status, json={"error": error})
         if request.method != "GET":
             self.writes.append(f"{request.method} {path}")
+        if answer is None:
+            return httpx.Response(status)
         if isinstance(answer, bytes):
             return httpx.Response(status, content=answer)
         return httpx.Response(status, json=answer)
 
     def _route(
-        self, method: str, parts: list[str], body: dict, params: dict[str, str]
+        self,
+        method: str,
+        parts: list[str],
+        body: dict,
+        params: dict[str, str],
+        me: dict[str, Any],
     ) -> tuple[int, Any]:
+        owner = me["kind"] == "owner"
+        match method, parts:
+            case _, ["me"]:
+                return 200, me
+            case _, ["members", *rest] if owner or rest[:1] == [me["name"]]:
+                return self._members(method, rest, body, params)
+            case "GET", ["workspaces"]:
+                return 200, self._page(
+                    [{"name": name, "lanes": list(LANES)} for name in self.workspaces],
+                    params,
+                )
+            case "POST", ["workspaces"] if owner:
+                if body["name"].casefold() in map(str.casefold, self.workspaces):
+                    raise Refusal(409, "conflict", f"{body['name']} exists.")
+                self.workspaces.append(body["name"])
+                return 201, {"name": body["name"], "lanes": list(LANES)}
+            case "POST", ["session", "links"] if owner:
+                code = next(self._ids)
+                return 201, {"url": f"{BASE}/-/enter#code{code}", "expires_at": ""}
+            case (_, ["members" | "session", *_]) | ("POST", ["workspaces"]):
+                raise Refusal(403, "forbidden", "The member may not do that.")
         match parts:
-            case ["me"]:
-                return 200, {"name": MEMBER, "display_name": MEMBER, "kind": "agent"}
             case ["pulls"]:
                 return 200, self._page([self._patrol(p) for p in self._involving()])
             case ["repos", repo, *rest]:
                 return self._repository(method, repo, rest, body, params)
-            case ["workspaces", workspace, *rest] if workspace in (SCOPE, THEIRS):
+            case ["workspaces", workspace, *rest] if workspace in self.workspaces:
                 return 200, self._workspace(workspace, rest, params)
         raise _missing("/".join(parts))
+
+    def _members(
+        self, method: str, rest: list[str], body: dict, params: dict
+    ) -> tuple[int, Any]:
+        match method, rest:
+            case "GET", []:
+                return 200, self._page(list(self.members.values()), params)
+            case "POST", []:
+                if body["name"] in self.members:
+                    raise Refusal(409, "conflict", f"{body['name']} exists.")
+                member = self.member(body["name"], body["kind"])
+                member["display_name"] = body.get("display_name") or body["name"]
+                return 201, member
+            case _, [name, *more] if name not in self.members:
+                raise _missing(f"Member {name}")
+            case "GET", [name]:
+                return 200, self.members[name]
+            case "GET", [name, "tokens"]:
+                issued = [
+                    {"id": t["id"], "label": t["label"], "created_at": self.now()}
+                    for t in self.tokens.values()
+                    if t["member"] == name
+                ]
+                return 200, self._page(issued, params)
+            case "POST", [name, "tokens"]:
+                label = body["label"]
+                if label in ("owner-file", "auto") or label.startswith("app:"):
+                    raise Refusal(400, "invalid", f"The label {label} is Branvil's.")
+                if body.get("replace"):
+                    self._revoke(name, label)
+                token, issued = self._issued(name, label)
+                return 201, {
+                    "token": token,
+                    "id": issued["id"],
+                    "label": label,
+                    "created_at": self.now(),
+                }
+            case "DELETE", [name, "tokens", token_id]:
+                self.tokens = {
+                    v: t
+                    for v, t in self.tokens.items()
+                    if (t["member"], t["id"]) != (name, token_id)
+                }
+                return 204, None
+            case "PUT", [name, "accounts", host]:
+                assert set(body) in ({"token"}, {"app"}), body
+                self.accounts[name, host] = body
+                return 200, self.members[name]
+        raise _missing("/".join(rest))
+
+    def _issued(self, name: str, label: str) -> tuple[str, dict[str, str]]:
+        token = f"bvt_{next(self._ids)}"
+        return token, self.issue(name, label, token)
+
+    def _revoke(self, name: str, label: str) -> None:
+        self.tokens = {
+            v: t
+            for v, t in self.tokens.items()
+            if (t["member"], t["label"]) != (name, label)
+        }
+
+    def _exchange(self, body: dict) -> tuple[int, Any]:
+        """A consent code, once, for a new admin token."""
+        grant = self._codes.pop(body["code"], None)
+        challenge = urlsafe_b64encode(sha256(body["code_verifier"].encode()).digest())
+        if (
+            grant is None
+            or grant["redirect_uri"] != body["redirect_uri"]
+            or grant["code_challenge"] != challenge.rstrip(b"=").decode()
+        ):
+            raise Refusal(400, "invalid", "The code is not valid.")
+        label = f"app:{grant['client']}"
+        self._revoke(OWNER, label)
+        token, issued = self._issued(OWNER, label)
+        return 201, {
+            "token": token,
+            "id": issued["id"],
+            "label": label,
+            "member": OWNER,
+        }
 
     def _repository(
         self, method: str, repo: str, rest: list[str], body: dict, params: dict
@@ -664,15 +844,22 @@ def serve(double: BranvilDouble, monkeypatch: Any) -> None:
     """Have every Branvil client, gate included, talk to ``double``."""
     from guildbotics.integrations.branvil import api
 
-    connect: Callable[..., httpx.AsyncClient] = api.connect
+    made: Callable[..., httpx.AsyncClient] = api._client
 
-    def connected(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
-        client = connect(*args, **kwargs)
+    def served(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        client = made(*args, **kwargs)
         client._transport = httpx.MockTransport(double.respond)
         client._mounts = {}
         return client
 
-    monkeypatch.setattr(api, "connect", connected)
+    monkeypatch.setattr(api, "_client", served)
+
+
+def connect_admin(token: str = ADMIN) -> None:
+    """Hold ``token`` as this machine's admin token for Branvil."""
+    from guildbotics.utils.env_loader import workspace_secret_store
+
+    workspace_secret_store().set("BRANVIL_ADMIN_TOKEN", token)
 
 
 def services(

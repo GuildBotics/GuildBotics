@@ -97,7 +97,7 @@ Launching the desktop app opens **Project** setup, where you configure:
 
 - **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
-- **Branvil**: a running Branvil, reachable at the same base URL on every machine, and a Branvil member and token for each GuildBotics member. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
+- **Branvil**: a running Branvil, reachable at the same base URL on every machine. GuildBotics connects to it once on the owner's consent and sets up each member's Branvil agent and token itself. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
 
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
@@ -586,9 +586,10 @@ same input again after the result has been pushed.
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: fine-grained PAT for a machine account
 - GitHub App IDs live in the member YAML (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
 
-**Branvil access** (per member, format: `{PERSON_ID}_...`):
+**Branvil access**:
 
-- `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token (its name is `account_info.branvil_username` in the member YAML)
+- `BRANVIL_ADMIN_TOKEN`: the token Branvil issues GuildBotics when its owner allows the connection; the host uses it to set up members and to open Branvil's GUI
+- `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved (its Branvil name is `account_info.branvil_username` in the member YAML)
 
 Secrets stored in the OS keychain are loaded automatically. GuildBotics does not read a workspace `.env`.
 
@@ -960,7 +961,7 @@ discarding; the activity history record stays either way.
 - `services.ticket_service`: GitHub issues and Projects settings
 - `services.ticket_service.lane_map`: maps the ready / working / done lanes to GitHub Project status names. Set this when your Project uses its own status names
 - `services.code_hosting_service`: code hosting service settings (the GitHub owner used for repository operations)
-- With Branvil, both services are `name: branvil` with `base_url` (default `http://127.0.0.1:7878`) and `owner` (the namespace members write in); the ticket service also takes `board` (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
+- With Branvil, both services are `name: branvil` with the same `base_url` (default `http://127.0.0.1:7878`) and a `workspace` (members write only to its repositories and take tickets from its board) (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
 **Member settings** (`team/members/<person_id>/person.yml`):

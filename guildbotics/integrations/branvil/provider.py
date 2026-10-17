@@ -8,6 +8,7 @@ from typing import cast
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.branvil.api import (
     PROVIDER,
+    Admin,
     BranvilApi,
     base_url,
     health,
@@ -57,14 +58,17 @@ def _verify(person: Person) -> list[ProviderCheck]:
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:
-    """Whether Branvil answers, then each agent's token and the workspaces."""
+    """Whether Branvil answers, then whether a human is the owner whose
+    rights GuildBotics' connection has, each agent's token, and the
+    workspaces."""
     project = context.team.project
     kinds = [kind for kind in _KINDS if project.get_service_name(kind) == PROVIDER]
     if not kinds:
         return []
-    base_urls = sorted({base_url(project.get_service_config(kind)) for kind in kinds})
-    checks = [await _reachable(base_url) for base_url in base_urls]
-    if any(check.status == "error" for check in checks):
+    # Both kinds reach one Branvil (setup holds them to one base URL).
+    url = base_url(project.get_service_config(kinds[0]))
+    checks = [await _reachable(url)]
+    if checks[0].status == "error":
         # A token cannot be checked against a Branvil that does not answer.
         return checks
     #: Each workspace the kinds name, with a kind that names it.
@@ -72,9 +76,11 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
         str(project.get_service_config(kind).get("workspace") or ""): kind
         for kind in kinds
     }
+    humans = [member for member in members if member.person_type == "human"]
+    owner = await _owner(url) if humans else ""
     for member in members:
         if member.person_type == "human":
-            checks.append(_human(member))
+            checks.append(_human(member, owner))
             continue
         access = await _access(context, member, kinds[0])
         checks.append(access)
@@ -114,19 +120,33 @@ async def _reachable(url: str) -> ProviderCheck:
     )
 
 
-def _human(member: Person) -> ProviderCheck:
-    configured = bool(username(member))
+async def _owner(url: str) -> str | ServiceError:
+    """Branvil's owner, as GuildBotics' connection names it, or why not."""
+    try:
+        async with Admin(url) as admin:
+            return await admin.owner()
+    except ServiceError as exc:
+        return exc
+
+
+def _human(member: Person, owner: str | ServiceError) -> ProviderCheck:
+    """A human is Branvil's owner, whose rights GuildBotics' connection has:
+    without the connection, nothing can be set up on Branvil."""
+    name = username(member)
+    if isinstance(owner, ServiceError):
+        message = str(owner)
+    elif name.casefold() != owner.casefold():
+        message = t("integrations.branvil.provider.not_owner", name=name, owner=owner)
+    else:
+        message = ""
     return ProviderCheck(
         section=_SECTION,
-        code="human_branvil_user",
-        status="ok" if configured else "error",
-        message=(
-            t("integrations.branvil.provider.human_configured")
-            if configured
-            else t("integrations.branvil.provider.human_missing")
-        ),
+        code="branvil_owner",
+        credential=True,
+        status="error" if message else "ok",
+        message=message or t("integrations.branvil.provider.owner", owner=owner),
         person_id=member.person_id,
-        target=username(member),
+        target=name,
     )
 
 
@@ -184,6 +204,7 @@ BRANVIL = Provider(
     name=PROVIDER,
     secret_keys=frozenset({"BRANVIL_TOKEN"}),
     account_info_keys=frozenset({"branvil_username"}),
+    workspace_secret_keys=frozenset({"BRANVIL_ADMIN_TOKEN"}),
     code_hosting_service=lambda logger, person, team: BranvilCodeHostingService(
         person, team
     ),

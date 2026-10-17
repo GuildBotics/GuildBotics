@@ -1,9 +1,9 @@
 """Every provider of the factory declares what it needs of a member.
 
 A provider's descriptor declares which secrets and ``account_info`` keys of a
-member it reads. What it declares is what its package reads, taken from the
-code itself, so a key read but not declared (or declared but no longer read)
-fails here.
+member it reads, and which workspace Secrets it keeps. What it declares is
+what its package reads, taken from the code itself, so a key read but not
+declared (or declared but no longer read) fails here.
 """
 
 from __future__ import annotations
@@ -59,6 +59,31 @@ def _read_keys(name: str) -> tuple[set[str], set[str]]:
     return secrets, accounts
 
 
+def _workspace_secrets(name: str) -> set[str]:
+    """The names the provider's package reads from or keeps in the
+    workspace's own store, which no member's prefix names."""
+    found: set[str] = set()
+    for path in sorted((PACKAGE / name).rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"get", "set"}
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id == "workspace_secret_store"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                found.add(str(node.args[0].value))
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(PROVIDERS))
+def test_a_provider_declares_exactly_the_workspace_secrets_it_keeps(name):
+    assert PROVIDERS[name].workspace_secret_keys == _workspace_secrets(name)
+
+
 @pytest.mark.parametrize("name", sorted(PROVIDERS))
 def test_a_provider_declares_exactly_what_its_package_reads_of_a_member(name):
     provider = PROVIDERS[name]
@@ -86,17 +111,24 @@ def test_a_provider_serves_a_kind_and_is_chosen_by_its_name(name):
     assert configured_providers(Team(project=Project(), members=[])) == []
 
 
-#: A member account of each provider with every field it stores filled.
-_FILLED_ACCOUNTS: dict[str, dict[str, Any]] = {
-    "branvil": {"username": "aiko", "token": "bvt_aiko"},
-    "github": {
-        "account_type": "github_apps",
-        "username": "octo",
-        "installation_id": 7,
-        "app_id": 3,
-        "access_token": "ghp-token",
-    },
-    "slack": {"user_id": "U1", "bot_token": "xoxb-1", "app_token": "xapp-1"},
+#: A member account of each provider with every field it stores filled,
+#: and the secrets the form gives (Branvil's token is issued by the save).
+_FILLED_ACCOUNTS: dict[str, tuple[dict[str, Any], set[str]]] = {
+    "branvil": ({"username": "aiko", "reissue": True}, set()),
+    "github": (
+        {
+            "account_type": "github_apps",
+            "username": "octo",
+            "installation_id": 7,
+            "app_id": 3,
+            "access_token": "ghp-token",
+        },
+        {"GITHUB_ACCESS_TOKEN", "GITHUB_PRIVATE_KEY"},
+    ),
+    "slack": (
+        {"user_id": "U1", "bot_token": "xoxb-1", "app_token": "xapp-1"},
+        {"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"},
+    ),
 }
 
 
@@ -132,7 +164,8 @@ def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tm
     assert provider.setup is not None and provider.setup.member is not None
     key = tmp_path / "app.pem"
     key.write_text("-----BEGIN KEY-----", encoding="utf-8")
-    fields = dict(_FILLED_ACCOUNTS[name])
+    fields, given = _FILLED_ACCOUNTS[name]
+    fields = dict(fields)
     if "private_key_path" in provider.setup.member.model_fields:
         fields["private_key_path"] = key
     account = provider.setup.member.model_validate(fields)
@@ -140,7 +173,7 @@ def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tm
     info, secrets = account.stored("alice", human=False)
     human_info, human_secrets = account.stored("alice", human=True)
 
-    assert secrets and set(secrets) <= provider.secret_keys
+    assert set(secrets) == given <= provider.secret_keys
     assert human_secrets == {}
     assert set(info) | set(human_info) <= provider.account_info_keys
 
@@ -148,7 +181,7 @@ def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tm
 #: The checks of a member's credential: their failing opens the member's
 #: credential alert for the provider, their passing closes it.
 _CREDENTIAL_CHECKS = {
-    "branvil": {"branvil_access"},
+    "branvil": {"branvil_access", "branvil_owner"},
     "github": {"github_access", "github_code_hosting_access", "github_project_access"},
     "slack": {
         "slack_access",

@@ -56,6 +56,15 @@ STORE_ELSEWHERE = {
     ("app_api/verify.py", "VerifyService._check_llm_provider"): (
         "the LLM provider API key named by the model config"
     ),
+    ("app_api/verify.py", "VerifyService._check_credentials"): (
+        "the workspace Secrets the configured providers' descriptors declare"
+    ),
+    ("integrations/branvil/api.py", "Admin.client"): (
+        "Branvil's admin token, a workspace Secret of the provider"
+    ),
+    ("integrations/branvil/setup.py", "Consents._exchange"): (
+        "Branvil's admin token, a workspace Secret of the provider"
+    ),
     ("app_api/workspace_secrets.py", "WorkspaceSecretService._store"): (
         "Hub transfers of keys the user picks from the secrets index"
     ),

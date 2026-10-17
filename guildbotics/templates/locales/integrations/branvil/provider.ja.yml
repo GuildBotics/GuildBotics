@@ -2,5 +2,5 @@ ja:
   reachable: "%{base_url} の Branvil が応答しました。"
   workspace: "ワークスペース %{workspace} を読み取りました。"
   access: "Branvil がメンバーのトークンをメンバー本人のものとして受け付けました。"
-  human_configured: "この人間のメンバーに Branvil のユーザー名（Branvil のオーナー名）が設定されています。"
-  human_missing: "この人間のメンバーに Branvil のユーザー名が設定されていません。Branvil のオーナー名を設定してください。"
+  owner: "人間のメンバーは Branvil のオーナー %{owner} で、GuildBotics の接続はその権限を持っています。"
+  not_owner: "人間のメンバーの Branvil 名 '%{name}' は Branvil のオーナー '%{owner}' ではありません。メンバーをもう一度保存してオーナーの名前にしてください。"

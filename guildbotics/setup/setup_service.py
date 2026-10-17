@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import shutil
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +17,7 @@ from guildbotics.environment.contract import (
 )
 from guildbotics.integrations.chat_profile import chat_participation
 from guildbotics.integrations.factory import PROVIDERS
-from guildbotics.integrations.provider import MemberAccount, SetupError
+from guildbotics.integrations.provider import MemberAccount, SavedMember, SetupError
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
@@ -79,7 +79,10 @@ class _OwnedSecrets:
     prefix: str
 
     def has(self, name: str) -> bool:
-        return bool(self.store and self.store.get(self.prefix + name))
+        return bool(self.value(name))
+
+    def value(self, name: str) -> str:
+        return (self.store.get(self.prefix + name) if self.store else None) or ""
 
     def keys(self) -> dict[str, str]:
         """The member's keys, by member-relative name."""
@@ -170,7 +173,19 @@ class ProjectSetupInput(BaseModel):
     def validate_services(
         cls, value: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        return {kind: _service_config(kind, item) for kind, item in value.items()}
+        services = {kind: _service_config(kind, item) for kind, item in value.items()}
+        for provider in PROVIDERS.values():
+            for key in provider.setup.shared if provider.setup else ():
+                given = {
+                    str(item.get(key))
+                    for item in services.values()
+                    if item["name"] == provider.name
+                }
+                if len(given) > 1:
+                    raise ValueError(
+                        f"{provider.name}: every kind it serves needs the same {key}"
+                    )
+        return services
 
 
 class CreatedFile(BaseModel):
@@ -985,6 +1000,71 @@ def _stored_accounts(
 def _saved(config: PersonSetupInput) -> None:
     for account in config.accounts.values():
         account.saved()
+
+
+async def prepare_accounts(config: PersonSetupInput, saved_person_id: str) -> None:
+    """Have each account obtain from its provider what saving the member
+    needs, before the save takes the workspace's lock: no write waits on a
+    provider. The member's credentials on each host are handed to every
+    account.
+
+    Raises:
+        SetupError: If a provider refuses; nothing is saved.
+    """
+    account_info, secrets = _stored_accounts(config, saved_person_id)
+    held = _owned_secrets(config.config_dir, saved_person_id)
+    member = SavedMember(
+        person_id=config.person_id,
+        name=config.person_name,
+        human=config.person_type == "human",
+        account_info=account_info,
+        get_secret=lambda name: secrets.get(name) or held.value(name),
+        services=_services_of(config.config_dir),
+    )
+    member = replace(
+        member,
+        credentials={
+            provider.name: credential
+            for provider in PROVIDERS.values()
+            if provider.setup
+            and provider.setup.member
+            and (credential := provider.setup.member.credential(member))
+        },
+    )
+    for account in config.accounts.values():
+        await account.prepare(member)
+
+
+async def remove_accounts(config_dir: Path, person_id: str) -> None:
+    """Have each provider undo what saving the member obtained from it,
+    before the member is deleted.
+
+    Raises:
+        SetupError: If a provider refuses; the member is kept.
+    """
+    person_file = stored_person_config_dir(config_dir, person_id) / "person.yml"
+    person_data = _read_member_form(person_file)
+    member = SavedMember(
+        person_id=person_id,
+        name=str(person_data.get("name", "")),
+        human=person_data.get("person_type") == "human",
+        account_info={
+            key: str(value)
+            for key, value in _config_mapping(person_data.get("account_info")).items()
+        },
+        get_secret=_owned_secrets(config_dir, person_id).value,
+        services=_services_of(config_dir),
+    )
+    for provider in PROVIDERS.values():
+        if provider.setup and provider.setup.member:
+            await provider.setup.member.removed(member)
+
+
+def _services_of(config_dir: Path) -> dict[str, dict[str, Any]]:
+    return {
+        kind: _config_mapping(item)
+        for kind, item in _project_services(config_dir).items()
+    }
 
 
 def _message_channel(

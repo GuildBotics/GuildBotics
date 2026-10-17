@@ -215,6 +215,18 @@ def test_a_provider_without_a_setup_model_keeps_its_items(tmp_path: Path) -> Non
             id="ready-equals-done",
         ),
         pytest.param({"chat_service": {"name": "slack", "token": "x"}}, id="extra"),
+        pytest.param(
+            {
+                "code_hosting_service": {"name": "branvil", "workspace": "a"},
+                "ticket_service": {
+                    "name": "branvil",
+                    "workspace": "a",
+                    "base_url": "http://hub:7878",
+                },
+            },
+            # One Branvil per project: its admin token is one.
+            id="two-branvils",
+        ),
     ],
 )
 def test_services_a_provider_does_not_accept_are_refused(

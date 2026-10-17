@@ -9,9 +9,12 @@ request ``{base}/{repository}/-/pulls/{number}``; a repository
 (``{workspace}/{name}``) numbers each from 1. Its API names a repository as
 one percent-encoded path segment.
 
-Every request of the client that is not a read passes the write gate before
-it is sent: it must name a repository of the configured workspace, the
-scope.
+Every request of a member's client that is not a read passes the write gate
+before it is sent: it must name a repository of the configured workspace, the
+scope. GuildBotics' own client (:class:`Admin`), with the admin token Branvil
+issued it on the owner's consent, administers Branvil for the setup screens
+and the checks: members, their tokens and accounts, workspaces, entry links.
+It is the host's alone.
 Every failure comes out as the ports' failure, told from Branvil's status and
 error code.
 """
@@ -19,7 +22,7 @@ error code.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
@@ -46,6 +49,7 @@ from guildbotics.runtime.resources import (
     WorkKind,
     WorkTarget,
 )
+from guildbotics.utils.env_loader import workspace_secret_store
 from guildbotics.utils.i18n_tool import t
 
 DEFAULT_BASE_URL = "http://127.0.0.1:7878"
@@ -109,6 +113,10 @@ def record_auth_failure(person_id: str, code: str = "unauthorized") -> None:
     )
 
 
+class Unauthorized(ServiceError):
+    """Branvil took the token for nobody's."""
+
+
 def _failure(response: httpx.Response) -> ServiceError:
     """What Branvil's error answer means, in words fit for the user."""
     try:
@@ -117,8 +125,6 @@ def _failure(response: httpx.Response) -> ServiceError:
     except (ValueError, KeyError, TypeError):
         code, message = "", ""
     status = response.status_code
-    if status == httpx.codes.UNAUTHORIZED:
-        return ServiceError(t("integrations.branvil.api.authentication"))
     if status == httpx.codes.NOT_FOUND:
         return ServiceNotFound(t("integrations.branvil.api.not_found", message=message))
     if status == httpx.codes.UNPROCESSABLE_ENTITY:
@@ -168,10 +174,34 @@ class _Client(httpx.AsyncClient):
         return str(self.base_url).removesuffix("/api/v1/")
 
 
+def _client(
+    base_url: str,
+    token: str,
+    unauthorized: Callable[[], ServiceError],
+    *gate: Callable[[httpx.Request], Awaitable[None]],
+) -> httpx.AsyncClient:
+    """A client of the Branvil API at ``base_url`` with ``token``, whose
+    refused token is ``unauthorized()``."""
+
+    async def check(response: httpx.Response) -> None:
+        if response.is_error:
+            await response.aread()
+            if response.status_code == httpx.codes.UNAUTHORIZED:
+                raise unauthorized()
+            raise _failure(response)
+
+    return _Client(
+        base_url=f"{base_url}/api/v1",
+        headers={"Authorization": f"Bearer {token}"} if token else {},
+        timeout=_TIMEOUT_SECONDS,
+        event_hooks={"request": list(gate), "response": [check]},
+    )
+
+
 def connect(
     base_url: str, *, token: str, scope: str, person_id: str
 ) -> httpx.AsyncClient:
-    """A client of the Branvil API at ``base_url``.
+    """A member's client of the Branvil API at ``base_url``.
 
     Args:
         base_url: Where Branvil is reached.
@@ -190,18 +220,26 @@ def connect(
         else:
             check_path(scope, unquote(written.group(1)), provider=PROVIDER)
 
-    async def check(response: httpx.Response) -> None:
-        if response.is_error:
-            await response.aread()
-            if response.status_code == httpx.codes.UNAUTHORIZED:
-                record_auth_failure(person_id)
-            raise _failure(response)
+    def unauthorized() -> ServiceError:
+        record_auth_failure(person_id)
+        return Unauthorized(t("integrations.branvil.api.authentication"))
 
-    return _Client(
-        base_url=f"{base_url}/api/v1",
-        headers={"Authorization": f"Bearer {token}"} if token else {},
-        timeout=_TIMEOUT_SECONDS,
-        event_hooks={"request": [gate], "response": [check]},
+    return _client(base_url, token, unauthorized, gate)
+
+
+def administer(base_url: str, token: str) -> httpx.AsyncClient:
+    """GuildBotics' own client of the Branvil API at ``base_url``, which
+    writes to no repository and so passes no member's write gate.
+
+    Args:
+        base_url: Where Branvil is reached.
+        token: The admin token, a member's token to check it, or empty for
+            what needs none.
+    """
+    return _client(
+        base_url,
+        token,
+        lambda: Unauthorized(t("integrations.branvil.api.admin_refused")),
     )
 
 
@@ -234,7 +272,76 @@ def _json(response: httpx.Response) -> Any:
         raise ServiceError(t("integrations.branvil.api.invalid")) from None
 
 
-class BranvilApi:
+class Calls:
+    """The requests of one client of the Branvil API."""
+
+    def client(self) -> httpx.AsyncClient:
+        raise NotImplementedError
+
+    async def call(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> Any:
+        """What Branvil answers to a write, which is sent once."""
+        return _json(await self.client().request(method, path, json=body))
+
+    async def get(self, path: str, **params: Any) -> Any:
+        return _json(await self.client().get(path, params=params))
+
+    async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:
+        """Every item of the collection at ``path``."""
+        found: list[dict[str, Any]] = []
+        cursor = ""
+        while True:
+            page = await self.get(
+                path, **params, limit=100, **({"cursor": cursor} if cursor else {})
+            )
+            found.extend(page["items"])
+            cursor = page.get("next_cursor") or ""
+            if not cursor:
+                return found
+
+
+class Admin(Calls):
+    """Branvil as GuildBotics administers it with the admin token, which
+    this machine's workspace Secrets hold once the owner consented."""
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+        self._client: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> Admin:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+
+    def client(self) -> httpx.AsyncClient:
+        """The client with the admin token.
+
+        Raises:
+            ServiceError: If this machine holds none.
+        """
+        if self._client is None:
+            token = workspace_secret_store().get("BRANVIL_ADMIN_TOKEN")
+            if not token:
+                raise Unauthorized(t("integrations.branvil.api.not_connected"))
+            self._client = administer(self.base_url, token)
+        return self._client
+
+    async def owner(self) -> str:
+        """The name of Branvil's owner, whose rights the admin token has.
+
+        Raises:
+            ServiceError: If Branvil does not take it for the owner's.
+        """
+        me = await self.get("/me")
+        if me.get("kind") != "owner":
+            raise Unauthorized(t("integrations.branvil.api.admin_refused"))
+        return str(me["name"])
+
+
+class BranvilApi(Calls):
     """A member's Branvil, as configured for one kind of service."""
 
     def __init__(self, person: Person, team: Team, service: Service) -> None:
@@ -272,28 +379,6 @@ class BranvilApi:
                 person_id=self.person.person_id,
             )
         return self._client
-
-    async def call(
-        self, method: str, path: str, body: dict[str, Any] | None = None
-    ) -> Any:
-        """What Branvil answers to a write, which is sent once."""
-        return _json(await self.client().request(method, path, json=body))
-
-    async def get(self, path: str, **params: Any) -> Any:
-        return _json(await self.client().get(path, params=params))
-
-    async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:
-        """Every item of the collection at ``path``."""
-        found: list[dict[str, Any]] = []
-        cursor = ""
-        while True:
-            page = await self.get(
-                path, **params, limit=100, **({"cursor": cursor} if cursor else {})
-            )
-            found.extend(page["items"])
-            cursor = page.get("next_cursor") or ""
-            if not cursor:
-                return found
 
     async def page(
         self,

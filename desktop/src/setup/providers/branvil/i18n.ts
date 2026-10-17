@@ -10,17 +10,33 @@ export const branvil = {
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         workspace: "Workspace",
         workspaceHint:
-          "The Branvil workspace members work in, such as acme: they write only to its repositories and take tickets from its board.",
-        workspaceRequired: "Enter the workspace members work in.",
-        workspaceInvalid: "Enter one name, such as acme.",
-        username: "Branvil username",
-        usernameHint: "The member's name on Branvil.",
-        usernameRequired: "Enter the member's Branvil username.",
-        usernameInvalid: "Use letters, digits, '.', '_' and '-' only.",
-        token: "Branvil token",
-        tokenHint: "A token Branvil issued for this member. It is also the member's git password.",
-        tokenPlaceholder: "bvt_…",
-        tokenRequired: "Enter the member's Branvil token.",
+          "The Branvil workspace members work in: they write only to its repositories and take tickets from its board.",
+        workspaceConnect: "Connect to Branvil to choose one of its workspaces or create one.",
+        workspaceRequired: "Choose the workspace members work in.",
+        workspaceInvalid: "Use one name of letters, digits, '.', '_' and '-', such as acme.",
+        newWorkspace: "New workspace name",
+        createWorkspace: "Create",
+        connection: {
+          connect: "Connect to Branvil",
+          reconnect: "Connect again",
+          connected: "Connected to Branvil as its owner {{owner}}.",
+          open: "Open Branvil",
+          pending: "Answer Branvil's consent screen in the browser…",
+          hint: "Branvil asks its owner once, in the browser of the machine where Branvil runs, to let GuildBotics manage it. Other machines receive the connection from the Hub.",
+        },
+        member: {
+          label: "Branvil member",
+          new: "Create a new agent ({{name}})",
+          existing: "Choose an existing agent",
+          choose: "Agent",
+          chooseRequired: "Choose the agent.",
+          stored: "Branvil member: {{name}}",
+          tokenSet: "Its token is issued by GuildBotics and kept in the OS secret store.",
+          tokenMissing: "Its token is issued when the member is saved.",
+          reissue: "Issue a new token when saved",
+          owner: "Branvil name: {{name}} (Branvil's owner)",
+          ownerPending: "The Branvil name is Branvil's owner's, filled in when saved.",
+        },
       },
     },
     overview: {
@@ -37,9 +53,9 @@ export const branvil = {
           title: "The Branvil workspace was read",
           description: "The workspace {{target}} was read.",
         },
-        human_branvil_user: {
-          title: "The Branvil username is configured",
-          description: "Tickets can be assigned to this member by name.",
+        branvil_owner: {
+          title: "The human member is Branvil's owner",
+          description: "GuildBotics' connection to Branvil has the owner's rights.",
         },
       },
       diagnosticChecks: {
@@ -50,7 +66,7 @@ export const branvil = {
         },
         branvil_access: {
           title: "Branvil refused the member's token",
-          description: "Check the member's Branvil token and username.",
+          description: "Reissue the member's Branvil token in the member's Branvil settings.",
         },
         branvil_workspace: {
           title: "The Branvil workspace could not be read",
@@ -60,9 +76,10 @@ export const branvil = {
           title: "A Branvil setting is missing",
           description: "{{target}} is not configured.",
         },
-        human_branvil_user: {
-          title: "The Branvil username is not configured",
-          description: "Enter the Branvil username of this human member.",
+        branvil_owner: {
+          title: "GuildBotics is not connected to Branvil as its owner",
+          description:
+            "Connect to Branvil under Setup → Integrations, then save this member again. The reason is below.",
         },
       },
     },
@@ -76,18 +93,33 @@ export const branvil = {
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         workspace: "ワークスペース",
         workspaceHint:
-          "メンバーが作業する Branvil のワークスペース（acme など）です。そのリポジトリにだけ書き込み、そのボードからチケットを取ります。",
-        workspaceRequired: "メンバーが作業するワークスペースを入力してください。",
-        workspaceInvalid: "acme のように、名前を 1 つ入力してください。",
-        username: "Branvil ユーザー名",
-        usernameHint: "Branvil でのメンバーの名前です。",
-        usernameRequired: "メンバーの Branvil ユーザー名を入力してください。",
-        usernameInvalid: "英数字と '.'、'_'、'-' だけを使ってください。",
-        token: "Branvil トークン",
-        tokenHint:
-          "Branvil がこのメンバーに発行したトークンです。メンバーの git のパスワードにもなります。",
-        tokenPlaceholder: "bvt_…",
-        tokenRequired: "メンバーの Branvil トークンを入力してください。",
+          "メンバーが作業する Branvil のワークスペースです。そのリポジトリにだけ書き込み、そのボードからチケットを取ります。",
+        workspaceConnect: "Branvil に接続すると、ワークスペースを選んだり作成したりできます。",
+        workspaceRequired: "メンバーが作業するワークスペースを選んでください。",
+        workspaceInvalid: "acme のように、英数字と '.'、'_'、'-' の名前を 1 つ入力してください。",
+        newWorkspace: "新しいワークスペースの名前",
+        createWorkspace: "作成",
+        connection: {
+          connect: "Branvil に接続",
+          reconnect: "接続し直す",
+          connected: "Branvil にオーナー {{owner}} として接続しています。",
+          open: "Branvil を開く",
+          pending: "ブラウザで Branvil の同意画面に答えてください…",
+          hint: "Branvil は、Branvil が動いているマシンのブラウザで一度だけ、GuildBotics に管理を許可するかをオーナーに尋ねます。ほかのマシンには Hub から接続が届きます。",
+        },
+        member: {
+          label: "Branvil のメンバー",
+          new: "新しいエージェントを作る（{{name}}）",
+          existing: "既存のエージェントを選ぶ",
+          choose: "エージェント",
+          chooseRequired: "エージェントを選んでください。",
+          stored: "Branvil のメンバー: {{name}}",
+          tokenSet: "トークンは GuildBotics が発行し、OS の秘密ストアに保存しています。",
+          tokenMissing: "トークンはメンバーを保存したときに発行します。",
+          reissue: "保存するときにトークンを再発行する",
+          owner: "Branvil の名前: {{name}}（Branvil のオーナー）",
+          ownerPending: "Branvil の名前は Branvil のオーナーのもので、保存したときに入ります。",
+        },
       },
     },
     overview: {
@@ -104,9 +136,9 @@ export const branvil = {
           title: "Branvil のワークスペースを読み取りました",
           description: "ワークスペース {{target}} を読み取りました。",
         },
-        human_branvil_user: {
-          title: "Branvil ユーザー名が設定されています",
-          description: "このメンバーにチケットを名前で割り当てられます。",
+        branvil_owner: {
+          title: "人間のメンバーは Branvil のオーナーです",
+          description: "GuildBotics の Branvil への接続はオーナーの権限を持っています。",
         },
       },
       diagnosticChecks: {
@@ -117,7 +149,7 @@ export const branvil = {
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",
-          description: "メンバーの Branvil トークンとユーザー名を確認してください。",
+          description: "メンバーの Branvil の設定でトークンを再発行してください。",
         },
         branvil_workspace: {
           title: "Branvil のワークスペースを読み取れませんでした",
@@ -127,9 +159,10 @@ export const branvil = {
           title: "Branvil の設定が足りません",
           description: "{{target}} が設定されていません。",
         },
-        human_branvil_user: {
-          title: "Branvil ユーザー名が設定されていません",
-          description: "この人間のメンバーの Branvil ユーザー名を入力してください。",
+        branvil_owner: {
+          title: "GuildBotics が Branvil にオーナーとして接続していません",
+          description:
+            "設定 → 連携で Branvil に接続してから、このメンバーをもう一度保存してください。理由は下にあります。",
         },
       },
     },

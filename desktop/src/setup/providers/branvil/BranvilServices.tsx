@@ -1,15 +1,19 @@
-import { Stack, TextInput } from "@mantine/core";
+import { Button, Group, Select, Stack, TextInput } from "@mantine/core";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ProjectServices, ServiceSelection } from "../../../api/client";
+import {
+  SERVICE_KINDS,
+  type ProjectServices,
+  type ServiceKind,
+  type ServiceSelection,
+} from "../../../api/client";
 import { RequiredLabel } from "../../formParts";
 import type { FieldErrors, ServiceUi } from "../types";
+import { BRANVIL_BASE_URL, ORIGIN, branvilKey, createWorkspace, listWorkspaces } from "./api";
+import { BranvilConnection, useConnection } from "./BranvilConnection";
 
-/** Where Branvil is reached unless the project says otherwise: the same on
- * every machine, through Branvil's tunnel on those other than the Hub. */
-export const BRANVIL_BASE_URL = "http://127.0.0.1:7878";
-
-const ORIGIN = /^https?:\/\/[^/\s?#@]+\/?$/;
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
 type Translate = Parameters<ServiceUi["errors"]>[1];
@@ -25,6 +29,10 @@ function shared(services: ProjectServices): Record<string, unknown> {
   };
 }
 
+function isWorkspace(name: string): boolean {
+  return NAME.test(name) && name !== "." && name !== "..";
+}
+
 function errors(value: ServiceSelection, t: Translate): FieldErrors {
   const result: FieldErrors = {};
   const baseUrl = String(value.base_url ?? "").trim();
@@ -34,44 +42,132 @@ function errors(value: ServiceSelection, t: Translate): FieldErrors {
   const workspace = String(value.workspace ?? "").trim();
   if (!workspace) {
     result.workspace = t("setup.branvil.workspaceRequired");
-  } else if (!NAME.test(workspace) || workspace === "." || workspace === "..") {
+  } else if (!isWorkspace(workspace)) {
     result.workspace = t("setup.branvil.workspaceInvalid");
   }
   return result;
 }
 
-function Fields({
+/** The workspace, chosen from the connected Branvil's or created there. */
+function WorkspaceField({
+  baseUrl,
   value,
   onChange,
-  errors: fieldErrors,
+  error,
 }: {
-  value: ServiceSelection;
-  onChange(value: ServiceSelection): void;
-  errors: FieldErrors;
+  baseUrl: string;
+  value: string;
+  onChange(workspace: string): void;
+  error?: string;
 }) {
   const { t } = useTranslation();
-  const field = (key: string, label: string, hint: string, required = false) => (
-    <TextInput
-      label={required ? <RequiredLabel text={label} /> : label}
-      aria-label={label}
-      aria-required={required}
-      description={hint}
-      value={String(value[key] ?? "")}
-      onChange={(event) => onChange({ ...value, [key]: event.currentTarget.value })}
-      error={fieldErrors[key]}
-    />
-  );
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const connected = useConnection(baseUrl).data?.status === "connected";
+  const key = branvilKey("workspaces", baseUrl);
+  const listed = useQuery({
+    queryKey: key,
+    queryFn: () => listWorkspaces(baseUrl),
+    enabled: connected,
+  });
+  const create = useMutation({
+    mutationFn: () => createWorkspace(baseUrl, name.trim()),
+    onSuccess: (created) => {
+      queryClient.setQueryData(key, created);
+      onChange(name.trim());
+      setName("");
+    },
+  });
+  const workspaces = [...new Set([...(listed.data?.workspaces ?? []), value].filter(Boolean))];
+  const newName = name.trim();
   return (
-    <Stack>
-      {field("base_url", t("setup.branvil.baseUrl"), t("setup.branvil.baseUrlHint"))}
-      {field("workspace", t("setup.branvil.workspace"), t("setup.branvil.workspaceHint"), true)}
+    <Stack gap={4}>
+      <Select
+        label={<RequiredLabel text={t("setup.branvil.workspace")} />}
+        aria-label={t("setup.branvil.workspace")}
+        aria-required
+        description={
+          connected ? t("setup.branvil.workspaceHint") : t("setup.branvil.workspaceConnect")
+        }
+        data={workspaces}
+        value={value || null}
+        onChange={(chosen) => onChange(chosen ?? "")}
+        error={error}
+      />
+      {connected ? (
+        <Group align="flex-start" gap="xs">
+          <TextInput
+            aria-label={t("setup.branvil.newWorkspace")}
+            placeholder={t("setup.branvil.newWorkspace")}
+            size="xs"
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            error={
+              create.error?.message ||
+              (newName && !isWorkspace(newName) ? t("setup.branvil.workspaceInvalid") : "")
+            }
+          />
+          <Button
+            size="xs"
+            variant="default"
+            loading={create.isPending}
+            disabled={!isWorkspace(newName)}
+            onClick={() => create.mutate()}
+          >
+            {t("setup.branvil.createWorkspace")}
+          </Button>
+        </Group>
+      ) : null}
     </Stack>
   );
 }
 
-/** The code host and the tickets name the same items: the Branvil and the
- * workspace, whose repositories members write to and whose board they take
- * tickets from. */
-export const branvilCodeHosting: ServiceUi = { initial: shared, errors, Fields };
+/** The items of one kind: the Branvil and the connection to it, shown with
+ * the first kind that names Branvil (the others follow its base URL), and
+ * the workspace whose repositories members write to and whose board they
+ * take tickets from. */
+function service(kind: ServiceKind): ServiceUi {
+  function Fields({
+    value,
+    onChange,
+    errors: fieldErrors,
+    services,
+  }: {
+    value: ServiceSelection;
+    onChange(value: ServiceSelection): void;
+    errors: FieldErrors;
+    services: ProjectServices;
+  }) {
+    const { t } = useTranslation();
+    const baseUrl = String(value.base_url ?? "").trim() || BRANVIL_BASE_URL;
+    const first = SERVICE_KINDS.find((other) => services[other]?.name === "branvil") === kind;
+    return (
+      <Stack>
+        {first ? (
+          <>
+            <TextInput
+              label={t("setup.branvil.baseUrl")}
+              aria-label={t("setup.branvil.baseUrl")}
+              description={t("setup.branvil.baseUrlHint")}
+              value={String(value.base_url ?? "")}
+              onChange={(event) => onChange({ ...value, base_url: event.currentTarget.value })}
+              error={fieldErrors.base_url}
+            />
+            <BranvilConnection baseUrl={baseUrl} />
+          </>
+        ) : null}
+        <WorkspaceField
+          baseUrl={baseUrl}
+          value={String(value.workspace ?? "")}
+          onChange={(workspace) => onChange({ ...value, workspace })}
+          error={fieldErrors.workspace}
+        />
+      </Stack>
+    );
+  }
+  return { initial: shared, errors, Fields };
+}
 
-export const branvilTickets = branvilCodeHosting;
+export const branvilCodeHosting = service("code_hosting_service");
+
+export const branvilTickets = service("ticket_service");

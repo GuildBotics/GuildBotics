@@ -17,6 +17,7 @@ from tests.guildbotics.integrations.branvil_double import (
     BASE,
     SCOPE,
     BranvilDouble,
+    connect_admin,
     services,
 )
 
@@ -77,19 +78,60 @@ def test_an_agent_needs_its_name_and_token_and_a_human_its_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_diagnose_reads_branvil_the_agents_token_and_the_workspace(monkeypatch):
+    connect_admin()
+
     found, checks = await _diagnose(monkeypatch)
 
     assert found == [
         ("branvil_reachable", "ok", "", False),
         ("branvil_access", "ok", "aiko", True),
         ("branvil_workspace", "ok", "", False),
-        ("human_branvil_user", "ok", "otota", False),
+        ("branvil_owner", "ok", "otota", True),
     ]
     assert checks[2].target == SCOPE
+    assert checks[3].message == t("integrations.branvil.provider.owner", owner="otota")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("admin", "message"),
+    [
+        ("", t("integrations.branvil.api.not_connected")),
+        ("bvt_revoked", t("integrations.branvil.api.admin_refused")),
+        # The agent's token is no owner's.
+        ("bvt_aiko", t("integrations.branvil.api.admin_refused")),
+    ],
+    ids=["missing", "refused", "not_the_owners"],
+)
+async def test_a_human_is_the_owner_only_through_guildbotics_connection(
+    monkeypatch, admin: str, message: str
+):
+    if admin:
+        connect_admin(admin)
+
+    found, checks = await _diagnose(monkeypatch)
+
+    assert found[-1] == ("branvil_owner", "error", "otota", True)
+    assert checks[-1].message == message
+
+
+@pytest.mark.asyncio
+async def test_a_human_named_otherwise_is_not_the_owner(monkeypatch):
+    connect_admin()
+    double = BranvilDouble()
+    double.members["otota"]["name"] = "root"
+
+    _, checks = await _diagnose(monkeypatch, double)
+
+    assert (checks[-1].code, checks[-1].status) == ("branvil_owner", "error")
+    assert checks[-1].message == t(
+        "integrations.branvil.provider.not_owner", name="otota", owner="root"
+    )
 
 
 @pytest.mark.asyncio
 async def test_each_workspace_the_services_name_is_read(monkeypatch):
+    connect_admin()
     found, checks = await _diagnose(monkeypatch, code={"workspace": "nope"})
 
     assert found[2:4] == [
@@ -137,20 +179,16 @@ async def test_another_service_at_the_base_url_is_not_branvil(monkeypatch, answe
 
 @pytest.mark.asyncio
 async def test_a_refused_token_is_reported_and_no_workspace_read(monkeypatch):
+    connect_admin()
     double = BranvilDouble()
-    respond = double.respond
-    double.respond = lambda request: (  # type: ignore[method-assign]
-        httpx.Response(401, json={"error": {"code": "unauthorized", "message": ""}})
-        if request.url.path.endswith("/me")
-        else respond(request)
-    )
+    del double.tokens["bvt_aiko"]
 
     found, _ = await _diagnose(monkeypatch, double)
 
     assert found == [
         ("branvil_reachable", "ok", "", False),
         ("branvil_access", "error", "aiko", True),
-        ("human_branvil_user", "ok", "otota", False),
+        ("branvil_owner", "ok", "otota", True),
     ]
 
 
@@ -192,21 +230,3 @@ def test_the_services_refuse_what_names_no_branvil_or_workspace(
 ):
     with pytest.raises(ValidationError):
         Workspace.model_validate(items)
-
-
-def test_a_member_account_stores_a_name_and_an_agents_token():
-    account = BRANVIL.setup.member.model_validate(  # type: ignore[union-attr]
-        {"username": "aiko", "token": "bvt"}
-    )
-
-    assert account.stored("aiko", human=False) == (
-        {"branvil_username": "aiko"},
-        {"BRANVIL_TOKEN": "bvt"},
-    )
-    assert account.stored("aiko", human=True) == ({"branvil_username": "aiko"}, {})
-    view = BRANVIL.setup.member.view(  # type: ignore[union-attr]
-        {"branvil_username": "aiko"}, lambda key: key == "BRANVIL_TOKEN"
-    )
-    assert view.model_dump() == {"username": "aiko", "has_token": True}
-    with pytest.raises(ValidationError):
-        BRANVIL.setup.member.model_validate({"username": "a b"})  # type: ignore[union-attr]

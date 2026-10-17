@@ -126,6 +126,12 @@ PROVIDER_OPERATIONS = {
         "starts a GitHub App registration held in memory"
     ),
     ("github", "app-registration"): "polls a registration held in memory",
+    ("branvil", "connect"): "starts a consent held in memory",
+    ("branvil", "connection"): "reads the admin token's owner on Branvil",
+    ("branvil", "workspaces"): "lists Branvil's workspaces",
+    ("branvil", "workspaces/create"): "creates a workspace on Branvil",
+    ("branvil", "agents"): "lists Branvil's agents",
+    ("branvil", "entry"): "asks Branvil for an entry link",
     ("slack", "app-registrations"): "builds a Slack App deep link",
     ("slack", "verify-tokens"): "calls Slack with the entered or stored tokens",
 }

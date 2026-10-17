@@ -40,31 +40,64 @@ When the tunnel is down, every Branvil operation fails with "Branvil is not reac
 Following the Branvil README:
 
 1. Run Branvil on the Hub machine, and the tunnel on every other machine that runs
-   GuildBotics.
-2. Create the workspace the members work in (for example `acme`) and its repositories
-   (`acme/demo`, with the labels its tickets may carry). The workspace has one board;
+   GuildBotics. `branvil init` creates Branvil's owner, the one person who uses it: the
+   GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
+2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
+   may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
    a repository holds its tickets; a merge closes only tickets of the pull request's
-   repository.
-3. The GuildBotics human member is Branvil's owner, the one person `branvil init`
-   creates. The owner may do everything, merges, and uses Branvil's GUI without
-   signing in (`branvil open` on the Hub machine). Create an agent member for each AI
-   member: an agent reads everything and works on tickets, pull requests, and
-   unprotected branches; nothing is granted per workspace.
-4. Issue a token for each agent member. Branvil shows it once.
+   repository. GuildBotics can create the workspace itself (below).
 
-## Configure GuildBotics
+Members and their tokens are not created in Branvil: GuildBotics does that.
 
-Under **Setup → Integrations** in the desktop app, choose **Branvil** for the code host
-and for the tickets, and enter:
+## Connect GuildBotics to Branvil
 
-- **Base URL**: where Branvil is reached (leave it empty for `http://127.0.0.1:7878`)
-- **Workspace**: the workspace the members work in (`acme`). Members write only to its
-  repositories and take tickets from its board; reads are not limited
+On the Hub machine, where Branvil runs, under **Setup → Integrations** in the desktop app:
 
-Then, under **Setup → Members → Branvil**, give each member its **Branvil username**
-(for the human member, the owner's name) and, for an AI member, its **Branvil token**. The token is stored in the OS keychain as
-`{PERSON_ID}_BRANVIL_TOKEN` and is also the member's git password: git authenticates
-with the username and the token.
+1. Choose **Branvil** for the code host and for the tickets. Both use one Branvil, at one
+   **Base URL** (leave it empty for `http://127.0.0.1:7878`).
+2. Press **Connect to Branvil**. The browser opens Branvil's consent screen: *Allow
+   GuildBotics to manage Branvil?* Choose **Allow**. (When the browser has no Branvil
+   session yet, the page says to run `branvil open` on this machine; it comes back to the
+   consent screen once you have entered.) The screen then shows *Connected to Branvil as
+   its owner*.
+3. Choose the **Workspace** the members work in, or create one there. Members write only
+   to its repositories and take tickets from its board; reads are not limited.
+
+Branvil issues GuildBotics an owner token labelled `app:GuildBotics`. GuildBotics keeps
+it in the OS keychain as the workspace Secret `BRANVIL_ADMIN_TOKEN` and uses it only in
+its own process on the machine (the setup screens and the checks): no member, command, or
+isolated environment receives it. To revoke it, delete the token under Branvil's
+**Settings → Members → owner → Tokens**, then connect again.
+
+On the other machines there is nothing to connect: send the Secrets from the Hub machine
+and fetch them under **Credentials on this machine** (the admin token and the members'
+tokens alike). No machine issues them again.
+
+**Open Branvil**, next to the connection, opens Branvil's GUI in the system browser from
+any machine: GuildBotics asks Branvil for a single-use entry link with the admin token.
+
+## Set up the members
+
+Under **Setup → Members → Branvil**:
+
+- An AI member is a Branvil agent: **Create a new agent** (named after the member's ID)
+  or **Choose an existing agent**. Saving the member creates the agent unless one was
+  chosen, issues its token (labelled `guildbotics`, replacing the one issued before), and
+  keeps the token in the OS keychain as `{PERSON_ID}_BRANVIL_TOKEN`. No token is ever
+  shown or typed. The token is also the member's git password: git authenticates with
+  the agent's name and the token. Later saves keep the token while Branvil accepts it as
+  the agent's; **Issue a new token when saved** replaces it.
+- The human member is Branvil's owner: its Branvil name is filled in with the owner's
+  when the member is saved.
+- The member's **GitHub** tab is shown too. When an AI member has a GitHub account there
+  (a machine user's token, or a GitHub App), every save hands it to Branvil, which
+  publishes the member's pull requests as that account (below).
+- Deleting an AI member revokes the `guildbotics` tokens of its agent. The agent stays in
+  Branvil, as its history names it.
+
+Saving an AI member and deleting one reach Branvil, so they need Branvil to be reachable
+and GuildBotics to be connected on that machine; otherwise nothing is saved or deleted,
+and the screen says why.
 
 Without the GUI, the same settings are in `team/project.yml`:
 
@@ -80,7 +113,7 @@ services:
     workspace: acme
 ```
 
-and in each member's `person.yml`:
+and in each member's `person.yml`, which a save of the member writes:
 
 ```yaml
 account_info:
@@ -88,8 +121,9 @@ account_info:
 ```
 
 Press **Validate settings** under **Setup → Verification**: it checks that Branvil
-answers, that each AI member's token is accepted as that member's own, and that the
-workspace can be read.
+answers, that this machine holds GuildBotics' connection and Branvil takes it for its
+owner (the human member), that each AI member's token is accepted as that member's own,
+and that the workspace can be read.
 
 ## How members work with it
 
@@ -120,10 +154,10 @@ things:
 - Members work in Branvil exactly as above. Nothing reaches GitHub while they do.
 - When a pull request is done, the owner publishes it from Branvil's GUI instead of
   merging: Branvil pushes the branch and opens a pull request on GitHub with the final
-  title and body, **as the author's GitHub account**. Give each AI member's bot account
-  to Branvil for this (`branvil member account <name>`), besides its Branvil token in
-  GuildBotics. One of these bot accounts also reads GitHub for Branvil, so the human
-  member's own GitHub token is not needed.
+  title and body, **as the author's GitHub account**. Give each AI member its bot
+  account on the member's **GitHub** tab in GuildBotics; GuildBotics hands it to Branvil.
+  One of these bot accounts also reads GitHub for Branvil, so the human member's own
+  GitHub token is not needed.
 - GitHub's checks of the published head appear among the pull request's checks
   (`github/<name>`) with their logs, so a failure on GitHub (Windows, for example) keeps
   the pull request from being ready, and the member fixes it in Branvil; later pushes

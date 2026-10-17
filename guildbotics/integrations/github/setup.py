@@ -32,12 +32,17 @@ from guildbotics.integrations.github import app_manifest
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
+    AppCredential,
+    HostCredential,
     MemberAccount,
     Operation,
     Page,
     ProviderSetup,
+    SavedMember,
     SetupError,
     SetupItems,
+    html_page,
+    message_page,
     page_path,
 )
 from guildbotics.utils.i18n_tool import t
@@ -171,6 +176,24 @@ class GitHubAccount(MemberAccount):
 
     def saved(self) -> None:
         _registrations.discard(self.app_registration_id)
+
+    @classmethod
+    def credential(cls, member: SavedMember) -> HostCredential | None:
+        """A machine user's token, or a GitHub App; a human hands over none."""
+        kind = member.account_info.get("github_account_type")
+        if kind == GitHubAppAuth.MACHINE_USER:
+            token = member.get_secret("GITHUB_ACCESS_TOKEN")
+            return HostCredential(token=token) if token else None
+        key = member.get_secret("GITHUB_PRIVATE_KEY")
+        if kind != GitHubAppAuth.GITHUB_APPS or not key:
+            return None
+        return HostCredential(
+            app=AppCredential(
+                app_id=member.account_info.get("github_app_id", ""),
+                installation_id=member.account_info.get("github_installation_id", ""),
+                private_key=key,
+            )
+        )
 
     @classmethod
     def view(
@@ -477,7 +500,7 @@ class AppRegistrations:
         manifest = app_manifest.build_app_manifest(
             registration.app_name, registration.callback_url
         )
-        return _page(
+        return html_page(
             f"<p>{html.escape(t('integrations.github.app_registration.redirecting'))}</p>"
             f'<form id="manifest-form" action="{html.escape(url)}'
             f'?state={html.escape(registration.state)}" method="post">'
@@ -573,33 +596,12 @@ class AppRegistrations:
         }
 
 
-_PAGE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>GuildBotics</title>
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 4rem auto; max-width: 40rem;
-       text-align: center; color: #333; }}
-button {{ font-size: 1rem; padding: 0.5rem 1.5rem; }}
-</style>
-</head>
-<body>
-{body}
-</body>
-</html>"""
-
-
-def _page(body: str, status_code: int = 200) -> Page:
-    return Page(html=_PAGE.format(body=body), status_code=status_code)
-
-
 def _error_page(message: str) -> Page:
     """A page telling the user to retry from the app."""
-    return _page(
-        f"<p>{html.escape(t('integrations.github.app_registration.error_title'))}</p>"
-        f"<p>{html.escape(message)}</p>"
-        f"<p>{html.escape(t('integrations.github.app_registration.error_hint'))}</p>",
+    return message_page(
+        t("integrations.github.app_registration.error_title"),
+        message,
+        t("integrations.github.app_registration.error_hint"),
         status_code=400,
     )
 

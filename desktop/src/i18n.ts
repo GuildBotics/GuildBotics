@@ -1459,6 +1459,10 @@ const resources = {
             description:
               "The isolated agent environment on this device can start the default AI CLI tool.",
           },
+          provider_secret: {
+            title: "A provider's workspace credential is held",
+            description: "{{target}} is held on this machine.",
+          },
           cli_agent_brain: {
             title: "AI CLI tool check passed",
             description:
@@ -1501,6 +1505,11 @@ const resources = {
             title: "Default AI CLI tool cannot start",
             description:
               "The isolated agent environment on this device cannot start the default AI CLI tool. See the reason below.",
+          },
+          provider_secret: {
+            title: "A provider's workspace credential is missing",
+            description:
+              "{{target}} is not held on this machine. Connect again under Setup → Integrations, or fetch it from the Hub under Credentials on this machine.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check failed",
@@ -3260,6 +3269,10 @@ const resources = {
             title: "AI CLIツールを起動できます",
             description: "この端末の隔離環境で既定の AI CLIツールを起動できます。",
           },
+          provider_secret: {
+            title: "サービスのワークスペースの認証情報があります",
+            description: "このマシンに {{target}} があります。",
+          },
           cli_agent_brain: {
             title: "AI CLIツールの検証に成功しました",
             description:
@@ -3301,6 +3314,11 @@ const resources = {
             title: "既定の AI CLIツールを起動できません",
             description:
               "この端末の隔離環境で既定の AI CLIツールを起動できません。理由を確認してください。",
+          },
+          provider_secret: {
+            title: "サービスのワークスペースの認証情報がありません",
+            description:
+              "このマシンに {{target}} がありません。設定 → 連携でもう一度接続するか、「このマシンの認証情報」で Hub から取得してください。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に失敗しました",

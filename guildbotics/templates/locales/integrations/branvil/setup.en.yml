@@ -1,0 +1,8 @@
+en:
+  connected: "GuildBotics is connected to Branvil."
+  close: "Close this page and go back to the GuildBotics app."
+  failed: "GuildBotics could not connect to Branvil."
+  retry: "Close this page and connect again from the GuildBotics app."
+  expired: "This connection was not started here, or it has expired."
+  denied: "The connection was not allowed on Branvil's consent screen."
+  not_agent: "Branvil's member '%{name}' is not an agent. Choose an agent, or another name."

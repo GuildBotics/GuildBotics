@@ -164,6 +164,8 @@ from guildbotics.setup.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
     person_config_paths,
+    prepare_accounts,
+    remove_accounts,
     stored_person_config_dir,
     stored_person_config_paths,
 )
@@ -1040,13 +1042,17 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
+    # A member's save and deletion first reach its providers, outside the
+    # workspace's shared-write lock, which then blocks: hence the thread.
     @router.post("/config/members")
-    def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
+    async def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
         status = app_runtime.get_config_status()
         member = request.model_copy(
             update={"config_dir": status.config_dir or request.config_dir}
         )
-        receipt = apply_config_write(
+        await prepare_accounts(member, member.person_id)
+        receipt = await run_in_threadpool(
+            apply_config_write,
             member.config_dir,
             lambda: SimplePersonSetupService().write_person(member),
             report=lambda: config_repository(member.config_dir).revisions(
@@ -1069,7 +1075,7 @@ def create_app(
         return snapshot.model_copy(update={"revisions": revisions})
 
     @router.put("/config/members/{person_id}")
-    def config_member_update(
+    async def config_member_update(
         person_id: MemberDirectoryName, request: PersonUpdateInput
     ) -> ConfigWriteResponse:
         if request.original_person_id != person_id:
@@ -1079,7 +1085,9 @@ def create_app(
             )
         config_dir = _resolve_member_config_dir(app_runtime)
         member = request.model_copy(update={"config_dir": config_dir})
-        receipt = apply_config_write(
+        await prepare_accounts(member, member.original_person_id)
+        receipt = await run_in_threadpool(
+            apply_config_write,
             config_dir,
             lambda: SimplePersonSetupService().update_person(member),
             expected=request.expected_revisions,
@@ -1093,11 +1101,13 @@ def create_app(
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.delete("/config/members/{person_id}")
-    def config_member_delete(
+    async def config_member_delete(
         person_id: MemberDirectoryName, request: MemberDeleteRequest
     ) -> ConfigWriteResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
-        receipt = apply_config_write(
+        await remove_accounts(config_dir, person_id)
+        receipt = await run_in_threadpool(
+            apply_config_write,
             config_dir,
             lambda: SimplePersonSetupService().delete_person(
                 config_dir=config_dir,
@@ -1121,6 +1131,8 @@ def create_app(
                     if getattr(provider, service.value) is not None
                 ],
                 avatar=provider.setup.avatar_url is not None,
+                shared=sorted(provider.setup.shared),
+                credentials_from=sorted(provider.setup.credentials_from),
             )
             for provider in PROVIDERS.values()
             if provider.setup is not None
