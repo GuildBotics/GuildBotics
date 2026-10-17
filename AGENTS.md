@@ -489,7 +489,11 @@ OS で結果が変わらない検査（ruff / pylint / CLI reference / Markdown 
 Windows の契約は、実ファイルの大小文字・Unicode・長いパス・symlink / junction、
 ファイルの置換とプロセス間 lock、host のプロセス起動・終了、Git for Windows の
 askpass・hook・改行・バイナリを対象とする。これらの境界を変更したときは、実 OS の動作を
-使う代表テストに `windows` を付ける。Windows 以外では skip するテストにも必ず付ける。
+使う代表テストに `windows` を付ける。本体に Windows 専用の分岐（`os.name == "nt"` /
+`sys.platform == "win32"` など）を追加・変更したときは、その分岐と、それが渡す値を
+使う呼び出し側まで、実 Windows で通る代表テストが選択されているか確認する。
+Windows 以外では skip するテストにも必ず付ける。直接の `skipif(os.name != "nt")` /
+`skipif(sys.platform != "win32")` の選択漏れは `tests/test_windows_contracts.py` が検出する。
 OS API を mock した分岐テストやソースの文字列検査は
 Linux で足り、Linux の microVM 内だけで動く guest のコードも Windows の対象にしない。
 marker は Windows 限定の skip ではないので、選んだ契約も Linux の全件実行に含まれる。

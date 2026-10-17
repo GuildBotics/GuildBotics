@@ -307,6 +307,7 @@ def test_workspace_ancestry_does_not_open_an_unrelated_grant(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("present", [False, True])
+@pytest.mark.windows
 def test_workspace_ancestry_still_refuses_a_granted_parent(tmp_path, present):
     parent = tmp_path / "shared"
     target = parent / "workspace"
