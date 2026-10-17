@@ -1,4 +1,4 @@
-import type { SecretScope, SecretStatus, WorkspaceSecrets } from "../api/client";
+import type { SyncScope, SecretStatus, WorkspaceSecrets } from "../api/client";
 
 /**
  * How the Secret list is presented.
@@ -16,7 +16,7 @@ import type { SecretScope, SecretStatus, WorkspaceSecrets } from "../api/client"
  * answer -- and to one request, however many of them are on screen. Every
  * scope's key starts the same, so all of them are told apart from the rest.
  */
-export const secretsQueryKey = (scope: SecretScope) => ["workspace-secrets", scope];
+export const secretsQueryKey = (scope: SyncScope) => ["workspace-secrets", scope];
 
 /**
  * How often that answer is renewed.

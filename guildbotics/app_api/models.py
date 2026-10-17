@@ -263,7 +263,12 @@ class DeviceRenameRequest(BaseModel):
 
 
 class WorkspaceSyncStatus(BaseModel):
-    """The synchronization state of the selected workspace."""
+    """The synchronization state of the selected workspace, or of the members'
+    identities, which every workspace shares.
+
+    ``state`` is the queue's own state, plus ``not_connected`` for identities
+    that are not on the hub the workspace synchronizes with.
+    """
 
     enabled: bool
     workspace_id: str | None = None
@@ -271,8 +276,6 @@ class WorkspaceSyncStatus(BaseModel):
     hub_url: str | None = None
     state: str = "disabled"
     local_head: str | None = None
-    #: The commit the members' identities are on, which every workspace shares.
-    identity_head: str | None = None
     remote_head: str | None = None
     ahead_count: int = 0
     behind_count: int = 0
@@ -881,6 +884,11 @@ class ActivityHistorySession(BaseModel):
     detail_available: bool = False
 
 
+#: The two things a device synchronizes with its hub: the selected workspace,
+#: and the members' identities, which every workspace shares.
+type SyncScope = Literal["workspace", "identities"]
+
+
 class ActivityHistoryRejection(BaseModel):
     """What identifies a local change the hub did not accept.
 
@@ -892,6 +900,9 @@ class ActivityHistoryRejection(BaseModel):
     rejection_id: str
     paths: list[str] = Field(default_factory=list)
     source_device_id: str = ""
+    #: Whose repository holds the stashed commit: the workspace's, or the
+    #: members' identities', which every workspace shares.
+    scope: SyncScope = "workspace"
 
 
 class ActivityHistoryEvent(BaseModel):

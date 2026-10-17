@@ -14,7 +14,6 @@ import {
   getWorkspaceLive,
   getWorkspaceSecrets,
   getWorkspaceServiceOwner,
-  getWorkspaceSyncStatus,
   inspectHub,
   previewWorkspaceSync,
   renameThisDevice,
@@ -26,6 +25,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import { SyncSettings } from "./SyncSettings";
+import { mockSyncStatuses } from "../test/syncStatuses";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
@@ -59,7 +59,6 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     hub_url: null,
     state: "disabled",
     local_head: null,
-    identity_head: null,
     remote_head: null,
     ahead_count: 0,
     behind_count: 0,
@@ -131,7 +130,7 @@ beforeEach(() => {
     pending_count: 0,
     attention_count: 0,
   });
-  vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
+  mockSyncStatuses(status());
   vi.mocked(getWorkspaceDevices).mockResolvedValue({ devices: [], device_id: "d1" });
   vi.mocked(getWorkspaceLive).mockResolvedValue([]);
   vi.mocked(getWorkspaceServiceOwner).mockResolvedValue({
@@ -397,7 +396,7 @@ describe("choosing what to do with this workspace", () => {
 describe("once connected", () => {
   it("offers reconnecting to a rebuilt hub", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+    mockSyncStatuses(
       status({ enabled: true, state: "idle", hub_url: "user@hub:.guildbotics/hub/w.git" }),
     );
     vi.mocked(inspectHub).mockResolvedValue(connection());
@@ -416,7 +415,7 @@ describe("once connected", () => {
   });
 
   it("lists what cannot be sent, with the reason for each", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+    mockSyncStatuses(
       status({
         enabled: true,
         state: "idle",
@@ -427,9 +426,23 @@ describe("once connected", () => {
     );
     renderSettings();
 
-    expect(await screen.findByText(t("sync.unsendable.title"))).toBeInTheDocument();
+    expect(await screen.findByText(t("sync.unsendable.title.workspace"))).toBeInTheDocument();
     expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
     expect(screen.getByText("is larger than the shared limit")).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.unsendable.title.identities"))).toBe(null);
+  });
+
+  it("lists the members' changes that cannot be sent under their own title", async () => {
+    const connected = status({ enabled: true, state: "idle" });
+    mockSyncStatuses(connected, {
+      ...connected,
+      unsendable_changes: [{ path: "config/team/members/alice/person.yml", reason: "too large" }],
+    });
+    renderSettings();
+
+    expect(await screen.findByText(t("sync.unsendable.title.identities"))).toBeInTheDocument();
+    expect(screen.getByText("config/team/members/alice/person.yml")).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.unsendable.title.workspace"))).toBe(null);
   });
 });
 
@@ -548,9 +561,7 @@ describe("changes the hub did not accept", () => {
       ...held,
       paths: Array.from({ length: 16 }, (_, index) => `config/commands/c${index}.md`),
     };
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ enabled: true, state: "idle", rejected_changes: [many] }),
-    );
+    mockSyncStatuses(status({ enabled: true, state: "idle", rejected_changes: [many] }));
     renderSettings();
 
     // Three are shown; the rest is one click away.
@@ -566,12 +577,10 @@ describe("changes the hub did not accept", () => {
   });
 
   it("names what was set aside and how to find it again", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ enabled: true, state: "idle", rejected_changes: [held] }),
-    );
+    mockSyncStatuses(status({ enabled: true, state: "idle", rejected_changes: [held] }));
     renderSettings();
 
-    expect(await screen.findByText(t("sync.rejected.title"))).toBeInTheDocument();
+    expect(await screen.findByText(t("sync.rejected.title.workspace"))).toBeInTheDocument();
     expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
     // The identifier is the whole of the manual recovery procedure's input.
     expect(screen.getByText(held.rejection_id)).toBeInTheDocument();
@@ -581,9 +590,7 @@ describe("changes the hub did not accept", () => {
     // Nothing else holds this content -- not the hub, not another device -- so
     // the confirmation says so rather than asking a bare "are you sure".
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ enabled: true, state: "idle", rejected_changes: [held] }),
-    );
+    mockSyncStatuses(status({ enabled: true, state: "idle", rejected_changes: [held] }));
     vi.mocked(discardWorkspaceSyncRejection).mockResolvedValue(
       status({ enabled: true, state: "idle" }),
     );
@@ -596,14 +603,33 @@ describe("changes the hub did not accept", () => {
 
     await user.click(screen.getByRole("button", { name: t("sync.rejected.discardConfirm") }));
 
-    expect(discardWorkspaceSyncRejection).toHaveBeenCalledWith(held.rejection_id);
+    expect(discardWorkspaceSyncRejection).toHaveBeenCalledWith(held.rejection_id, "workspace");
+  });
+
+  it("lists a change to the members apart, says where it is held, and discards it there", async () => {
+    // The members' identities are a repository of their own, shared by every
+    // workspace: the recovery procedure runs there, and so does the discard.
+    const user = userEvent.setup();
+    const connected = status({ enabled: true, state: "idle" });
+    mockSyncStatuses(connected, { ...connected, rejected_changes: [held] });
+    vi.mocked(discardWorkspaceSyncRejection).mockResolvedValue(connected);
+    renderSettings();
+
+    expect(await screen.findByText(t("sync.rejected.title.identities"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.rejected.identitiesLocation"))).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.rejected.title.workspace"))).toBe(null);
+
+    await user.click(screen.getByRole("button", { name: t("sync.rejected.discard") }));
+    await user.click(
+      await screen.findByRole("button", { name: t("sync.rejected.discardConfirm") }),
+    );
+
+    expect(discardWorkspaceSyncRejection).toHaveBeenCalledWith(held.rejection_id, "identities");
   });
 
   it("keeps the change when the confirmation is cancelled", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ enabled: true, state: "idle", rejected_changes: [held] }),
-    );
+    mockSyncStatuses(status({ enabled: true, state: "idle", rejected_changes: [held] }));
     renderSettings();
 
     await user.click(await screen.findByRole("button", { name: t("sync.rejected.discard") }));

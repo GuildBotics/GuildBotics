@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSyncStatus } from "../api/client";
-import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "./syncState";
+import {
+  mostUrgentSyncState,
+  syncAttentionGroups,
+  syncCanRetry,
+  syncIndicatorState,
+  syncNeedsAttention,
+  syncTone,
+} from "./syncState";
 
 function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStatus {
   return {
@@ -11,7 +18,6 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     hub_url: "user@hub:.guildbotics/hub/workspaces/w/repository.git",
     state: "idle",
     local_head: "abc",
-    identity_head: null,
     remote_head: "abc",
     ahead_count: 0,
     behind_count: 0,
@@ -146,5 +152,58 @@ describe("what the user is asked to do", () => {
     expect(syncTone("local_error")).toBe("warning");
     expect(syncTone("invalid_shared_state")).toBe("danger");
     expect(syncTone("disabled")).toBe("neutral");
+  });
+});
+
+describe("identities that are not on the workspace's hub", () => {
+  it("are a failure the user can retry, ranked with an unreachable hub", () => {
+    const state = syncIndicatorState(status({ state: "not_connected" }));
+
+    expect(state).toBe("not_connected");
+    expect(syncNeedsAttention(state)).toBe(true);
+    expect(syncCanRetry(state)).toBe(true);
+    expect(syncTone(state)).toBe("warning");
+  });
+});
+
+describe("mostUrgentSyncState", () => {
+  it.each([
+    [["synced", "not_connected"], "not_connected"],
+    [["unreachable", "update_required"], "update_required"],
+    [["sending", "unsendable"], "unsendable"],
+    [["disabled", "synced"], "synced"],
+    [["disabled", "disabled"], "disabled"],
+  ] as const)("ranks %j as %s", (states, expected) => {
+    expect(mostUrgentSyncState([...states])).toBe(expected);
+  });
+});
+
+describe("syncAttentionGroups", () => {
+  const scoped = (identities: WorkspaceSyncStatus, workspace: WorkspaceSyncStatus) =>
+    [
+      { scope: "identities", status: identities },
+      { scope: "workspace", status: workspace },
+    ].map((item) => ({ ...item, state: syncIndicatorState(item.status) })) as Parameters<
+      typeof syncAttentionGroups
+    >[0];
+
+  it("makes one warning of a state both scopes are in", () => {
+    const down = status({ state: "unreachable" });
+
+    expect(
+      syncAttentionGroups(scoped(down, down)).map((group) => group.map((item) => item.scope)),
+    ).toEqual([["identities", "workspace"]]);
+  });
+
+  it("keeps different states apart, and leaves out what needs no one", () => {
+    const groups = syncAttentionGroups(
+      scoped(status({ state: "not_connected" }), status({ state: "local_error" })),
+    );
+
+    expect(groups.map((group) => group.map((item) => [item.scope, item.state]))).toEqual([
+      [["identities", "not_connected"]],
+      [["workspace", "local_error"]],
+    ]);
+    expect(syncAttentionGroups(scoped(status(), status({ ahead_count: 2 })))).toEqual([]);
   });
 });

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 
-import { getWorkspaceSecrets, type SecretScope } from "../api/client";
+import { getWorkspaceSecrets, type SyncScope } from "../api/client";
 import { SECRETS_REFETCH_MS, secretNeedsAttention, secretsQueryKey } from "./secretState";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 
@@ -27,7 +27,7 @@ export function SecretStatusHint({
   scope = "workspace",
 }: {
   envKey: string | undefined;
-  scope?: SecretScope;
+  scope?: SyncScope;
 }) {
   const { t } = useTranslation();
   const secrets = useQuery({

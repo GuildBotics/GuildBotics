@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.models import RejectedChangeModel
 from guildbotics.drivers.live_state import LiveState
-from guildbotics.hub import host
+from guildbotics.hub import HubUnreachableError, host
 from guildbotics.hub.connection import workspace_id_from_remote_url
 from guildbotics.hub.host import hub_root
 from guildbotics.sync import (
@@ -698,6 +698,96 @@ def test_the_user_can_say_they_are_done_with_a_displaced_commit(
     )
 
     assert payload["rejected_changes"] == []
+
+
+@pytest.mark.usefixtures("idle_queue")
+def test_the_identities_displaced_commits_are_reported_and_discarded_apart(
+    client: TestClient, workspace: Path
+) -> None:
+    """Two machines editing the same member displace one of the edits in the
+    identities' repository, not the workspace's: it is listed, and discarded,
+    there -- and appears in Activity as the identities'."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    rejection_id = _reject(get_identity_root())
+
+    identities = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+    assert identities["enabled"] is True
+    assert [item["rejection_id"] for item in identities["rejected_changes"]] == [
+        rejection_id
+    ]
+    assert identities["rejected_changes"][0]["paths"] == [CONFIG]
+    assert (
+        _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["rejected_changes"]
+        == []
+    )
+    now = datetime.now(UTC)
+    activity = _json(
+        client.get(
+            "/activity/history",
+            headers=AUTH_HEADERS,
+            params={
+                "start": (now - timedelta(days=1)).isoformat(),
+                "end": (now + timedelta(days=1)).isoformat(),
+            },
+        )
+    )
+    assert [
+        (event["rejection"]["rejection_id"], event["rejection"]["scope"])
+        for event in activity["events"]
+        if event["type"] == "sync_rejected"
+    ] == [(rejection_id, "identities")]
+
+    payload = _json(
+        client.post(
+            f"/identities/sync/rejections/{rejection_id}/discard",
+            headers=AUTH_HEADERS,
+        )
+    )
+
+    assert payload["rejected_changes"] == []
+    assert not LocalSyncRepository(get_identity_root()).list_rejected()
+
+
+def test_identities_without_a_hub_are_not_synchronized(client: TestClient) -> None:
+    payload = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+
+    assert payload["enabled"] is False
+    assert payload["state"] == "disabled"
+
+
+@pytest.mark.usefixtures("idle_queue")
+def test_identities_a_hub_cannot_hold_are_reported_with_its_words(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hub from before it held identities is reached -- the workspace
+    synchronizes with it -- but refuses them. That shows as identities not
+    connected, in the hub's own words, until a retry finds it updated."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    LocalSyncRepository(get_identity_root()).clear_remote()
+    claim = workspace_sync.connection.claim_hub_identity
+
+    def old_hub(*_args: object) -> str:
+        raise HubUnreachableError("Error: No such command 'identity'.")
+
+    monkeypatch.setattr(workspace_sync.connection, "claim_hub_identity", old_hub)
+
+    refused = _json(client.post("/identities/sync/retry", headers=AUTH_HEADERS))
+
+    assert refused["state"] == "not_connected"
+    assert refused["last_error_detail"] == "Error: No such command 'identity'."
+    assert _json(client.get("/identities/sync", headers=AUTH_HEADERS)) == refused
+    assert _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["state"] == (
+        "idle"
+    )
+
+    monkeypatch.setattr(workspace_sync.connection, "claim_hub_identity", claim)
+    connected = _json(client.post("/identities/sync/retry", headers=AUTH_HEADERS))
+
+    assert connected["state"] == "idle"
+    assert connected["last_error_detail"] is None
+    assert connected["local_head"]
 
 
 def test_a_rejection_id_that_names_no_ref_is_refused(

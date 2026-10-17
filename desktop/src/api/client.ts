@@ -452,6 +452,8 @@ export type ActivityHistoryRejection = {
   rejection_id: string;
   paths: string[];
   source_device_id: string;
+  /** Whose repository holds the stashed commit. */
+  scope: SyncScope;
 };
 
 export type ActivityHistoryEvent = {
@@ -1128,7 +1130,9 @@ export type SyncState =
   | "unreachable"
   | "local_error"
   | "invalid_shared_state"
-  | "update_required";
+  | "update_required"
+  /** Identities that are not on the hub the workspace synchronizes with. */
+  | "not_connected";
 
 export type UnsendableChange = {
   path: string;
@@ -1154,8 +1158,6 @@ export type WorkspaceSyncStatus = {
   hub_url: string | null;
   state: SyncState;
   local_head: string | null;
-  /** The commit the members' identities are on, which every workspace shares. */
-  identity_head: string | null;
   remote_head: string | null;
   ahead_count: number;
   behind_count: number;
@@ -1337,8 +1339,10 @@ export class ApiRequestError extends Error {
   }
 }
 
-export async function getWorkspaceSyncStatus(): Promise<WorkspaceSyncStatus> {
-  return request("/workspace/sync");
+export async function getWorkspaceSyncStatus(
+  scope: SyncScope = "workspace",
+): Promise<WorkspaceSyncStatus> {
+  return request(`/${scope}/sync`);
 }
 
 export async function previewWorkspaceSync(
@@ -1359,8 +1363,10 @@ export async function changeWorkspaceSyncHub(
   return request("/workspace/sync/hub", { method: "POST", body });
 }
 
-export async function retryWorkspaceSync(): Promise<WorkspaceSyncStatus> {
-  return request("/workspace/sync/retry", { method: "POST" });
+export async function retryWorkspaceSync(
+  scope: SyncScope = "workspace",
+): Promise<WorkspaceSyncStatus> {
+  return request(`/${scope}/sync/retry`, { method: "POST" });
 }
 
 export async function cloneWorkspaceFromHub(
@@ -1371,24 +1377,28 @@ export async function cloneWorkspaceFromHub(
 
 /** Whose secrets: the selected workspace's, or the identities' -- the
  * members' credentials and the connections', which every workspace shares. */
-export type SecretScope = "workspace" | "identities";
+/**
+ * The two things a device synchronizes with its hub: the selected workspace,
+ * and the members' identities, which every workspace shares.
+ */
+export type SyncScope = "workspace" | "identities";
 
 export async function getWorkspaceSecrets(
-  scope: SecretScope = "workspace",
+  scope: SyncScope = "workspace",
 ): Promise<WorkspaceSecrets> {
   return request(`/${scope}/secrets`);
 }
 
 export async function sendWorkspaceSecrets(
   body: SecretTransferRequest = {},
-  scope: SecretScope = "workspace",
+  scope: SyncScope = "workspace",
 ): Promise<SecretTransferResponse> {
   return request(`/${scope}/secrets/send`, { method: "POST", body });
 }
 
 export async function fetchWorkspaceSecrets(
   body: SecretTransferRequest = {},
-  scope: SecretScope = "workspace",
+  scope: SyncScope = "workspace",
 ): Promise<SecretTransferResponse> {
   return request(`/${scope}/secrets/fetch`, { method: "POST", body });
 }
@@ -1463,8 +1473,9 @@ export async function setWorkspace(body: WorkspaceChangeRequest): Promise<Config
 
 export async function discardWorkspaceSyncRejection(
   rejectionId: string,
+  scope: SyncScope = "workspace",
 ): Promise<WorkspaceSyncStatus> {
-  return request(`/workspace/sync/rejections/${encodeURIComponent(rejectionId)}/discard`, {
+  return request(`/${scope}/sync/rejections/${encodeURIComponent(rejectionId)}/discard`, {
     method: "POST",
   });
 }

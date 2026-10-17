@@ -79,13 +79,13 @@ from guildbotics.sync import (
     paused_workspace_sync,
     preview_enrollment,
     run_current_sync,
+    run_identity_sync,
     synchronize_once,
 )
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     get_identity_root,
     get_workspace_root,
-    get_workspace_state_path,
 )
 from guildbotics.utils.live_freshness import live_status
 from guildbotics.utils.openssh import OpenSshNotFoundError
@@ -135,6 +135,10 @@ class WorkspaceSyncService:
         self._relay_runtime: RelayRuntime | None = None
         self._live_states: dict[tuple[str, str], LiveState] = {}
         self._live_error_code: str | None = None
+        #: What the last attempt to put the identities on the workspace's hub
+        #: printed. Only the words: whether they are on it is read from the
+        #: two repositories each time.
+        self._identity_connect_error: str | None = None
         self._on_live_publisher = on_live_publisher
         self._on_owner_transfer = on_owner_transfer
 
@@ -408,31 +412,68 @@ class WorkspaceSyncService:
 
     def get_status(self) -> WorkspaceSyncStatus:
         """Report the selected workspace's synchronization state."""
-        running = run_current_sync(
-            lambda manager, root: self._running_status(manager.status(), root)
+        return self._status(
+            run_current_sync, _workspace_root(), live_error_code=self._live_error_code
+        )
+
+    def get_identity_status(self) -> WorkspaceSyncStatus:
+        """Report the identities' synchronization state.
+
+        The identities belong on the hub of the workspace that has one. While
+        they are not on it -- that hub predates holding them, or could not be
+        reached when they were last connected -- nothing about them reaches the
+        other machines, so they are reported as not connected rather than by
+        whatever their own repository last did.
+        """
+        root = get_identity_root()
+        if self._identity_hub_to_join() is not None:
+            return WorkspaceSyncStatus(
+                enabled=True,
+                workspace_id=_workspace_id(root),
+                device_id=ensure_device_identity().device_id,
+                state="not_connected",
+                last_error_detail=self._identity_connect_error,
+            )
+        return self._status(run_identity_sync, root)
+
+    def _status(
+        self,
+        running_sync: Callable[
+            [Callable[[GitSyncManager, Path], WorkspaceSyncStatus]],
+            WorkspaceSyncStatus | None,
+        ],
+        root: Path | None,
+        *,
+        live_error_code: str | None = None,
+    ) -> WorkspaceSyncStatus:
+        """Report one root's state, from its queue when one is running."""
+        running = running_sync(
+            lambda manager, root: self._running_status(
+                manager.status(), root, live_error_code
+            )
         )
         if running is not None:
             return running
 
-        root = _workspace_root()
         repository = _repository(root)
         if repository is None or not repository.has_remote():
             return WorkspaceSyncStatus(
                 enabled=False,
                 workspace_id=_workspace_id(root),
                 device_id=ensure_device_identity().device_id,
-                live_error_code=self._live_error_code,
+                live_error_code=live_error_code,
             )
         # Enabled but not running yet, which is what a process that has not
-        # activated this workspace sees.
+        # activated this root sees.
         return WorkspaceSyncStatus(
             enabled=True,
             workspace_id=_workspace_id(root),
             device_id=ensure_device_identity().device_id,
             hub_url=repository.remote_url(),
             state="idle",
+            local_head=repository.head(),
             rejected_changes=_rejected(repository),
-            live_error_code=self._live_error_code,
+            live_error_code=live_error_code,
         )
 
     def discard_rejection(self, rejection_id: str) -> WorkspaceSyncStatus:
@@ -442,16 +483,14 @@ class WorkspaceSyncService:
         ref is the only copy, held only here. It exists so the warning can end
         without a second record of what the user has already looked at.
         """
-        repository = _repository(_workspace_root())
-        if repository is None:
-            raise AppApiError(
-                "workspace_not_configured",
-                "workspace_not_configured.discard",
-                status_code=409,
-            )
-        with _reporting("sync_discard_failed"):
-            repository.discard_rejected(rejection_id)
+        _discard(_workspace_root(), rejection_id)
         return self.get_status()
+
+    def discard_identity_rejection(self, rejection_id: str) -> WorkspaceSyncStatus:
+        """Drop one of the identities' displaced commits, as
+        :meth:`discard_rejection` does for the workspace's."""
+        _discard(get_identity_root(), rejection_id)
+        return self.get_identity_status()
 
     def activate(self) -> WorkspaceSyncStatus:
         """Start the queue for the selected workspace, if it has a hub, and
@@ -548,11 +587,28 @@ class WorkspaceSyncService:
         self._connect_identities()
         with _reporting("sync_retry_failed"):
             result = run_current_sync(
-                lambda manager, root: self._running_status(manager.resume(), root)
+                lambda manager, root: self._running_status(
+                    manager.resume(), root, self._live_error_code
+                )
             )
         if result is None:
             return self.activate()
         return result
+
+    def retry_identities(self) -> WorkspaceSyncStatus:
+        """Put the identities on the workspace's hub if they are not on it, and
+        try their queue again, answering with that attempt as :meth:`retry`."""
+        self._connect_identities()
+        if self._identity_hub_to_join() is None:
+            with _reporting("sync_retry_failed"):
+                result = run_identity_sync(
+                    lambda manager, root: self._running_status(
+                        manager.resume(), root, None
+                    )
+                )
+            if result is not None:
+                return result
+        return self.get_identity_status()
 
     def change_hub(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncStatus:
         """Point the selected workspace at a different hub.
@@ -576,8 +632,9 @@ class WorkspaceSyncService:
 
     # -- Internals ----------------------------------------------------------
 
+    @staticmethod
     def _running_status(
-        self, status: GitSyncStatus, workspace_root: Path
+        status: GitSyncStatus, workspace_root: Path, live_error_code: str | None
     ) -> WorkspaceSyncStatus:
         """Build one response from the manager's explicit workspace root."""
         repository = LocalSyncRepository(workspace_root)
@@ -585,7 +642,7 @@ class WorkspaceSyncService:
             status,
             repository.remote_url(),
             _rejected(repository),
-            live_error_code=self._live_error_code,
+            live_error_code=live_error_code,
         )
 
     @contextmanager
@@ -739,20 +796,32 @@ class WorkspaceSyncService:
         Whichever way a workspace came to have a hub -- connected, copied from
         one, moved to another -- its members' identities belong on the same
         one, so they are connected here, where every one of those ends. A hub
-        that cannot be reached leaves them as they are until the next time.
+        that cannot be reached leaves them as they are until the next time,
+        and what it printed is kept for :meth:`get_identity_status` to show.
         """
         try:
-            workspace = self.hub_target()
-            identities = self.identity_hub_target()
-            if workspace is not None and (
-                identities is None or identities[0] != workspace[0]
-            ):
-                self._enroll_identity(workspace[0])
-        except (AppApiError, SyncStillStoppingError):
+            location = self._identity_hub_to_join()
+            if location is not None:
+                self._enroll_identity(location)
+            self._identity_connect_error = None
+        except (AppApiError, SyncStillStoppingError) as exc:
+            # The words the hub printed, which a hub refusal carries as the
+            # cause of the answer this layer made of it.
+            self._identity_connect_error = str(exc.__cause__ or exc)
             _LOGGER.warning(
                 "The identities could not be connected to the hub.", exc_info=True
             )
         activate_identity_sync()
+
+    def _identity_hub_to_join(self) -> HubLocation | None:
+        """Return the workspace's hub when the identities are not on it."""
+        workspace = self.hub_target()
+        if workspace is None:
+            return None
+        identities = self.identity_hub_target()
+        if identities is not None and identities[0] == workspace[0]:
+            return None
+        return workspace[0]
 
     def _enroll_identity(self, location: HubLocation) -> None:
         """Connect the identities to ``location``'s hub.
@@ -846,6 +915,19 @@ def _key_fingerprint() -> str | None:
     return None if key is None else key.fingerprint
 
 
+def _discard(root: Path | None, rejection_id: str) -> None:
+    """Delete one displaced commit's ref from ``root``'s repository."""
+    repository = _repository(root)
+    if repository is None:
+        raise AppApiError(
+            "workspace_not_configured",
+            "workspace_not_configured.discard",
+            status_code=409,
+        )
+    with _reporting("sync_discard_failed"):
+        repository.discard_rejected(rejection_id)
+
+
 def _repository(workspace_root: Path | None) -> LocalSyncRepository | None:
     if workspace_root is None:
         return None
@@ -927,11 +1009,7 @@ def _recorded_rejections(
     change that is being held would be worse than saying less about it.
     """
     recorded: dict[str, tuple[str, list[str]]] = {}
-    store = ActivityEventStore(
-        get_workspace_state_path("events", workspace_root=workspace_root),
-        workspace_root=workspace_root,
-    )
-    for event in store.list_between(
+    for event in ActivityEventStore.of(workspace_root).list_between(
         datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
     ):
         if event.get("kind") != SYNC_UPDATE_REJECTED:
@@ -1038,7 +1116,6 @@ def _status_model(
         hub_url=hub_url,
         state=status.state,
         local_head=status.local_head,
-        identity_head=_identity_head(),
         remote_head=status.remote_head,
         ahead_count=status.ahead_count,
         behind_count=status.behind_count,
@@ -1049,13 +1126,6 @@ def _status_model(
         last_error_detail=status.last_error_detail,
         live_error_code=live_error_code,
     )
-
-
-def _identity_head() -> str | None:
-    """The commit the identities are on: what changes when another machine's
-    edit of a member's name or accounts has been taken in."""
-    repository = _repository(get_identity_root())
-    return repository.head() if repository is not None else None
 
 
 @contextmanager

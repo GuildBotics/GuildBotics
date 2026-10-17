@@ -20,7 +20,7 @@ import {
   fetchWorkspaceSecrets,
   getWorkspaceSecrets,
   sendWorkspaceSecrets,
-  type SecretScope,
+  type SyncScope,
   type SecretTransferResult,
   type WorkspaceSecretState,
   type WorkspaceSecrets,
@@ -40,7 +40,7 @@ const MOVED = new Set(["sent", "fetched"]);
  * they go from one OS secret store to the other, and what this screen handles
  * is a key name and a generation number.
  */
-export function SecretsCard({ scope }: { scope: SecretScope }) {
+export function SecretsCard({ scope }: { scope: SyncScope }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const queryKey = secretsQueryKey(scope);

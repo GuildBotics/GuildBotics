@@ -104,6 +104,11 @@ ELSEWHERE = {
         "POST",
         "/identities/secrets/send",
     ): "one key generation, read-modify-written inside the port's lock",
+    (
+        "POST",
+        "/identities/sync/rejections/{rejection_id}/discard",
+    ): "deletes a local ref, writes no config",
+    ("POST", "/identities/sync/retry"): "the identities' whole repository",
     ("POST", "/workspace/sync/clone"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/hub"): "a whole workspace, not one config file",

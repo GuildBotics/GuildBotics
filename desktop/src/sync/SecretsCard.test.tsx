@@ -9,7 +9,7 @@ import {
   fetchWorkspaceSecrets,
   getWorkspaceSecrets,
   sendWorkspaceSecrets,
-  type SecretScope,
+  type SyncScope,
   type WorkspaceSecrets,
   type WorkspaceSecretState,
 } from "../api/client";
@@ -61,7 +61,7 @@ function secrets(overrides: Partial<WorkspaceSecrets> = {}): WorkspaceSecrets {
   };
 }
 
-function renderCard(scope: SecretScope = "workspace") {
+function renderCard(scope: SyncScope = "workspace") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
