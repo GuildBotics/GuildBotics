@@ -108,20 +108,6 @@ def memory_sync(
     return manager
 
 
-@pytest.fixture
-def idle_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install the queue a real hub connection activates, without running it.
-
-    These cases exercise Git transport through the endpoints. A running worker
-    starts a cycle of its own as soon as the connection is made, so every later
-    request that pauses or switches the queue waits on that cycle -- dozens of
-    Git processes, which under CI load outlast the stop timeout and turn the
-    request into a 409 unrelated to the case (#570). Queue lifecycle and its
-    stop timeout are covered separately.
-    """
-    monkeypatch.setattr(GitSyncManager, "start", lambda _self: True)
-
-
 def _json(response) -> dict:
     assert response.status_code == HTTP_OK, response.text
     return response.json()
@@ -283,6 +269,7 @@ def _hub_repository(repository: LocalSyncRepository) -> str:
     return workspace_id_from_remote_url(remote)
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_enabling_connects_the_identities_to_the_same_hub(
     client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
@@ -311,6 +298,7 @@ def test_enabling_connects_the_identities_to_the_same_hub(
     assert len(host.list_workspace_ids()) == 2
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_a_connected_workspace_brings_its_identities_to_its_hub(
     client: TestClient, workspace: Path
 ) -> None:
@@ -328,6 +316,7 @@ def test_a_connected_workspace_brings_its_identities_to_its_hub(
     assert _hub_repository(identities) == identity_id
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_shutting_down_stops_the_identities_queue_too(
     client: TestClient, workspace: Path
 ) -> None:
