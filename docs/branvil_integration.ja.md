@@ -108,3 +108,22 @@ account_info:
   です。
 - 失敗やレート制限で終わった実行は、チケットや pull request に状態の通知を残します。Branvil は
   それを通知として表示し、誰かが動くまでその項目を巡回から外します。
+
+## 上流が GitHub のリポジトリ
+
+Branvil のリポジトリは、GitHub のリポジトリに追従できます（*上流*。Branvil の README を参照）。
+このとき正本は GitHub のままで、Branvil はメンバーが試行錯誤する場所になります。
+
+- メンバーは上と同じように Branvil で作業します。その間、GitHub には何も出ません。
+- pull request ができあがったら、オーナーは Branvil の GUI でマージの代わりに GitHub に出します。
+  Branvil はブランチを push し、最終的なタイトルと本文で、**作成者の GitHub アカウントとして**
+  GitHub に pull request を開きます。そのため、AI メンバーごとの bot アカウントを Branvil にも
+  登録してください（`branvil member account <name>`。GuildBotics に登録する Branvil のトークンとは
+  別）。GitHub の読み取りにはオーナーのアカウントを使います。
+- 出した head に対する GitHub のチェックは、pull request のチェックに `github/<name>` として
+  ログ付きで並びます。GitHub で（Windows などで）失敗すると pull request は ready にならず、
+  メンバーは Branvil で直します。その後の push は自動で GitHub に届きます。
+- 承認とマージは GitHub で人が行います。Branvil は GitHub の既定ブランチに追従して pull request を
+  マージ済みにするので、巡回はいつもどおりチケットを **完了** に移します。
+- チケットには、それに当たる GitHub の Issue を記録できます。出した pull request はその Issue を
+  閉じます。

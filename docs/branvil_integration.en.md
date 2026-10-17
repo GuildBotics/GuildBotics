@@ -110,3 +110,24 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
 - Draft pull requests are left alone. Only the owner makes a draft ready for review.
 - A run that fails or is rate-limited leaves a status notice on the ticket or the pull
   request; Branvil shows it as a notice, and it holds the item until someone acts on it.
+
+## Repositories with an upstream on GitHub
+
+A Branvil repository may follow a GitHub repository (its *upstream*; see the Branvil
+README). GitHub then stays the place of record, and Branvil is where the members try
+things:
+
+- Members work in Branvil exactly as above. Nothing reaches GitHub while they do.
+- When a pull request is done, the owner publishes it from Branvil's GUI instead of
+  merging: Branvil pushes the branch and opens a pull request on GitHub with the final
+  title and body, **as the author's GitHub account**. Give each AI member's bot account
+  to Branvil for this (`branvil member account <name>`), besides its Branvil token in
+  GuildBotics; the owner's account reads GitHub for Branvil.
+- GitHub's checks of the published head appear among the pull request's checks
+  (`github/<name>`) with their logs, so a failure on GitHub (Windows, for example) keeps
+  the pull request from being ready, and the member fixes it in Branvil; later pushes
+  reach GitHub on their own.
+- People approve and merge on GitHub. Branvil then follows GitHub's default branch and
+  marks its pull request merged, so the patrol moves the ticket to **Done** as usual.
+- A ticket can name the GitHub issue it stands for; the published pull request then
+  closes that issue.
