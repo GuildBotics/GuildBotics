@@ -25,6 +25,7 @@ from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import KeyringSecretStore, SecretKeyStatus
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from tests.guildbotics.secrets.fake_hub import FakeHub
+from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 
 @pytest.fixture
@@ -227,6 +228,38 @@ def test_fetching_replaces_a_superseded_value(store):
 
     assert other.get("A_TOKEN") == "ghp-second"
     assert _status(other, "A_TOKEN") is SecretKeyStatus.READY
+
+
+def test_a_fetch_decides_inside_the_lock_of_the_store_s_own_workspace(
+    fake_keyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The selected workspace is ``tmp_path``; the fetch is for another one.
+
+    The second look at the key and the write it allows have to share the lock
+    of the queue that commits this store's index, or an edit can land between
+    them. The selected workspace's lock orders them against nothing.
+    """
+    other_root = tmp_path / "other"
+    sender = KeyringSecretStore(other_root / ".guildbotics" / "config")
+    sender.set("A_TOKEN", "ghp-first")
+    hub = FakeHub()
+    SecretTransfer(sender, hub).send(["A_TOKEN"])
+    receiver = _second_device(sender)
+    held: list[tuple[bool, bool]] = []
+    key_state = receiver.key_state
+
+    def watched(key: str):
+        held.append(
+            (shared_write_lock_is_held(other_root), shared_write_lock_is_held(tmp_path))
+        )
+        return key_state(key)
+
+    monkeypatch.setattr(receiver, "key_state", watched)
+
+    SecretTransfer(receiver, hub).fetch(["A_TOKEN"])
+
+    assert receiver.get("A_TOKEN") == "ghp-first"
+    assert held[-1] == (True, False)
 
 
 def test_a_hub_generation_the_workspace_has_not_recorded_is_not_adopted(store):

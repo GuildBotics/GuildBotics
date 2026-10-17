@@ -18,12 +18,13 @@ import re
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Concatenate
 
 from dotenv import dotenv_values
 
@@ -32,6 +33,7 @@ from guildbotics.utils.fileio import (
     get_workspace_config_dir,
     load_yaml_dict,
     save_yaml_file,
+    workspace_root_from_config_dir,
 )
 from guildbotics.utils.keychain import (
     InvalidSecretKeyError,
@@ -39,7 +41,7 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
-from guildbotics.utils.shared_write_lock import shared_write_operation
+from guildbotics.utils.shared_write_lock import shared_write_lock
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
@@ -271,6 +273,19 @@ class SecretStore(ABC):
         return result
 
 
+def _store_operation[**P, R](
+    func: Callable[Concatenate[KeyringSecretStore, P], R],
+) -> Callable[Concatenate[KeyringSecretStore, P], R]:
+    """Make the whole method one span of the store's :meth:`write_span`."""
+
+    @wraps(func)
+    def wrapper(self: KeyringSecretStore, *args: P.args, **kwargs: P.kwargs) -> R:
+        with self.write_span():
+            return func(self, *args, **kwargs)
+
+    return wrapper
+
+
 class KeyringSecretStore(SecretStore):
     """OS keychain storage with a non-secret key index in the workspace.
 
@@ -278,10 +293,9 @@ class KeyringSecretStore(SecretStore):
     writes the index back, so the whole operation is one span rather than the
     write at the end of it: read outside one, the index that gets written back
     is the one from before a hub's version was adopted, and the generations
-    another device published are silently reverted. The operations declare that
-    span with :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`
-    because it is simply the method -- there is nothing in them that waits on
-    anything remote.
+    another device published are silently reverted. The operations hold
+    :meth:`write_span` for the whole method because there is nothing in them
+    that waits on anything remote.
     """
 
     def __init__(
@@ -300,6 +314,22 @@ class KeyringSecretStore(SecretStore):
             local_index or config_dir.parent / "local" / LOCAL_SECRETS_FILENAME
         )
         self._keychain = keychain or system_keychain()
+
+    @contextlib.contextmanager
+    def write_span(self) -> Iterator[None]:
+        """Hold the shared-write lock of the workspace this store belongs to.
+
+        That is the workspace whose ``config/`` holds the index, which is not
+        necessarily the selected one: the lock has to be the one the queue
+        that commits this index takes, or it serializes against nothing. A
+        store outside any workspace has no queue and takes no lock.
+        """
+        root = workspace_root_from_config_dir(self.location.parent)
+        if root is None:
+            yield
+            return
+        with shared_write_lock(root):
+            yield
 
     def get(self, key: str) -> str | None:
         local = self._read_local()
@@ -353,7 +383,7 @@ class KeyringSecretStore(SecretStore):
     def set(self, key: str, value: str) -> None:
         self.set_many({key: value})
 
-    @shared_write_operation
+    @_store_operation
     def set_many(self, values: dict[str, str]) -> None:
         index = self._read_index()
         local = self._read_local()
@@ -374,7 +404,7 @@ class KeyringSecretStore(SecretStore):
             raise SecretStoreError(str(exc)) from exc
         self._record_keys(index, local, written_keys)
 
-    @shared_write_operation
+    @_store_operation
     def confirm_shared(
         self, generations: dict[str, int], *, sent: dict[str, str]
     ) -> None:
@@ -436,7 +466,7 @@ class KeyringSecretStore(SecretStore):
         except Exception:
             return False
 
-    @shared_write_operation
+    @_store_operation
     def adopt_received(self, key: str, value: str, generation: int) -> None:
         """Store a value taken from the hub as the generation the hub holds.
 
@@ -457,7 +487,7 @@ class KeyringSecretStore(SecretStore):
         local["keys"][key] = {"generation": generation, "pending_send": False}
         self._write_local(local)
 
-    @shared_write_operation
+    @_store_operation
     def delete(self, key: str) -> None:
         index = self._read_index()
         local = self._read_local()
@@ -472,7 +502,7 @@ class KeyringSecretStore(SecretStore):
         if local["keys"].pop(key, None) is not None:
             self._write_local(local)
 
-    @shared_write_operation
+    @_store_operation
     def rename(self, old_key: str, new_key: str) -> None:
         """Move a key's shared metadata, local generation, and stored value.
 
@@ -512,7 +542,7 @@ class KeyringSecretStore(SecretStore):
     def keys(self) -> list[str]:
         return [state.key for state in self.key_states()]
 
-    @shared_write_operation
+    @_store_operation
     def ensure_initialized(self) -> None:
         """Persist the shared index and this device's keychain namespace.
 

@@ -49,7 +49,7 @@ from guildbotics.utils.secret_store import (
     SecretKeyStatus,
     is_locked_error,
 )
-from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 
 #: What a key's standing is called when the hub holds a generation the shared
 #: history does not name. It is not one of the device's own states: only the
@@ -368,13 +368,14 @@ class SecretTransfer:
         The span from the check in :meth:`_fetch` to this write crosses the
         network, so it holds no lock -- and a value can be typed here in
         between, which a fetch must not overwrite. So the same
-        :func:`can_fetch` is asked again, this time inside the shared-write
-        lock the store's own write re-enters, where the answer and the write
+        :func:`can_fetch` is asked again, this time inside the store's
+        :meth:`~guildbotics.utils.secret_store.KeyringSecretStore.write_span`,
+        which its own write re-enters, where the answer and the write
         cannot be interleaved with another writer. Any edit in between changes
         the answer: entering a value marks the key as pending, and deleting it
         takes the shared entry with it.
         """
-        with shared_write_lock():
+        with self._store.write_span():
             refusal = _fetch_refusal(key, self._store.key_state(key), generation)
             if refusal is not None:
                 return refusal
