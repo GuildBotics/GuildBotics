@@ -824,10 +824,12 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
     bus_before = len(bus.snapshot_events())
     # The status a reader of the failure event would find at that moment.
     status_at_failure: list[str] = []
+    workers: list[threading.Thread] = []
     publish = bus.publish_event
 
     def recording_publish(event_type: str, payload: Any = None, **kwargs: Any) -> None:
         if event_type == "scheduler.failed" and "traceback" in (payload or {}):
+            workers.append(threading.current_thread())
             status_at_failure.append(service.get_status().scheduler.state)
         publish(event_type, payload, **kwargs)
 
@@ -851,6 +853,9 @@ def test_scheduler_thread_exception_reflected_in_failed_event_and_status(
         assert _wait_until(lambda: status_at_failure)
     finally:
         FakeScheduler.__init__ = original_init  # type: ignore[method-assign]
+        for worker in workers:
+            worker.join(timeout=10)
+            assert not worker.is_alive()
 
     assert status_at_failure == ["failed"]
     status = service.get_status().scheduler
@@ -888,7 +893,11 @@ def test_status_refresh_after_thread_terminates_naturally(
     scheduler = FakeScheduler.instances[0]
 
     # Let the scheduler loop finish on its own (no stop() call).
+    thread = service._scheduler._thread
+    assert thread is not None
     scheduler._stop.set()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
     assert _wait_until(lambda: service.get_status().scheduler.state == "stopped")
 
     status = service.get_status().scheduler

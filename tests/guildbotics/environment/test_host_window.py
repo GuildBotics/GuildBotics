@@ -946,20 +946,21 @@ async def test_a_call_larger_than_the_limit_is_refused(monkeypatch, chunked) -> 
 async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(member_broker, "_MAX_OUTPUT_BYTES", 64)
 
     async def host(name: str, arguments: dict[str, Any]) -> Any:
         if name == "slow":
-            await asyncio.sleep(1)
+            await asyncio.Event().wait()
         if name == "broken":
             raise ValueError("Host operation failed.")
         return "x" * 128
 
     async with _served(host) as (client, url):
         slow = HostClient(url, client.headers["Authorization"].split()[1])
-        with pytest.raises(HostCallError) as timed_out:
-            await slow.acall("slow")
+        with monkeypatch.context() as timeout_patch:
+            timeout_patch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+            with pytest.raises(HostCallError) as timed_out:
+                await slow.acall("slow")
         with pytest.raises(HostCallError) as too_much:
             await slow.acall("large")
         with pytest.raises(HostCallError) as broken:
@@ -1563,7 +1564,6 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
         return 0, "", ""
 
     monkeypatch.setattr(member_broker, "_member_cli", run_in_process)
-    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
 
     async def run_command():
         async with _command(monkeypatch, tmp_path) as command:
@@ -1591,7 +1591,13 @@ async def test_cancellation_during_teardown_waits_for_timed_out_member_write(
                     await close()
 
             monkeypatch.setattr(target, "close", slow_close)
-            result = await shared._broker.execute(shared._broker.turn_grant, ["help"])
+            with monkeypatch.context() as timeout_patch:
+                timeout_patch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+                call = asyncio.create_task(
+                    shared._broker.execute(shared._broker.turn_grant, ["help"])
+                )
+                await asyncio.wait_for(started.wait(), 10)
+                result = await call
             assert result.exit_code == 124
 
     task = asyncio.create_task(run_command())

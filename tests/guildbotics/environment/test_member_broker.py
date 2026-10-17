@@ -183,22 +183,29 @@ async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
     monkeypatch, tmp_path
 ) -> None:
     release = threading.Event()
+    entered = asyncio.Event()
+    loop = asyncio.get_running_loop()
     started: list[list[str]] = []
 
     def run_in_process(arguments, invocation, *, cwd, stdin):
         started.append(arguments)
         if arguments == ["hang"]:
-            release.wait(5)
+            loop.call_soon_threadsafe(entered.set)
+            release.wait()
         return 0, "done", ""
 
-    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(member_broker, "_rejection_reason", lambda *_: None)
     broker = _active_broker(_context(tmp_path), run_in_process)
     try:
-        timed_out = await broker.execute("turn-1", ["hang"])
+        with monkeypatch.context() as timeout_patch:
+            timeout_patch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+            call = asyncio.create_task(broker.execute("turn-1", ["hang"]))
+            await asyncio.wait_for(entered.wait(), 10)
+            timed_out = await call
         following = await broker.execute("turn-1", ["help"])
     finally:
         release.set()
+        await broker.close()
 
     assert timed_out.exit_code == 124
     assert "may still complete" in timed_out.stderr

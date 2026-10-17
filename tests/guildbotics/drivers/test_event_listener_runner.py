@@ -141,7 +141,12 @@ def test_runner_notifies_when_worker_thread_stops(monkeypatch) -> None:
     monkeypatch.setattr(runner, "_run_loop", finish_immediately)
 
     runner.start()
-    assert stopped.wait(timeout=1.0)
+    try:
+        assert stopped.wait(timeout=10)
+    finally:
+        runner.stop()
+        runner.join(timeout=10)
+    assert not runner.is_alive()
 
 
 def _wait_for(condition: Callable[[], bool], timeout: float = 5.0) -> None:

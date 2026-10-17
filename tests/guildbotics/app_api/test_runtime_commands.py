@@ -1479,7 +1479,7 @@ def test_command_reservation_does_not_wait_for_workspace_switch():
         with runtime._lock:
             future = executor.submit(runtime._reserve_command, "incoming")
             with pytest.raises(AppApiError) as exc_info:
-                future.result(timeout=1)
+                future.result(timeout=10)
     assert exc_info.value.code == "command_workspace_changing"
     assert exc_info.value.status_code == HTTP_CONFLICT
 
@@ -1536,7 +1536,7 @@ async def test_run_command_appears_in_runtime_active_work(
     task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
     )
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.wait_for(started.wait(), timeout=10)
 
     status = runtime.get_scheduler_status()
     assert len(status.active_works) == 1
@@ -1570,14 +1570,14 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
     command_task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
     )
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.wait_for(started.wait(), timeout=10)
 
     stop_task = asyncio.create_task(asyncio.to_thread(runtime.stop_scheduler))
     await asyncio.sleep(0.05)
     assert stop_task.done() is False
 
     finish.set()
-    stopped = await asyncio.wait_for(stop_task, timeout=1.0)
+    stopped = await asyncio.wait_for(stop_task, timeout=10)
     await command_task
     assert stopped.active_works == []
 
@@ -1587,7 +1587,7 @@ async def test_force_stop_scheduler_cancels_manual_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_bus = EventBus()
-    runtime = AppRuntime(event_bus, stop_timeout_seconds=1.0)
+    runtime = AppRuntime(event_bus, stop_timeout_seconds=10)
     started = asyncio.Event()
     cancelled = {"value": False}
 
@@ -1608,7 +1608,7 @@ async def test_force_stop_scheduler_cancels_manual_command(
     command_task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
     )
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.wait_for(started.wait(), timeout=10)
 
     stopped = await asyncio.to_thread(runtime.stop_scheduler, force=True)
 

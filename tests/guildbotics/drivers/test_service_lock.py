@@ -251,7 +251,12 @@ def test_a_setting_half_written_by_hand_keeps_the_hold_until_it_reads(
     try:
         with caplog.at_level(logging.WARNING):
             _replace(settings, "keep_awake: [")
-            time.sleep(0.2)
+            assert _wait_until(
+                lambda: any(
+                    "keep-awake setting cannot be read" in record.getMessage()
+                    for record in caplog.records
+                )
+            )
             held_while_unreadable = wakepy.modecount()
             _replace(settings, "keep_awake: false\n")
             released = _wait_until(lambda: wakepy.modecount() == 0)
@@ -281,21 +286,30 @@ def test_a_held_service_reads_the_setting_only_when_it_changes(
     """An open file cannot be replaced on Windows, so the holder must not keep
     the file open for the writer's save to land on."""
     reads = []
+    polls = []
     original = service_lock_module.service_keeps_awake
+    signature = service_lock_module._signature
+
+    def polled(path):
+        result = signature(path)
+        polls.append(result)
+        return result
 
     def counting(workspace=None):
         reads.append(workspace)
         return original(workspace)
 
     monkeypatch.setattr(service_lock_module, "service_keeps_awake", counting)
+    monkeypatch.setattr(service_lock_module, "_signature", polled)
     service_lock = ServiceLock(tmp_path / "service.lock")
     service_lock.acquire(owner="cli", workspace=workspace)
     try:
-        time.sleep(0.3)
+        assert _wait_until(lambda: len(polls) >= 3)
         unchanged = len(reads)
         set_service_keeps_awake(True)
         followed = _wait_until(lambda: wakepy.modecount() == 1)
-        time.sleep(0.3)
+        polled_at_change = len(polls)
+        assert _wait_until(lambda: len(polls) >= polled_at_change + 2)
         changed = len(reads)
     finally:
         service_lock.release()
@@ -314,7 +328,6 @@ def test_a_released_service_no_longer_follows_the_setting(
     service_lock.release()
 
     set_service_keeps_awake(True)
-    time.sleep(0.2)
 
     assert wakepy.modecount() == 0
     assert [

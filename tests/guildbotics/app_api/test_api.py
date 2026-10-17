@@ -90,7 +90,7 @@ HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_INTERNAL_SERVER_ERROR = 500
 HTTP_CONFLICT = 409
-THREAD_WAIT_SECONDS = 2.0
+THREAD_WAIT_SECONDS = 10.0
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 GITHUB_APPS_USER_ID = 42
@@ -2110,7 +2110,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(monkeypatch) -> None:
 
         def start(self) -> None:
             started.set()
-            release.wait(THREAD_WAIT_SECONDS)
+            release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_calls += 1
@@ -2183,7 +2183,7 @@ def test_app_runtime_marks_scheduler_failed_on_stop_timeout(monkeypatch) -> None
 
         def start(self) -> None:
             started.set()
-            release.wait(THREAD_WAIT_SECONDS)
+            release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_timeout = timeout
@@ -2275,7 +2275,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(monkeypatch) -> None:
             RunningScheduler.instances.append(self)
 
         def start(self) -> None:
-            scheduler_release.wait(THREAD_WAIT_SECONDS)
+            scheduler_release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             self.shutdown_calls += 1
@@ -2400,7 +2400,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(monkeypatch) ->
             return
 
         def start(self) -> None:
-            scheduler_release.wait(THREAD_WAIT_SECONDS)
+            scheduler_release.wait()
 
         def shutdown(self, graceful: bool = True, timeout: float | None = None) -> None:
             scheduler_release.set()

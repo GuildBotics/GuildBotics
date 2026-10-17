@@ -163,9 +163,21 @@ def test_clear_stop_request_ignores_control_lock_timeout(monkeypatch, tmp_path) 
     assert path.exists()
 
 
-def test_watcher_accepts_only_matching_instance_and_escalates(tmp_path) -> None:
+def test_watcher_accepts_only_matching_instance_and_escalates(
+    tmp_path, monkeypatch
+) -> None:
     path = tmp_path / "stop-request.json"
     calls: list[bool] = []
+    stale_reads = []
+    read = service_control.read_stop_request
+
+    def observed(path):
+        result = read(path)
+        if result is not None and result.service_instance_id == "stale":
+            stale_reads.append(result)
+        return result
+
+    monkeypatch.setattr(service_control, "read_stop_request", observed)
     watcher = ServiceControlWatcher(
         "service-1",
         lambda *, cancel: calls.append(cancel),
@@ -175,22 +187,25 @@ def test_watcher_accepts_only_matching_instance_and_escalates(tmp_path) -> None:
     watcher.start()
     try:
         write_stop_request("stale", "cancel", path)
-        time.sleep(0.02)
+        _wait_for(lambda: len(stale_reads) >= 2)
         assert calls == []
 
         write_stop_request("service-1", "graceful", path)
-        deadline = time.monotonic() + 1
-        while calls != [False] and time.monotonic() < deadline:
-            time.sleep(0.005)
+        _wait_for(lambda: calls == [False])
         assert calls == [False]
 
         write_stop_request("service-1", "cancel", path)
-        deadline = time.monotonic() + 1
-        while calls != [False, True] and time.monotonic() < deadline:
-            time.sleep(0.005)
+        _wait_for(lambda: calls == [False, True])
         assert calls == [False, True]
     finally:
         watcher.close()
+
+
+def _wait_for(condition) -> None:
+    deadline = time.monotonic() + 10
+    while not condition():
+        assert time.monotonic() < deadline, "the watcher did not observe the request"
+        time.sleep(0.005)
 
 
 def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
@@ -206,15 +221,11 @@ def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
         watcher.start()
         try:
             write_stop_request(f"service-{attempt}", "graceful", path)
-            deadline = time.monotonic() + 1
-            while calls != [False] and time.monotonic() < deadline:
-                time.sleep(0.001)
+            _wait_for(lambda: calls == [False])
             assert calls == [False]
 
             write_stop_request(f"service-{attempt}", "cancel", path)
-            deadline = time.monotonic() + 1
-            while calls != [False, True] and time.monotonic() < deadline:
-                time.sleep(0.001)
+            _wait_for(lambda: calls == [False, True])
             assert calls == [False, True]
         finally:
             watcher.close()
@@ -223,8 +234,17 @@ def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
 def test_watcher_recovers_after_control_lock_timeout(monkeypatch, tmp_path) -> None:
     path = tmp_path / "stop-request.json"
     calls: list[bool] = []
+    timed_out = threading.Event()
     monkeypatch.setattr(service_control, "_LOCK_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(service_control, "_LOCK_RETRY_SECONDS", 0.001)
+    read = service_control.read_stop_request
+
+    def observed(path):
+        result = read(path)
+        timed_out.set()
+        return result
+
+    monkeypatch.setattr(service_control, "read_stop_request", observed)
     watcher = ServiceControlWatcher(
         "service-1",
         lambda *, cancel: calls.append(cancel),
@@ -235,12 +255,10 @@ def test_watcher_recovers_after_control_lock_timeout(monkeypatch, tmp_path) -> N
     try:
         with service_control._request_lock(path):
             watcher.start()
-            time.sleep(0.05)
+            assert timed_out.wait(10)
 
         write_stop_request("service-1", "graceful", path)
-        deadline = time.monotonic() + 1
-        while calls != [False] and time.monotonic() < deadline:
-            time.sleep(0.001)
+        _wait_for(lambda: calls == [False])
         assert calls == [False]
     finally:
         watcher.close()
