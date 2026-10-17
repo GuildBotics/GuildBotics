@@ -606,12 +606,17 @@ describe("changes the hub did not accept", () => {
     expect(discardWorkspaceSyncRejection).toHaveBeenCalledWith(held.rejection_id, "workspace");
   });
 
-  it("lists a change to the members apart, says where it is held, and discards it there", async () => {
+  it.each([
+    ["in sync", { enabled: true, state: "idle" as const }],
+    ["not on the hub", { enabled: true, state: "not_connected" as const }],
+    ["no longer synchronized", { enabled: false, state: "disabled" as const }],
+  ])("lists a change to the members apart and discards it there, %s", async (_label, members) => {
     // The members' identities are a repository of their own, shared by every
-    // workspace: the recovery procedure runs there, and so does the discard.
+    // workspace: the recovery procedure runs there, and so does the discard --
+    // whether or not they are connected to a hub right now.
     const user = userEvent.setup();
     const connected = status({ enabled: true, state: "idle" });
-    mockSyncStatuses(connected, { ...connected, rejected_changes: [held] });
+    mockSyncStatuses(connected, status({ ...members, rejected_changes: [held] }));
     vi.mocked(discardWorkspaceSyncRejection).mockResolvedValue(connected);
     renderSettings();
 

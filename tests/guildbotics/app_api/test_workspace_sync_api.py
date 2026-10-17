@@ -516,6 +516,10 @@ def test_status_operations_keep_one_workspace_while_a_switch_starts(
     real_method = getattr(first, manager_method)
 
     def delayed_manager_operation() -> GitSyncStatus:
+        # The queue's own worker answers its cycles with the same method, and
+        # holding it here would stand in for the read under test.
+        if threading.current_thread() is not reader:
+            return real_method()
         inside.set()
         assert release.wait(5)
         return real_method()
@@ -747,6 +751,103 @@ def test_the_identities_displaced_commits_are_reported_and_discarded_apart(
 
     assert payload["rejected_changes"] == []
     assert not LocalSyncRepository(get_identity_root()).list_rejected()
+
+
+@pytest.mark.usefixtures("idle_queue")
+def test_a_displaced_commit_outlives_the_identities_leaving_the_hub(
+    client: TestClient,
+) -> None:
+    """Being connected and holding a displaced commit are independent: the
+    identities off the workspace's hub still list, and discard, what this
+    machine holds."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    rejection_id = _reject(get_identity_root())
+    LocalSyncRepository(get_identity_root()).clear_remote()
+
+    payload = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+
+    assert payload["state"] == "not_connected"
+    assert [item["rejection_id"] for item in payload["rejected_changes"]] == [
+        rejection_id
+    ]
+    assert payload["local_head"]
+    discarded = _json(
+        client.post(
+            f"/identities/sync/rejections/{rejection_id}/discard",
+            headers=AUTH_HEADERS,
+        )
+    )
+    assert discarded["state"] == "not_connected"
+    assert discarded["rejected_changes"] == []
+
+
+def test_identities_off_the_hub_report_nothing_their_queue_did_against_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a hub change the identities' queue can still be synchronizing with
+    the old hub; its counts and times are about that hub, not this one, while
+    what this machine holds stays."""
+    held = RejectedChangeModel(
+        rejection_id="held", occurred_at="2026-10-17T00:00:00Z", paths=[CONFIG]
+    )
+    queue = workspace_sync.WorkspaceSyncStatus(
+        enabled=True,
+        hub_url="old-hub",
+        state="idle",
+        local_head="head",
+        remote_head="old-head",
+        ahead_count=2,
+        behind_count=3,
+        unsendable_changes=[{"path": CONFIG, "reason": "too large"}],
+        rejected_changes=[held],
+        last_success_at="2026-10-17T00:00:00Z",
+    )
+    monkeypatch.setattr(workspace_sync, "run_identity_sync", lambda _operation: queue)
+    service = workspace_sync.WorkspaceSyncService()
+    monkeypatch.setattr(
+        service, "_identity_hub_to_join", lambda: workspace_sync.HubLocation()
+    )
+    service._identity_connect_error = "Error: No such command 'identity'."
+
+    status = service.get_identity_status()
+
+    assert status.state == "not_connected"
+    assert (status.hub_url, status.remote_head, status.last_success_at) == (
+        None,
+        None,
+        None,
+    )
+    assert (status.ahead_count, status.behind_count) == (0, 0)
+    assert status.last_error_detail == "Error: No such command 'identity'."
+    assert status.local_head == "head"
+    assert status.rejected_changes == [held]
+    assert [change.path for change in status.unsendable_changes] == [CONFIG]
+
+
+@pytest.mark.parametrize("scope", ["workspace", "identities"])
+@pytest.mark.usefixtures("idle_queue")
+def test_a_displaced_commit_outlives_synchronization_being_off(
+    client: TestClient, workspace: Path, scope: str
+) -> None:
+    """A repository with no hub and no queue running still holds what it set
+    aside, so the answer about it lists that for the user to discard."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    root = workspace if scope == "workspace" else get_identity_root()
+    rejection_id = _reject(root)
+    service = client.app.state.runtime.workspace_sync_service
+    assert service.deactivate()
+    assert activation.deactivate_identity_sync()
+    for repository_root in (workspace, get_identity_root()):
+        LocalSyncRepository(repository_root).clear_remote()
+
+    payload = _json(client.get(f"/{scope}/sync", headers=AUTH_HEADERS))
+
+    assert payload["enabled"] is False
+    assert [item["rejection_id"] for item in payload["rejected_changes"]] == [
+        rejection_id
+    ]
 
 
 def test_identities_without_a_hub_are_not_synchronized(client: TestClient) -> None:

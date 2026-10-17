@@ -423,18 +423,27 @@ class WorkspaceSyncService:
         they are not on it -- that hub predates holding them, or could not be
         reached when they were last connected -- nothing about them reaches the
         other machines, so they are reported as not connected rather than by
-        whatever their own repository last did.
+        whatever their own queue last did against another hub. What this
+        machine holds -- its head, what it set aside, what it cannot send --
+        does not depend on being connected, so that stays as their repository
+        has it.
         """
-        root = get_identity_root()
-        if self._identity_hub_to_join() is not None:
-            return WorkspaceSyncStatus(
-                enabled=True,
-                workspace_id=_workspace_id(root),
-                device_id=ensure_device_identity().device_id,
-                state="not_connected",
-                last_error_detail=self._identity_connect_error,
-            )
-        return self._status(run_identity_sync, root)
+        status = self._status(run_identity_sync, get_identity_root())
+        if self._identity_hub_to_join() is None:
+            return status
+        return status.model_copy(
+            update={
+                "enabled": True,
+                "state": "not_connected",
+                "hub_url": None,
+                "remote_head": None,
+                "ahead_count": 0,
+                "behind_count": 0,
+                "last_success_at": None,
+                "last_error_code": None,
+                "last_error_detail": self._identity_connect_error,
+            }
+        )
 
     def _status(
         self,
@@ -456,23 +465,18 @@ class WorkspaceSyncService:
             return running
 
         repository = _repository(root)
-        if repository is None or not repository.has_remote():
-            return WorkspaceSyncStatus(
-                enabled=False,
-                workspace_id=_workspace_id(root),
-                device_id=ensure_device_identity().device_id,
-                live_error_code=live_error_code,
-            )
-        # Enabled but not running yet, which is what a process that has not
-        # activated this root sees.
+        hub_url = repository.remote_url() if repository is not None else None
+        # Enabled but not running yet is what a process that has not activated
+        # this root sees. Either way, what the repository still holds is
+        # reported: a hub coming and going does not take it away.
         return WorkspaceSyncStatus(
-            enabled=True,
+            enabled=hub_url is not None,
             workspace_id=_workspace_id(root),
             device_id=ensure_device_identity().device_id,
-            hub_url=repository.remote_url(),
-            state="idle",
-            local_head=repository.head(),
-            rejected_changes=_rejected(repository),
+            hub_url=hub_url,
+            state="idle" if hub_url is not None else "disabled",
+            local_head=repository.head() if repository is not None else None,
+            rejected_changes=_rejected(repository) if repository is not None else [],
             live_error_code=live_error_code,
         )
 

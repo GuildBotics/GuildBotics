@@ -189,6 +189,18 @@ describe("the synchronization warning band", () => {
     expect(screen.queryByText(t("sync.rejected.alertTitle.workspace"))).toBe(null);
   });
 
+  it.each([
+    ["not on the hub", { state: "not_connected" as const }],
+    ["no longer synchronized", { enabled: false, state: "disabled" as const }],
+  ])("keeps a set aside change in view while the members are %s", async (_label, off) => {
+    // Being connected and holding a set aside change are independent: the
+    // change stays this machine's to look at and discard either way.
+    mockSyncStatuses(status(), status({ ...off, rejected_changes: [held] }));
+    renderAlerts();
+
+    expect(await screen.findByText(t("sync.rejected.alertTitle.identities"))).toBeInTheDocument();
+  });
+
   it("says the members are not on the hub, in its words, and retries only them", async () => {
     // An older hub is reached -- the workspace synchronizes with it -- but
     // cannot hold the members, and only what it printed says so.
