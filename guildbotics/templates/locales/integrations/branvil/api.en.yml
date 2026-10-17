@@ -1,6 +1,6 @@
 en:
   authentication: "Branvil rejected the member's token. Check the member's Branvil token."
-  not_found: "Branvil has no such item, or does not show it to the member: %{message}"
+  not_found: "Branvil has no such item: %{message}"
   unsupported: "Branvil does not offer this: %{message}"
   head_moved: "The pull request's head is no longer the commit the member read: read the new commits, then submit again on the current head."
   label_undefined: "A label is not defined in the repository. %{message} Ask a human to add the label instead of introducing a new one."
@@ -21,5 +21,4 @@ en:
   no_head: "%{url} has no head commit."
   no_base: "The base branch of %{url} is gone."
   artifact_too_large: "Artifact '%{name}' is above the %{limit} byte limit. Ask a human to retrieve it."
-  off_board: "%{url} is not on the board %{board}: put it there first."
-  other_board: "%{url} is on the board %{board}, not on the one the project takes tickets from: a human moves it between boards."
+  off_board: "%{url} is not on the board of the workspace %{workspace}: put it there first."

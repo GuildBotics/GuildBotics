@@ -11,7 +11,7 @@ GitHub answers from :class:`GitHubDouble`, a GitHub that keeps what it is sent
 and checks that what a request names belongs to what the path says; Branvil
 from :class:`~tests.guildbotics.integrations.branvil_double.BranvilDouble`,
 which does the same by Branvil's API, with tickets numbered in the
-repository and a board; ``local``
+repository and the board of its workspace; ``local``
 keeps its files under the test's workspace, with a repository three names deep
 and tickets keyed ``T-<n>`` in a tracker of their own.
 
@@ -98,7 +98,9 @@ def harness(name: str, tmp_path: Path, monkeypatch) -> Harness:
     )
 
 
-def _services(name: str, scope: str, **board: str) -> tuple[Any, Any]:
+def _services(
+    name: str, scope: str, *, key: str = "owner", **board: str
+) -> tuple[Any, Any]:
     person = Person(
         person_id=MEMBER,
         name="Aiko",
@@ -108,8 +110,8 @@ def _services(name: str, scope: str, **board: str) -> tuple[Any, Any]:
     project = Project(
         name="demo",
         services={
-            "code_hosting_service": {"name": name, "owner": scope},
-            "ticket_service": {"name": name, "owner": scope, **board},
+            "code_hosting_service": {"name": name, key: scope},
+            "ticket_service": {"name": name, key: scope, **board},
         },
     )
     team = Team(project=project, members=[person])
@@ -253,9 +255,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
     double = branvil_double.BranvilDouble()
     branvil_double.serve(double, monkeypatch)
     monkeypatch.setenv(f"{MEMBER.upper()}_BRANVIL_TOKEN", branvil_double.TOKEN)
-    code, tickets = _services(
-        "branvil", branvil_double.SCOPE, board=branvil_double.BOARD
-    )
+    code, tickets = _services("branvil", branvil_double.SCOPE, key="workspace")
     return Harness(
         "branvil",
         code,

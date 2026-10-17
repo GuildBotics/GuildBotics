@@ -7,19 +7,20 @@ answered only under the item it belongs to, a branch only by its exact
 name, a review or an inline comment only on the current head
 (``409 head_moved``) and only on a file the pull request changes
 (``400 invalid``; every branch commit changes ``CHANGED``), a label only if
-the ticket's repository defines it (``400 label_undefined``), a ticket only
-on a board there is, a new pull request's link that closes only to a ticket
-of its repository (``422 unsupported``), and an artifact only if it is a zip
-archive. A repository numbers its tickets from 1, apart from its pull
-requests. It does not hold writes to the member's scope -- the provider
-refuses those before any request. As Branvil does, it records an author's
+the ticket's repository defines it (``400 label_undefined``), a new pull
+request's link that closes only to a ticket of its repository (``422
+unsupported``), and an artifact only if it is a zip archive. A repository
+(``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
+requests, and a ticket is on its workspace's board or on none. It does not
+hold writes to the member's scope -- the provider refuses those before any
+request. As Branvil does, it records an author's
 approval of its own pull request (which counts toward no merge); a verdict
 or a new inline comment consumes its author's review request, a reply does
 not; marking a pull request ready for review (or opening it as one) sets
 ``ready_at``; a merge closes the tickets the pull request ``closes`` and
-moves them to ``done``; a board's closed items are its tickets and the pull
-requests of the repositories of its cards; and a gone branch's commit is
-``""`` with no ``behind_by``.
+moves them to ``done``; a workspace board's closed items are the closed
+tickets and pull requests of the workspace's repositories; and a gone
+branch's commit is ``""`` with no ``behind_by``.
 
 ``writes`` lists the writes it accepted, as ``"<method> <path>"``.
 """
@@ -41,10 +42,9 @@ MEMBER = "aiko"
 TOKEN = "bvt_aiko"
 SCOPE = "acme"
 REPO = f"{SCOPE}/demo"
-BOARD = f"{SCOPE}/board"
-#: Another board of the scope, which the member's tickets are not taken from.
-OTHER_BOARD = f"{SCOPE}/other-board"
-THEIR_REPO = "other/demo"
+#: Another workspace, outside the scope.
+THEIRS = "other"
+THEIR_REPO = f"{THEIRS}/demo"
 LABEL = "bug"
 #: The labels each repository defines.
 LABELS = {REPO: [LABEL], THEIR_REPO: []}
@@ -71,7 +71,6 @@ class BranvilDouble:
         self.writes: list[str] = []
         #: The branches of ``REPO``: name -> commit.
         self.branches: dict[str, str] = {"main": "main-sha"}
-        self.boards = {BOARD, OTHER_BOARD}
         self.tickets: dict[str, dict[str, Any]] = {}
         #: The roots of the resolved review threads.
         self.resolved: set[str] = set()
@@ -104,13 +103,9 @@ class BranvilDouble:
     def advance(self, name: str) -> None:
         self.branches[name] = f"{name.replace('/', '-')}-sha{next(self._revisions)}"
 
-    def assign(
-        self, url: str, lane: str = "ready", name: str = MEMBER, board: str = BOARD
-    ) -> None:
+    def assign(self, url: str, lane: str = "ready", name: str = MEMBER) -> None:
         self.tickets[url].update(
-            board=board,
-            lane=lane,
-            assignee={"name": name, "assigned_at": self.now()},
+            lane=lane, assignee={"name": name, "assigned_at": self.now()}
         )
 
     def add_artifact(self, sha: str, name: str, content: bytes) -> None:
@@ -158,7 +153,7 @@ class BranvilDouble:
             ticket = self.tickets.get(link["url"])
             if link["closes"] and ticket is not None:
                 ticket.update(state="closed", state_reason="completed", closed_at=at)
-                if ticket["board"]:
+                if ticket["lane"]:
                     ticket["lane"] = "done"
 
     # -- the API ----------------------------------------------------------------
@@ -189,18 +184,13 @@ class BranvilDouble:
     ) -> tuple[int, Any]:
         match parts:
             case ["me"]:
-                return 200, {
-                    "name": MEMBER,
-                    "display_name": MEMBER,
-                    "kind": "agent",
-                    "grants": [],
-                }
+                return 200, {"name": MEMBER, "display_name": MEMBER, "kind": "agent"}
             case ["pulls"]:
                 return 200, self._page([self._patrol(p) for p in self._involving()])
             case ["repos", repo, *rest]:
                 return self._repository(method, repo, rest, body, params)
-            case ["boards", board, *rest] if board in self.boards:
-                return 200, self._board(board, rest, params)
+            case ["workspaces", workspace, *rest] if workspace in (SCOPE, THEIRS):
+                return 200, self._workspace(workspace, rest, params)
         raise _missing("/".join(parts))
 
     def _repository(
@@ -362,16 +352,17 @@ class BranvilDouble:
             case "GET", ["pulls"]:
                 return 200, self._page(self._linked(url), params)
             case "PUT", ["board"]:
-                if body["board"] not in self.boards:
-                    raise _missing(str(body["board"]))
-                if body["lane"] not in LANES:
+                if body["lane"] not in (None, *LANES):
                     raise Refusal(400, "invalid", f"No lane {body['lane']}.")
-                ticket.update(board=body["board"], lane=body["lane"])
+                ticket["lane"] = body["lane"]
                 return 200, ticket
         raise _missing("/".join(rest))
 
-    def _board(self, board: str, rest: list[str], params: dict) -> Any:
-        if rest == ["cards"]:
+    def _workspace(self, workspace: str, rest: list[str], params: dict) -> Any:
+        def of(item: dict[str, Any]) -> bool:
+            return item["repository"].partition("/")[0] == workspace
+
+        if rest == ["board", "cards"]:
             lanes = params["lane"].split(",")
             cards = [
                 ticket
@@ -380,7 +371,7 @@ class BranvilDouble:
                     "pull_requests": self._linked(url),
                 }
                 for url, ticket in self.tickets.items()
-                if ticket["board"] == board
+                if of(ticket)
                 and ticket["lane"] in lanes
                 and ticket["state"] == params.get("state", ticket["state"])
                 and (ticket["assignee"] or {}).get("name") == MEMBER
@@ -388,12 +379,7 @@ class BranvilDouble:
             return self._page(
                 sorted(cards, key=lambda card: LANES.index(card["lane"])), params
             )
-        if rest == ["closed"]:
-            repositories = {
-                ticket["repository"]
-                for ticket in self.tickets.values()
-                if ticket["board"] == board
-            }
+        if rest == ["board", "closed"]:
             closed = [
                 {
                     "kind": kind,
@@ -410,16 +396,12 @@ class BranvilDouble:
                     ("pull_request", self.pulls),
                 )
                 for item in items.values()
-                if (
-                    item["board"] == board
-                    if kind == "ticket"
-                    else item["repository"] in repositories
-                )
+                if of(item)
                 and item["closed_at"]
                 and params["since"] <= item["closed_at"] <= params["until"]
             ]
             return self._page(closed, params)
-        return {"path": board, "lanes": list(LANES)}
+        return {"name": workspace, "lanes": list(LANES)}
 
     # -- items ------------------------------------------------------------------
 
@@ -444,7 +426,6 @@ class BranvilDouble:
             "author": author,
             "assignee": None,
             "labels": labels,
-            "board": None,
             "lane": None,
             "created_at": self.now(),
             "closed_at": None,
@@ -702,7 +683,7 @@ def services(
 ) -> tuple[BranvilDouble, Any, Any]:
     """The double, and the code host and the tickets of ``MEMBER`` on it, with
     the human ``otota`` in the team; ``code`` and ``tickets`` are the
-    services' configuration besides their scope (and the board)."""
+    services' configuration besides their workspace ``SCOPE``."""
     from guildbotics.entities.team import Person, Project, Team
     from guildbotics.integrations.factory import ServiceIntegrationFactory
 
@@ -724,12 +705,12 @@ def services(
     project = Project(
         name="demo",
         services={
-            "code_hosting_service": {"name": "branvil", "owner": SCOPE, **(code or {})},
-            "ticket_service": {
+            "code_hosting_service": {
                 "name": "branvil",
-                "owner": SCOPE,
-                **({"board": BOARD} | tickets),
+                "workspace": SCOPE,
+                **(code or {}),
             },
+            "ticket_service": {"name": "branvil", "workspace": SCOPE, **tickets},
         },
     )
     team = Team(project=project, members=[member, human])

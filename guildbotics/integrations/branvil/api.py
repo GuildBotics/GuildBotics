@@ -5,12 +5,13 @@ reactions on them.
 Branvil is reached at one base URL, the same on every machine (Branvil's own
 tunnel forwards it to the Hub elsewhere), so the URLs it is known by are the
 ones recorded: a ticket is ``{base}/{repository}/-/tickets/{number}``, a pull
-request ``{base}/{repository}/-/pulls/{number}``; a repository numbers each
-from 1. Its API names a repository or a board as one percent-encoded path
-segment.
+request ``{base}/{repository}/-/pulls/{number}``; a repository
+(``{workspace}/{name}``) numbers each from 1. Its API names a repository as
+one percent-encoded path segment.
 
 Every request of the client that is not a read passes the write gate before
-it is sent: it must name a repository in the configured scope.
+it is sent: it must name a repository of the configured workspace, the
+scope.
 Every failure comes out as the ports' failure, told from Branvil's status and
 error code.
 """
@@ -70,7 +71,7 @@ def username(person: Person) -> str:
 
 
 def segment(path: str) -> str:
-    """A repository, board, branch, or id as one API path segment."""
+    """A repository, workspace, branch, or id as one API path segment."""
     return quote(path, safe="")
 
 
@@ -175,7 +176,7 @@ def connect(
     Args:
         base_url: Where Branvil is reached.
         token: The member's token; empty for what needs none.
-        scope: The namespace the client writes in.
+        scope: The workspace the client writes in.
         person_id: The member whose token a refusal is recorded for.
     """
 
@@ -241,8 +242,8 @@ class BranvilApi:
         self.person = person
         self.team = team
         self.base_url = base_url(config)
-        #: The namespace the member writes in.
-        self.owner = str(config.get("owner") or "")
+        #: The workspace the member writes in and takes tickets from: the scope.
+        self.workspace = str(config.get("workspace") or "")
         self._client: httpx.AsyncClient | None = None
 
     async def aclose(self) -> None:
@@ -267,7 +268,7 @@ class BranvilApi:
             self._client = connect(
                 self.base_url,
                 token=self.person.get_secret("BRANVIL_TOKEN"),
-                scope=self.owner,
+                scope=self.workspace,
                 person_id=self.person.person_id,
             )
         return self._client
@@ -334,6 +335,14 @@ class BranvilApi:
                     username=username(self.person),
                 )
             )
+
+    async def check_workspace(self) -> None:
+        """Confirm that the configured workspace is there for the member.
+
+        Raises:
+            ServiceError: If it is not.
+        """
+        await self.get(f"/workspaces/{segment(self.workspace)}")
 
     # -- addresses --------------------------------------------------------
 

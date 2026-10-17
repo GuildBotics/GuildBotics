@@ -1,9 +1,10 @@
 # Branvil Integration Guide
 
-Branvil is a code host and board you run yourself: Git repositories over Smart HTTP,
-pull requests with reviews and CI, and each repository's tickets on a board. GuildBotics uses
-it through the `branvil` provider as the code host (`services.code_hosting_service`) and
-the tickets (`services.ticket_service`), in place of GitHub. The chat stays whatever the
+Branvil is a code host and board you run yourself: Git repositories over Smart HTTP in
+workspaces, pull requests with reviews and CI, and each repository's tickets on its
+workspace's board. GuildBotics uses it through the `branvil` provider as the code host
+(`services.code_hosting_service`) and the tickets (`services.ticket_service`), in place of
+GitHub. The chat stays whatever the
 project chooses (Slack, for example).
 
 This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
@@ -40,14 +41,15 @@ Following the Branvil README:
 
 1. Run Branvil on the Hub machine, and the tunnel on every other machine that runs
    GuildBotics.
-2. Create the namespace the members write in (for example `acme`), with its
-   repositories (`acme/demo`, with the labels its tickets may carry) and a board
-   (`acme/board`). A repository holds its tickets; a merge closes only tickets of the
-   pull request's repository.
+2. Create the workspace the members work in (for example `acme`) and its repositories
+   (`acme/demo`, with the labels its tickets may carry). The workspace has one board;
+   a repository holds its tickets; a merge closes only tickets of the pull request's
+   repository.
 3. The GuildBotics human member is Branvil's owner, the one person `branvil init`
-   creates. The owner has every role, merges, and uses Branvil's GUI without signing
-   in (`branvil open` on the Hub machine). Create an agent member for each AI member and
-   grant it `write` on the namespace.
+   creates. The owner may do everything, merges, and uses Branvil's GUI without
+   signing in (`branvil open` on the Hub machine). Create an agent member for each AI
+   member: an agent reads everything and works on tickets, pull requests, and
+   unprotected branches; nothing is granted per workspace.
 4. Issue a token for each agent member. Branvil shows it once.
 
 ## Configure GuildBotics
@@ -56,10 +58,8 @@ Under **Setup → Integrations** in the desktop app, choose **Branvil** for the 
 and for the tickets, and enter:
 
 - **Base URL**: where Branvil is reached (leave it empty for `http://127.0.0.1:7878`)
-- **Namespace**: the namespace the members write in (`acme`). Members write only to
-  repositories directly in it; reads are not limited
-- **Board** (tickets only): the board the tickets are taken from (`acme/board`).
-  Without a board, no ticket is selected as a member's work
+- **Workspace**: the workspace the members work in (`acme`). Members write only to its
+  repositories and take tickets from its board; reads are not limited
 
 Then, under **Setup → Members → Branvil**, give each member its **Branvil username**
 (for the human member, the owner's name) and, for an AI member, its **Branvil token**. The token is stored in the OS keychain as
@@ -73,12 +73,11 @@ services:
   code_hosting_service:
     name: branvil
     base_url: http://127.0.0.1:7878
-    owner: acme
+    workspace: acme
   ticket_service:
     name: branvil
     base_url: http://127.0.0.1:7878
-    owner: acme
-    board: acme/board
+    workspace: acme
 ```
 
 and in each member's `person.yml`:
@@ -90,7 +89,7 @@ account_info:
 
 Press **Validate settings** under **Setup → Verification**: it checks that Branvil
 answers, that each AI member's token is accepted as that member's own, and that the
-board can be read.
+workspace can be read.
 
 ## How members work with it
 
@@ -98,10 +97,11 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
 
 - A ticket has at most one assignee: the agent that works on it. Assigning another
   member replaces the assignee, so two members never take up the same ticket.
-- A ticket assigned to the member in the board's **Ready** lane is taken up and moved to
-  **In progress**; one in **In progress** is taken up again when someone else has spoken
-  since the member last did. Once a pull request refers to the ticket, the patrol
-  follows the pull request instead, and its merge moves the ticket to **Done**.
+- A ticket assigned to the member in the **Ready** lane of the workspace's board is
+  taken up and moved to **In progress**; one in **In progress** is taken up again when
+  someone else has spoken since the member last did. Once a pull request refers to the
+  ticket, the patrol follows the pull request instead, and its merge moves the ticket to
+  **Done**.
 - A member's pull request is taken up when someone says something the member has not
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.

@@ -24,11 +24,12 @@ _BASE_URL = re.compile(r"https?://[^/\s?#@]+")
 _MEMBER = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
-class CodeHosting(SetupItems):
-    """The Branvil the members reach, and the namespace they write in."""
+class Workspace(SetupItems):
+    """The Branvil the members reach, and the workspace they work in: they
+    write only to its repositories and take tickets from its board."""
 
     base_url: str = DEFAULT_BASE_URL
-    owner: str = Field(min_length=1)
+    workspace: str = Field(min_length=1)
 
     @field_validator("base_url")
     @classmethod
@@ -38,25 +39,12 @@ class CodeHosting(SetupItems):
             raise ValueError("base_url must be an http(s) origin: http://<host>:<port>")
         return value
 
-    @field_validator("owner")
+    @field_validator("workspace")
     @classmethod
-    def _namespace(cls, value: str) -> str:
-        # A namespace is what a path of it starts with.
-        if not valid_path(f"{value}/name"):
-            raise ValueError("owner must be a namespace: names joined by '/'")
-        return value
-
-
-class Tickets(CodeHosting):
-    """As for the code host, and the board tickets are taken from."""
-
-    board: str = ""
-
-    @field_validator("board")
-    @classmethod
-    def _board(cls, value: str) -> str:
-        if value and not valid_path(value):
-            raise ValueError("board must be a board path: <namespace>/<name>")
+    def _workspace(cls, value: str) -> str:
+        # A workspace is one name, the first of its repositories' paths.
+        if "/" in value or not valid_path(f"{value}/name"):
+            raise ValueError("workspace must be one name, such as acme")
         return value
 
 
@@ -100,8 +88,8 @@ class BranvilAccount(MemberAccount):
 SETUP = ProviderSetup(
     title="Branvil",
     services={
-        Service.CODE_HOSTING_SERVICE: CodeHosting,
-        Service.TICKET_SERVICE: Tickets,
+        Service.CODE_HOSTING_SERVICE: Workspace,
+        Service.TICKET_SERVICE: Workspace,
     },
     member=BranvilAccount,
 )

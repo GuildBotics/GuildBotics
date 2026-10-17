@@ -94,19 +94,21 @@ function Tickets() {
 }
 
 describe("Branvil ticket service fields", () => {
-  it("edits the base URL, the namespace, and the board", async () => {
+  it("edits the base URL and the workspace", async () => {
     renderWithProviders(<Tickets />);
 
-    expect(screen.getByText(t("setup.branvil.ownerRequired"))).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(t("setup.branvil.owner")), "acme");
-    await userEvent.type(screen.getByLabelText(t("setup.branvil.board")), "acme/board");
+    expect(screen.getByText(t("setup.branvil.workspaceRequired"))).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(t("setup.branvil.workspace")), "acme/x");
+    expect(screen.getByText(t("setup.branvil.workspaceInvalid"))).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText(t("setup.branvil.workspace")));
+    await userEvent.type(screen.getByLabelText(t("setup.branvil.workspace")), "acme");
 
-    expect(screen.queryByText(t("setup.branvil.ownerRequired"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("setup.branvil.workspaceRequired"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("setup.branvil.workspaceInvalid"))).not.toBeInTheDocument();
     expect(JSON.parse(screen.getByRole("status").textContent ?? "")).toEqual({
       name: "branvil",
       base_url: "http://127.0.0.1:7878",
-      owner: "acme",
-      board: "acme/board",
+      workspace: "acme",
     });
   });
 });

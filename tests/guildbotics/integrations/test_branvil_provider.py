@@ -10,12 +10,12 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.entities.team import Person
-from guildbotics.integrations.branvil.setup import Tickets
+from guildbotics.integrations.branvil.setup import Workspace
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
-    BOARD,
+    SCOPE,
     BranvilDouble,
     services,
 )
@@ -43,8 +43,13 @@ class _Context:
         await self.tickets.aclose()
 
 
-async def _diagnose(monkeypatch, double: BranvilDouble | None = None, **tickets):
-    double, code, ticket_service = services(monkeypatch, double, **tickets)
+async def _diagnose(
+    monkeypatch,
+    double: BranvilDouble | None = None,
+    code: dict[str, str] | None = None,
+    **tickets,
+):
+    double, code, ticket_service = services(monkeypatch, double, code, **tickets)
     context = _Context(code.team, code, ticket_service)
     checks = await BRANVIL.diagnose(context, code.team.members)  # type: ignore[arg-type]
     return [(c.code, c.status, c.person_id, c.credential) for c in checks], checks
@@ -71,15 +76,27 @@ def test_an_agent_needs_its_name_and_token_and_a_human_its_name(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_diagnose_reads_branvil_the_agents_token_and_the_board(monkeypatch):
-    found, _ = await _diagnose(monkeypatch)
+async def test_diagnose_reads_branvil_the_agents_token_and_the_workspace(monkeypatch):
+    found, checks = await _diagnose(monkeypatch)
 
     assert found == [
         ("branvil_reachable", "ok", "", False),
         ("branvil_access", "ok", "aiko", True),
-        ("branvil_board", "ok", "", False),
+        ("branvil_workspace", "ok", "", False),
         ("human_branvil_user", "ok", "otota", False),
     ]
+    assert checks[2].target == SCOPE
+
+
+@pytest.mark.asyncio
+async def test_each_workspace_the_services_name_is_read(monkeypatch):
+    found, checks = await _diagnose(monkeypatch, code={"workspace": "nope"})
+
+    assert found[2:4] == [
+        ("branvil_workspace", "error", "", False),
+        ("branvil_workspace", "ok", "", False),
+    ]
+    assert [check.target for check in checks[2:4]] == ["nope", SCOPE]
 
 
 @pytest.mark.asyncio
@@ -119,7 +136,7 @@ async def test_another_service_at_the_base_url_is_not_branvil(monkeypatch, answe
 
 
 @pytest.mark.asyncio
-async def test_a_refused_token_and_a_missing_board_are_reported(monkeypatch):
+async def test_a_refused_token_is_reported_and_no_workspace_read(monkeypatch):
     double = BranvilDouble()
     respond = double.respond
     double.respond = lambda request: (  # type: ignore[method-assign]
@@ -128,48 +145,53 @@ async def test_a_refused_token_and_a_missing_board_are_reported(monkeypatch):
         else respond(request)
     )
 
-    found, _ = await _diagnose(monkeypatch, double, board="")
+    found, _ = await _diagnose(monkeypatch, double)
 
-    assert found[:3] == [
+    assert found == [
         ("branvil_reachable", "ok", "", False),
-        ("branvil_board_missing", "warning", "", False),
         ("branvil_access", "error", "aiko", True),
+        ("human_branvil_user", "ok", "otota", False),
     ]
 
 
 @pytest.mark.parametrize(
     ("items", "stored"),
     [
-        ({"owner": "acme"}, {"base_url": "http://127.0.0.1:7878", "owner": "acme"}),
         (
-            {
-                "owner": "acme/team",
-                "base_url": "http://hub.local:9000/",
-                "board": BOARD,
-            },
-            {"base_url": "http://hub.local:9000", "owner": "acme/team", "board": BOARD},
+            {"workspace": "acme"},
+            {"base_url": "http://127.0.0.1:7878", "workspace": "acme"},
+        ),
+        (
+            {"workspace": "acme", "base_url": "http://hub.local:9000/"},
+            {"base_url": "http://hub.local:9000", "workspace": "acme"},
         ),
     ],
 )
-def test_the_services_store_an_origin_a_namespace_and_a_board(
+def test_the_services_store_an_origin_and_a_workspace(
     items: dict[str, Any], stored: dict[str, Any]
 ):
-    assert Tickets.model_validate(items).model_dump() == {"board": "", **stored}
+    assert Workspace.model_validate(items).model_dump() == stored
+    # The code host and the tickets name the same items.
+    assert set(BRANVIL.setup.services.values()) == {Workspace}  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize(
     "items",
     [
-        {"owner": ""},
-        {"owner": "acme/../x"},
-        {"owner": "acme", "base_url": "ftp://hub"},
-        {"owner": "acme", "base_url": "http://hub/branvil"},
-        {"owner": "acme", "board": "board"},
+        {"workspace": ""},
+        {"workspace": "acme/team"},
+        {"workspace": ".."},
+        {"workspace": "acme", "base_url": "ftp://hub"},
+        {"workspace": "acme", "base_url": "http://hub/branvil"},
+        {"workspace": "acme", "board": "acme/board"},
+        {"owner": "acme"},
     ],
 )
-def test_the_services_refuse_what_names_no_branvil_or_scope(items: dict[str, Any]):
+def test_the_services_refuse_what_names_no_branvil_or_workspace(
+    items: dict[str, Any],
+):
     with pytest.raises(ValidationError):
-        Tickets.model_validate(items)
+        Workspace.model_validate(items)
 
 
 def test_a_member_account_stores_a_name_and_an_agents_token():

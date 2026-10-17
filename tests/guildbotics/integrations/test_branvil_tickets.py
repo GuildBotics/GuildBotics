@@ -1,4 +1,4 @@
-"""Which tickets of the Branvil board are a member's work, beyond what the
+"""Which tickets of the workspace's Branvil board are a member's work, beyond what the
 ticket service contract asks: the member's own word, a summons, a held
 status, the time of the assignment, the pull request that takes a ticket
 over, and the patrol's order."""
@@ -14,11 +14,10 @@ from guildbotics.entities.task import Task
 from guildbotics.runtime.port import ServiceError, ServiceNotFound, WorkflowStatus
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
-    BOARD,
-    MEMBER,
-    OTHER_BOARD,
     BASE,
+    MEMBER,
     REPO,
+    SCOPE,
     THEIR_REPO,
     BranvilDouble,
     services,
@@ -154,19 +153,24 @@ async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_a_ticket_on_another_board_is_not_taken_off_it(monkeypatch):
+async def test_a_ticket_of_another_workspace_is_neither_work_nor_written_to(
+    monkeypatch,
+):
     double, _, tickets = services(monkeypatch)
-    url = _ticket(double)
-    double.assign(url, board=OTHER_BOARD)
+    url = double._ticket(THEIR_REPO, "Elsewhere", "", [])["url"]
+    double.assign(url)
     before = len(double.writes)
 
-    with pytest.raises(ServiceError, match=OTHER_BOARD):
+    # It is on its own workspace's board, which is not the member's.
+    assert await tickets.candidates() == []
+    assert (await tickets.read("tickets", url)).items[0]["lane"] is None
+    with pytest.raises(ServiceError, match="refused"):
         await tickets.add(url)
-    with pytest.raises(ServiceError, match=OTHER_BOARD):
+    with pytest.raises(ServiceError, match="refused"):
         await tickets.move(Task(url=url, title="", description=""), "done")
 
     assert double.writes[before:] == []
-    assert double.tickets[url]["board"] == OTHER_BOARD
+    assert double.tickets[url]["lane"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -174,24 +178,10 @@ async def test_a_ticket_off_the_board_is_not_moved_onto_it(monkeypatch):
     double, _, tickets = services(monkeypatch)
     url = double._ticket(REPO, "Loose", "", [])["url"]
 
-    with pytest.raises(ServiceError, match=BOARD):
+    with pytest.raises(ServiceError, match=SCOPE):
         await tickets.move(Task(url=url, title="", description=""), "in_progress")
 
-    assert double.tickets[url]["board"] is None
-
-
-@pytest.mark.asyncio
-async def test_a_board_outside_the_scope_is_not_written_to(monkeypatch):
-    double, _, tickets = services(monkeypatch, board="other/board")
-    url = _ticket(double)
-    before = len(double.writes)
-
-    with pytest.raises(ServiceError, match="refused"):
-        await tickets.add(url)
-    with pytest.raises(ServiceError, match="refused"):
-        await tickets.move(Task(url=url, title="", description=""), "done")
-
-    assert double.writes[before:] == []
+    assert double.tickets[url]["lane"] is None
 
 
 @pytest.mark.asyncio
@@ -233,22 +223,6 @@ async def test_a_ticket_reads_as_its_one_assignee_or_none(monkeypatch):
     assert await assignees() == [MEMBER]
     double.assign(url, name="otota")
     assert await assignees() == ["otota"]
-
-
-@pytest.mark.asyncio
-async def test_without_a_board_no_ticket_is_work_or_put_on_one(monkeypatch):
-    double, _, tickets = services(monkeypatch, board="")
-    url = _ticket(double)
-    before = len(double.writes)
-
-    assert await tickets.candidates() == []
-    assert await tickets.add(url) is False
-    assert await tickets.move(Task(url=url, title="", description=""), "done") is False
-    now = datetime.now(UTC)
-    assert await tickets.closed_since(now - timedelta(days=1), now) == []
-    assert double.writes[before:] == []
-    # A ticket on a board is on none the service is configured with.
-    assert (await tickets.read("tickets", url)).items[0]["lane"] is None
 
 
 @pytest.mark.asyncio
@@ -339,7 +313,7 @@ async def test_an_address_of_no_ticket_is_not_found(monkeypatch, url):
 
 
 @pytest.mark.asyncio
-async def test_the_boards_closed_pull_requests_are_of_its_cards_repositories(
+async def test_the_boards_closed_items_are_of_its_workspaces_repositories(
     monkeypatch,
 ):
     double, code, tickets = services(monkeypatch)
@@ -350,17 +324,15 @@ async def test_the_boards_closed_pull_requests_are_of_its_cards_repositories(
         )
     ).target.url
     double.merge(pull)
-    their_card = double._ticket(THEIR_REPO, "Elsewhere", "", [])["url"]
-    double.assign(their_card)
     now = datetime.now(UTC)
     window = (now - timedelta(days=3650), now + timedelta(days=3650))
 
-    # No card of the pull request's repository: not the board's.
-    assert [item.url for item in await tickets.closed_since(*window)] == []
+    # The workspace's pull requests are listed with no card on the board.
+    assert [item.url for item in await tickets.closed_since(*window)] == [pull]
 
-    # An open card brings its repository's pull requests in, and so does a
-    # closed one.
-    card = _ticket(double)
-    assert [item.url for item in await tickets.closed_since(*window)] == [pull]
-    double.tickets[card].update(state="closed", lane="done")
-    assert [item.url for item in await tickets.closed_since(*window)] == [pull]
+    # So are its closed tickets, on the board or not; another workspace's are not.
+    loose = double._ticket(REPO, "Loose", "", [])["url"]
+    theirs = double._ticket(THEIR_REPO, "Elsewhere", "", [])["url"]
+    for url in (loose, theirs):
+        double.tickets[url].update(state="closed", closed_at=double.now())
+    assert {item.url for item in await tickets.closed_since(*window)} == {pull, loose}

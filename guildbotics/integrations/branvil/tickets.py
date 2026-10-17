@@ -1,8 +1,7 @@
-"""Branvil as a member's tickets: the tickets of its repositories, and the
-board named by ``project.services.ticket_service.board`` they are taken from.
+"""Branvil as a member's tickets: the tickets of its repositories, taken from
+the board of the workspace ``project.services.ticket_service.workspace`` names.
 
-Without a board no ticket is the member's work, and none is put on one. The
-selection's rules (:mod:`~guildbotics.integrations.ticket_selection`) are
+The selection's rules (:mod:`~guildbotics.integrations.ticket_selection`) are
 applied here to the cards Branvil answers.
 """
 
@@ -21,7 +20,7 @@ from guildbotics.integrations.branvil.api import (
     segment,
     username,
 )
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
@@ -54,9 +53,6 @@ class BranvilTicketService(BranvilApi, TicketService):
     def __init__(self, logger: Logger, person: Person, team: Team):
         TicketService.__init__(self, logger, person, team)
         BranvilApi.__init__(self, person, team, Service.TICKET_SERVICE)
-        config = team.project.get_service_config(Service.TICKET_SERVICE)
-        #: The board the member's tickets are taken from; empty for none.
-        self.board = str(config.get("board") or "")
 
     async def read(
         self,
@@ -155,10 +151,8 @@ class BranvilTicketService(BranvilApi, TicketService):
     async def candidates(self) -> list[Task]:
         """Every actionable ticket of the board, ready lane first, oldest
         first in each lane."""
-        if not self.board:
-            return []
         cards = await self.items(
-            f"/boards/{segment(self.board)}/cards",
+            f"{self._board}/cards",
             lane=",".join(_LANES),
             assignee="me",
             state="open",
@@ -187,65 +181,44 @@ class BranvilTicketService(BranvilApi, TicketService):
         return None if found is None else await self._select(found, card)
 
     async def move(self, task: Task, lane: MoveLane) -> bool:
-        """Move a ticket of the configured board to ``lane``.
+        """Move a ticket of the workspace's board to ``lane``.
 
         Raises:
             ServiceError: If the ticket is not on that board.
         """
         assert task.url
         item = self.item(task.url, "ticket")
-        if not self.board:
-            return False
         if not self._on_board(await self._placed(item)):
             raise ServiceError(
                 t(
                     "integrations.branvil.api.off_board",
                     url=self.url(item),
-                    board=self.board,
+                    workspace=self.workspace,
                 )
             )
-        await self.call("PUT", f"{item.api}/board", {"board": self.board, "lane": lane})
+        await self.call("PUT", f"{item.api}/board", {"lane": lane})
         return True
 
     async def add(self, ticket_url: str) -> bool:
         item = self.item(ticket_url, "ticket")
-        if not self.board:
-            return False
         if not self._on_board(await self._placed(item)):
-            await self.call(
-                "PUT", f"{item.api}/board", {"board": self.board, "lane": Task.NEW}
-            )
+            await self.call("PUT", f"{item.api}/board", {"lane": Task.NEW})
         return True
 
     async def _placed(self, item: BranvilItem) -> dict[str, Any]:
-        """The ticket ``item``, to be placed on the configured board: both its
-        repository and the board are in the scope -- checked before anything,
-        as a ticket already on the board is not written to -- and it is on
-        no other board, which it is not taken off silently.
+        """The ticket ``item``, to be placed on the workspace's board: its
+        repository is in the scope, checked before anything, as a ticket
+        already on the board is not written to.
 
         Raises:
-            ServiceError: If either is outside the scope, or the ticket is on
-                another board.
+            ServiceError: If it is outside the scope.
         """
-        check_path(self.owner, item.place, provider=PROVIDER)
-        check_path(self.owner, self.board, provider=PROVIDER)
-        ticket = await self.get(item.api)
-        other = str(ticket.get("board") or "")
-        if other and not self._on_board(ticket):
-            raise ServiceError(
-                t(
-                    "integrations.branvil.api.other_board",
-                    url=self.url(item),
-                    board=other,
-                )
-            )
-        return ticket
+        check_path(self.workspace, item.place, provider=PROVIDER)
+        return await self.get(item.api)
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
-        if not self.board:
-            return []
         closed = await self.items(
-            f"/boards/{segment(self.board)}/closed",
+            f"{self._board}/closed",
             since=_timestamp(start),
             until=_timestamp(end),
         )
@@ -261,13 +234,16 @@ class BranvilTicketService(BranvilApi, TicketService):
             for item in closed
         ]
 
-    async def check_board(self) -> None:
-        """Confirm that the configured board is there for the member."""
-        await self.get(f"/boards/{segment(self.board)}")
+    @property
+    def _board(self) -> str:
+        """The API path of the workspace's board."""
+        return f"/workspaces/{segment(self.workspace)}/board"
 
     def _on_board(self, ticket: dict[str, Any]) -> bool:
-        return bool(self.board) and str(ticket.get("board") or "").casefold() == (
-            self.board.casefold()
+        """Whether ``ticket`` is on the workspace's board: in a lane, and of a
+        repository of the workspace (another workspace's board is not it)."""
+        return ticket["lane"] is not None and in_scope(
+            self.workspace, str(ticket["repository"])
         )
 
     def _task(self, card: dict[str, Any]) -> Task | None:

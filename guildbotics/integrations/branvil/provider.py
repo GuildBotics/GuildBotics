@@ -57,7 +57,7 @@ def _verify(person: Person) -> list[ProviderCheck]:
 
 
 async def _diagnose(context: Context, members: list[Person]) -> list[ProviderCheck]:
-    """Whether Branvil answers, then each agent's token and the board."""
+    """Whether Branvil answers, then each agent's token and the workspaces."""
     project = context.team.project
     kinds = [kind for kind in _KINDS if project.get_service_name(kind) == PROVIDER]
     if not kinds:
@@ -67,31 +67,31 @@ async def _diagnose(context: Context, members: list[Person]) -> list[ProviderChe
     if any(check.status == "error" for check in checks):
         # A token cannot be checked against a Branvil that does not answer.
         return checks
-    tickets = Service.TICKET_SERVICE in kinds
-    board = (
-        str(project.get_service_config(Service.TICKET_SERVICE).get("board") or "")
-        if tickets
-        else ""
-    )
-    if tickets and not board:
-        checks.append(
-            ProviderCheck(
-                section=_SECTION,
-                code="branvil_board_missing",
-                status="warning",
-                message=t("integrations.branvil.provider.board_missing"),
-            )
-        )
+    #: Each workspace the kinds name, with a kind that names it.
+    workspaces = {
+        str(project.get_service_config(kind).get("workspace") or ""): kind
+        for kind in kinds
+    }
     for member in members:
         if member.person_type == "human":
             checks.append(_human(member))
             continue
         access = await _access(context, member, kinds[0])
         checks.append(access)
-        if board and access.status == "ok":
-            checks.append(await _board(context, member, board))
-            board = ""
+        if access.status == "ok":
+            for workspace, kind in workspaces.items():
+                checks.append(await _workspace(context, member, kind, workspace))
+            workspaces = {}
     return checks
+
+
+def _service(context: Context, kind: Service) -> BranvilApi:
+    return cast(
+        BranvilApi,
+        context.get_code_hosting_service()
+        if kind == Service.CODE_HOSTING_SERVICE
+        else context.get_ticket_service(),
+    )
 
 
 async def _reachable(url: str) -> ProviderCheck:
@@ -133,12 +133,7 @@ def _human(member: Person) -> ProviderCheck:
 async def _access(context: Context, member: Person, kind: Service) -> ProviderCheck:
     c = context.clone_for(member)
     try:
-        service = (
-            c.get_code_hosting_service()
-            if kind == Service.CODE_HOSTING_SERVICE
-            else c.get_ticket_service()
-        )
-        await cast(BranvilApi, service).confirm()
+        await _service(c, kind).confirm()
     except ServiceError as exc:
         return ProviderCheck(
             section=_SECTION,
@@ -160,26 +155,28 @@ async def _access(context: Context, member: Person, kind: Service) -> ProviderCh
     )
 
 
-async def _board(context: Context, member: Person, board: str) -> ProviderCheck:
+async def _workspace(
+    context: Context, member: Person, kind: Service, workspace: str
+) -> ProviderCheck:
     c = context.clone_for(member)
     try:
-        await cast(BranvilTicketService, c.get_ticket_service()).check_board()
+        await _service(c, kind).check_workspace()
     except ServiceError as exc:
         return ProviderCheck(
             section=_SECTION,
-            code="branvil_board",
+            code="branvil_workspace",
             status="error",
             message=str(exc),
-            target=board,
+            target=workspace,
         )
     finally:
         await c.aclose()
     return ProviderCheck(
         section=_SECTION,
-        code="branvil_board",
+        code="branvil_workspace",
         status="ok",
-        message=t("integrations.branvil.provider.board", board=board),
-        target=board,
+        message=t("integrations.branvil.provider.workspace", workspace=workspace),
+        target=workspace,
     )
 
 

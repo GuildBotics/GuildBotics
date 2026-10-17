@@ -1,6 +1,6 @@
 ja:
   authentication: "Branvil がメンバーのトークンを拒否しました。メンバーの Branvil トークンを確認してください。"
-  not_found: "Branvil にその項目が無いか、メンバーには見えません: %{message}"
+  not_found: "Branvil にその項目がありません: %{message}"
   unsupported: "Branvil はこの操作を提供していません: %{message}"
   head_moved: "pull request の head が、メンバーが読んだコミットではなくなりました。新しいコミットを読んでから、現在の head に対してもう一度送ってください。"
   label_undefined: "リポジトリに定義されていないラベルです。%{message} 新しいラベルを作らず、人にラベルの追加を依頼してください。"
@@ -21,5 +21,4 @@ ja:
   no_head: "%{url} に head のコミットがありません。"
   no_base: "%{url} の base ブランチがありません。"
   artifact_too_large: "成果物 '%{name}' は上限の %{limit} バイトを超えています。人に取得を依頼してください。"
-  off_board: "%{url} はボード %{board} にありません。先にボードに載せてください。"
-  other_board: "%{url} はボード %{board} にあり、プロジェクトがチケットを取るボードにはありません。ボード間の移動は人が行います。"
+  off_board: "%{url} はワークスペース %{workspace} のボードにありません。先にボードに載せてください。"

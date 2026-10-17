@@ -453,7 +453,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         )
 
     def check_push(self, repository: str) -> None:
-        check_path(self.owner, repository, provider=PROVIDER)
+        check_path(self.workspace, repository, provider=PROVIDER)
 
     def commit_url(self, repository: str, sha: str) -> str:
         return f"{self.base_url}/{repository}/-/commits/{sha}"
@@ -475,7 +475,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         return [
             task
             for entry in entries
-            if in_scope(self.owner, str(entry["repository"]))
+            if in_scope(self.workspace, str(entry["repository"]))
             and (task := await self._work(entry, entry["activity"])) is not None
         ]
 

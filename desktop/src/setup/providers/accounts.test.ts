@@ -496,32 +496,25 @@ describe("branvilAccount", () => {
 
 describe("branvil services", () => {
   it("start from what the other kind says of the same Branvil", () => {
-    expect(branvilTickets.initial({})).toEqual({
-      base_url: BRANVIL_BASE_URL,
-      owner: "",
-      board: "",
-    });
+    expect(branvilTickets.initial({})).toEqual({ base_url: BRANVIL_BASE_URL, workspace: "" });
     expect(
       branvilCodeHosting.initial({
-        ticket_service: { name: "branvil", base_url: "http://hub:9000", owner: "acme" },
+        ticket_service: { name: "branvil", base_url: "http://hub:9000", workspace: "acme" },
       }),
-    ).toEqual({ base_url: "http://hub:9000", owner: "acme" });
+    ).toEqual({ base_url: "http://hub:9000", workspace: "acme" });
   });
 
-  it("refuse what names no Branvil, scope, or board", () => {
-    const value = { name: "branvil", base_url: "http://hub/x", owner: "acme/..", board: "board" };
+  it("refuse what names no Branvil or workspace", () => {
+    const value = { name: "branvil", base_url: "http://hub/x", workspace: "acme/team" };
 
     expect(branvilTickets.errors(value, t)).toEqual({
       base_url: t("setup.branvil.baseUrlInvalid"),
-      owner: t("setup.branvil.ownerInvalid"),
-      board: t("setup.branvil.boardInvalid"),
+      workspace: t("setup.branvil.workspaceInvalid"),
     });
-    expect(branvilCodeHosting.errors({ ...value, owner: " " }, t)).toEqual({
+    expect(branvilCodeHosting.errors({ ...value, workspace: " " }, t)).toEqual({
       base_url: t("setup.branvil.baseUrlInvalid"),
-      owner: t("setup.branvil.ownerRequired"),
+      workspace: t("setup.branvil.workspaceRequired"),
     });
-    expect(
-      branvilTickets.errors({ name: "branvil", owner: "acme/team", board: "acme/board" }, t),
-    ).toEqual({});
+    expect(branvilTickets.errors({ name: "branvil", workspace: "acme" }, t)).toEqual({});
   });
 });
