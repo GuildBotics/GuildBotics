@@ -44,11 +44,9 @@
 
   --color-border: light-dark(var(--literal-slate-200), var(--literal-slate-800));
   --color-border-subtle: light-dark(var(--literal-slate-100), var(--literal-slate-900));
-  --shadow-premium-light:
+  /* light-dark() takes colours only; the dark shadow is set by the scheme selector below. */
+  --shadow-premium:
     0 1px 2px rgba(0, 0, 0, 0.02), 0 4px 12px rgba(0, 0, 0, 0.03), 0 12px 24px rgba(0, 0, 0, 0.04);
-  --shadow-premium-dark:
-    0 1px 2px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.2), 0 12px 24px rgba(0, 0, 0, 0.25);
-  --shadow-premium: light-dark(var(--shadow-premium-light), var(--shadow-premium-dark));
 
   --color-text-main: light-dark(var(--literal-slate-900), var(--literal-slate-50));
   --color-text-subtle: light-dark(var(--literal-slate-700), var(--literal-slate-300));
@@ -95,6 +93,11 @@
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+:root[data-mantine-color-scheme="dark"] {
+  --shadow-premium:
+    0 1px 2px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.2), 0 12px 24px rgba(0, 0, 0, 0.25);
 }
 
 * {
@@ -2810,114 +2813,7 @@ pre {
    Design System Custom Overrides & Aesthetics Tune-up
    ========================================================================== */
 
-/* Alert Indicator Colors resolver */
-.mantine-Alert-root[data-color="success"] {
-  --alert-indicator-color: var(--color-success);
-}
-.mantine-Alert-root[data-color="warning"] {
-  --alert-indicator-color: var(--color-warning);
-}
-.mantine-Alert-root[data-color="danger"] {
-  --alert-indicator-color: var(--color-danger);
-}
-.mantine-Alert-root[data-color="info"] {
-  --alert-indicator-color: var(--color-info);
-}
-
-.mantine-Alert-icon[data-color="success"] {
-  color: var(--color-success) !important;
-}
-.mantine-Alert-icon[data-color="warning"] {
-  color: var(--color-warning) !important;
-}
-.mantine-Alert-icon[data-color="danger"] {
-  color: var(--color-danger) !important;
-}
-.mantine-Alert-icon[data-color="info"] {
-  color: var(--color-info) !important;
-}
-
-/* 2. Global Badge Slate Neutralization */
-.mantine-Badge-root[data-color="neutral"] {
-  background-color: var(--color-bg-hover) !important;
-  color: var(--color-text-subtle) !important;
-  border: 1px solid var(--color-border-subtle) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Badge-root[data-color="info"] {
-  background-color: var(--color-bg-hover-subtle) !important;
-  color: var(--color-text-subtle) !important;
-  border: 1px solid var(--color-border-subtle) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Badge-root[data-color="success"] {
-  background-color: var(--color-success-bg) !important;
-  color: var(--color-success-text) !important;
-  border: 1px solid var(--color-success-border) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Badge-root[data-color="warning"] {
-  background-color: var(--color-warning-bg) !important;
-  color: var(--color-warning-text) !important;
-  border: 1px solid var(--color-warning-border) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Badge-root[data-color="danger"] {
-  background-color: var(--color-danger-bg) !important;
-  color: var(--color-danger-text) !important;
-  border: 1px solid var(--color-danger-border) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-/* Global outline badges (e.g. TEAM, PERSONAL, MEMORY) -> monotone slate */
-.mantine-Badge-root[data-variant="outline"] {
-  background-color: transparent !important;
-  color: var(--color-text-muted) !important;
-  border: 1px solid var(--color-border) !important;
-  text-transform: none !important;
-  border-radius: 6px !important;
-}
-
-/* 3. Global Danger Button Styler (Avoid cheap red fill) */
-.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
-    :disabled
-  ) {
-  background-color: transparent !important;
-  color: var(--color-danger) !important;
-  border: 1px solid var(--color-danger-border) !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Button-root[data-color="danger"][data-variant="light"]:not([data-disabled="true"]):not(
-    :disabled
-  ):hover {
-  background-color: var(--color-danger-bg) !important;
-}
-
-.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
-    :disabled
-  ) {
-  background-color: var(--color-danger) !important;
-  color: #ffffff !important;
-  border-radius: 6px !important;
-}
-
-.mantine-Button-root[data-color="danger"][data-variant="filled"]:not([data-disabled="true"]):not(
-    :disabled
-  ):hover {
-  background-color: var(--literal-red-700) !important;
-}
-
-/* 5. Inner Element Border Radius (規格化) */
+/* Inner Element Border Radius (規格化) */
 .mantine-Button-root,
 .mantine-Select-input,
 .mantine-TextInput-input,
