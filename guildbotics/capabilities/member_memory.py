@@ -242,6 +242,7 @@ class MemberMemoryService:
             capture_output=True,
             check=False,
             text=True,
+            encoding="utf-8",
         )
         if completed.returncode == RG_NO_MATCH_EXIT_CODE:
             return []
