@@ -52,6 +52,10 @@ Branvil の README に従って、次を行います。
 
 メンバーとそのトークンは Branvil で作りません。GuildBotics が作ります。
 
+1 つの Branvil につなぐ GuildBotics のワークスペースは 1 つにしてください。GuildBotics のメンバーと
+Branvil への接続はワークスペースごとに持つので、2 つ目のワークスペースで接続したりメンバーを
+保存したりすると、もう一方の接続とトークンが失効します。
+
 ## GuildBotics を Branvil に接続する
 
 Branvil が動いている Hub のマシンで、デスクトップアプリの **設定 → 連携** から:

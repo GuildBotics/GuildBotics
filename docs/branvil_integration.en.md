@@ -54,6 +54,10 @@ Following the Branvil README:
 
 Members and their tokens are not created in Branvil: GuildBotics does that.
 
+Connect one GuildBotics workspace to a Branvil. GuildBotics keeps its members and its connection to
+Branvil per workspace, so connecting or saving members in a second workspace revokes the other's
+connection and tokens.
+
 ## Connect GuildBotics to Branvil
 
 On the Hub machine, where Branvil runs, under **Setup → Integrations** in the desktop app:
