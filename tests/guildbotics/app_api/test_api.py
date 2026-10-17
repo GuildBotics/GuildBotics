@@ -2884,16 +2884,29 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
     # ``local`` is the reference provider and has no setup, so it is not offered.
     assert response.json() == [
         {
+            "name": "branvil",
+            "title": "Branvil",
+            "kinds": ["ticket_service", "code_hosting_service"],
+            "avatar": False,
+            # One Branvil per project, handed the members' GitHub credentials.
+            "shared": ["base_url"],
+            "credentials_from": ["github"],
+        },
+        {
             "name": "github",
             "title": "GitHub",
             "kinds": ["ticket_service", "code_hosting_service"],
             "avatar": True,
+            "shared": [],
+            "credentials_from": [],
         },
         {
             "name": "slack",
             "title": "Slack",
             "kinds": ["chat_service"],
             "avatar": True,
+            "shared": [],
+            "credentials_from": [],
         },
     ]
 

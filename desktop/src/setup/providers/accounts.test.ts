@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import i18n from "../../i18n";
 import "../../i18n";
+import { branvilAccount, type BranvilForm } from "./branvil/BranvilAccount";
+import { BRANVIL_BASE_URL, branvilUrl } from "./branvil/api";
+import { branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
 import type { AppRegistrationStatus } from "./github/api";
 import { githubAccount, type GitHubForm } from "./github/GitHubAccount";
 import { isSlackChannel, slackAccount, type SlackForm } from "./slack/SlackAccount";
@@ -456,5 +459,83 @@ describe("isSlackChannel", () => {
     for (const channel of ["Dev", "_dev", "-dev", "#_dev", "#-dev", ""]) {
       expect(isSlackChannel(channel)).toBe(false);
     }
+  });
+});
+
+function branvil(overrides: Partial<BranvilForm> = {}): BranvilForm {
+  return { ...branvilAccount.initial(), ...overrides };
+}
+
+describe("branvilAccount", () => {
+  it("sends the agent saved, chosen or to be created, and a human's saved name", () => {
+    expect(branvilAccount.request(branvil(), false)).toEqual({ username: "", reissue: false });
+    expect(branvilAccount.request(branvil({ choice: "existing", chosen: "aiko" }), false)).toEqual({
+      username: "aiko",
+      reissue: false,
+    });
+    expect(
+      branvilAccount.request(
+        branvil({ stored: "aiko", choice: "existing", chosen: "other", reissue: true }),
+        false,
+      ),
+    ).toEqual({ username: "aiko", reissue: true });
+    expect(branvilAccount.request(branvil({ stored: "otota" }), true)).toEqual({
+      username: "otota",
+    });
+  });
+
+  it("edits a stored account with its token kept", () => {
+    expect(
+      branvilAccount.fromView({ username: "aiko", has_token: true }, branvil(), false),
+    ).toEqual(branvil({ stored: "aiko", storedToken: true }));
+    expect(branvilAccount.fromView(undefined, branvil(), false)).toEqual(branvil());
+  });
+
+  it("asks an agent to be chosen only when choosing one", () => {
+    expect(branvilAccount.errors(branvil(), context(), t)).toEqual({});
+    expect(branvilAccount.errors(branvil({ choice: "existing" }), context(), t)).toEqual({
+      chosen: t("setup.branvil.member.chooseRequired"),
+    });
+    expect(
+      branvilAccount.errors(branvil({ choice: "existing" }), context({ human: true }), t),
+    ).toEqual({});
+  });
+});
+
+describe("branvilUrl", () => {
+  it("is the base URL the project's Branvil services name", () => {
+    expect(branvilUrl({})).toBe("");
+    expect(branvilUrl({ code_hosting_service: { name: "github", owner: "a" } })).toBe("");
+    expect(branvilUrl({ ticket_service: { name: "branvil", workspace: "a" } })).toBe(
+      BRANVIL_BASE_URL,
+    );
+    expect(branvilUrl({ ticket_service: { name: "branvil", base_url: " http://hub:9 " } })).toBe(
+      "http://hub:9",
+    );
+  });
+});
+
+describe("branvil services", () => {
+  it("start from what the other kind says of the same Branvil", () => {
+    expect(branvilTickets.initial({})).toEqual({ base_url: BRANVIL_BASE_URL, workspace: "" });
+    expect(
+      branvilCodeHosting.initial({
+        ticket_service: { name: "branvil", base_url: "http://hub:9000", workspace: "acme" },
+      }),
+    ).toEqual({ base_url: "http://hub:9000", workspace: "acme" });
+  });
+
+  it("refuse what names no Branvil or workspace", () => {
+    const value = { name: "branvil", base_url: "http://hub/x", workspace: "acme/team" };
+
+    expect(branvilTickets.errors(value, t)).toEqual({
+      base_url: t("setup.branvil.baseUrlInvalid"),
+      workspace: t("setup.branvil.workspaceInvalid"),
+    });
+    expect(branvilCodeHosting.errors({ ...value, workspace: " " }, t)).toEqual({
+      base_url: t("setup.branvil.baseUrlInvalid"),
+      workspace: t("setup.branvil.workspaceRequired"),
+    });
+    expect(branvilTickets.errors({ name: "branvil", workspace: "acme" }, t)).toEqual({});
   });
 });

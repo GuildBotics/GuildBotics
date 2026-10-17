@@ -1,0 +1,10 @@
+en:
+  connected: "GuildBotics is connected to Branvil."
+  close: "Close this page and go back to the GuildBotics app."
+  failed: "GuildBotics could not connect to Branvil."
+  retry: "Close this page and connect again from the GuildBotics app."
+  expired: "This connection was not started here, or it has expired."
+  denied: "The connection was not allowed on Branvil's consent screen."
+  workspace_changed: "The GuildBotics app switched to another workspace after this connection started. Select the workspace to connect, then connect again."
+  not_kept: "The admin token Branvil gave could not be kept on this machine. Branvil has revoked the earlier admin token, so connect again."
+  not_agent: "Branvil's member '%{name}' is not an agent. Choose an agent, or another name."

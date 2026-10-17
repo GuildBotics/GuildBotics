@@ -16,9 +16,12 @@ def get_member_avatar_dir(config_dir: Path, person_id: str) -> Path:
 
 
 def find_avatar_file(config_dir: Path, person_id: str) -> Path | None:
-    member_dir = get_member_avatar_dir(config_dir, person_id)
-    if not member_dir.exists():
-        return None
+    return avatar_in(get_member_avatar_dir(config_dir, person_id))
+
+
+def avatar_in(member_dir: Path) -> Path | None:
+    """The avatar in a member's directory, which may be stored under a name
+    that is no valid ID; ``None`` for none."""
     for ext in SUPPORTED_EXTENSIONS:
         avatar_path = member_dir / f"avatar{ext}"
         if avatar_path.is_file():

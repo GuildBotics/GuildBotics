@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 
 from guildbotics.drivers.live_state import LiveState, LiveStatePublisher
+from guildbotics.hub.forward import HubForwards
 from guildbotics.hub.relay import HEAD_UPDATED_EVENT, LIVE_EXPIRED_EVENT_KIND
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
 from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
@@ -17,12 +18,14 @@ OWNER_CACHE_SECONDS = 5.0
 
 
 class RelayRuntime:
-    """Own one publisher and one reconnecting watcher for a process."""
+    """Own one publisher and one reconnecting watcher for a process, and the
+    forwards to the hub machine's services when the hub is another machine."""
 
     def __init__(
         self,
         client: HubRelayClient,
         *,
+        forwards: HubForwards | None = None,
         on_live_state: Callable[[LiveState], None] | None = None,
         on_live_expired: Callable[[str, str, str], None] | None = None,
         on_head_updated: Callable[[], None] | None = None,
@@ -30,6 +33,7 @@ class RelayRuntime:
         heartbeat_interval: float = LIVE_HEARTBEAT_INTERVAL_SECONDS,
     ) -> None:
         self.client = client
+        self._forwards = forwards
         self._on_live_state = on_live_state
         self._on_live_expired = on_live_expired
         self._on_head_updated = on_head_updated
@@ -68,10 +72,13 @@ class RelayRuntime:
         )
         self._watcher.start()
         self._heartbeat_thread.start()
+        if self._forwards is not None:
+            self._forwards.start()
 
     def stop(self, timeout: float = 5.0) -> bool:
         self._stop.set()
         self.client.close()
+        forwards_stopped = self._forwards is None or self._forwards.stop(timeout)
         with self._owner_cache_lock:
             self._owner_cache = None
         threads = [self._watcher, self._heartbeat_thread]
@@ -83,7 +90,7 @@ class RelayRuntime:
             return False
         self._watcher = None
         self._heartbeat_thread = None
-        return True
+        return forwards_stopped
 
     def check_owner(self) -> bool | None:
         """Return owner status, or ``None`` when the Hub cannot answer."""

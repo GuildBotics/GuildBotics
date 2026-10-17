@@ -672,6 +672,11 @@ export type ProviderOption = {
   kinds: ServiceKind[];
   /** Whether a member's avatar can be imported from it. */
   avatar: boolean;
+  /** The items every kind it serves gives alike. */
+  shared: string[];
+  /** The providers whose member credentials it is handed: a member's account
+   * with one is edited wherever this provider is used. */
+  credentials_from: string[];
 };
 
 export type ProjectSetupRequest = {

@@ -39,6 +39,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - **複数メンバーの定義**: 異なる役割、個性、記憶を持つ複数の AI メンバーを定義できます（設定ファイル上の識別子は `person`）
 - **GitHub 統合**: GitHub Projects / Issues によるチケット管理と、メンバーによる PR 作成・コメント・レビュー対応
 - **Slack 統合**: 設定したチャネルをメンバーが監視し、そこで受けた依頼を本人として処理・応答
+- **Branvil 統合**: Hub のマシンで自分で動かすコードホスト兼ボード [Branvil](docs/branvil_integration.ja.md) を、GitHub の代わりにリポジトリ・PR・CI・チケットに使う
 - **メンバー記憶**: メンバーがセッションを越えて参照・維持する個人/チームの記憶
 - **対話メンバーセッション**: guildbotics スキルにより、AI CLI ツールが現在のリポジトリでメンバーとして作業
 - **スケジュール実行**: メンバーごとの巡回実行コマンドと、cron ベースの定期実行コマンド
@@ -96,6 +97,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 - **GitHub**: 初期設定を完了するには、有効な GitHub Project の URL が必須です。先に [GitHub プロジェクトを作成する](#github-プロジェクトを作成する)（Todo / In Progress / Done のステータスを用意）と [AI エージェント用の GitHub アカウントを用意する](#ai-エージェント用の-github-アカウントを用意する)（アカウント種別の選択とトークン発行）を済ませてください。メンバーに GitHub アカウントを割り当てる場合は、そのメンバーのユーザー名・git メールアドレス・認証情報も必須になります
 - **Slack**: メンバーが Slack で依頼を受けるには、Socket Mode の Slack App と bot / app トークンが必要です。準備する内容は [Slack で作業を依頼する](#slack-で作業を依頼する)を参照してください
+- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。GuildBotics はオーナーの同意で一度だけ Branvil に接続し、メンバーごとの Branvil のエージェントとトークンは GuildBotics が用意します。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
 
 GuildBotics では、プロジェクトの設定と状態を置くフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 
@@ -577,6 +579,11 @@ publisher が heartbeat を止め、状態が失効すると消えます。完�
 - `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント用の fine-grained PAT
 - GitHub App の ID はメンバー YAML（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
 
+**Branvil アクセス**:
+
+- `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。ホストがメンバーの用意と Branvil の GUI を開くのに使います
+- `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行します（Branvil での名前はメンバー YAML の `account_info.branvil_username`）
+
 OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
 
 ### ワークスペースとデータの保存場所
@@ -926,6 +933,7 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `services.ticket_service`: GitHub の Issue と Projects の設定
 - `services.ticket_service.lane_map`: 着手可能 / 作業中 / 完了レーンを GitHub Project のステータス名に対応付けます。Project が独自のステータス名を使う場合に設定します
 - `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使う GitHub owner）
+- Branvil では、どちらのサービスも `name: branvil` で、同じ `base_url`（既定 `http://127.0.0.1:7878`）と `workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
 - `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 
 **メンバー設定** (`team/members/<person_id>/person.yml`):

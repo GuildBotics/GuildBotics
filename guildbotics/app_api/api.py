@@ -164,6 +164,10 @@ from guildbotics.setup.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
     person_config_paths,
+    prepare_accounts,
+    remove_accounts,
+    settle_accounts,
+    share_avatar,
     stored_person_config_dir,
     stored_person_config_paths,
 )
@@ -191,6 +195,7 @@ from guildbotics.utils.workspace_state import (
     registered_workspaces,
     unregister_workspace,
 )
+from guildbotics.workspace.config_repository import ConfigWriteReceipt
 
 #: The header the Desktop sends naming its display language, so error
 #: sentences come back in the language the screen is in.
@@ -1040,14 +1045,17 @@ def create_app(
         )
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
+    # A member's deletion first reaches its providers, outside the
+    # workspace's shared-write lock, which then blocks: hence the thread.
     @router.post("/config/members")
-    def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
+    async def config_members(request: PersonSetupInput) -> ConfigWriteResponse:
         status = app_runtime.get_config_status()
         member = request.model_copy(
             update={"config_dir": status.config_dir or request.config_dir}
         )
-        receipt = apply_config_write(
-            member.config_dir,
+        receipt = await _save_member(
+            member,
+            member.person_id,
             lambda: SimplePersonSetupService().write_person(member),
             report=lambda: config_repository(member.config_dir).revisions(
                 person_config_paths(member.person_id)
@@ -1069,7 +1077,7 @@ def create_app(
         return snapshot.model_copy(update={"revisions": revisions})
 
     @router.put("/config/members/{person_id}")
-    def config_member_update(
+    async def config_member_update(
         person_id: MemberDirectoryName, request: PersonUpdateInput
     ) -> ConfigWriteResponse:
         if request.original_person_id != person_id:
@@ -1079,13 +1087,13 @@ def create_app(
             )
         config_dir = _resolve_member_config_dir(app_runtime)
         member = request.model_copy(update={"config_dir": config_dir})
-        receipt = apply_config_write(
-            config_dir,
+        receipt = await _save_member(
+            member,
+            member.original_person_id,
             lambda: SimplePersonSetupService().update_person(member),
             expected=request.expected_revisions,
-            # The member may have been renamed, so the paths that matter
-            # now are the new ones, not the ones the request was composed
-            # against.
+            # The member may have been renamed, so the paths that matter now
+            # are the new ones, not the ones the request was composed against.
             report=lambda: config_repository(config_dir).revisions(
                 person_config_paths(request.person_id)
             ),
@@ -1093,11 +1101,13 @@ def create_app(
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @router.delete("/config/members/{person_id}")
-    def config_member_delete(
+    async def config_member_delete(
         person_id: MemberDirectoryName, request: MemberDeleteRequest
     ) -> ConfigWriteResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
-        receipt = apply_config_write(
+        await remove_accounts(config_dir, person_id)
+        receipt = await run_in_threadpool(
+            apply_config_write,
             config_dir,
             lambda: SimplePersonSetupService().delete_person(
                 config_dir=config_dir,
@@ -1121,6 +1131,8 @@ def create_app(
                     if getattr(provider, service.value) is not None
                 ],
                 avatar=provider.setup.avatar_url is not None,
+                shared=sorted(provider.setup.shared),
+                credentials_from=sorted(provider.setup.credentials_from),
             )
             for provider in PROVIDERS.values()
             if provider.setup is not None
@@ -1172,7 +1184,7 @@ def create_app(
         raise AppApiError("avatar_not_found", status_code=404)
 
     @router.post("/config/members/{person_id}/avatar")
-    def config_member_avatar_upload(
+    async def config_member_avatar_upload(
         person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
     ) -> AvatarMutationResponse:
@@ -1181,9 +1193,13 @@ def create_app(
 
         try:
             content, suffix = read_upload(file)
-            dest_path = apply_config_write(
-                config_dir,
-                lambda: store_avatar(config_dir, person_id, content, suffix),
+            # The write lock blocks, and this runs on the event loop.
+            dest_path = (
+                await run_in_threadpool(
+                    apply_config_write,
+                    config_dir,
+                    lambda: store_avatar(config_dir, person_id, content, suffix),
+                )
             ).result
         except ValueError as exc:
             # Validation failures (e.g. too large) carry a safe, stable message.
@@ -1200,6 +1216,7 @@ def create_app(
                 "avatar_save_failed",
                 status_code=500,
             ) from exc
+        await share_avatar(config_dir, person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @router.post("/config/members/{person_id}/avatar/{provider}")
@@ -1234,6 +1251,7 @@ def create_app(
                 params={"provider": setup.title},
                 status_code=500,
             ) from exc
+        await share_avatar(config_dir, person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
     @app.websocket("/events")
@@ -1241,6 +1259,45 @@ def create_app(
         await _stream(websocket, token, bus)
 
     return app
+
+
+async def _save_member[T](
+    member: PersonSetupInput,
+    saved_person_id: str,
+    write: Callable[[], T],
+    *,
+    expected: Mapping[str, str] | None = None,
+    report: Callable[[], dict[str, str]],
+) -> ConfigWriteReceipt[T]:
+    """Save ``member`` with ``write`` between preparing its accounts with
+    their providers, which no write waits on, and settling them.
+
+    A save refused before ``write`` began is settled as refused. One that
+    failed after it began may have stored what its accounts obtained, so they
+    are not settled: what they obtained stays rather than what is stored
+    being undone. The write blocks on the workspace's shared-write lock:
+    hence the thread.
+    """
+    began = False
+
+    def begin() -> T:
+        nonlocal began
+        began = True
+        return write()
+
+    try:
+        await prepare_accounts(member, saved_person_id)
+        receipt = await run_in_threadpool(
+            lambda: apply_config_write(
+                member.config_dir, begin, expected=expected, report=report
+            )
+        )
+    except Exception:
+        if not began:
+            await settle_accounts(member, saved=False)
+        raise
+    await settle_accounts(member, saved=True)
+    return receipt
 
 
 async def _store_downloaded_avatar(config_dir: Path, person_id: str, url: str) -> Path:

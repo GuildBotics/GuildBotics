@@ -203,18 +203,33 @@ class VerifyService:
         ]
 
     def _check_credentials(self, team: Team) -> list[VerifyCheck]:
+        providers = configured_providers(team)
         return [
-            VerifyCheck(
-                code=check.code,
-                status=check.status,
-                message=check.message,
-                target=check.target,
-                context=check.context,
-            )
-            for provider in configured_providers(team)
-            for member in team.members
-            if member.is_active
-            for check in provider.verify(member)
+            *(
+                self._check(
+                    "provider_secret",
+                    bool(workspace_secret_store().get(key)),
+                    f"{key} is configured.",
+                    f"{key} is not configured.",
+                    target=key,
+                    context={"provider": provider.name},
+                )
+                for provider in providers
+                for key in sorted(provider.workspace_secret_keys)
+            ),
+            *(
+                VerifyCheck(
+                    code=check.code,
+                    status=check.status,
+                    message=check.message,
+                    target=check.target,
+                    context=check.context,
+                )
+                for provider in providers
+                for member in team.members
+                if member.is_active
+                for check in provider.verify(member)
+            ),
         ]
 
     def _resolve_default_model_provider(self, team: Team) -> str:

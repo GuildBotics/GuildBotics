@@ -1461,6 +1461,11 @@ class ProviderOption(BaseModel):
     kinds: list[str]
     #: Whether a member's avatar can be imported from it.
     avatar: bool
+    #: The items every kind it serves gives alike.
+    shared: list[str]
+    #: The providers whose member credentials it takes: a member's account
+    #: with one is edited wherever this provider is used.
+    credentials_from: list[str]
 
 
 class ProjectConfigUpdateRequest(ProjectSetupInput):

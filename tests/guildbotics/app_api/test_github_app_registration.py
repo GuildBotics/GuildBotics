@@ -6,6 +6,7 @@ app's IDs and key from it."""
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable, Iterator
 from functools import cache
@@ -370,6 +371,13 @@ def _for_bob(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
     return _installed(client, person_id="bob")
 
 
+def _in_another_workspace(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
+    with monkeypatch.context() as other:
+        root = Path(os.environ["GUILDBOTICS_WORKSPACE_ROOT"]) / "other"
+        other.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(root))
+        return _installed(client)
+
+
 @pytest.mark.parametrize("save", [_add, _update], ids=["add", "update"])
 @pytest.mark.parametrize(
     ("registration", "code"),
@@ -378,8 +386,9 @@ def _for_bob(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> str:
         (_pending, "github_app_registration_incomplete"),
         (_expired, "github_app_registration_not_found"),
         (_for_bob, "github_app_registration_member_mismatch"),
+        (_in_another_workspace, "github_app_registration_not_found"),
     ],
-    ids=["missing", "incomplete", "expired", "another-member"],
+    ids=["missing", "incomplete", "expired", "another-member", "another-workspace"],
 )
 def test_member_save_refuses_a_registration_it_cannot_use_before_writing(
     client: TestClient,

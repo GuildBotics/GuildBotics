@@ -1,0 +1,6 @@
+en:
+  reachable: "Branvil answered at %{base_url}."
+  workspace: "The workspace %{workspace} was read."
+  access: "Branvil accepted the member's token as the member's."
+  owner: "The human member is Branvil's owner %{owner}, whose rights GuildBotics' connection has."
+  not_owner: "The human member's Branvil name '%{name}' is not Branvil's owner '%{owner}'. Save the member again to take the owner's name."

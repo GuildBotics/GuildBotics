@@ -32,14 +32,20 @@ from guildbotics.integrations.github import app_manifest
 from guildbotics.integrations.github.github_utils import GitHubAppAuth
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
+    AppCredential,
+    HostCredential,
     MemberAccount,
     Operation,
     Page,
     ProviderSetup,
+    SavedMember,
     SetupError,
     SetupItems,
+    html_page,
+    message_page,
     page_path,
 )
+from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.i18n_tool import t
 
 _NAME = "github"
@@ -169,8 +175,28 @@ class GitHubAccount(MemberAccount):
             {key: value for key, value in values.items() if value},
         )
 
-    def saved(self) -> None:
-        _registrations.discard(self.app_registration_id)
+    async def settled(self, saved: bool) -> None:
+        # A refused save may be retried with the same registration.
+        if saved:
+            _registrations.discard(self.app_registration_id)
+
+    @classmethod
+    def credential(cls, member: SavedMember) -> HostCredential | None:
+        """A machine user's token, or a GitHub App; a human hands over none."""
+        kind = member.account_info.get("github_account_type")
+        if kind == GitHubAppAuth.MACHINE_USER:
+            token = member.get_secret("GITHUB_ACCESS_TOKEN")
+            return HostCredential(token=token) if token else None
+        key = member.get_secret("GITHUB_PRIVATE_KEY")
+        if kind != GitHubAppAuth.GITHUB_APPS or not key:
+            return None
+        return HostCredential(
+            app=AppCredential(
+                app_id=member.account_info.get("github_app_id", ""),
+                installation_id=member.account_info.get("github_installation_id", ""),
+                private_key=key,
+            )
+        )
 
     @classmethod
     def view(
@@ -403,6 +429,8 @@ class AppRegistrationStatus(BaseModel):
 class _Registration(AppRegistrationStatus):
     organization: str
     callback_url: str
+    #: The workspace the registration is for: the one selected at the start.
+    config_dir: Path
     created_at: float = Field(default_factory=time.time)
     pem: str = ""
 
@@ -435,6 +463,7 @@ class AppRegistrations:
             person_id=request.person_id,
             organization=request.organization.strip(),
             callback_url=f"{base}{page_path(_NAME, 'app-callback')}",
+            config_dir=get_workspace_config_dir(),
         )
         registration.start_url = (
             f"{base}{page_path(_NAME, 'app-manifest')}?state={registration.state}"
@@ -477,7 +506,7 @@ class AppRegistrations:
         manifest = app_manifest.build_app_manifest(
             registration.app_name, registration.callback_url
         )
-        return _page(
+        return html_page(
             f"<p>{html.escape(t('integrations.github.app_registration.redirecting'))}</p>"
             f'<form id="manifest-form" action="{html.escape(url)}'
             f'?state={html.escape(registration.state)}" method="post">'
@@ -525,8 +554,9 @@ class AppRegistrations:
         the same registration; it is discarded once the save succeeded.
 
         Raises:
-            SetupError: The registration is missing, expired or already
-                saved, is not installed yet, or was started for another member.
+            SetupError: The registration is missing, expired, already
+                saved, or started in another workspace, is not installed yet, or
+                was started for another member.
         """
         registration = self._get(state)
         if registration.status != "installed":
@@ -547,7 +577,11 @@ class AppRegistrations:
     def _get(self, state: str, *, status_code: int = 400) -> _Registration:
         self._purge_expired()
         registration = self._registrations.get(state)
-        if registration is None:
+        # One started in another workspace is not this workspace's.
+        if (
+            registration is None
+            or registration.config_dir != get_workspace_config_dir()
+        ):
             raise SetupError(
                 "github_app_registration_not_found",
                 "GitHub App registration was not found or has expired.",
@@ -573,33 +607,12 @@ class AppRegistrations:
         }
 
 
-_PAGE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>GuildBotics</title>
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 4rem auto; max-width: 40rem;
-       text-align: center; color: #333; }}
-button {{ font-size: 1rem; padding: 0.5rem 1.5rem; }}
-</style>
-</head>
-<body>
-{body}
-</body>
-</html>"""
-
-
-def _page(body: str, status_code: int = 200) -> Page:
-    return Page(html=_PAGE.format(body=body), status_code=status_code)
-
-
 def _error_page(message: str) -> Page:
     """A page telling the user to retry from the app."""
-    return _page(
-        f"<p>{html.escape(t('integrations.github.app_registration.error_title'))}</p>"
-        f"<p>{html.escape(message)}</p>"
-        f"<p>{html.escape(t('integrations.github.app_registration.error_hint'))}</p>",
+    return message_page(
+        t("integrations.github.app_registration.error_title"),
+        message,
+        t("integrations.github.app_registration.error_hint"),
         status_code=400,
     )
 

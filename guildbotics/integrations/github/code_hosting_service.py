@@ -3,7 +3,6 @@ git remote, and the pull request patrol."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import IO, Any
@@ -16,20 +15,14 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_github_token,
     normalize_login,
-    parse_timestamp,
 )
 from guildbotics.integrations.github.issue_links import (
     append_issue_link,
     preserve_issue_links,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
-    MAX_REVIEW_ROUNDS,
     PULL_REQUEST_QUERY,
-    REVIEW_LIMIT,
-    REVIEW_LIMIT_REASON,
-    PullRequest,
     parse_pull_request,
-    pull_request_work,
 )
 from guildbotics.integrations.github.pull_requests import (
     GitHubPullRequests,
@@ -46,6 +39,7 @@ from guildbotics.integrations.github.reads import (
 from guildbotics.integrations.github.repository_scope import (
     CONVERT_PULL_REQUEST_TO_DRAFT,
 )
+from guildbotics.integrations.pull_request_patrol import patrol
 from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
@@ -75,7 +69,6 @@ from guildbotics.runtime.resources import (
 )
 from guildbotics.utils.i18n_tool import t
 
-_LOGGER = logging.getLogger(__name__)
 _VERDICTS: dict[ReviewVerdict, str] = {
     "approve": "APPROVE",
     "request_changes": "REQUEST_CHANGES",
@@ -470,15 +463,17 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         node = (data.get("repository") or {}).get("pullRequest")
         if not node:
             raise ServiceNotFound(f"{url} is not there.")
-        pull = parse_pull_request(node, item.repository)
-        work = pull_request_work(pull, self._login())
-        if work is None:
-            return None
-        task = self._pull_request_task(pull, work)
-        if work == REVIEW_LIMIT:
-            await self._hand_over_at_review_limit(task)
-            return None
-        return task
+        pull = parse_pull_request(node)
+        return await patrol(
+            self,
+            pull,
+            normalize_login(get_github_username(self.person, strict=True)),
+            provider="github",
+            person_id=self.person.person_id,
+            draft=lambda: self.graphql(
+                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": pull.id}
+            ),
+        )
 
     async def _search_pull_requests(self) -> list[dict[str, Any]]:
         """Open PRs under the project owner that name this member.
@@ -514,62 +509,6 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         return sorted(
             found.values(), key=lambda pull: str(pull.get("updated_at") or "")
         )
-
-    def _login(self) -> str:
-        return normalize_login(get_github_username(self.person, strict=True))
-
-    def _pull_request_task(self, pull: PullRequest, trigger_reason: str) -> Task:
-        return Task(
-            provider="github",
-            label=f"#{pull.number}",
-            id=pull.node_id,
-            url=pull.url,
-            title=pull.title,
-            description=pull.body,
-            status=Task.IN_PROGRESS,
-            created_at=parse_timestamp(pull.created_at),
-            assignee=self.person.person_id,
-            pull_request_url=pull.url,
-            trigger_reason=trigger_reason,
-        )
-
-    async def _hand_over_at_review_limit(self, task: Task) -> None:
-        """Make the PR a draft, then say on it that automatic re-review stopped.
-
-        The notice tells the human that the PR is theirs until they mark it
-        ready for review, so it is posted only once the PR is a draft. When
-        the conversion fails, a failure notice takes its place: it holds the
-        PR until someone acts on it, and the rounds stay as they are.
-        """
-        assert task.pull_request_url
-        try:
-            await self.graphql(CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": task.id})
-        except Exception as exc:
-            _LOGGER.warning(
-                f"Could not convert {task.pull_request_url} to a draft: {exc}"
-            )
-            status = WorkflowStatus(
-                reason="failed",
-                person_id=self.person.person_id,
-                run_id="",
-                subject=task.pull_request_url,
-            )
-            body = t(
-                "integrations.github.code_hosting_service.review_limit_draft_failed",
-                count=MAX_REVIEW_ROUNDS,
-            )
-        else:
-            status = WorkflowStatus(
-                reason=REVIEW_LIMIT_REASON,
-                person_id=self.person.person_id,
-                run_id="",
-                subject=task.pull_request_url,
-            )
-            body = t(
-                "integrations.github.code_hosting_service.review_limit_reached",
-                count=MAX_REVIEW_ROUNDS,
-            )
-        await self.comment(task.pull_request_url, body, status=status)
 
 
 def _remote_web_url(remote_url: str) -> str:

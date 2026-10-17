@@ -65,6 +65,9 @@ FRONTEND_ROUTES = {
     ("setup/providers/github/api.ts", "startAppRegistration"): (
         "browser callback destination"
     ),
+    ("setup/providers/branvil/api.ts", "startConnection"): (
+        "browser callback destination"
+    ),
     ("api/client.ts", "uploadFile"): "header",
     ("api/client.ts", "subscribeEvents"): "WebSocket subprotocol",
     ("api/client.ts", "request"): "header",

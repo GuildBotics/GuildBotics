@@ -302,6 +302,7 @@ id = "providers-behind-the-factory"
 name = "Only the factory imports a provider's package"
 type = "protected"
 protected_modules = [
+  "guildbotics.integrations.branvil",
   "guildbotics.integrations.github",
   "guildbotics.integrations.local",
   "guildbotics.integrations.slack",

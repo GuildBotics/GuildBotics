@@ -23,6 +23,7 @@ import {
   getMemberConfig,
   getAgentEnvironmentStatus,
   getProjectConfig,
+  getProviders,
   getRoleOptions,
   getTeam,
   getWorkspaceSyncStatus,
@@ -399,6 +400,13 @@ vi.mock("./providers/slack/api", async (importOriginal) => {
       app_token_source: "input",
       channels: [],
     })),
+  };
+});
+vi.mock("./providers/branvil/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./providers/branvil/api")>();
+  return {
+    ...actual,
+    getConnection: vi.fn(async () => ({ status: "disconnected", owner: "", message: "" })),
   };
 });
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
@@ -1076,6 +1084,33 @@ describe("SetupPage", () => {
     expect(screen.getByLabelText(t("setup.github.owner"))).toBeInTheDocument();
   });
 
+  it("keeps the items a provider's kinds share alike", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProviders).mockResolvedValue([BRANVIL, ...PROVIDERS]);
+    const branvil = { name: "branvil", base_url: "http://127.0.0.1:7878", workspace: "acme" };
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { code_hosting_service: branvil, ticket_service: branvil } }),
+    );
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Existing project"));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    // The tickets' Branvil is the code host's: its base URL is edited once.
+    const [baseUrl] = await screen.findAllByLabelText(t("setup.branvil.baseUrl"));
+    expect(screen.getAllByLabelText(t("setup.branvil.baseUrl"))).toHaveLength(1);
+    await user.clear(baseUrl);
+    await fill(user, baseUrl, "http://hub:7878");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    const shared = { ...branvil, base_url: "http://hub:7878" };
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual({
+      code_hosting_service: shared,
+      ticket_service: shared,
+    });
+  });
+
   it("saves the chosen services from the integrations section", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
@@ -1648,9 +1683,29 @@ const PROVIDERS: ProviderOption[] = [
     title: "GitHub",
     kinds: ["code_hosting_service", "ticket_service"],
     avatar: true,
+    shared: [],
+    credentials_from: [],
   },
-  { name: "slack", title: "Slack", kinds: ["chat_service"], avatar: true },
+  {
+    name: "slack",
+    title: "Slack",
+    kinds: ["chat_service"],
+    avatar: true,
+    shared: [],
+    credentials_from: [],
+  },
 ];
+
+/** Branvil, which keeps one base URL for its kinds and is handed the
+ * members' GitHub credentials. */
+const BRANVIL: ProviderOption = {
+  name: "branvil",
+  title: "Branvil",
+  kinds: ["code_hosting_service", "ticket_service"],
+  avatar: false,
+  shared: ["base_url"],
+  credentials_from: ["github"],
+};
 
 const PROJECT_URL = "https://github.com/orgs/acme/projects/9";
 
@@ -2725,6 +2780,7 @@ describe("MembersSection", () => {
     // The default add form links the agent to no provider: each account is
     // sent empty, with no credential.
     expect(request.accounts).toEqual({
+      branvil: { username: "", reissue: false },
       github: { account_type: "", username: "" },
       slack: { bot_token: "", app_token: "" },
     });
@@ -2788,6 +2844,24 @@ describe("MembersSection", () => {
 
     expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "GitHub" })).not.toBeInTheDocument();
+  });
+
+  it("offers the account tab of a provider whose credentials a used one takes", async () => {
+    vi.mocked(getProviders).mockResolvedValue([BRANVIL, ...PROVIDERS]);
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ services: { ticket_service: { name: "branvil", workspace: "acme" } } }),
+    );
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+
+    expect(await screen.findByRole("tab", { name: "Branvil" })).toBeInTheDocument();
+    // The member's GitHub credential is entered here, for Branvil to publish with.
+    expect(screen.getByRole("tab", { name: "GitHub" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Slack" })).not.toBeInTheDocument();
   });
 
   it("offers the account tabs of the integrations once they are saved", async () => {
