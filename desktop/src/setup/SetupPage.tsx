@@ -814,7 +814,9 @@ export function SetupPage() {
               defaultPersonId={teamSummary?.default_person_id ?? ""}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
-              services={form.values.services}
+              // What a member's save works with is the saved project, not
+              // integrations still being edited.
+              services={projectConfig.data?.services ?? {}}
               cliTools={cliTools}
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
