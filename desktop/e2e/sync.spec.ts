@@ -305,6 +305,27 @@ test("⑧ refreshes an open member editor after a competing change is set aside"
   await expect(name).toHaveValue("Member from another device");
   await expect(page.getByText("This member's settings have changed")).toHaveCount(0);
   expect(readFileSync(memberFile, "utf-8")).toContain("name: Member from another device");
+
+  // This machine's edit was set aside in the identities' repository, not the
+  // workspace's: the band names it as the members', and their own card on the
+  // sync settings discards it there.
+  const alert = page.getByRole("alert").filter({ hasText: "Members' changes set aside" });
+  await expect(alert).toBeVisible({ timeout: 30_000 });
+  await page.goto("/#/setup?section=sync");
+  const card = page
+    .locator(".mantine-Card-root")
+    .filter({ has: page.getByRole("heading", { name: "Members' changes set aside" }) });
+  await expect(card.getByText(memberPath)).toBeVisible();
+  await card.getByRole("button", { name: "Discard…" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(card).toHaveCount(0);
+  await expect(alert).toHaveCount(0);
+  const identityRefs = git(
+    join(ctx.homeDir, ".guildbotics", "identity", ".guildbotics"),
+    "for-each-ref",
+    "refs/guildbotics/rejected",
+  );
+  expect(identityRefs.trim()).toBe("");
 });
 
 test("⑩ takes in a change pushed straight to the hub, with nothing asked of the user", async ({

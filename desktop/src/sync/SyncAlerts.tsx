@@ -1,20 +1,16 @@
 import { Alert, Anchor, Button, Group, Stack, Text } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import {
-  getWorkspaceSecrets,
-  getWorkspaceSyncStatus,
-  retryWorkspaceSync,
-  type SecretScope,
-} from "../api/client";
+import { getWorkspaceSecrets, type SyncScope } from "../api/client";
 import { SECRETS_REFETCH_MS, secretAlert, secretsQueryKey } from "./secretState";
 import { SyncFailureDetail } from "./SyncFailureDetail";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
-import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "./syncState";
+import { syncAttentionGroups, syncCanRetry, syncTone, type ScopedSyncStatus } from "./syncState";
+import { useSyncRetry, useSyncStatuses } from "./useSyncStatus";
 
 /**
  * The synchronization half of the app-wide warning band.
@@ -23,6 +19,10 @@ import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "
  * sidebar indicator, which is always on screen anyway. The band carries a
  * summary and a way in -- the list of what is actually wrong lives on the
  * settings screen, so the warning does not grow with the problem.
+ *
+ * The workspace and the members' identities synchronize separately, so each
+ * has its warnings, named for whose they are. A state both are in -- a hub that
+ * is down -- is one warning about both.
  *
  * A change the hub did not accept is one of those states, not an event that
  * scrolls past. It is rare, and each one means an edit of the user's was set
@@ -33,35 +33,28 @@ import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "
 export function SyncAlerts() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
+  const scoped = useSyncStatuses();
+  const workspace = scoped.find((item) => item.scope === "workspace");
   // A head change includes both adoption and reconciliation. Rejections are
   // also observed because a short-lived local head can fall between polls.
   // Refresh reads, never the editable form: it compares its own revisions.
   const previous = useRef<{ workspace: string | null; revision: string } | null>(null);
   useEffect(() => {
-    if (!status.data) return;
-    const workspace = status.data.workspace_id;
-    const revision = JSON.stringify([
-      status.data.local_head,
-      // Another machine's edit of a member's name or accounts arrives here.
-      status.data.identity_head,
-      status.data.rejected_changes.map((change) => change.rejection_id).sort(),
-    ]);
+    if (!workspace?.status) return;
+    const workspaceId = workspace.status.workspace_id;
+    const revision = JSON.stringify(
+      scoped.map(({ status }) => [
+        status?.local_head ?? null,
+        (status?.rejected_changes ?? []).map((change) => change.rejection_id).sort(),
+      ]),
+    );
     const last = previous.current;
-    previous.current = { workspace, revision };
-    if (last?.workspace === workspace && last.revision !== revision) {
+    previous.current = { workspace: workspaceId, revision };
+    if (last?.workspace === workspaceId && last.revision !== revision) {
       void queryClient.invalidateQueries({ queryKey: ["team"] });
       void queryClient.invalidateQueries({ queryKey: ["member-config"] });
     }
-  }, [queryClient, status.data]);
-  const retry = useMutation({
-    mutationFn: retryWorkspaceSync,
-    onSuccess: (next) => queryClient.setQueryData(["workspace-sync"], next),
-  });
+  }, [queryClient, scoped, workspace?.status]);
   const secrets = useQuery({
     queryKey: secretsQueryKey("workspace"),
     queryFn: () => getWorkspaceSecrets("workspace"),
@@ -72,44 +65,21 @@ export function SyncAlerts() {
     queryFn: () => getWorkspaceSecrets("identities"),
     refetchInterval: SECRETS_REFETCH_MS,
   });
-  const state = syncIndicatorState(status.data);
-  const rejected = status.data?.rejected_changes.length ?? 0;
-  const count = status.data?.unsendable_changes.length ?? 0;
-  const liveClientUpdateRequired = status.data?.live_error_code === "live_client_update_required";
-  // Both at once is an ordinary combination -- a hub that cannot be reached
-  // says nothing about what it already refused -- so neither hides the other.
+  const liveClientUpdateRequired =
+    workspace?.status?.live_error_code === "live_client_update_required";
+  // A state and a set-aside change at once is an ordinary combination -- a
+  // hub that cannot be reached says nothing about what it already refused --
+  // so neither hides the other.
   return (
     <>
-      {syncNeedsAttention(state) ? (
-        <Alert
-          color={syncTone(state) === "danger" ? "danger" : "warning"}
-          icon={<TriangleAlert size={18} />}
-          title={t(`sync.state.${state}.label`)}
-        >
-          <Stack gap="xs">
-            <Group align="center" gap="md" wrap="wrap">
-              <Text size="sm">{t(`sync.alerts.${state}`, { count })}</Text>
-              <Group gap="xs">
-                {syncCanRetry(state) ? (
-                  <Button
-                    loading={retry.isPending}
-                    onClick={() => retry.mutate()}
-                    size="xs"
-                    variant="light"
-                  >
-                    {t("sync.actions.retry")}
-                  </Button>
-                ) : null}
-                <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
-                  {t("sync.actions.settings")}
-                </Anchor>
-              </Group>
-            </Group>
-            <SyncFailureDetail status={status.data} />
-          </Stack>
-        </Alert>
-      ) : null}
-      {rejected > 0 ? <RejectedAlert count={rejected} /> : null}
+      {syncAttentionGroups(scoped).map((group) => (
+        <StateAlert group={group} key={group[0]?.state} />
+      ))}
+      {scoped.map(({ scope, status }) =>
+        (status?.rejected_changes.length ?? 0) > 0 ? (
+          <RejectedAlert count={status?.rejected_changes.length ?? 0} key={scope} scope={scope} />
+        ) : null,
+      )}
       {secretAlert(identitySecrets.data) === "attention" ? (
         <SecretsAlert scope="identities" count={identitySecrets.data?.attention_count ?? 0} />
       ) : null}
@@ -130,13 +100,71 @@ export function SyncAlerts() {
 }
 
 /**
+ * One state that needs the user, in every scope it holds for.
+ *
+ * Named for the identities only when they alone are in it: the workspace's
+ * warnings read as they always have, and a warning about both needs no name.
+ */
+function StateAlert({ group }: { group: ScopedSyncStatus[] }) {
+  const { t } = useTranslation();
+  const retry = useSyncRetry();
+  const state = group[0]?.state ?? "disabled";
+  const label = t(`sync.state.${state}.label`);
+  const count = group.reduce((sum, item) => sum + (item.status?.unsendable_changes.length ?? 0), 0);
+  // Both scopes of a hub that is down failed the same way; their words are
+  // shown once.
+  const failures = group.filter(
+    (item, index) =>
+      item.status?.last_error_detail &&
+      group.findIndex(
+        (other) => other.status?.last_error_detail === item.status?.last_error_detail,
+      ) === index,
+  );
+  return (
+    <Alert
+      color={syncTone(state) === "danger" ? "danger" : "warning"}
+      icon={<TriangleAlert size={18} />}
+      title={
+        group.length === 1 && group[0]?.scope === "identities"
+          ? t("sync.identities.title", { label })
+          : label
+      }
+    >
+      <Stack gap="xs">
+        <Group align="center" gap="md" wrap="wrap">
+          <Text size="sm">{t(`sync.alerts.${state}`, { count })}</Text>
+          <Group gap="xs">
+            {syncCanRetry(state) ? (
+              <Button
+                loading={retry.isPending}
+                onClick={() => retry.mutate(group.map((item) => item.scope))}
+                size="xs"
+                variant="light"
+              >
+                {t("sync.actions.retry")}
+              </Button>
+            ) : null}
+            <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
+              {t("sync.actions.settings")}
+            </Anchor>
+          </Group>
+        </Group>
+        {failures.map((item) => (
+          <SyncFailureDetail key={item.scope} status={item.status} />
+        ))}
+      </Stack>
+    </Alert>
+  );
+}
+
+/**
  * Credentials this machine is short of, or has not given the hub.
  *
  * The band carries the count and the way in. Which keys, and what to do about
  * each, are on the settings screen -- and so is every transfer, because a value
  * leaving or arriving on a machine is a decision rather than a notification.
  */
-function SecretsAlert({ scope, count }: { scope: SecretScope; count: number }) {
+function SecretsAlert({ scope, count }: { scope: SyncScope; count: number }) {
   const { t } = useTranslation();
   return (
     <Alert
@@ -162,10 +190,14 @@ function SecretsAlert({ scope, count }: { scope: SecretScope; count: number }) {
  * user discards them there, because until then they are still holding content
  * that exists on no other machine.
  */
-function RejectedAlert({ count }: { count: number }) {
+function RejectedAlert({ scope, count }: { scope: SyncScope; count: number }) {
   const { t } = useTranslation();
   return (
-    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("sync.rejected.alertTitle")}>
+    <Alert
+      color="warning"
+      icon={<TriangleAlert size={18} />}
+      title={t(`sync.rejected.alertTitle.${scope}`)}
+    >
       <Group align="center" gap="md" wrap="wrap">
         <Text size="sm">{t("sync.rejected.alert", { count })}</Text>
         <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">

@@ -17,7 +17,6 @@ from pathlib import Path
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_log
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
-from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.timestamps import utc_now_iso
 
 #: Signature the sync manager depends on, so the recorder can be substituted.
@@ -57,10 +56,7 @@ def record_update_rejected(
             f"({', '.join(paths)})"
         ),
     )
-    ActivityEventStore(
-        get_workspace_state_path("events", workspace_root=workspace_root),
-        workspace_root=workspace_root,
-    ).record(
+    ActivityEventStore.of(workspace_root).record(
         {
             "type": SYNC_UPDATE_REJECTED,
             "workspace_id": workspace_id,

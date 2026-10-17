@@ -366,6 +366,17 @@ def activate_identity_sync() -> None:
         _identity = repository.workspace_root
 
 
+def run_identity_sync[Result](
+    operation: Callable[[GitSyncManager, Path], Result],
+) -> Result | None:
+    """Run an operation against the identities' queue, as :func:`run_current_sync`
+    does against the workspace's, or return None when none is running."""
+    with _lock:
+        if _identity_manager is None or _identity is None:
+            return None
+        return operation(_identity_manager, _identity)
+
+
 @contextmanager
 def paused_identity_sync() -> Iterator[None]:
     """Hold the identities' repository alone, with no queue running in it.

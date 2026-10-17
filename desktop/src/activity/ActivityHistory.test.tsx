@@ -1948,6 +1948,7 @@ describe("a change the hub did not accept", () => {
       rejection_id: "01932a7c-0000-7000-8000-00000000000f",
       paths: ["config/team/project.yml", "state/devices/d1.json"],
       source_device_id: "1f0a0000-0000-7000-8000-0000000000d1",
+      scope: "workspace" as const,
     },
   };
 
@@ -1962,7 +1963,9 @@ describe("a change the hub did not accept", () => {
 
     await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
 
-    expect(await screen.findByText(i18n.t("activity.rejection.title"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(i18n.t("activity.rejection.title.workspace")),
+    ).toBeInTheDocument();
     expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
     expect(screen.getByText("state/devices/d1.json")).toBeInTheDocument();
     expect(screen.getByText("1f0a0000-0000-7000-8000-0000000000d1")).toBeInTheDocument();
@@ -1983,7 +1986,9 @@ describe("a change the hub did not accept", () => {
 
     await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
 
-    expect(await screen.findByText(i18n.t("activity.rejection.title"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(i18n.t("activity.rejection.title.workspace")),
+    ).toBeInTheDocument();
   });
 
   it("points recovery at the machine that made the change, not at this screen", async () => {
@@ -2001,5 +2006,29 @@ describe("a change the hub did not accept", () => {
 
     expect(await screen.findByText(i18n.t("activity.rejection.recovery"))).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /restore|recover/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(i18n.t("activity.rejection.identitiesLocation")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("names a change to the members, and the repository its recovery runs in", async () => {
+    // The members' identities are a repository of their own, shared by every
+    // workspace, so the README procedure has to be pointed there instead.
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      sessions: [],
+      events: [
+        { ...rejectionEvent, rejection: { ...rejectionEvent.rejection, scope: "identities" } },
+      ],
+    });
+    renderActivity();
+
+    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
+
+    expect(
+      await screen.findByText(i18n.t("activity.rejection.title.identities")),
+    ).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("activity.rejection.identitiesLocation"))).toBeInTheDocument();
   });
 });

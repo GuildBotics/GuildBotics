@@ -4,9 +4,11 @@
 ambient workspace read is how GET mixed manager A's status with workspace
 B's hub URL. The population is every production call of that getter.
 
-Callers that need both go through ``run_current_sync``, which holds the
-activation lock across the pair. New pairing sites have to be named here
-so the next mix cannot land in an unnamed function.
+Callers that need both go through ``run_current_sync`` (or, for the
+identities' queue, ``run_identity_sync``), which holds the activation lock
+across the pair. New pairing sites have to be named here so the next mix
+cannot land in an unnamed function. A site that hands the function on rather
+than calling it is a pairing site too.
 """
 
 from __future__ import annotations
@@ -28,6 +30,15 @@ CURRENT_SYNC_OPERATIONS = {
     ),
     ("guildbotics/app_api/workspace_sync.py", "WorkspaceSyncService.retry"),
     ("guildbotics/app_api/workspace_sync.py", "WorkspaceSyncService._paused"),
+}
+
+#: The same for the identities' queue.
+IDENTITY_SYNC_OPERATIONS = {
+    (
+        "guildbotics/app_api/workspace_sync.py",
+        "WorkspaceSyncService.get_identity_status",
+    ),
+    ("guildbotics/app_api/workspace_sync.py", "WorkspaceSyncService.retry_identities"),
 }
 
 
@@ -53,7 +64,8 @@ def _enclosing_function(node: ast.AST) -> str:
     return ".".join(reversed(names)) or "<module>"
 
 
-def _production_call_sites(symbol: str) -> set[tuple[str, str]]:
+def _production_use_sites(symbol: str) -> set[tuple[str, str]]:
+    """Return where production code calls or hands on ``symbol``."""
     sites: set[tuple[str, str]] = set()
     for path in sorted(PRODUCTION_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -62,11 +74,8 @@ def _production_call_sites(symbol: str) -> set[tuple[str, str]]:
             for child in ast.iter_child_nodes(parent):
                 child.parent = parent  # type: ignore[attr-defined]
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            called = node.func
-            is_direct = isinstance(called, ast.Name) and called.id in direct_names
-            is_qualified = isinstance(called, ast.Attribute) and called.attr == symbol
+            is_direct = isinstance(node, ast.Name) and node.id in direct_names
+            is_qualified = isinstance(node, ast.Attribute) and node.attr == symbol
             if not is_direct and not is_qualified:
                 continue
             module = path.relative_to(REPOSITORY_ROOT).as_posix()
@@ -76,9 +85,10 @@ def _production_call_sites(symbol: str) -> set[tuple[str, str]]:
 
 def test_the_queue_pointer_is_not_read_outside_activation() -> None:
     """A status mix starts by reading the pointer, then the selected repo."""
-    assert _production_call_sites("current_sync_manager") == set()
+    assert _production_use_sites("current_sync_manager") == set()
 
 
 def test_lifecycle_operation_callers_are_named() -> None:
     """New pairings cannot appear without being counted."""
-    assert _production_call_sites("run_current_sync") == CURRENT_SYNC_OPERATIONS
+    assert _production_use_sites("run_current_sync") == CURRENT_SYNC_OPERATIONS
+    assert _production_use_sites("run_identity_sync") == IDENTITY_SYNC_OPERATIONS

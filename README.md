@@ -912,6 +912,11 @@ fill in the placeholders as follows.
 | `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/member.yml`) |
 | `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/member.yml`) |
 
+A change to the members' names or accounts is set aside in the members' own repository
+rather than the workspace's, and is listed under "Members' changes set aside". For those,
+put `~/.guildbotics/identity` (on Windows, `%USERPROFILE%\.guildbotics\identity`) in place
+of `<workspace>`.
+
 1. Read what was set aside. This shows the difference from what is in use now (`+` lines
    are the set aside side):
 
@@ -952,11 +957,14 @@ A set aside change cannot be recovered if the machine that made it is lost, or i
 been discarded there. Nothing prunes them automatically.
 
 Once you are done looking, discard it from **Settings → Sync**, under "Changes set
-aside". Discarding removes the set aside content and clears the warning. This machine
+aside" (or "Members' changes set aside"). Discarding removes the set aside content and clears the warning. This machine
 holds the only copy, so look at the content with the steps above before
 discarding; the activity history record stays either way.
 
 #### What the sidebar is telling you
+
+The sidebar shows whichever of the workspace's and the members' synchronization needs you
+more. Select it to see which one it is.
 
 | State | Meaning | What to do |
 | --- | --- | --- |
@@ -968,6 +976,7 @@ discarding; the activity history record stays either way.
 | Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
 | Shared data problem | Content could not be reconciled automatically | Open **Sync** |
 | Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |
+| Not connected to the hub | The members are not on the hub this workspace uses, so their names and accounts do not reach the other machines | Read the **Error details**. If GuildBotics on the hub machine is older, update it there, then select **Try again** |
 
 ### Configuration Files
 

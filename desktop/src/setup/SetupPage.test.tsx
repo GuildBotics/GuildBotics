@@ -53,6 +53,7 @@ import i18n from "../i18n";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 import { SyncAlerts } from "../sync/SyncAlerts";
+import { syncQueryKey } from "../sync/syncState";
 import {
   ensureAgentField,
   getAgentFieldState,
@@ -149,7 +150,6 @@ vi.mock("../api/client", async (importOriginal) => {
       hub_url: null,
       state: "disabled",
       local_head: null,
-      identity_head: null,
       remote_head: null,
       ahead_count: 0,
       behind_count: 0,
@@ -2530,14 +2530,15 @@ describe("MembersSection", () => {
         enabled: true,
         workspace_id: "workspace-a",
         local_head: "before",
-        identity_head: null,
         rejected_changes: [],
       };
       vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(sync);
       const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", true);
       const name = await screen.findByLabelText(t("setup.members.personName"));
       await waitFor(() => expect(name).toHaveValue("Alice"));
-      await waitFor(() => expect(queryClient.getQueryData(["workspace-sync"])).toEqual(sync));
+      await waitFor(() =>
+        expect(queryClient.getQueryData(syncQueryKey("workspace"))).toEqual(sync),
+      );
       fireEvent.change(name, { target: { value: "Unsaved name" } });
 
       const adopted = memberConfigDetail({
@@ -2553,10 +2554,9 @@ describe("MembersSection", () => {
         ),
       });
       // Deliver the next polling response without navigating or focusing the window.
-      queryClient.setQueryData(["workspace-sync"], {
+      queryClient.setQueryData(syncQueryKey("workspace"), {
         ...sync,
         local_head: "adopted",
-        identity_head: null,
         rejected_changes: rejected
           ? [
               {

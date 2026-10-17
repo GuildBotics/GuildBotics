@@ -10,7 +10,6 @@ what sends it.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +17,7 @@ import yaml
 from git import Repo
 
 from guildbotics.hub import host
+from guildbotics.sync import activation
 from guildbotics.sync.activation import (
     activate_identity_sync,
     commit_and_push_once,
@@ -27,7 +27,7 @@ from guildbotics.sync.activation import (
 from guildbotics.sync.enrollment import enroll
 from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
-from guildbotics.utils.workspace_sync_port import write_shared_text
+from guildbotics.utils.workspace_sync_port import ChangeSet, write_shared_text
 from guildbotics.workspace.identity import ensure_workspace_identity
 
 
@@ -39,11 +39,11 @@ def _machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str) -> Path
     return get_identity_root()
 
 
-def _save(name: str) -> None:
+def _save(name: str) -> ChangeSet | None:
     """Save alice's identity on the machine this is, as the setup screen does."""
     path = identity_members_dir() / "alice" / IDENTITY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_shared_text(path, yaml.safe_dump({"person_id": "alice", "name": name}))
+    return write_shared_text(path, yaml.safe_dump({"person_id": "alice", "name": name}))
 
 
 def _name() -> str:
@@ -108,13 +108,16 @@ def test_announcing_a_change_sends_it(
     pushed = Repo(hub_url).head.commit
     activate_identity_sync()
     try:
-        _save("Alice renamed on the Mac")
-        deadline = time.monotonic() + 20
-        while Repo(hub_url).head.commit == pushed:
-            assert time.monotonic() < deadline, "the change never reached the hub"
-            time.sleep(0.1)
+        change = _save("Alice renamed on the Mac")
+        assert change is not None
+        manager = activation._identity_manager
+        assert manager is not None
+        # The queue's own barrier, which waits as long as the product does for
+        # a change to be shared, rather than a deadline of this test's own.
+        assert manager.await_pushed(change.change_id)
     finally:
         assert deactivate_identity_sync()
+    assert Repo(hub_url).head.commit != pushed
 
     _machine(tmp_path, monkeypatch, "windows")
     synchronize_once(windows)

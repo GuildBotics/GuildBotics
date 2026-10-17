@@ -12,6 +12,7 @@ import {
 import i18n from "../i18n";
 import { SyncAlerts } from "./SyncAlerts";
 import { SyncIndicator } from "./SyncIndicator";
+import { mockSyncStatuses } from "../test/syncStatuses";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
@@ -33,7 +34,6 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     hub_url: "user@hub:.guildbotics/hub/workspaces/w/repository.git",
     state: "idle",
     local_head: "abc",
-    identity_head: null,
     remote_head: "abc",
     ahead_count: 0,
     behind_count: 0,
@@ -59,12 +59,12 @@ function renderWith(ui: React.ReactElement) {
 }
 
 beforeEach(() => {
-  vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
+  mockSyncStatuses(status());
 });
 
 describe("SyncIndicator", () => {
   it("shows nothing for a workspace that was never connected to a hub", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ enabled: false }));
+    mockSyncStatuses(status({ enabled: false }));
     renderWith(<SyncIndicator />);
 
     await waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalled());
@@ -79,9 +79,7 @@ describe("SyncIndicator", () => {
 
   it("opens the detail with the counts behind it", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ ahead_count: 3, last_success_at: "2026-07-01T10:00:00+00:00" }),
-    );
+    mockSyncStatuses(status({ ahead_count: 3, last_success_at: "2026-07-01T10:00:00+00:00" }));
     renderWith(<SyncIndicator />);
 
     await user.click(await screen.findByRole("button", { name: /Waiting to send/ }));
@@ -92,7 +90,7 @@ describe("SyncIndicator", () => {
 
   it("offers a retry only when the hub could not be reached", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ state: "unreachable" }));
+    mockSyncStatuses(status({ state: "unreachable" }));
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncIndicator />);
 
@@ -106,7 +104,7 @@ describe("SyncIndicator", () => {
 
   it("opens the failure with what the hub printed", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+    mockSyncStatuses(
       status({ state: "unreachable", last_error_detail: "fatal: Could not read from remote." }),
     );
     renderWith(<SyncIndicator />);
@@ -119,9 +117,33 @@ describe("SyncIndicator", () => {
     expect(screen.getByText("fatal: Could not read from remote.")).toBeInTheDocument();
   });
 
+  it("shows the more urgent of the two scopes, and which one it is", async () => {
+    // A member's rename that never reaches the other machines is as much a
+    // synchronization problem as a workspace edit that does not.
+    const user = userEvent.setup();
+    mockSyncStatuses(status(), status({ state: "not_connected" }));
+    vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
+    renderWith(<SyncIndicator />);
+    const label = t("sync.state.not_connected.label");
+
+    await user.click(await screen.findByRole("button", { name: new RegExp(label) }));
+
+    expect(
+      await screen.findByText(t("sync.indicator.scope.identities", { state: label })),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t("sync.indicator.scope.workspace", { state: t("sync.state.synced.label") }),
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t("sync.actions.retry") }));
+
+    expect(vi.mocked(retryWorkspaceSync).mock.calls).toEqual([["identities"]]);
+  });
+
   it("does not offer a retry for changes that would only be rejected again", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+    mockSyncStatuses(
       status({ unsendable_changes: [{ path: "config/team/project.yml", reason: "too large" }] }),
     );
     renderWith(<SyncIndicator />);
@@ -143,7 +165,7 @@ describe("SyncAlerts", () => {
 
   it("says nothing about changes merely queued", async () => {
     // Progress belongs to the sidebar; the band is for what needs a person.
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ ahead_count: 9 }));
+    mockSyncStatuses(status({ ahead_count: 9 }));
     renderWith(<SyncAlerts />);
 
     await waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalled());
@@ -152,7 +174,7 @@ describe("SyncAlerts", () => {
 
   it("warns that the hub cannot be reached, with a way to try again", async () => {
     const user = userEvent.setup();
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ state: "unreachable" }));
+    mockSyncStatuses(status({ state: "unreachable" }));
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncAlerts />);
 
@@ -165,9 +187,7 @@ describe("SyncAlerts", () => {
   it("points at this machine, not the hub, when a file here stopped the cycle", async () => {
     const user = userEvent.setup();
     const printed = "fatal: Unable to create '/w/.guildbotics/.git/index.lock': File exists.";
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
-      status({ state: "local_error", last_error_detail: printed }),
-    );
+    mockSyncStatuses(status({ state: "local_error", last_error_detail: printed }));
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncAlerts />);
 
@@ -194,7 +214,7 @@ describe("SyncAlerts", () => {
   });
 
   it("counts the changes that cannot be sent and links to the list", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+    mockSyncStatuses(
       status({
         unsendable_changes: [
           { path: "config/team/project.yml", reason: "too large" },
@@ -209,7 +229,7 @@ describe("SyncAlerts", () => {
   });
 
   it("asks for an update when another machine wrote something newer", async () => {
-    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ state: "update_required" }));
+    mockSyncStatuses(status({ state: "update_required" }));
     renderWith(<SyncAlerts />);
 
     expect(await screen.findByText(t("sync.alerts.update_required"))).toBeInTheDocument();

@@ -1,5 +1,4 @@
 import { Anchor, Button, Group, Popover, Stack, Text } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
@@ -12,13 +11,16 @@ import {
   Upload,
 } from "lucide-react";
 
-import {
-  getWorkspaceSyncStatus,
-  retryWorkspaceSync,
-  type WorkspaceSyncStatus,
-} from "../api/client";
+import type { WorkspaceSyncStatus } from "../api/client";
 import { SyncFailureDetail } from "./SyncFailureDetail";
-import { syncCanRetry, syncIndicatorState, syncTone, type SyncIndicatorState } from "./syncState";
+import {
+  mostUrgentSyncState,
+  syncCanRetry,
+  syncTone,
+  type ScopedSyncStatus,
+  type SyncIndicatorState,
+} from "./syncState";
+import { useSyncRetry, useSyncStatuses } from "./useSyncStatus";
 
 /** Where the settings for hubs, devices, and unsendable changes live. */
 export const SYNC_SETTINGS_PATH = "/setup?section=sync";
@@ -26,6 +28,7 @@ export const SYNC_SETTINGS_PATH = "/setup?section=sync";
 const ICONS: Record<SyncIndicatorState, typeof CircleCheck> = {
   update_required: TriangleAlert,
   invalid_shared_state: TriangleAlert,
+  not_connected: CircleAlert,
   unreachable: CircleAlert,
   local_error: CircleAlert,
   unsendable: CircleAlert,
@@ -39,29 +42,28 @@ const ICONS: Record<SyncIndicatorState, typeof CircleCheck> = {
  * A small, always-visible line above the navigation saying whether this
  * machine and the hub hold the same thing. Selecting it opens the detail.
  *
- * A workspace with no hub shows nothing at all: synchronization is not a
+ * The workspace and the members' identities synchronize separately, and the
+ * line is the more urgent of the two: a member's rename that does not reach the
+ * other machines is the same question as a workspace edit that does not. The
+ * detail says which is which.
+ *
+ * Nothing synchronizing shows nothing at all: synchronization is not a
  * feature that is switched off, it is one that was never set up, and an
  * indicator saying so on every screen would be noise.
  */
 export function SyncIndicator() {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const [opened, setOpened] = useState(false);
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
-  const retry = useMutation({
-    mutationFn: retryWorkspaceSync,
-    onSuccess: (next) => queryClient.setQueryData(["workspace-sync"], next),
-  });
-  const state = syncIndicatorState(status.data);
+  const scoped = useSyncStatuses();
+  const retry = useSyncRetry();
+  const state = mostUrgentSyncState(scoped.map((item) => item.state));
   if (state === "disabled") {
     return null;
   }
   const Icon = ICONS[state];
   const label = t(`sync.state.${state}.label`);
+  const shown = scoped.filter((item) => item.state !== "disabled");
+  const retryable = shown.filter((item) => syncCanRetry(item.state));
   return (
     <Popover
       opened={opened}
@@ -91,13 +93,14 @@ export function SyncIndicator() {
           <Text c="dimmed" size="xs">
             {t(`sync.state.${state}.detail`)}
           </Text>
-          <SyncFailureDetail status={status.data} />
-          <SyncCounts status={status.data} />
+          {shown.map((item) => (
+            <ScopeDetail item={item} key={item.scope} />
+          ))}
           <Group gap="xs">
-            {syncCanRetry(state) ? (
+            {retryable.length > 0 ? (
               <Button
                 loading={retry.isPending}
-                onClick={() => retry.mutate()}
+                onClick={() => retry.mutate(retryable.map((item) => item.scope))}
                 size="xs"
                 variant="light"
               >
@@ -116,6 +119,22 @@ export function SyncIndicator() {
         </Stack>
       </Popover.Dropdown>
     </Popover>
+  );
+}
+
+/** One scope's state, what it last printed, and what it is waiting on. */
+function ScopeDetail({ item }: { item: ScopedSyncStatus }) {
+  const { t } = useTranslation();
+  return (
+    <Stack gap={2}>
+      <Text fw={600} size="xs">
+        {t(`sync.indicator.scope.${item.scope}`, {
+          state: t(`sync.state.${item.state}.label`),
+        })}
+      </Text>
+      <SyncFailureDetail status={item.status} />
+      <SyncCounts status={item.status} />
+    </Stack>
   );
 }
 
