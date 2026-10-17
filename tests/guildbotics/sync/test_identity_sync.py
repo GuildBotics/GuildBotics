@@ -10,6 +10,7 @@ what sends it.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,6 @@ import yaml
 from git import Repo
 
 from guildbotics.hub import host
-from guildbotics.sync import activation
 from guildbotics.sync.activation import (
     activate_identity_sync,
     commit_and_push_once,
@@ -25,9 +25,10 @@ from guildbotics.sync.activation import (
     synchronize_once,
 )
 from guildbotics.sync.enrollment import enroll
+from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import get_identity_root
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
-from guildbotics.utils.workspace_sync_port import ChangeSet, write_shared_text
+from guildbotics.utils.workspace_sync_port import write_shared_text
 from guildbotics.workspace.identity import ensure_workspace_identity
 
 
@@ -39,15 +40,11 @@ def _machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str) -> Path
     return get_identity_root()
 
 
-def _save(name: str) -> ChangeSet:
+def _save(name: str) -> None:
     """Save alice's identity on the machine this is, as the setup screen does."""
     path = identity_members_dir() / "alice" / IDENTITY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    change = write_shared_text(
-        path, yaml.safe_dump({"person_id": "alice", "name": name})
-    )
-    assert change is not None
-    return change
+    write_shared_text(path, yaml.safe_dump({"person_id": "alice", "name": name}))
 
 
 def _name() -> str:
@@ -109,16 +106,19 @@ def test_announcing_a_change_sends_it(
     windows = _machine(tmp_path, monkeypatch, "windows")
     enroll(hub_url, windows)
     _machine(tmp_path, monkeypatch, "mac")
+    pushed = threading.Event()
+    push = LocalSyncRepository.push
+
+    def observe_push(repository: LocalSyncRepository) -> None:
+        push(repository)
+        pushed.set()
+
+    monkeypatch.setattr(LocalSyncRepository, "push", observe_push)
     activate_identity_sync()
     try:
-        manager = activation._identity_manager
-        assert manager is not None
-        # Keep the old polling loop's wait budget, without repeatedly opening Git.
-        monkeypatch.setattr(manager, "_push_barrier_timeout", 20.0)
-        change = _save("Alice renamed on the Mac")
-        assert manager.await_pushed(change.change_id), (
-            "the change never reached the hub"
-        )
+        _save("Alice renamed on the Mac")
+        # Observe completion without waking the queue or repeatedly opening Git.
+        assert pushed.wait(20), "the change never reached the hub"
         with Repo(hub_url) as repository:
             saved = repository.git.show(
                 f"main:config/team/members/alice/{IDENTITY_FILE}"
