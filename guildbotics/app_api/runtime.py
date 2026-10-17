@@ -175,6 +175,7 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     WorkspaceNotConfiguredError,
     apply_workspace_root,
+    get_identity_root,
     get_machine_state_root,
     get_primary_config_dir,
     get_workspace_local_path,
@@ -1283,6 +1284,9 @@ class AppRuntime:
             members=context.team.members,
             lifecycles=_activity_lifecycles_between(start_time, end_time),
             records=self._activity_records_between(start_time, end_time),
+            identity_records=ActivityEventStore.of(get_identity_root()).records_between(
+                start_time, end_time
+            ),
             detail_available=self._diagnostics_store.transcript_exists,
         )
 

@@ -34,6 +34,7 @@ from guildbotics.app_api.models import (
     ActivityHistoryRejection,
     ActivityHistoryResponse,
     ActivityHistorySession,
+    SyncScope,
 )
 from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.entities.team import Person
@@ -129,6 +130,7 @@ def build_activity_history(
     members: Iterable[Person],
     lifecycles: Iterable[ActivityLifecycle],
     records: Iterable[dict[str, Any]],
+    identity_records: Iterable[dict[str, Any]] = (),
     detail_available: Callable[[str], bool],
 ) -> ActivityHistoryResponse:
     """Assemble the response from lifecycle records and fact records.
@@ -140,6 +142,9 @@ def build_activity_history(
         lifecycles: One per execution to show as a session.
         records: The fact records (shared activity events, memory audit
             events, work targets) in diagnostics-record shape.
+        identity_records: The activity events of the members' identities, in
+            the same shape. They describe the identities' own synchronization,
+            which every workspace shares.
         detail_available: Whether this device holds the transcript of a
             trace, by trace id. Every other part of a session is shared and
             reads the same on every device.
@@ -159,7 +164,13 @@ def build_activity_history(
     sessions = _build_sessions(
         lifecycles, ordered_records, display_member_ids, detail_available
     )
-    events = _build_events(ordered_records, display_member_ids)
+    events = _build_events(
+        [
+            *((item, "workspace") for item in ordered_records),
+            *((item, "identities") for item in identity_records),
+        ],
+        display_member_ids,
+    )
     return ActivityHistoryResponse(
         start=start.isoformat(),
         end=end.isoformat(),
@@ -299,12 +310,13 @@ def _attribute_has_value(attributes: dict[str, Any], key: str) -> bool:
 
 
 def _build_events(
-    records: list[dict[str, Any]], display_member_ids: set[str]
+    records: list[tuple[dict[str, Any], SyncScope]], display_member_ids: set[str]
 ) -> list[ActivityHistoryEvent]:
+    """Build the events, each knowing which repository's record it came from."""
     events: list[ActivityHistoryEvent] = []
     seen: set[str] = set()
-    for index, item in enumerate(records):
-        event = _activity_event(item, index, display_member_ids)
+    for index, (item, scope) in enumerate(records):
+        event = _activity_event(item, index, display_member_ids, scope)
         if event is None or event.id in seen:
             continue
         seen.add(event.id)
@@ -314,7 +326,7 @@ def _build_events(
 
 
 def _activity_event(
-    item: dict[str, Any], index: int, display_member_ids: set[str]
+    item: dict[str, Any], index: int, display_member_ids: set[str], scope: SyncScope
 ) -> ActivityHistoryEvent | None:
     timestamp = str(item.get("timestamp") or "")
     if parse_timestamp(timestamp) is None:
@@ -338,7 +350,7 @@ def _activity_event(
         return None
     rejection = None
     if classification == "sync_rejected":
-        rejection = _rejection(payload)
+        rejection = _rejection(payload, scope)
         if rejection is None:
             return None
     link_attrs = dict(attributes)
@@ -363,7 +375,9 @@ def _activity_event(
     )
 
 
-def _rejection(payload: dict[str, Any]) -> ActivityHistoryRejection | None:
+def _rejection(
+    payload: dict[str, Any], scope: SyncScope
+) -> ActivityHistoryRejection | None:
     """Describe a rejected local change, or nothing when it cannot be found again.
 
     A record without a ``rejection_id`` names no stashed commit, so it would
@@ -376,6 +390,7 @@ def _rejection(payload: dict[str, Any]) -> ActivityHistoryRejection | None:
         rejection_id=rejection_id,
         paths=rejected_paths(payload),
         source_device_id=str(payload.get("source_device_id") or ""),
+        scope=scope,
     )
 
 

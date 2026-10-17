@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { cloneWorkspaceFromHub, getWorkspaceSyncStatus, type ConfigStatus } from "../api/client";
 import { HubConnector } from "./HubConnector";
 import { RequestErrorAlert } from "./RequestErrorAlert";
+import { syncQueryKey } from "./syncState";
 
 /**
  * Create a workspace on this machine from one a hub already holds.
@@ -30,8 +31,8 @@ export function CloneFromHubButton({
   // Taking a copy of the workspace already open here would leave this machine
   // with two copies of it, so the row that would do that is labeled.
   const sync = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
+    queryKey: syncQueryKey("workspace"),
+    queryFn: () => getWorkspaceSyncStatus("workspace"),
     enabled: opened,
   });
   const currentWorkspaceId = sync.data?.workspace_id ?? null;

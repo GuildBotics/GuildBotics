@@ -73,6 +73,17 @@ class ActivityEventStore:
         self.root = root if root is not None else default_events_root()
         self.workspace_root = workspace_root
 
+    @classmethod
+    def of(cls, workspace_root: Path) -> ActivityEventStore:
+        """Return the events of one workspace root, named rather than selected.
+
+        The identities' root has the same shape, so it is named the same way.
+        """
+        return cls(
+            get_workspace_state_path("events", workspace_root=workspace_root),
+            workspace_root=workspace_root,
+        )
+
     def record(self, record: dict[str, Any]) -> Path:
         """Write one event and announce it.
 

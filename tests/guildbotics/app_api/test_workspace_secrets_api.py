@@ -158,8 +158,12 @@ def client(workspace: Path):
 
 
 @pytest.fixture
-def real_connected(client: TestClient) -> TestClient:
-    """A workspace sharing with a hub this same machine hosts."""
+def real_connected(client: TestClient, idle_queue: None) -> TestClient:
+    """A workspace sharing with a hub this same machine hosts.
+
+    Transfers synchronize once on their own, so the queue's worker is not run.
+    """
+    del idle_queue
     client.post("/hub", headers=AUTH_HEADERS)
     assert (
         client.post(

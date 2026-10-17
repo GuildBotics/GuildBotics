@@ -597,6 +597,21 @@ def create_app(
         """Drop one displaced commit the user has finished with."""
         return sync_service.discard_rejection(rejection_id)
 
+    @router.get("/identities/sync")
+    def identity_sync_status() -> WorkspaceSyncStatus:
+        """Report the synchronization state of the members' identities."""
+        return sync_service.get_identity_status()
+
+    @router.post("/identities/sync/retry")
+    def identity_sync_retry() -> WorkspaceSyncStatus:
+        """Connect the identities to the workspace's hub and try again."""
+        return sync_service.retry_identities()
+
+    @router.post("/identities/sync/rejections/{rejection_id}/discard")
+    def identity_sync_discard_rejection(rejection_id: str) -> WorkspaceSyncStatus:
+        """Drop one of the identities' displaced commits the user has finished with."""
+        return sync_service.discard_identity_rejection(rejection_id)
+
     @router.get("/workspace/secrets")
     def workspace_secrets() -> WorkspaceSecrets:
         """Report which keys this device holds, and which the hub holds."""

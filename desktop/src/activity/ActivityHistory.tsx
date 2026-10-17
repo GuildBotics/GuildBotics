@@ -988,7 +988,7 @@ function RejectionDetail({
         </Text>
       </Group>
       <Text fw={700} size="sm">
-        {t("activity.rejection.title")}
+        {t(`activity.rejection.title.${rejection.scope}`)}
       </Text>
       <Text c="dimmed" size="xs">
         {t("activity.rejection.body")}
@@ -1013,6 +1013,11 @@ function RejectionDetail({
       <Text c="dimmed" size="xs">
         {t("activity.rejection.recovery")}
       </Text>
+      {rejection.scope === "identities" ? (
+        <Text c="dimmed" size="xs">
+          {t("activity.rejection.identitiesLocation")}
+        </Text>
+      ) : null}
     </Stack>
   );
 }

@@ -30,6 +30,7 @@ from guildbotics.sync.activation import (
     paused_identity_sync,
     paused_workspace_sync,
     run_current_sync,
+    run_identity_sync,
     synchronize_once,
 )
 from guildbotics.sync.commits import UnsendableChange
@@ -86,5 +87,6 @@ __all__ = [
     "preview_enrollment",
     "record_update_rejected",
     "run_current_sync",
+    "run_identity_sync",
     "synchronize_once",
 ]

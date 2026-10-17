@@ -36,13 +36,16 @@ def _record(**overrides: Any) -> dict[str, Any]:
     return record
 
 
-def _events(*records: dict[str, Any]):
+def _events(
+    *records: dict[str, Any], identity_records: tuple[dict[str, Any], ...] = ()
+):
     return build_activity_history(
         start=START,
         end=END,
         members=[Person(person_id="alice", name="Alice", person_type="agent")],
         lifecycles=[],
         records=list(records),
+        identity_records=list(identity_records),
         detail_available=lambda _trace_id: False,
     ).events
 
@@ -82,7 +85,32 @@ def test_no_stashed_content_is_carried() -> None:
         "rejection_id",
         "paths",
         "source_device_id",
+        "scope",
     }
+
+
+def test_a_rejection_says_whose_repository_holds_it() -> None:
+    """The members' identities are a repository of their own, shared by every
+    workspace, and the recovery procedure has to be run in that one. Which it
+    is follows from where the record was read, not from what it says."""
+    events = _events(
+        _record(),
+        identity_records=(
+            _record(
+                timestamp="2026-07-01T12:00:00+00:00",
+                payload={
+                    "rejection_id": "r-2",
+                    "paths": ["config/team/members/alice/person.yml"],
+                },
+            ),
+        ),
+    )
+
+    assert [
+        (event.rejection.rejection_id, event.rejection.scope)
+        for event in events
+        if event.rejection is not None
+    ] == [("r-1", "workspace"), ("r-2", "identities")]
 
 
 def test_a_record_without_an_identifier_is_not_shown() -> None:

@@ -94,6 +94,13 @@ const resources = {
         },
         indicator: {
           aria: "Synchronization: {{state}}",
+          scope: {
+            identities: "Members: {{state}}",
+            workspace: "Workspace: {{state}}",
+          },
+        },
+        identities: {
+          title: "Members' sync: {{label}}",
         },
         settings: {
           title: "Sync",
@@ -169,13 +176,21 @@ const resources = {
             "Use this after rebuilding the hub on another machine. Content only this machine has is sent to the new hub rather than discarded.",
         },
         unsendable: {
-          title: "Changes that cannot be sent",
+          title: {
+            identities: "Members' changes that cannot be sent",
+            workspace: "Changes that cannot be sent",
+          },
           body: "These files stay on this machine until they are repaired here. Nothing is discarded.",
           path: "File",
           reason: "Reason",
         },
         rejected: {
-          title: "Changes set aside",
+          title: {
+            identities: "Members' changes set aside",
+            workspace: "Changes set aside",
+          },
+          identitiesLocation:
+            "They are held in the members' own repository, so run the recovery procedure in ~/.guildbotics/identity/.guildbotics instead of <workspace>/.guildbotics.",
           body: "Another machine's version of these files reached the hub first, so this machine's version was set aside instead of being merged. It is kept here, and only here.",
           when: "Set aside",
           paths: "Files",
@@ -193,7 +208,10 @@ const resources = {
           alert_one: "One change of yours was set aside and is still held on this machine.",
           alert_other:
             "{{count}} changes of yours were set aside and are still held on this machine.",
-          alertTitle: "Changes set aside",
+          alertTitle: {
+            identities: "Members' changes set aside",
+            workspace: "Changes set aside",
+          },
         },
         devices: {
           title: "Devices",
@@ -397,6 +415,11 @@ const resources = {
             detail:
               "Another machine is running a newer version of GuildBotics, and this one cannot read what it wrote.",
           },
+          not_connected: {
+            label: "Not connected to the hub",
+            detail:
+              "The members are not on the hub this workspace synchronizes with, so their names and accounts do not reach the other machines.",
+          },
           disabled: { label: "Not synchronized", detail: "" },
         },
         alerts: {
@@ -408,7 +431,9 @@ const resources = {
           unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
           invalid_shared_state:
             "Synchronization stopped because the shared content could not be reconciled.",
-          update_required: "Update GuildBotics on this machine to keep sharing this workspace.",
+          update_required: "Update GuildBotics on this machine to keep sharing.",
+          not_connected:
+            "The workspace synchronizes, but the members' names and accounts do not reach the other machines. Update GuildBotics on the hub machine, then retry.",
         },
         live: {
           updateRequiredTitle: "Live state client update required",
@@ -530,7 +555,12 @@ const resources = {
           incomplete: "Incomplete",
         },
         rejection: {
-          title: "This change was not applied",
+          title: {
+            identities: "This change to the members was not applied",
+            workspace: "This change was not applied",
+          },
+          identitiesLocation:
+            "They are held in the members' own repository, so run the recovery procedure in ~/.guildbotics/identity/.guildbotics instead of <workspace>/.guildbotics.",
           body: "Another machine's change to the same file reached the hub first. Nothing here failed, and nothing was lost: the change is kept on the machine that made it.",
           paths: "Files",
           sourceDevice: "Made on device",
@@ -1928,6 +1958,13 @@ const resources = {
         },
         indicator: {
           aria: "同期: {{state}}",
+          scope: {
+            identities: "メンバー: {{state}}",
+            workspace: "ワークスペース: {{state}}",
+          },
+        },
+        identities: {
+          title: "メンバーの同期: {{label}}",
         },
         settings: {
           title: "同期設定",
@@ -2003,13 +2040,21 @@ const resources = {
             "Hub を別マシンで作り直したときに使います。このマシンにだけある内容は破棄されず、新しい Hub へ送信されます。",
         },
         unsendable: {
-          title: "送信できない変更",
+          title: {
+            identities: "メンバーの送信できない変更",
+            workspace: "送信できない変更",
+          },
           body: "これらのファイルは、このマシンで直すまで送信されずに残ります。破棄はされません。",
           path: "ファイル",
           reason: "理由",
         },
         rejected: {
-          title: "退避された変更",
+          title: {
+            identities: "メンバーの退避された変更",
+            workspace: "退避された変更",
+          },
+          identitiesLocation:
+            "メンバーの変更はメンバー専用のリポジトリに退避されています。回復手順は <workspace>/.guildbotics の代わりに ~/.guildbotics/identity/.guildbotics で実行してください。",
           body: "同じファイルについて別マシンの内容が先に Hub へ確定したため、このマシンの内容は統合されずに退避されました。このマシンだけが持っています。",
           when: "退避日時",
           paths: "対象ファイル",
@@ -2026,7 +2071,10 @@ const resources = {
           cancel: "キャンセル",
           alert_one: "あなたの変更 1 件が退避され、このマシンに残っています。",
           alert_other: "あなたの変更 {{count}} 件が退避され、このマシンに残っています。",
-          alertTitle: "退避された変更があります",
+          alertTitle: {
+            identities: "メンバーの退避された変更があります",
+            workspace: "退避された変更があります",
+          },
         },
         devices: {
           title: "device 一覧",
@@ -2230,6 +2278,11 @@ const resources = {
             detail:
               "別のマシンが新しいバージョンの GuildBotics を使っており、このマシンでは内容を読めません。",
           },
+          not_connected: {
+            label: "Hub につなげません",
+            detail:
+              "メンバーがワークスペースと同じ Hub につながっていないため、メンバーの名前やアカウントは他のマシンへ届きません。",
+          },
           disabled: { label: "同期していません", detail: "" },
         },
         alerts: {
@@ -2240,8 +2293,9 @@ const resources = {
           unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
           unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
           invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
-          update_required:
-            "このワークスペースの共有を続けるには、このマシンの GuildBotics を更新してください。",
+          update_required: "共有を続けるには、このマシンの GuildBotics を更新してください。",
+          not_connected:
+            "ワークスペースは同期していますが、メンバーの名前やアカウントは他のマシンへ届きません。Hub のマシンの GuildBotics を更新してから再試行してください。",
         },
         live: {
           updateRequiredTitle: "現在状態のクライアント更新が必要です",
@@ -2363,7 +2417,12 @@ const resources = {
           incomplete: "未完了",
         },
         rejection: {
-          title: "この変更は反映されませんでした",
+          title: {
+            identities: "メンバーのこの変更は反映されませんでした",
+            workspace: "この変更は反映されませんでした",
+          },
+          identitiesLocation:
+            "メンバーの変更はメンバー専用のリポジトリに退避されています。回復手順は <workspace>/.guildbotics の代わりに ~/.guildbotics/identity/.guildbotics で実行してください。",
           body: "同じファイルへの別マシンの変更が先に Hub へ確定しました。失敗ではなく、内容も失われていません。変更したマシンに保持されています。",
           paths: "対象ファイル",
           sourceDevice: "変更元 device",

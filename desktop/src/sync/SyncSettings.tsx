@@ -27,18 +27,20 @@ import {
   getWorkspaceDevices,
   getWorkspaceLive,
   getWorkspaceServiceOwner,
-  getWorkspaceSyncStatus,
   previewWorkspaceSync,
   renameThisDevice,
   transferWorkspaceServiceOwner,
   type HubConnection,
   type RejectedChange,
+  type SyncScope,
   type WorkspaceLiveState,
   type WorkspaceSyncPreview,
 } from "../api/client";
 import { HubConnector } from "./HubConnector";
 import { RequestErrorAlert } from "./RequestErrorAlert";
 import { SecretsCard } from "./SecretsCard";
+import { SYNC_SCOPES, syncQueryKey } from "./syncState";
+import { useSyncStatus } from "./useSyncStatus";
 
 /**
  * Everything about sharing this workspace with the user's other machines:
@@ -57,11 +59,7 @@ import { SecretsCard } from "./SecretsCard";
  */
 export function SyncSettings() {
   const { t } = useTranslation();
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
+  const status = useSyncStatus("workspace");
   return (
     <Stack gap="md">
       <Title order={3}>{t("sync.settings.title")}</Title>
@@ -73,10 +71,15 @@ export function SyncSettings() {
       ) : (
         <ConnectCard />
       )}
-      <SecretsCard scope="identities" />
-      <SecretsCard scope="workspace" />
-      <UnsendableChangesCard />
-      <RejectedChangesCard />
+      {SYNC_SCOPES.map((scope) => (
+        <SecretsCard key={scope} scope={scope} />
+      ))}
+      {SYNC_SCOPES.map((scope) => (
+        <UnsendableChangesCard key={scope} scope={scope} />
+      ))}
+      {SYNC_SCOPES.map((scope) => (
+        <RejectedChangesCard key={scope} scope={scope} />
+      ))}
       <DevicesCard />
     </Stack>
   );
@@ -107,7 +110,9 @@ function ConnectCard({ change = false }: { change?: boolean }) {
     onSuccess: async (next) => {
       setPreview(null);
       setError(null);
-      queryClient.setQueryData(["workspace-sync"], next);
+      queryClient.setQueryData(syncQueryKey("workspace"), next);
+      // Connecting the workspace puts the identities on the same hub.
+      await queryClient.invalidateQueries({ queryKey: syncQueryKey("identities") });
       await queryClient.invalidateQueries({ queryKey: ["workspace-devices"] });
     },
     onError: setError,
@@ -307,13 +312,9 @@ function ConnectedHubCard({ hubUrl }: { hubUrl: string }) {
  * These are the user's own edits, not a conflict someone else won: nothing is
  * discarded, and nothing moves until the file itself is fixed here.
  */
-function UnsendableChangesCard() {
+function UnsendableChangesCard({ scope }: { scope: SyncScope }) {
   const { t } = useTranslation();
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
+  const status = useSyncStatus(scope);
   const changes = status.data?.unsendable_changes ?? [];
   if (changes.length === 0) {
     return null;
@@ -321,7 +322,7 @@ function UnsendableChangesCard() {
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
-        <Title order={4}>{t("sync.unsendable.title")}</Title>
+        <Title order={4}>{t(`sync.unsendable.title.${scope}`)}</Title>
         <Text c="dimmed" size="sm">
           {t("sync.unsendable.body")}
         </Text>
@@ -356,21 +357,20 @@ function UnsendableChangesCard() {
  * exported here: it lives in one Git ref on this device, and reading it is a
  * manual procedure the README carries. Discarding is the one operation this
  * screen can offer without touching that content at all.
+ *
+ * The identities' changes are held in their own repository, which the
+ * procedure is run in instead of the workspace's, so their card says where.
  */
-function RejectedChangesCard() {
+function RejectedChangesCard({ scope }: { scope: SyncScope }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [discarding, setDiscarding] = useState<RejectedChange | null>(null);
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
+  const status = useSyncStatus(scope);
   const discard = useMutation({
-    mutationFn: (rejectionId: string) => discardWorkspaceSyncRejection(rejectionId),
+    mutationFn: (rejectionId: string) => discardWorkspaceSyncRejection(rejectionId, scope),
     onSuccess: (next) => {
       setDiscarding(null);
-      queryClient.setQueryData(["workspace-sync"], next);
+      queryClient.setQueryData(syncQueryKey(scope), next);
     },
   });
   const changes = status.data?.rejected_changes ?? [];
@@ -380,10 +380,15 @@ function RejectedChangesCard() {
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
-        <Title order={4}>{t("sync.rejected.title")}</Title>
+        <Title order={4}>{t(`sync.rejected.title.${scope}`)}</Title>
         <Text c="dimmed" size="sm">
           {t("sync.rejected.body")}
         </Text>
+        {scope === "identities" ? (
+          <Text c="dimmed" size="sm">
+            {t("sync.rejected.identitiesLocation")}
+          </Text>
+        ) : null}
         <Table striped>
           <Table.Thead>
             <Table.Tr>

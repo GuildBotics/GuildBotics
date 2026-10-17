@@ -19,6 +19,7 @@ from guildbotics.environment.status import (
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.sync.manager import GitSyncManager
 
 
 @pytest.fixture
@@ -43,6 +44,20 @@ def _stop_transcript_retention(monkeypatch: pytest.MonkeyPatch):
     yield
     for store in started:
         store.stop_maintenance()
+
+
+@pytest.fixture
+def idle_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install the queue a real hub connection activates, without running it.
+
+    These cases exercise Git transport through the endpoints. A running worker
+    starts a cycle of its own as soon as the connection is made, so every later
+    request that pauses or switches the queue waits on that cycle -- dozens of
+    Git processes, which under CI load outlast the stop timeout and turn the
+    request into a 409 unrelated to the case (#570). Queue lifecycle and its
+    stop timeout are covered separately.
+    """
+    monkeypatch.setattr(GitSyncManager, "start", lambda _self: True)
 
 
 @pytest.fixture
