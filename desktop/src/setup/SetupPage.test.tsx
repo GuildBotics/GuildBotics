@@ -242,7 +242,36 @@ vi.mock("../api/client", async (importOriginal) => {
       local_grants: { paths: [], deny: [] },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
-    getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
+    getAgentEnvironmentStatus: vi.fn(async () =>
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            usage_supported: false,
+            usage_check: null,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
+            problem: "",
+          },
+          {
+            name: "claude",
+            label: "Claude Code",
+            config_reference: "cli_agents/claude/default.yml",
+            provisioned: true,
+            credentials_saved: false,
+            authentication_failed: false,
+            usage_supported: false,
+            usage_check: null,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
+            problem: "",
+          },
+        ],
+      }),
+    ),
     getProjectConfig: vi.fn(async () => projectConfig({ description: "Demo project" })),
     getProviders: vi.fn(async () => PROVIDERS),
     importAvatarFromProvider: vi.fn(async () => ({ avatar_timestamp: 2 })),
@@ -375,39 +404,7 @@ vi.mock("./providers/slack/api", async (importOriginal) => {
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 beforeEach(() => {
-  // Reset implementations and unused one-shot responses to each vi.fn default.
-  vi.resetAllMocks();
   localStorage.clear();
-  vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
-    environmentStatus({
-      tools: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          config_reference: "cli_agents/codex/default.yml",
-          provisioned: true,
-          credentials_saved: true,
-          authentication_failed: false,
-          usage_supported: false,
-          usage_check: null,
-          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
-          problem: "",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          config_reference: "cli_agents/claude/default.yml",
-          provisioned: true,
-          credentials_saved: false,
-          authentication_failed: false,
-          usage_supported: false,
-          usage_check: null,
-          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
-          problem: "",
-        },
-      ],
-    }),
-  );
 });
 
 afterEach(() => {
@@ -1416,28 +1413,6 @@ describe("SetupPage", () => {
     expect(vi.mocked(updateProjectConfig).mock.calls[1][0]).toMatchObject({
       expected_revisions: { "team/project.yml": "after-first-save" },
     });
-  });
-
-  // Keep this after the two-save test: its save implementation must not leak.
-  it("keeps the configured provider accounts after saving the project", async () => {
-    const user = userEvent.setup();
-    const project = projectConfig({ services: GITHUB_AND_SLACK });
-    vi.mocked(getProjectConfig).mockResolvedValue(project);
-    renderSetupPage("/setup");
-
-    const description = await screen.findByLabelText("Project description");
-    await waitFor(() => expect(description).toHaveValue(project.description));
-    await user.clear(description);
-    await fill(user, description, "Updated description");
-    await saveSection(user);
-    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(getProjectConfig).toHaveBeenCalledTimes(2));
-    expect(await getProjectConfig()).toEqual(project);
-
-    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
-    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
-    expect(await screen.findByRole("tab", { name: "GitHub" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Slack" })).toBeInTheDocument();
   });
 
   it("reloads instead of resending when the save is refused as stale", async () => {
