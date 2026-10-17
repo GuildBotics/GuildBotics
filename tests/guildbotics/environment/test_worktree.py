@@ -94,6 +94,7 @@ def _write(entry: str, content: bytes, executable: bool = False) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_what_the_command_changed_in_its_copy_is_written_back(
     tmp_path: Path, monkeypatch, repository: Path
 ) -> None:
@@ -237,6 +238,7 @@ async def test_nothing_is_written_over_a_file_that_changed_while_the_command_ran
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_a_link_in_the_working_directory_is_never_followed(
     tmp_path: Path, monkeypatch, repository: Path, symlinks: None
 ) -> None:
@@ -260,6 +262,7 @@ async def test_a_link_in_the_working_directory_is_never_followed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_a_directory_swapped_for_a_link_after_the_check_is_not_followed(
     tmp_path: Path, monkeypatch, repository: Path, symlinks: None
 ) -> None:
@@ -542,6 +545,7 @@ async def test_a_directory_put_in_place_of_the_working_directory_is_never_writte
 
 
 @pytest.mark.asyncio
+@pytest.mark.windows
 async def test_two_names_of_one_file_on_the_host_are_refused(
     tmp_path: Path, monkeypatch, repository: Path
 ) -> None:

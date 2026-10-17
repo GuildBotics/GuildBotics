@@ -179,6 +179,7 @@ def test_a_deletion_travels_like_any_other_change(
     assert not second.exists(CONFIG)
 
 
+@pytest.mark.windows
 def test_a_member_avatar_is_shared_as_a_binary(first: Device, hub: Path) -> None:
     """Avatars are the only binary normal synchronization carries, so the
     commit boundary must accept them rather than treat them as damage."""
@@ -625,6 +626,7 @@ def test_a_save_beneath_a_held_link_is_not_confirmed_as_shared(
     assert first.manager.await_pushed(change.change_id) is False
 
 
+@pytest.mark.windows
 def test_what_lands_is_the_bytes_that_were_validated(
     first: Device, second: Device
 ) -> None:

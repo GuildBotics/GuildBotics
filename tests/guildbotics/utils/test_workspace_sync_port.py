@@ -164,6 +164,7 @@ def test_write_shared_json_uses_stable_serialization(
     assert dump_shared_json({"b": 2, "a": 1}) == text
 
 
+@pytest.mark.windows
 def test_write_announces_create_then_update(
     tmp_path: Path, port: RecordingPort
 ) -> None:

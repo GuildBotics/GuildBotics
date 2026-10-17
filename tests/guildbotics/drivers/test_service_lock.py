@@ -280,6 +280,7 @@ def _replace(path: Path, text: str) -> None:
     os.replace(staged, path)
 
 
+@pytest.mark.windows
 def test_a_held_service_reads_the_setting_only_when_it_changes(
     tmp_path, workspace, quick_poll, monkeypatch
 ) -> None:
