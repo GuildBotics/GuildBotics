@@ -2864,6 +2864,36 @@ describe("MembersSection", () => {
     expect(screen.queryByRole("tab", { name: "Slack" })).not.toBeInTheDocument();
   });
 
+  it("offers the account tabs of the integrations once they are saved", async () => {
+    const user = userEvent.setup();
+    const saved = projectConfig({ services: { chat_service: { name: "slack" } } });
+    vi.mocked(getProjectConfig).mockResolvedValue(saved);
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=integrations");
+    await chooseProvider(user, "code_hosting_service", "GitHub");
+    await fill(user, screen.getByLabelText(t("setup.github.owner")), "acme");
+
+    // Chosen but not saved: a member's save would not reach GitHub yet.
+    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
+    expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "GitHub" })).not.toBeInTheDocument();
+
+    // Stand in for the project file the save changes.
+    vi.mocked(updateProjectConfig).mockImplementation(async (request) => {
+      vi.mocked(getProjectConfig).mockResolvedValue({ ...saved, services: request.services });
+      return configWriteResponse();
+    });
+    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
+    expect(await screen.findByRole("tab", { name: "GitHub" })).toBeInTheDocument();
+  });
+
   it("keeps the chat channels in a tab of their own for a chat without an account", async () => {
     const user = userEvent.setup();
     vi.mocked(getProjectConfig).mockResolvedValue(
