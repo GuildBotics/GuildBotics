@@ -88,6 +88,7 @@ def test_a_provider_serves_a_kind_and_is_chosen_by_its_name(name):
 
 #: A member account of each provider with every field it stores filled.
 _FILLED_ACCOUNTS: dict[str, dict[str, Any]] = {
+    "branvil": {"username": "aiko", "token": "bvt_aiko"},
     "github": {
         "account_type": "github_apps",
         "username": "octo",
@@ -147,6 +148,7 @@ def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tm
 #: The checks of a member's credential: their failing opens the member's
 #: credential alert for the provider, their passing closes it.
 _CREDENTIAL_CHECKS = {
+    "branvil": {"branvil_access"},
     "github": {"github_access", "github_code_hosting_access", "github_project_access"},
     "slack": {
         "slack_access",

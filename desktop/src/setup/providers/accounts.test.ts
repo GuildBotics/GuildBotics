@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import i18n from "../../i18n";
 import "../../i18n";
+import { branvilAccount, type BranvilForm } from "./branvil/BranvilAccount";
+import { BRANVIL_BASE_URL, branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
 import type { AppRegistrationStatus } from "./github/api";
 import { githubAccount, type GitHubForm } from "./github/GitHubAccount";
 import { isSlackChannel, slackAccount, type SlackForm } from "./slack/SlackAccount";
@@ -456,5 +458,70 @@ describe("isSlackChannel", () => {
     for (const channel of ["Dev", "_dev", "-dev", "#_dev", "#-dev", ""]) {
       expect(isSlackChannel(channel)).toBe(false);
     }
+  });
+});
+
+function branvil(overrides: Partial<BranvilForm> = {}): BranvilForm {
+  return { ...branvilAccount.initial(), ...overrides };
+}
+
+describe("branvilAccount", () => {
+  it("sends a human's name, and an agent's name and token", () => {
+    const form = branvil({ username: " aiko ", token: " bvt_1 " });
+
+    expect(branvilAccount.request(form, true)).toEqual({ username: "aiko" });
+    expect(branvilAccount.request(form, false)).toEqual({ username: "aiko", token: "bvt_1" });
+  });
+
+  it("edits a stored account with its token kept", () => {
+    expect(
+      branvilAccount.fromView({ username: "aiko", has_token: true }, branvil(), false),
+    ).toEqual({ username: "aiko", token: "", storedToken: true });
+    expect(branvilAccount.fromView(undefined, branvil(), false)).toEqual(branvil());
+  });
+
+  it("asks an agent for a token unless one is stored, and every member for a name", () => {
+    expect(branvilAccount.errors(branvil(), context(), t)).toEqual({
+      username: t("setup.branvil.usernameRequired"),
+      token: t("setup.branvil.tokenRequired"),
+    });
+    expect(
+      branvilAccount.errors(branvil({ username: "a b" }), context({ human: true }), t),
+    ).toEqual({ username: t("setup.branvil.usernameInvalid") });
+    expect(
+      branvilAccount.errors(branvil({ username: "aiko", storedToken: true }), context(), t),
+    ).toEqual({});
+  });
+});
+
+describe("branvil services", () => {
+  it("start from what the other kind says of the same Branvil", () => {
+    expect(branvilTickets.initial({})).toEqual({
+      base_url: BRANVIL_BASE_URL,
+      owner: "",
+      board: "",
+    });
+    expect(
+      branvilCodeHosting.initial({
+        ticket_service: { name: "branvil", base_url: "http://hub:9000", owner: "acme" },
+      }),
+    ).toEqual({ base_url: "http://hub:9000", owner: "acme" });
+  });
+
+  it("refuse what names no Branvil, scope, or board", () => {
+    const value = { name: "branvil", base_url: "http://hub/x", owner: "acme/..", board: "board" };
+
+    expect(branvilTickets.errors(value, t)).toEqual({
+      base_url: t("setup.branvil.baseUrlInvalid"),
+      owner: t("setup.branvil.ownerInvalid"),
+      board: t("setup.branvil.boardInvalid"),
+    });
+    expect(branvilCodeHosting.errors({ ...value, owner: " " }, t)).toEqual({
+      base_url: t("setup.branvil.baseUrlInvalid"),
+      owner: t("setup.branvil.ownerRequired"),
+    });
+    expect(
+      branvilTickets.errors({ name: "branvil", owner: "acme/team", board: "acme/board" }, t),
+    ).toEqual({});
   });
 });

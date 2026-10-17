@@ -11,6 +11,9 @@ remote of. What a provider cannot do at all it refuses as unsupported.
 
 from __future__ import annotations
 
+import io
+import zipfile
+
 import pytest
 import pytest_asyncio
 
@@ -380,10 +383,14 @@ async def test_an_artifact_is_only_the_current_heads(host: Harness):
     created = await _pull_request(host)
     url = created.target.url
     head = await _head(host, url)
-    host.artifact(head, "report", b"zip")
+    # An artifact is a zip archive, as CI uploads it.
+    report = io.BytesIO()
+    with zipfile.ZipFile(report, "w") as archive:
+        archive.writestr("report.txt", "ok")
+    host.artifact(head, "report", report.getvalue())
 
     async with host.code.artifact(url, "report", 1024) as (ref, archive):
-        assert (ref.name, archive.read()) == ("report", b"zip")
+        assert (ref.name, archive.read()) == ("report", report.getvalue())
     with pytest.raises(ServiceError):
         async with host.code.artifact(url, "report", 1):
             pass

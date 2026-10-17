@@ -12,19 +12,21 @@ import pytest
 
 from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
-    FEEDBACK,
-    MAX_REVIEW_ROUNDS,
     PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
     PULL_REQUEST_QUERY,
-    REVIEW,
-    REVIEW_LIMIT,
-    PullRequest,
     parse_pull_request,
-    pull_request_work,
-    review_rounds,
 )
 from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
+)
+from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    MAX_REVIEW_ROUNDS,
+    REVIEW,
+    REVIEW_LIMIT,
+    PullRequest,
+    pull_request_work,
+    review_rounds,
 )
 from guildbotics.runtime.port import WorkflowStatus
 
@@ -123,7 +125,7 @@ def _notice(reason: str, **fields: str) -> str:
 
 
 def _work(node: dict[str, Any]) -> str | None:
-    return pull_request_work(parse_pull_request(node, "repo"), ME)
+    return pull_request_work(parse_pull_request(node), ME)
 
 
 def test_parse_lower_cases_logins_and_orders_by_time():
@@ -148,8 +150,7 @@ def test_parse_lower_cases_logins_and_orders_by_time():
                 ]
             },
             reviewThreads={"nodes": [_thread("Bob", "Aiko-GH", reactors=["Bob"])]},
-        ),
-        "repo",
+        )
     )
 
     assert isinstance(pr, PullRequest)
@@ -161,7 +162,10 @@ def test_parse_lower_cases_logins_and_orders_by_time():
     ]
     assert [review.reply_only for review in pr.reviews] == [False, True]
     assert [review.reactors for review in pr.reviews] == [{ME}, set()]
-    assert [comment.body for comment in pr.comments] == ["earlier", "later"]
+    assert [comment.created_at for comment in pr.comments] == [
+        "2026-01-04T00:00:00Z",
+        "2026-01-05T00:00:00Z",
+    ]
     assert [comment.reactors for comment in pr.comments] == [{"x"}, set()]
     thread = pr.threads[0]
     assert thread.participants == {"bob", ME}
@@ -179,13 +183,13 @@ def test_graphql_bot_logins_match_the_members_bot_username():
         reviewThreads={"nodes": [_thread("aiko-guildbotics-com", "other")]},
     )
 
-    assert pull_request_work(parse_pull_request(node, "repo"), app) == REVIEW
+    assert pull_request_work(parse_pull_request(node), app) == REVIEW
 
     own = _node(
         author={"login": "aiko-guildbotics-com"},
         reviewThreads={"nodes": [_thread("reviewer", "aiko-guildbotics-com")]},
     )
-    assert pull_request_work(parse_pull_request(own, "repo"), app) is None
+    assert pull_request_work(parse_pull_request(own), app) is None
 
 
 def test_query_asks_for_everything_the_decision_reads():
@@ -484,7 +488,7 @@ def test_thread_replies_do_not_count_as_reviewing_the_new_head():
         }
     )
 
-    assert review_rounds(parse_pull_request(node, "repo"), ME) == {"head-1"}
+    assert review_rounds(parse_pull_request(node), ME) == {"head-1"}
     assert _work(node) == REVIEW
 
 
@@ -518,12 +522,12 @@ def test_rounds_are_counted_from_the_last_limit_notice(announcer):
         comments={"nodes": [_limit_notice(announcer)]},
     )
 
-    assert review_rounds(parse_pull_request(node, "repo"), ME) == {
+    assert review_rounds(parse_pull_request(node), ME) == {
         "after-5",
         "after-6",
     }
     unannounced = _theirs(reviews={"nodes": [*_rounds(4), *after]})
-    assert len(review_rounds(parse_pull_request(unannounced, "repo"), ME)) == 6
+    assert len(review_rounds(parse_pull_request(unannounced), ME)) == 6
 
 
 THIRD = "2026-01-03T00:00:00Z"
@@ -641,7 +645,7 @@ def test_marking_ready_without_a_notice_starts_the_count_over():
     ready = {**held, "readyForReview": _ready("2026-01-06T00:00:00Z")}
 
     assert _work(held) is None
-    assert review_rounds(parse_pull_request(ready, "repo"), ME) == set()
+    assert review_rounds(parse_pull_request(ready), ME) == set()
     assert _work(ready) == REVIEW
 
 

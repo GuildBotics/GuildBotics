@@ -2753,6 +2753,7 @@ describe("MembersSection", () => {
     // The default add form links the agent to no provider: each account is
     // sent empty, with no credential.
     expect(request.accounts).toEqual({
+      branvil: { username: "", token: "" },
       github: { account_type: "", username: "" },
       slack: { bot_token: "", app_token: "" },
     });

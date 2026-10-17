@@ -2861,6 +2861,12 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
     # ``local`` is the reference provider and has no setup, so it is not offered.
     assert response.json() == [
         {
+            "name": "branvil",
+            "title": "Branvil",
+            "kinds": ["ticket_service", "code_hosting_service"],
+            "avatar": False,
+        },
+        {
             "name": "github",
             "title": "GitHub",
             "kinds": ["ticket_service", "code_hosting_service"],

@@ -37,6 +37,12 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
+from guildbotics.integrations.ticket_selection import (
+    linked_pull_state,
+    mention_pending,
+    select,
+    since_assignment,
+)
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
@@ -638,20 +644,6 @@ class GitHubTicketService(GitHubApi, TicketService):
             )
         return sorted(comments, key=lambda comment: comment.timestamp)
 
-    def _pending_mention(self, description: str, comments: Sequence[Message]) -> bool:
-        """Return True when a mention of this member is still unanswered.
-
-        A mention in the description or in any comment marks the member as
-        summoned; the member's own next comment answers it.
-        """
-        pending = self._text_mentions_me(description)
-        for comment in comments:
-            if self._text_mentions_me(comment.content):
-                pending = True
-            if comment.author_type == Message.ASSISTANT:
-                pending = False
-        return pending
-
     async def _related_pull_request_state(self, item: GitHubItem) -> str | None:
         """The state of the pull request that refers to the issue -- ``merged``
         for a merged one -- choosing an open one, and the latest updated; ``None``
@@ -667,8 +659,7 @@ class GitHubTicketService(GitHubApi, TicketService):
                         str(source.get("updated_at") or ""),
                     )
                 )
-        candidates = [pull for pull in pulls if pull[0] == "open"] or pulls
-        return max(candidates, key=lambda pull: pull[1])[0] if candidates else None
+        return linked_pull_state(pulls)
 
     def _latest_assigned_event_time(self, issue: dict[str, Any]) -> str:
         """Return when this member was last added to the issue's assignees.
@@ -686,31 +677,6 @@ class GitHubTicketService(GitHubApi, TicketService):
             if self._is_me(str((event.get("assignee") or {}).get("login") or ""))
         ]
         return max(times, default="")
-
-    def _comments_since_assignment(
-        self, comments: Sequence[Message], assigned_at: str
-    ) -> list[Message]:
-        """Return the comments that count as evidence about the assigned work.
-
-        Being assigned is how a human asks this member to act, so only what was
-        said from that point on can show whether the member has already acted.
-        Comments the member wrote earlier were written in another capacity —
-        as the issue's author or a reviewer — and must not suppress the run.
-
-        The whole history is kept on the task for the agent to read; this
-        narrower view only drives the selection decision. When no assignment
-        path reports a time, every comment is kept: an unknown request time
-        must never be a reason to discard evidence and redo finished work.
-        """
-        since = parse_timestamp(assigned_at)
-        if since is None:
-            return list(comments)
-        return [
-            comment
-            for comment in comments
-            if (timestamp := parse_timestamp(comment.timestamp)) is None
-            or timestamp >= since
-        ]
 
     def _build_project_tasks(
         self, all_items: list[dict]
@@ -771,42 +737,18 @@ class GitHubTicketService(GitHubApi, TicketService):
         item = self.item(task.url, "ticket")
         task.comments = await self._comments(item)
         # The agent still receives the whole history on the task; only the
-        # decision below is limited to what was said after the assignment.
-        since_assignment = self._comments_since_assignment(
-            task.comments, str(metadata.get("assigned_at") or "")
+        # decision is limited to what was said after the assignment.
+        since = since_assignment(task.comments, str(metadata.get("assigned_at") or ""))
+        return await select(
+            task,
+            since,
+            latest_status=parse_workflow_status_comment(since[-1].content)
+            if since
+            else None,
+            pending=mention_pending(task.description, since, self._text_mentions_me),
+            linked_pull=lambda: self._related_pull_request_state(item),
+            done=lambda: self.move(task, "done"),
         )
-        mention_pending = self._pending_mention(task.description, since_assignment)
-        last_comment_is_mine = (
-            bool(since_assignment)
-            and since_assignment[-1].author_type == Message.ASSISTANT
-        )
-
-        if task.status == Task.READY:
-            if _latest_workflow_status_suppresses_selection(since_assignment):
-                return None
-            if last_comment_is_mine and not mention_pending:
-                return None
-            task.trigger_reason = "ready_lane"
-            return task
-
-        pull = await self._related_pull_request_state(item)
-        if pull is not None:
-            # A merged PR finishes the ticket; an open one is followed on the
-            # PR itself by the pull request patrol, never through the issue.
-            if pull == "merged":
-                await self.move(task, "done")
-            return None
-
-        if _latest_workflow_status_suppresses_selection(since_assignment):
-            return None
-
-        if since_assignment and not last_comment_is_mine:
-            task.trigger_reason = "issue_comment"
-            return task
-        if not since_assignment:
-            task.trigger_reason = "issue_mention" if mention_pending else "working_lane"
-            return task
-        return None
 
     async def candidates(self) -> list[Task]:
         """Return every currently actionable issue in patrol order."""
@@ -916,17 +858,6 @@ class GitHubTicketService(GitHubApi, TicketService):
             if item is not None:
                 closed.append(item)
         return closed
-
-
-def _latest_workflow_status_suppresses_selection(
-    comments: Sequence[Message],
-) -> bool:
-    """Whether the latest comment is the member's workflow status that keeps
-    the ticket out of selection (a failure, or a rate limit not yet reset)."""
-    if not comments or comments[-1].author_type != Message.ASSISTANT:
-        return False
-    status = parse_workflow_status_comment(comments[-1].content)
-    return status is not None and status.holds_selection()
 
 
 def _closed_item(content: dict[str, Any]) -> ClosedItem | None:

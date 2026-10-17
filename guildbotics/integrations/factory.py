@@ -6,6 +6,7 @@ from logging import Logger
 from typing import Any
 
 from guildbotics.entities import Person, Service, Team
+from guildbotics.integrations.branvil.provider import BRANVIL
 from guildbotics.integrations.event_listener import EventListener
 from guildbotics.integrations.github.provider import GITHUB
 from guildbotics.integrations.local.provider import LOCAL
@@ -19,7 +20,7 @@ from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
 
 PROVIDERS: dict[str, Provider] = {
-    provider.name: provider for provider in (GITHUB, LOCAL, SLACK)
+    provider.name: provider for provider in (BRANVIL, GITHUB, LOCAL, SLACK)
 }
 
 

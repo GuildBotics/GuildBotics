@@ -1,0 +1,7 @@
+ja:
+  reachable: "%{base_url} の Branvil が応答しました。"
+  board_missing: "チケットサービスにボードが設定されていません。どのチケットもメンバーの仕事として選ばれません。"
+  board: "ボード %{board} を読み取りました。"
+  access: "Branvil がメンバーのトークンをメンバー本人のものとして受け付けました。"
+  human_configured: "この人間のメンバーに Branvil のユーザー名が設定されています。"
+  human_missing: "この人間のメンバーに Branvil のユーザー名が設定されていません。"
