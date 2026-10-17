@@ -1,7 +1,7 @@
 # Branvil 連携ガイド
 
 Branvil は自分で動かすコードホスト兼ボードです。Smart HTTP の Git リポジトリ、レビューと CI
-付きの pull request、ボードに載るチケットのトラッカーを持ちます。GuildBotics は `branvil`
+付きの pull request、ボードに載る各リポジトリのチケットを持ちます。GuildBotics は `branvil`
 provider を通じて、GitHub の代わりにコードホスト（`services.code_hosting_service`）と
 チケット（`services.ticket_service`）として使います。チャットはプロジェクトが選んだもの
 （Slack など）のままです。
@@ -25,8 +25,9 @@ Hub のマシン                                ほかのマシン
   Hub のマシンでは Branvil そのもの、ほかのマシンでは Branvil のトンネルが、Hub 同期と同じ
   SSH 接続で同じローカルポートを Hub へ転送します。GuildBotics 自身はトンネルを持ちません。
 - どのマシンでも同じベース URL であることで、記録した URL がどこでも有効になります。チケットは
-  `{base}/{tracker}/-/tickets/{KEY}`、pull request は `{base}/{repository}/-/pulls/{n}` で、
-  共有するプロジェクト設定の `base_url` は 1 つです。
+  `{base}/{repository}/-/tickets/{n}`、pull request は `{base}/{repository}/-/pulls/{n}` で、
+  共有するプロジェクト設定の `base_url` は 1 つです。リポジトリはチケット（`#1`）を
+  pull request（`!1`）とは別に番号付けします。
 
 トンネルが切れていると、Branvil の操作はすべて「Branvil に届きません」で失敗し、
 **設定 → 検証** は「Branvil に届きません」と報告します。
@@ -36,9 +37,9 @@ Hub のマシン                                ほかのマシン
 Branvil の README に従って、次を行います。
 
 1. Hub のマシンで Branvil を、GuildBotics を動かすほかのマシンでトンネルを動かす。
-2. メンバーが書き込む名前空間（例 `acme`）と、その中のリポジトリ（`acme/demo`）、チケットの
-   トラッカー（`acme/demo-tickets`。マージでチケットを閉じられるよう、リポジトリを `acme/demo`
-   にする）、ボード（`acme/board`）を作る。
+2. メンバーが書き込む名前空間（例 `acme`）と、その中のリポジトリ（`acme/demo`。チケットに
+   付けられるラベルも設定する）、ボード（`acme/board`）を作る。チケットはリポジトリが持ち、
+   マージで閉じられるのは pull request と同じリポジトリのチケットだけです。
 3. GuildBotics の人間のメンバーは Branvil のオーナー（`branvil init` が作るただ一人の人）
    です。オーナーはすべてのロールを持ち、マージし、サインインせずに Branvil の GUI を使います
    （Hub マシンで `branvil open`）。AI メンバーごとに agent のメンバーを作り、名前空間に
@@ -51,8 +52,8 @@ Branvil の README に従って、次を行います。
 入力します。
 
 - **ベース URL**: Branvil に届く URL（空欄なら `http://127.0.0.1:7878`）
-- **名前空間**: メンバーが書き込む名前空間（`acme`）。メンバーはその直下のリポジトリと
-  トラッカーにだけ書き込みます。読み取りは制限しません
+- **名前空間**: メンバーが書き込む名前空間（`acme`）。メンバーはその直下のリポジトリに
+  だけ書き込みます。読み取りは制限しません
 - **ボード**（チケットのみ）: チケットを取るボード（`acme/board`）。ボードが無いと、どの
   チケットもメンバーの仕事として選ばれません
 

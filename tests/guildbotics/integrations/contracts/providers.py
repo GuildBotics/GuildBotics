@@ -10,8 +10,8 @@ repository outside the member's scope by the paths its provider spells.
 GitHub answers from :class:`GitHubDouble`, a GitHub that keeps what it is sent
 and checks that what a request names belongs to what the path says; Branvil
 from :class:`~tests.guildbotics.integrations.branvil_double.BranvilDouble`,
-which does the same by Branvil's API, with a tracker of its own keyed
-``DEMO-<n>`` and a board; ``local``
+which does the same by Branvil's API, with tickets numbered in the
+repository and a board; ``local``
 keeps its files under the test's workspace, with a repository three names deep
 and tickets keyed ``T-<n>`` in a tracker of their own.
 
@@ -261,9 +261,9 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         code,
         tickets,
         branvil_double.REPO,
-        branvil_double.TRACKER,
+        branvil_double.REPO,
         branvil_double.THEIR_REPO,
-        branvil_double.THEIR_TRACKER,
+        branvil_double.THEIR_REPO,
         double.branch,
         double.advance,
         double.branches.pop,
@@ -277,7 +277,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
             status=Task.READY,
         ),
         double.their_comment,
-        f"{branvil_double.BASE}/{branvil_double.TRACKER}/-/tickets/DEMO-404",
+        f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
         frozenset({"request_changes", "artifacts"}),
         double.writes,
     )

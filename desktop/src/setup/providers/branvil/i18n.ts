@@ -10,7 +10,7 @@ export const branvil = {
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         owner: "Namespace",
         ownerHint:
-          "The namespace members write in, such as acme: they write only to the repositories and trackers directly in it.",
+          "The namespace members write in, such as acme: they write only to the repositories directly in it.",
         ownerRequired: "Enter the namespace members write in.",
         ownerInvalid: "Enter names joined by /, such as acme or acme/team.",
         board: "Board",
@@ -84,7 +84,7 @@ export const branvil = {
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         owner: "名前空間",
         ownerHint:
-          "メンバーが書き込む名前空間（acme など）です。その直下のリポジトリとトラッカーにだけ書き込みます。",
+          "メンバーが書き込む名前空間（acme など）です。その直下のリポジトリにだけ書き込みます。",
         ownerRequired: "メンバーが書き込む名前空間を入力してください。",
         ownerInvalid: "acme や acme/team のように、名前を / でつないで入力してください。",
         board: "ボード",

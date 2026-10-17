@@ -1,5 +1,5 @@
-"""Branvil as a member's tickets: the tickets of its trackers, and the board
-named by ``project.services.ticket_service.board`` they are taken from.
+"""Branvil as a member's tickets: the tickets of its repositories, and the
+board named by ``project.services.ticket_service.board`` they are taken from.
 
 Without a board no ticket is the member's work, and none is put on one. The
 selection's rules (:mod:`~guildbotics.integrations.ticket_selection`) are
@@ -83,7 +83,7 @@ class BranvilTicketService(BranvilApi, TicketService):
             **self.target(item, data).model_dump(),
             key=item.name,
             tracker=item.place,
-            repository=data.get("repository"),
+            repository=item.place,
             body=str(data.get("body") or ""),
             state=str(data["state"]),
             assignees=[str(data["assignee"]["name"])] if data["assignee"] else [],
@@ -102,7 +102,7 @@ class BranvilTicketService(BranvilApi, TicketService):
     ) -> TicketCreated:
         data = await self.call(
             "POST",
-            f"/trackers/{segment(self.repository(tracker))}/tickets",
+            f"/repos/{segment(self.repository(tracker))}/tickets",
             {"title": title, "body": body, "labels": list(labels)},
         )
         return TicketCreated(
@@ -219,7 +219,7 @@ class BranvilTicketService(BranvilApi, TicketService):
 
     async def _placed(self, item: BranvilItem) -> dict[str, Any]:
         """The ticket ``item``, to be placed on the configured board: both its
-        tracker and the board are in the scope -- checked before anything,
+        repository and the board are in the scope -- checked before anything,
         as a ticket already on the board is not written to -- and it is on
         no other board, which it is not taken off silently.
 
@@ -324,7 +324,7 @@ class BranvilTicketService(BranvilApi, TicketService):
 
 
 def _ticket_item(ticket: dict[str, Any]) -> BranvilItem:
-    return BranvilItem("ticket", str(ticket["tracker"]), str(ticket["key"]))
+    return BranvilItem("ticket", str(ticket["repository"]), str(ticket["key"]))
 
 
 def _timestamp(moment: datetime) -> str:

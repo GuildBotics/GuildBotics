@@ -7,15 +7,19 @@ answered only under the item it belongs to, a branch only by its exact
 name, a review or an inline comment only on the current head
 (``409 head_moved``) and only on a file the pull request changes
 (``400 invalid``; every branch commit changes ``CHANGED``), a label only if
-the tracker defines it (``400 label_undefined``), a ticket only on a board
-there is, and an artifact only if it is a zip archive. It does
-not hold writes to the member's scope -- the provider refuses those before
-any request. As Branvil does, it records an author's approval of its own
-pull request (which counts toward no merge); a verdict or a new inline
-comment consumes its author's review request, a reply does not; marking a
-pull request ready for review (or opening it as one) sets ``ready_at``; a merge closes the tickets
-the pull request ``closes`` and moves them to ``done``; and a gone branch's
-commit is ``""`` with no ``behind_by``.
+the ticket's repository defines it (``400 label_undefined``), a ticket only
+on a board there is, a new pull request's link that closes only to a ticket
+of its repository (``422 unsupported``), and an artifact only if it is a zip
+archive. A repository numbers its tickets from 1, apart from its pull
+requests. It does not hold writes to the member's scope -- the provider
+refuses those before any request. As Branvil does, it records an author's
+approval of its own pull request (which counts toward no merge); a verdict
+or a new inline comment consumes its author's review request, a reply does
+not; marking a pull request ready for review (or opening it as one) sets
+``ready_at``; a merge closes the tickets the pull request ``closes`` and
+moves them to ``done``; a board's closed items are its tickets and the pull
+requests of the repositories of its cards; and a gone branch's commit is
+``""`` with no ``behind_by``.
 
 ``writes`` lists the writes it accepted, as ``"<method> <path>"``.
 """
@@ -37,13 +41,13 @@ MEMBER = "aiko"
 TOKEN = "bvt_aiko"
 SCOPE = "acme"
 REPO = f"{SCOPE}/demo"
-TRACKER = f"{SCOPE}/demo-tickets"
 BOARD = f"{SCOPE}/board"
 #: Another board of the scope, which the member's tickets are not taken from.
 OTHER_BOARD = f"{SCOPE}/other-board"
 THEIR_REPO = "other/demo"
-THEIR_TRACKER = "other/tickets"
 LABEL = "bug"
+#: The labels each repository defines.
+LABELS = {REPO: [LABEL], THEIR_REPO: []}
 LANES = ("new", "ready", "in_progress", "done")
 #: The file every commit on a branch changes.
 CHANGED = "a.py"
@@ -67,14 +71,6 @@ class BranvilDouble:
         self.writes: list[str] = []
         #: The branches of ``REPO``: name -> commit.
         self.branches: dict[str, str] = {"main": "main-sha"}
-        self.trackers: dict[str, dict[str, Any]] = {
-            TRACKER: {"key_prefix": "DEMO", "repository": REPO, "board": BOARD},
-            THEIR_TRACKER: {
-                "key_prefix": "OPS",
-                "repository": THEIR_REPO,
-                "board": None,
-            },
-        }
         self.boards = {BOARD, OTHER_BOARD}
         self.tickets: dict[str, dict[str, Any]] = {}
         #: The roots of the resolved review threads.
@@ -96,7 +92,7 @@ class BranvilDouble:
         self._ticks = count()
         self._ids = count(1)
         self._revisions = count(1)
-        theirs = self._ticket(THEIR_TRACKER, "Theirs", "", [], author="them")
+        theirs = self._ticket(THEIR_REPO, "Theirs", "", [], author="them")
         self.their_ticket = theirs["url"]
         self.their_comment = self._entry(theirs["url"], "comments", "them", "Hi")["id"]
 
@@ -203,8 +199,6 @@ class BranvilDouble:
                 return 200, self._page([self._patrol(p) for p in self._involving()])
             case ["repos", repo, *rest]:
                 return self._repository(method, repo, rest, body, params)
-            case ["trackers", tracker, *rest]:
-                return self._tracker(method, tracker, rest, body, params)
             case ["boards", board, *rest] if board in self.boards:
                 return 200, self._board(board, rest, params)
         raise _missing("/".join(parts))
@@ -216,7 +210,19 @@ class BranvilDouble:
             raise _missing(repo)
         match method, rest:
             case "GET", []:
-                return 200, {"path": repo, "default_branch": "main"}
+                return 200, {
+                    "path": repo,
+                    "default_branch": "main",
+                    "labels": LABELS[repo],
+                }
+            case "POST", ["tickets"]:
+                labels = _defined(repo, body["labels"])
+                return 201, self._ticket(repo, body["title"], body["body"], labels)
+            case _, ["tickets", number, *more]:
+                url = f"{BASE}/{repo}/-/tickets/{number}"
+                if url not in self.tickets:
+                    raise _missing(url)
+                return self._ticket_request(method, url, more, body, params)
             case "GET", ["branches", name] if name in self.branches:
                 return 200, {"name": name, "sha": self.branches[name]}
             case "POST", ["pulls"]:
@@ -324,28 +330,6 @@ class BranvilDouble:
                 }
         raise _missing("/".join(rest))
 
-    def _tracker(
-        self, method: str, tracker: str, rest: list[str], body: dict, params: dict
-    ) -> tuple[int, Any]:
-        if tracker not in self.trackers:
-            raise _missing(tracker)
-        match method, rest:
-            case "GET", []:
-                return 200, {
-                    "path": tracker,
-                    **self.trackers[tracker],
-                    "labels": [LABEL],
-                }
-            case "POST", ["tickets"]:
-                labels = _defined(tracker, body["labels"])
-                return 201, self._ticket(tracker, body["title"], body["body"], labels)
-            case _, ["tickets", key, *more]:
-                url = f"{BASE}/{tracker}/-/tickets/{key}"
-                if url not in self.tickets:
-                    raise _missing(url)
-                return self._ticket_request(method, url, more, body, params)
-        raise _missing("/".join(rest))
-
     def _ticket_request(
         self, method: str, url: str, rest: list[str], body: dict, params: dict
     ) -> tuple[int, Any]:
@@ -354,7 +338,7 @@ class BranvilDouble:
             case "GET", []:
                 return 200, ticket
             case "PATCH", []:
-                added = _defined(ticket["tracker"], body.get("add_labels", []))
+                added = _defined(ticket["repository"], body.get("add_labels", []))
                 state_changed = body.get("state", ticket["state"]) != ticket["state"]
                 for key in ("title", "body", "state", "state_reason"):
                     if key in body:
@@ -406,16 +390,18 @@ class BranvilDouble:
             )
         if rest == ["closed"]:
             repositories = {
-                tracker["repository"]
-                for tracker in self.trackers.values()
-                if tracker["board"] == board
+                ticket["repository"]
+                for ticket in self.tickets.values()
+                if ticket["board"] == board
             }
             closed = [
                 {
                     "kind": kind,
                     "url": item["url"],
                     "title": item["title"],
-                    "label": item["label"] if kind == "pull_request" else item["key"],
+                    "label": item["label"]
+                    if kind == "pull_request"
+                    else f"#{item['key']}",
                     "closed_at": item["closed_at"],
                     "merged": bool(item.get("merged")),
                 }
@@ -433,27 +419,24 @@ class BranvilDouble:
                 and params["since"] <= item["closed_at"] <= params["until"]
             ]
             return self._page(closed, params)
-        trackers = [path for path, t in self.trackers.items() if t["board"] == board]
-        return {"path": board, "lanes": list(LANES), "trackers": trackers}
+        return {"path": board, "lanes": list(LANES)}
 
     # -- items ------------------------------------------------------------------
 
     def _ticket(
         self,
-        tracker: str,
+        repo: str,
         title: str,
         body: str,
         labels: list[str],
         author: str = MEMBER,
     ) -> dict[str, Any]:
-        number = 1 + sum(t["tracker"] == tracker for t in self.tickets.values())
-        key = f"{self.trackers[tracker]['key_prefix']}-{number}"
-        url = f"{BASE}/{tracker}/-/tickets/{key}"
+        number = 1 + sum(t["repository"] == repo for t in self.tickets.values())
+        url = f"{BASE}/{repo}/-/tickets/{number}"
         self.tickets[url] = {
             "url": url,
-            "tracker": tracker,
-            "key": key,
-            "repository": self.trackers[tracker]["repository"],
+            "repository": repo,
+            "key": str(number),
             "title": title,
             "body": body,
             "state": "open",
@@ -685,13 +668,13 @@ _PASSED = {
 }
 
 
-def _defined(tracker: str, labels: list[str]) -> list[str]:
-    undefined = [label for label in labels if label != LABEL]
+def _defined(repo: str, labels: list[str]) -> list[str]:
+    undefined = [label for label in labels if label not in LABELS[repo]]
     if undefined:
         raise Refusal(
             400,
             "label_undefined",
-            f"Label '{undefined[0]}' is not defined by {tracker}. Defined: {LABEL}.",
+            f"Label '{undefined[0]}' is not defined by {repo}. Defined: {LABELS[repo]}.",
         )
     return list(dict.fromkeys(labels))
 

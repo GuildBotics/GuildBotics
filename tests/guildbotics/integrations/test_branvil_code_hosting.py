@@ -23,7 +23,6 @@ from tests.guildbotics.integrations.branvil_double import (
     MEMBER,
     REPO,
     THEIR_REPO,
-    TRACKER,
     BranvilDouble,
     services,
 )
@@ -231,7 +230,7 @@ async def test_a_body_change_keeps_the_ticket_links_unless_they_are_dropped(
     monkeypatch,
 ):
     double, code, tickets = services(monkeypatch)
-    ticket = (await tickets.create_ticket(TRACKER, "Fix", "", [])).target.url
+    ticket = (await tickets.create_ticket(REPO, "Fix", "", [])).target.url
     double.branch("feature")
     url = (
         await code.create_pull_request(
@@ -493,7 +492,7 @@ async def test_an_address_is_this_branvils_by_its_base_url(monkeypatch, base_url
     [
         f"https://github.com/{REPO}/pull/1",
         f"http://127.0.0.1:7879/{REPO}/-/pulls/1",
-        f"{BASE}/{TRACKER}/-/tickets/DEMO-1",
+        f"{BASE}/{REPO}/-/tickets/1",
         f"{BASE}/{REPO}/-/pulls/0",
         f"{BASE}/{REPO}/-/pulls/1?x=1",
         f"{BASE}/demo/-/pulls/1",

@@ -1,7 +1,7 @@
 # Branvil Integration Guide
 
 Branvil is a code host and board you run yourself: Git repositories over Smart HTTP,
-pull requests with reviews and CI, and trackers of tickets on a board. GuildBotics uses
+pull requests with reviews and CI, and each repository's tickets on a board. GuildBotics uses
 it through the `branvil` provider as the code host (`services.code_hosting_service`) and
 the tickets (`services.ticket_service`), in place of GitHub. The chat stays whatever the
 project chooses (Slack, for example).
@@ -27,8 +27,9 @@ Hub machine                                 another machine
   forwards the same local port to the Hub over the SSH connection the Hub sync already
   uses. GuildBotics has no tunnel of its own.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
-  `{base}/{tracker}/-/tickets/{KEY}` and a pull request `{base}/{repository}/-/pulls/{n}`
-  on every machine, and the shared project settings name one `base_url`.
+  `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
+  on every machine, and the shared project settings name one `base_url`. A repository
+  numbers its tickets (`#1`) apart from its pull requests (`!1`).
 
 When the tunnel is down, every Branvil operation fails with "Branvil is not reachable at
 …", and **Setup → Verification** reports *Branvil is not reachable*.
@@ -40,9 +41,9 @@ Following the Branvil README:
 1. Run Branvil on the Hub machine, and the tunnel on every other machine that runs
    GuildBotics.
 2. Create the namespace the members write in (for example `acme`), with its
-   repositories (`acme/demo`), a tracker for the tickets (`acme/demo-tickets`, whose
-   repository is `acme/demo` so that a merge can close its tickets), and a board
-   (`acme/board`).
+   repositories (`acme/demo`, with the labels its tickets may carry) and a board
+   (`acme/board`). A repository holds its tickets; a merge closes only tickets of the
+   pull request's repository.
 3. The GuildBotics human member is Branvil's owner, the one person `branvil init`
    creates. The owner has every role, merges, and uses Branvil's GUI without signing
    in (`branvil open` on the Hub machine). Create an agent member for each AI member and
@@ -56,7 +57,7 @@ and for the tickets, and enter:
 
 - **Base URL**: where Branvil is reached (leave it empty for `http://127.0.0.1:7878`)
 - **Namespace**: the namespace the members write in (`acme`). Members write only to
-  repositories and trackers directly in it; reads are not limited
+  repositories directly in it; reads are not limited
 - **Board** (tickets only): the board the tickets are taken from (`acme/board`).
   Without a board, no ticket is selected as a member's work
 

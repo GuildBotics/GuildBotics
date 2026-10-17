@@ -11,13 +11,15 @@ import pytest
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
-from guildbotics.runtime.port import ServiceError, WorkflowStatus
+from guildbotics.runtime.port import ServiceError, ServiceNotFound, WorkflowStatus
+from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BOARD,
     MEMBER,
     OTHER_BOARD,
+    BASE,
     REPO,
-    TRACKER,
+    THEIR_REPO,
     BranvilDouble,
     services,
 )
@@ -30,7 +32,7 @@ def _status(reason: str, **fields: str) -> dict[str, str]:
 
 
 def _ticket(double: BranvilDouble, body: str = "", lane: str = "ready") -> str:
-    url = double._ticket(TRACKER, "Fix login", body, [])["url"]
+    url = double._ticket(REPO, "Fix login", body, [])["url"]
     double.assign(url, lane)
     return url
 
@@ -56,7 +58,7 @@ async def test_a_ready_ticket_waits_after_the_members_word_until_someone_speaks(
         Task.READY,
         "ready_lane",
     )
-    assert (task.label, task.provider, task.assignee) == ("DEMO-1", "branvil", MEMBER)
+    assert (task.label, task.provider, task.assignee) == ("#1", "branvil", MEMBER)
     # Comments are the team's members', by name, or their author type.
     assert [(c.author, c.author_type) for c in task.comments] == [
         ("Aiko", Message.ASSISTANT),
@@ -69,7 +71,7 @@ async def test_what_the_member_said_before_the_assignment_does_not_answer_it(
     monkeypatch,
 ):
     double, _, tickets = services(monkeypatch)
-    url = double._ticket(TRACKER, "Fix login", "", [])["url"]
+    url = double._ticket(REPO, "Fix login", "", [])["url"]
     double.comment(url, MEMBER, "I reported this.")
     double.assign(url)
 
@@ -170,7 +172,7 @@ async def test_a_ticket_on_another_board_is_not_taken_off_it(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_ticket_off_the_board_is_not_moved_onto_it(monkeypatch):
     double, _, tickets = services(monkeypatch)
-    url = double._ticket(TRACKER, "Loose", "", [])["url"]
+    url = double._ticket(REPO, "Loose", "", [])["url"]
 
     with pytest.raises(ServiceError, match=BOARD):
         await tickets.move(Task(url=url, title="", description=""), "in_progress")
@@ -221,7 +223,7 @@ async def test_only_the_members_open_tickets_on_the_board_are_work(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_ticket_reads_as_its_one_assignee_or_none(monkeypatch):
     double, _, tickets = services(monkeypatch)
-    url = double._ticket(TRACKER, "Fix login", "", [])["url"]
+    url = double._ticket(REPO, "Fix login", "", [])["url"]
 
     async def assignees() -> list[str]:
         return (await tickets.read("tickets", url)).items[0]["assignees"]
@@ -266,7 +268,7 @@ async def test_a_status_comment_carries_the_status_and_addresses_the_author(
     monkeypatch,
 ):
     double, _, tickets = services(monkeypatch)
-    url = double._ticket(TRACKER, "Fix login", "", [], author="otota")["url"]
+    url = double._ticket(REPO, "Fix login", "", [], author="otota")["url"]
     status = WorkflowStatus(reason="failed", person_id=MEMBER, run_id="r", subject=url)
 
     await tickets.comment(url, "It failed.", status=status)
@@ -275,3 +277,90 @@ async def test_a_status_comment_carries_the_status_and_addresses_the_author(
     first, second = double.entries[url]["comments"]
     assert (first["body"], first["meta"]) == ("@otota\n\nIt failed.", status.payload())
     assert (second["body"], second["meta"]) == ("Plain.", None)
+
+
+@pytest.mark.asyncio
+async def test_a_repository_numbers_its_tickets_and_defines_their_labels(
+    monkeypatch,
+):
+    double, _, tickets = services(monkeypatch)
+    created = await tickets.create_ticket(REPO, "Fix login", "", ["bug"])
+
+    # Its own tickets count from 1, whatever another repository holds.
+    assert double.tickets[double.their_ticket]["key"] == "1"
+    assert (created.target.url, created.target.label) == (
+        f"{BASE}/{REPO}/-/tickets/1",
+        "#1",
+    )
+    [ticket] = (await tickets.read("tickets", created.target.url)).items
+    assert (ticket["key"], ticket["tracker"], ticket["repository"]) == (
+        "1",
+        REPO,
+        REPO,
+    )
+    # A label the repository does not define is refused.
+    with pytest.raises(ServiceError, match="repository"):
+        await tickets.create_ticket(REPO, "Docs", "", ["docs"])
+    with pytest.raises(ServiceError, match="repository"):
+        await tickets.update_ticket(
+            created.target.url,
+            body=None,
+            title=None,
+            add_labels=["docs"],
+            remove_labels=[],
+            state=None,
+            state_reason=None,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"{BASE}/{REPO}/-/tickets/01",
+        f"{BASE}/{REPO}/-/tickets/0",
+        f"{BASE}/{REPO}/-/tickets/DEMO-1",
+        f"{BASE}/{REPO}/-/tickets/1?x=1",
+        f"{BASE}/{REPO}/-/pulls/1",
+        f"{BASE}/demo/-/tickets/1",
+    ],
+)
+async def test_an_address_of_no_ticket_is_not_found(monkeypatch, url):
+    double, _, tickets = services(monkeypatch)
+    double._ticket(REPO, "Fix login", "", [])
+    before = len(double.writes)
+
+    # Refused by its address, before any request.
+    with pytest.raises(ServiceNotFound) as refused:
+        await tickets.comment(url, "Hi")
+
+    assert str(refused.value) == t("integrations.branvil.api.not_ticket", url=url)
+    assert double.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_the_boards_closed_pull_requests_are_of_its_cards_repositories(
+    monkeypatch,
+):
+    double, code, tickets = services(monkeypatch)
+    double.branch("feature")
+    pull = (
+        await code.create_pull_request(
+            REPO, "feature", "", "Fix", "", draft=False, ticket_url="", closes=False
+        )
+    ).target.url
+    double.merge(pull)
+    their_card = double._ticket(THEIR_REPO, "Elsewhere", "", [])["url"]
+    double.assign(their_card)
+    now = datetime.now(UTC)
+    window = (now - timedelta(days=3650), now + timedelta(days=3650))
+
+    # No card of the pull request's repository: not the board's.
+    assert [item.url for item in await tickets.closed_since(*window)] == []
+
+    # An open card brings its repository's pull requests in, and so does a
+    # closed one.
+    card = _ticket(double)
+    assert [item.url for item in await tickets.closed_since(*window)] == [pull]
+    double.tickets[card].update(state="closed", lane="done")
+    assert [item.url for item in await tickets.closed_since(*window)] == [pull]

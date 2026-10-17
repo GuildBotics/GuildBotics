@@ -4,12 +4,13 @@ reactions on them.
 
 Branvil is reached at one base URL, the same on every machine (Branvil's own
 tunnel forwards it to the Hub elsewhere), so the URLs it is known by are the
-ones recorded: a ticket is ``{base}/{tracker}/-/tickets/{key}``, a pull request
-``{base}/{repository}/-/pulls/{number}``. Its API names a repository, a
-tracker, or a board as one percent-encoded path segment.
+ones recorded: a ticket is ``{base}/{repository}/-/tickets/{number}``, a pull
+request ``{base}/{repository}/-/pulls/{number}``; a repository numbers each
+from 1. Its API names a repository or a board as one percent-encoded path
+segment.
 
 Every request of the client that is not a read passes the write gate before
-it is sent: it must name a repository or a tracker in the configured scope.
+it is sent: it must name a repository in the configured scope.
 Every failure comes out as the ports' failure, told from Branvil's status and
 error code.
 """
@@ -52,12 +53,10 @@ _TIMEOUT_SECONDS = 10.0
 #: How much of Branvil's own words a failure repeats.
 _MESSAGE_LIMIT = 500
 _COLLECTIONS: dict[WorkKind, str] = {"ticket": "tickets", "pull_request": "pulls"}
-_ITEM_NAMES: dict[WorkKind, re.Pattern[str]] = {
-    "ticket": re.compile(r"[A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}"),
-    "pull_request": re.compile(r"[1-9][0-9]{0,9}"),
-}
-#: The API path of a write: under the repository or the tracker it changes.
-_WRITTEN = re.compile(r"/api/v1/(?:repos|trackers)/([^/]+)(?:/.*)?")
+#: The number of a ticket or a pull request.
+_NUMBER = re.compile(r"[1-9][0-9]{0,9}")
+#: The API path of a write: under the repository it changes.
+_WRITTEN = re.compile(r"/api/v1/repos/([^/]+)(?:/.*)?")
 
 
 def base_url(config: Mapping[str, Any]) -> str:
@@ -71,30 +70,27 @@ def username(person: Person) -> str:
 
 
 def segment(path: str) -> str:
-    """A repository, tracker, board, branch, or id as one API path segment."""
+    """A repository, board, branch, or id as one API path segment."""
     return quote(path, safe="")
 
 
 @dataclass(frozen=True)
 class BranvilItem:
-    """A ticket of a tracker, or a pull request of a repository."""
+    """A ticket or a pull request of a repository."""
 
     kind: WorkKind
-    #: The tracker or the repository.
+    #: The repository.
     place: str
-    #: The ticket's key or the pull request's number.
+    #: The number.
     name: str
 
     @property
     def api(self) -> str:
-        collection = "trackers" if self.kind == "ticket" else "repos"
-        return (
-            f"/{collection}/{segment(self.place)}/{_COLLECTIONS[self.kind]}/{self.name}"
-        )
+        return f"/repos/{segment(self.place)}/{_COLLECTIONS[self.kind]}/{self.name}"
 
     @property
     def label(self) -> str:
-        return self.name if self.kind == "ticket" else f"!{self.name}"
+        return f"{'#' if self.kind == 'ticket' else '!'}{self.name}"
 
 
 def record_auth_failure(person_id: str, code: str = "unauthorized") -> None:
@@ -360,7 +356,7 @@ class BranvilApi:
         if (
             not valid_path(place)
             or collection != _COLLECTIONS[kind]
-            or not _ITEM_NAMES[kind].fullmatch(name)
+            or not _NUMBER.fullmatch(name)
         ):
             raise ServiceNotFound(
                 t("integrations.branvil.api.not_ticket", url=url)
@@ -373,7 +369,7 @@ class BranvilApi:
         return f"{self.base_url}/{item.place}/-/{_COLLECTIONS[item.kind]}/{item.name}"
 
     def repository(self, path: str) -> str:
-        """``path`` as a repository or a tracker of Branvil.
+        """``path`` as a repository of Branvil.
 
         Raises:
             ServiceNotFound: If it is not one.
