@@ -10,7 +10,8 @@ Four layers answer it, strongest first:
 1. the dispatch decision (``chat_dispatch.*``): whether anything will retry
 2. the rate limit (``workflow.rate_limited``)
 3. the recorded workflow completion evidence (``workflow.completed`` /
-   ``workflow.completion_missing``). ``retry_scheduled`` needs an actual
+   ``workflow.completion_missing``); a run that ended to await its pull
+   request's checks resolves to ``awaiting_checks``. ``retry_scheduled`` needs an actual
    dispatch event, because the ticket workflow shares this completion layer
    but exhausts its attempt budget by posting an error comment instead of
    scheduling a retry, so missing evidence alone resolves to ``incomplete``
@@ -101,7 +102,14 @@ class TraceStatus:
         elif event_type in _DISPATCH_DECISIONS:
             self._dispatch = _DISPATCH_DECISIONS[event_type]
         elif event_type in _COMPLETION_EVIDENCE:
-            self._completion = _COMPLETION_EVIDENCE[event_type]
+            payload = item.get("payload")
+            awaiting = (
+                isinstance(payload, Mapping)
+                and payload.get("status") == "awaiting_checks"
+            )
+            self._completion = (
+                "awaiting_checks" if awaiting else _COMPLETION_EVIDENCE[event_type]
+            )
         elif event_type.endswith(".failed"):
             self._observed = "failed"
         elif self._observed in _TERMINAL_OBSERVATIONS:
@@ -124,6 +132,8 @@ class TraceStatus:
             return "incomplete"
         if self._completion == "recorded":
             return "success"
+        if self._completion == "awaiting_checks":
+            return "awaiting_checks"
         return self._observed
 
 

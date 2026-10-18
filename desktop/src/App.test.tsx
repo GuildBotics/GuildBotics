@@ -804,6 +804,8 @@ describe("traceStatusColor", () => {
     expect(traceStatusColor("retry_scheduled")).toBe("warning");
     expect(traceStatusColor("abandoned")).toBe("danger");
     expect(traceStatusColor("incomplete")).toBe("danger");
+    // A run that ended to await its PR's checks is neither failed nor done.
+    expect(traceStatusColor("awaiting_checks")).toBe("info");
   });
 });
 
@@ -814,6 +816,7 @@ describe("isTerminalTraceStatus", () => {
     expect(isTerminalTraceStatus("retry_scheduled")).toBe(true);
     expect(isTerminalTraceStatus("abandoned")).toBe(true);
     expect(isTerminalTraceStatus("incomplete")).toBe(true);
+    expect(isTerminalTraceStatus("awaiting_checks")).toBe(true);
     expect(isTerminalTraceStatus("running")).toBe(false);
     expect(isTerminalTraceStatus("info")).toBe(false);
   });

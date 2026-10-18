@@ -139,3 +139,21 @@ def test_fact_events_never_override_a_lifecycle_failure_with_success() -> None:
     status.observe("failed")
     status.add(_event("pull_request.item"))
     assert status.resolve() == "failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("awaiting_checks", "awaiting_checks"), ("done", "success")],
+)
+def test_a_run_that_ended_to_await_its_checks_says_so(
+    status: str, expected: str
+) -> None:
+    """The completion carries how the member said the run ended; a run that
+    awaits its PR's checks is neither failed nor done."""
+    completed = {**_event("workflow.completed"), "payload": {"status": status}}
+
+    assert resolve_trace_status([_event("command.started"), completed]) == expected
+    with_lifecycle = TraceStatus()
+    with_lifecycle.observe("succeeded")
+    with_lifecycle.add(completed)
+    assert with_lifecycle.resolve() == expected

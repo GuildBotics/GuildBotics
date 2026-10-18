@@ -553,6 +553,7 @@ const resources = {
           retry_scheduled: "Retry scheduled",
           abandoned: "Abandoned",
           incomplete: "Incomplete",
+          awaiting_checks: "Waiting for CI",
         },
         rejection: {
           title: {
@@ -729,6 +730,7 @@ const resources = {
             retry_scheduled: "Retry scheduled",
             abandoned: "Abandoned",
             incomplete: "Incomplete",
+            awaiting_checks: "Waiting for CI",
           },
           sources: {
             all: "All sources",
@@ -2415,6 +2417,7 @@ const resources = {
           retry_scheduled: "再試行待ち",
           abandoned: "打ち切り",
           incomplete: "未完了",
+          awaiting_checks: "CI 待ち",
         },
         rejection: {
           title: {
@@ -3166,6 +3169,7 @@ const resources = {
             retry_scheduled: "再試行待ち",
             abandoned: "打ち切り",
             incomplete: "未完了",
+            awaiting_checks: "CI 待ち",
           },
           sources: {
             all: "すべてのソース",

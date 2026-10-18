@@ -27,6 +27,7 @@ from tests.guildbotics.local_code_host import (
     item,
     local_member,
     pull_request,
+    remote_with,
     ticket,
     tracker,
 )
@@ -37,27 +38,6 @@ FOREIGN_TICKET = "https://tickets.example.com/browse/OPS-7"
 @pytest.fixture
 def member():
     return local_member()
-
-
-def _remote_with(*branches: str, repository: str = REPOSITORY) -> None:
-    """The repository's remote, with ``main`` and ``branches`` one commit
-    ahead."""
-    bare = store.bare(repository)
-    seed = bare.parent / "seed"
-    git = ["git", "-c", "user.name=S", "-c", "user.email=s@example.com"]
-    subprocess.run([*git, "init", "-q", "-b", "main", str(seed)], check=True)
-    (seed / "a").write_text("a", encoding="utf-8")
-    subprocess.run([*git, "add", "a"], cwd=seed, check=True)
-    subprocess.run([*git, "commit", "-q", "-m", "a"], cwd=seed, check=True)
-    for branch in branches:
-        subprocess.run(
-            [*git, "switch", "-q", "-c", branch, "main"], cwd=seed, check=True
-        )
-        (seed / branch.replace("/", "-")).write_text(branch, encoding="utf-8")
-        subprocess.run([*git, "add", "."], cwd=seed, check=True)
-        subprocess.run([*git, "commit", "-q", "-m", branch], cwd=seed, check=True)
-    subprocess.run([*git, "switch", "-q", "main"], cwd=seed, check=True)
-    subprocess.run([*git, "clone", "-q", "--bare", str(seed), str(bare)], check=True)
 
 
 def _tickets_kept() -> list[dict]:
@@ -173,7 +153,7 @@ async def test_removing_a_label_the_ticket_does_not_carry_changes_nothing(member
 
 @pytest.mark.asyncio
 async def test_pull_request_work_reports_its_target(member):
-    _remote_with("feature")
+    remote_with("feature")
     created = await member_repository.pr_create(
         member, REPOSITORY, "feature", "", "PR", "Body", (), "false"
     )
@@ -214,7 +194,7 @@ async def test_pull_request_work_reports_its_target(member):
 
 @pytest.mark.asyncio
 async def test_a_review_on_a_head_that_moved_writes_nothing(member):
-    _remote_with("feature")
+    remote_with("feature")
     url = pull_request(1, "feature")
 
     with pytest.raises(ServiceError, match="head"):
@@ -310,7 +290,7 @@ def _artifact(sha: str, name: str, files: dict[str, str]) -> None:
 async def test_artifact_download_reads_only_the_heads_artifacts(member, tmp_path, name):
     """An artifact is named among the head commit's own: a name that leads
     into another commit's artifacts, or anywhere else, is refused."""
-    _remote_with("feature")
+    remote_with("feature")
     url = pull_request(3, "feature")
     _artifact("other-sha", "report", {"report.md": "theirs"})
 
@@ -321,7 +301,7 @@ async def test_artifact_download_reads_only_the_heads_artifacts(member, tmp_path
 
 @pytest.mark.asyncio
 async def test_artifact_download_refuses_a_path_as_the_name(member, tmp_path):
-    _remote_with("feature")
+    remote_with("feature")
     url = pull_request(3, "feature")
 
     with pytest.raises(ServiceNotFound, match="is no artifact name"):
@@ -332,7 +312,7 @@ async def test_artifact_download_refuses_a_path_as_the_name(member, tmp_path):
 
 @pytest.mark.asyncio
 async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
-    _remote_with("feature")
+    remote_with("feature")
     url = pull_request(3, "feature")
     head = store.branch_tip(REPOSITORY, "feature")
     _artifact(head, "report", {"report.md": "details"})
@@ -352,7 +332,7 @@ async def test_task_completion_revalidates_what_the_run_answers_for(member):
     """The PRs the run touched, and those that refer to the member's ticket
     and the member wrote; a PR of someone else's that the run did not touch is
     not the member's to make ready."""
-    _remote_with("mine", "touched", "theirs")
+    remote_with("mine", "touched", "theirs")
     ticket_url = ticket(1)
     refers = [{"url": ticket_url, "closes": False}]
     mine = pull_request(2, "mine", author="aiko", tickets=refers)
@@ -372,7 +352,7 @@ async def test_task_completion_revalidates_what_the_run_answers_for(member):
 async def test_task_completion_takes_the_pull_requests_the_run_wrote_to(member):
     """A write's target names a pull request; a ticket target is no pull
     request to make ready."""
-    _remote_with("touched")
+    remote_with("touched")
     ticket_url = ticket(1)
     touched = pull_request(2, "touched", author="someone")
 
@@ -392,7 +372,7 @@ async def test_task_completion_takes_the_pull_requests_the_run_wrote_to(member):
 async def test_task_completion_of_a_pull_request_revalidates_it(member):
     """A run whose ticket is a pull request answers for it, when the member
     wrote it."""
-    _remote_with("mine")
+    remote_with("mine")
     url = pull_request(2, "mine", author="aiko")
 
     results = await member_repository.task_completion_readiness(member, url, [])
@@ -414,7 +394,7 @@ async def test_task_completion_of_another_services_ticket_has_no_pull_requests(
 
 @pytest.mark.asyncio
 async def test_task_completion_refuses_a_blocked_pull_request():
-    _remote_with("mine")
+    remote_with("mine")
     failing = local_member(checks="failure")
     url = pull_request(2, "mine", author="aiko")
 
@@ -423,8 +403,71 @@ async def test_task_completion_refuses_a_blocked_pull_request():
 
 
 @pytest.mark.asyncio
+async def test_a_run_awaits_its_pull_requests_pending_checks():
+    """Pending checks end the run instead of a wait in the turn: each PR whose
+    checks are pending is told so, with the head they are of; a ready one is
+    left alone."""
+    remote_with("mine", "ready")
+    pending = local_member(checks="pending")
+    ticket_url = ticket(1)
+    refers = [{"url": ticket_url, "closes": False}]
+    waiting = pull_request(2, "mine", author="aiko", tickets=refers)
+    ready = pull_request(3, "ready", author="aiko", tickets=refers)
+    store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "ready"), "success")
+
+    results = await member_repository.await_checks(pending, ticket_url, "run-1", [])
+
+    assert [(r["target"]["url"], r["readiness"]) for r in results] == [
+        (waiting, "blocked"),
+        (ready, "ready"),
+    ]
+    [notice] = item(waiting)["comments"]
+    assert notice["status"] == {
+        "kind": "workflow_error",
+        "routing": "suppress",
+        "reason": "awaiting_checks",
+        "person_id": "aiko",
+        "run_id": "run-1",
+        "subject": ticket_url,
+        "head": store.branch_tip(REPOSITORY, "mine"),
+    }
+    assert item(ready)["comments"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("checks", "behind", "match"),
+    [
+        ("success", False, "Every PR is ready"),
+        ("failure", False, "CI checks are failing"),
+        ("pending", True, "behind its base"),
+    ],
+)
+async def test_a_run_awaits_checks_only_when_nothing_else_blocks(checks, behind, match):
+    remote_with("mine")
+    url = pull_request(2, "mine", author="aiko")
+    if behind:
+        seed = store.bare(REPOSITORY).parent / "seed"
+        git = ["git", "-c", "user.name=S", "-c", "user.email=s@example.com"]
+        subprocess.run(
+            [*git, "commit", "-q", "--allow-empty", "-m", "b"], cwd=seed, check=True
+        )
+        subprocess.run(
+            [*git, "push", "-q", str(store.bare(REPOSITORY)), "main"],
+            cwd=seed,
+            check=True,
+        )
+
+    with pytest.raises(MemberCapabilityError, match=re.escape(match)):
+        await member_repository.await_checks(
+            local_member(checks=checks), url, "run-1", []
+        )
+    assert item(url)["comments"] == []
+
+
+@pytest.mark.asyncio
 async def test_open_pull_request_readiness_skips_what_is_not_open(member):
-    _remote_with("feature")
+    remote_with("feature")
     url = pull_request(2, "feature")
     pull_request(3, "feature", state="closed")
 
@@ -438,7 +481,7 @@ async def test_a_remote_git_cannot_read_is_a_failure_not_an_answer(member):
     """What the code host says of its remote comes from git, or not at all."""
     with pytest.raises(ServiceNotFound, match="has no remote repository"):
         await member.code.default_branch(REPOSITORY)
-    _remote_with()
+    remote_with()
     bare = store.bare(REPOSITORY)
     sha = store.git(REPOSITORY, "rev-parse", "HEAD")
     subprocess.run(
@@ -453,7 +496,7 @@ async def test_a_remote_git_cannot_read_is_a_failure_not_an_answer(member):
 async def test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled(member):
     """A fork that is gone has no head: one such pull request is no failure of
     the whole patrol, and still reads as itself."""
-    _remote_with()
+    remote_with()
     url = pull_request(
         5,
         "feature",

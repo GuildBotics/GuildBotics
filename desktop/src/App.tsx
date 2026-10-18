@@ -1279,6 +1279,9 @@ function compositeTraceStatus(summaries: TraceSummary[]): TraceSummary["status"]
   if (summaries.some((summary) => summary.status === "retry_scheduled")) {
     return "retry_scheduled";
   }
+  if (summaries.some((summary) => summary.status === "awaiting_checks")) {
+    return "awaiting_checks";
+  }
   if (summaries.length > 0 && summaries.every((summary) => summary.status === "success")) {
     return "success";
   }

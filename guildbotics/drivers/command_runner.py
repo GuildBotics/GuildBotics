@@ -138,8 +138,13 @@ class HostRunLedger:
         return self._store.evidence(self.run_id)
 
     def record_completed(self, attempt: int) -> None:
-        """Record that the run's completion was found after an attempt."""
-        record_workflow_completed(run_id=self.run_id, attempt=attempt)
+        """Record that the run's completion was found after an attempt, and
+        how the member said it ended."""
+        record_workflow_completed(
+            run_id=self.run_id,
+            attempt=attempt,
+            status=self._store.status(self.run_id).status,
+        )
 
     def record_completion_missing(
         self, attempt: int, max_attempts: int, error: str

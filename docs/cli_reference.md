@@ -95,7 +95,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 | [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
@@ -1483,12 +1483,12 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 
 ## `guildbotics member task complete`
 
-Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done.
+Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1497,7 +1497,7 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--status [done\|asking\|blocked]` | Run outcome. [required] |
+| `--status [done\|asking\|blocked\|awaiting_checks]` | Run outcome. awaiting_checks ends the run to await its PRs' pending checks; the patrol resumes the work once they settle. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |

@@ -24,12 +24,14 @@ def record_workflow_completed(
     run_id: str,
     attempt: int = 0,
     recovered: bool = False,
+    status: str = "",
 ) -> None:
     """Record that the run's completion evidence exists in the run store.
 
     ``recovered=True`` marks a re-dispatch that found the evidence already
     recorded (crash between completion and dispatch bookkeeping) and therefore
-    skipped the agent.
+    skipped the agent. ``status`` is how the member said the run ended, when
+    the recorder read it (``awaiting_checks`` is shown as such).
     """
     record_correlated_event(
         event_type="workflow.completed",
@@ -38,6 +40,7 @@ def record_workflow_completed(
             "run_id": run_id,
             "attempt": attempt,
             "recovered": recovered,
+            "status": status,
         },
     )
 

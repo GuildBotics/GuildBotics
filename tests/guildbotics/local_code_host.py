@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from typing import Any
 
 from guildbotics.entities.team import Person, Project, Team
@@ -46,6 +47,27 @@ def local_member(person: Person | None = None, **code: str) -> MemberServices:
         LocalCodeHostingService(person, team),
         LocalTicketService(logging.getLogger(__name__), person, team),
     )
+
+
+def remote_with(*branches: str, repository: str = REPOSITORY) -> None:
+    """The repository's remote, with ``main`` and ``branches`` one commit
+    ahead."""
+    bare = store.bare(repository)
+    seed = bare.parent / "seed"
+    git = ["git", "-c", "user.name=S", "-c", "user.email=s@example.com"]
+    subprocess.run([*git, "init", "-q", "-b", "main", str(seed)], check=True)
+    (seed / "a").write_text("a", encoding="utf-8")
+    subprocess.run([*git, "add", "a"], cwd=seed, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "a"], cwd=seed, check=True)
+    for branch in branches:
+        subprocess.run(
+            [*git, "switch", "-q", "-c", branch, "main"], cwd=seed, check=True
+        )
+        (seed / branch.replace("/", "-")).write_text(branch, encoding="utf-8")
+        subprocess.run([*git, "add", "."], cwd=seed, check=True)
+        subprocess.run([*git, "commit", "-q", "-m", branch], cwd=seed, check=True)
+    subprocess.run([*git, "switch", "-q", "main"], cwd=seed, check=True)
+    subprocess.run([*git, "clone", "-q", "--bare", str(seed), str(bare)], check=True)
 
 
 def tracker(

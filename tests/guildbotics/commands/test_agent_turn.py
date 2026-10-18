@@ -34,11 +34,11 @@ def _chat_run(store: RunStore, run_id: str) -> None:
     store.append_evidence(run_id, "chat_batch", {"event_ids": ["E1"]})
 
 
-def _ticket_completion(store: RunStore, run_id: str) -> None:
+def _ticket_completion(store: RunStore, run_id: str, status: str = "done") -> None:
     store.append_evidence(run_id, "issue_comment", {"url": "https://example.test/1"})
     store.complete(
         run_id,
-        "done",
+        status,
         "completed",
         "https://example.test/1",
         "aiko",
@@ -214,7 +214,7 @@ async def test_turn_records_completion_missing_then_completed_events(
     assert missing["attempt"] == 1
     assert missing["max_attempts"] == max_attempts
     assert "not found" in missing["error"].lower()
-    assert recorded[1][1] == {"run_id": "run-1", "attempt": 2}
+    assert recorded[1][1] == {"run_id": "run-1", "attempt": 2, "status": "done"}
 
 
 @pytest.mark.asyncio
@@ -324,3 +324,30 @@ async def test_turn_gives_ticket_turns_no_extra_parameters(tmp_path):
     )
 
     assert parameters == [{}]
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_awaits_its_checks_is_complete(tmp_path, monkeypatch):
+    """Ending to await the checks finishes the run: no further attempt in the
+    dispatch, and the completion says how it ended."""
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        command_runner, "record_workflow_completed", lambda **kw: recorded.append(kw)
+    )
+    store = _store(tmp_path)
+    calls = 0
+
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
+        nonlocal calls
+        calls += 1
+        _ticket_completion(store, "run-1", "awaiting_checks")
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
+        execution_context={"max_completion_attempts": 3},
+    )
+
+    assert calls == 1
+    assert recorded == [{"run_id": "run-1", "attempt": 1, "status": "awaiting_checks"}]

@@ -17,6 +17,7 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.workflow_rate_limits import (
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
@@ -24,6 +25,7 @@ from guildbotics.capabilities.workflow_rate_limits import (
 )
 from guildbotics.entities import Person, Task
 from guildbotics.entities.team import Service
+from guildbotics.integrations import pull_request_patrol
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import WorkflowStatus
@@ -106,7 +108,8 @@ class TicketSelector:
 
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
-        record.
+        record. A run the patrol resumed for its PR's checks ends their wait
+        unless it awaits them again (:func:`_settle_checks`).
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
@@ -125,7 +128,7 @@ class TicketSelector:
             try:
                 if task.status == Task.READY and task.id is not None:
                     await context.get_ticket_service().move(task, "in_progress")
-                return await run_workflow(
+                result = await run_workflow(
                     replace(
                         invocation,
                         run_id=run_id,
@@ -140,6 +143,8 @@ class TicketSelector:
                 if notice is None:
                     raise
                 return notice
+            await _settle_checks(context, task, run_id)
+            return result
         finally:
             await context.aclose()
 
@@ -210,6 +215,26 @@ class TicketSelector:
             trigger_type="ticket",
             payload=payload,
             work=Work.of_ticket(ticket_url),
+        )
+
+
+async def _settle_checks(context: Context, task: Task, run_id: str) -> None:
+    """End the wait a run resumed for its PR's checks answered, unless the
+    run awaits them again: the wait is the member's latest status notice on
+    the PR, and whatever the run itself wrote there, it would resume the
+    member on every patrol."""
+    if task.trigger_reason != pull_request_patrol.CHECKS or not task.pull_request_url:
+        return
+    # Like a failure's notice, this one cannot fail the run that ended: the
+    # wait it leaves resumes the member on the next patrol instead.
+    with suppress(Exception):
+        if RunStore().status(run_id).status == "awaiting_checks":
+            return
+        await pull_request_patrol.checks_settled(
+            context.get_code_hosting_service(),
+            task.pull_request_url,
+            person_id=context.person.person_id,
+            run_id=run_id,
         )
 
 

@@ -4,7 +4,8 @@ device-local ``.guildbotics/local/services``.
 A repository is named by its path of any depth (``acme/team/demo``) and kept
 in ``code/<path, quoted>/``: its bare git repository ``repository.git`` (the
 remote members fetch from and push to), its pull requests ``pulls/<n>.json``,
-and the CI artifacts of a head commit ``artifacts/<sha>/<name>.zip``.
+the CI artifacts of a head commit ``artifacts/<sha>/<name>.zip``, and the
+conclusion its CI finished with, when it was recorded, ``checks/<sha>``.
 
 A ticket is kept in a tracker, a path too, in ``tickets/<path, quoted>/``:
 the tracker's ``tracker.json`` (the labels it defines, and the repository its
@@ -217,6 +218,20 @@ def artifacts(repository: str, sha: str) -> list[str]:
         path.stem
         for path in (directory("code", repository) / "artifacts" / sha).glob("*.zip")
     )
+
+
+def checks(repository: str, sha: str) -> str:
+    """The conclusion recorded for the CI of the commit ``sha``; empty for none."""
+    path = directory("code", repository) / "checks" / sha
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def finish_checks(repository: str, sha: str, conclusion: str) -> None:
+    """Record the conclusion the CI of the commit ``sha`` finished with, as
+    whoever runs it does."""
+    path = directory("code", repository) / "checks" / sha
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(conclusion, encoding="utf-8")
 
 
 def git(repository: str, *args: str, errors: str = "strict") -> str:

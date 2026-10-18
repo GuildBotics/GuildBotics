@@ -161,6 +161,9 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   commits land after its last review, or when there is a statement it has not answered.
   Automatic re-review stops after 3 rounds: the patrol makes the pull request a draft
   and says so on it. Mark it ready for review to go on.
+- A member does not wait for CI inside its run: when only unfinished checks are left, it
+  ends the run with a waiting notice on the pull request, and the patrol resumes it once
+  the checks finish or new commits land.
 - Draft pull requests are left alone. Only the owner makes a draft ready for review.
 - A run that fails or is rate-limited leaves a status notice on the ticket or the pull
   request; Branvil shows it as a notice, and it holds the item until someone acts on it.

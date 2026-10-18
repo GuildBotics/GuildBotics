@@ -29,6 +29,7 @@ from guildbotics.capabilities.artifact_archive import (
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.entities.message import Message
+from guildbotics.integrations import pull_request_patrol
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
@@ -44,6 +45,7 @@ from guildbotics.runtime.port import (
 from guildbotics.runtime.resources import (
     MAX_PAGE_BYTES,
     TICKET_RESOURCES,
+    Readiness,
     ReviewVerdict,
 )
 from guildbotics.runtime.ticket_service import TicketService
@@ -279,13 +281,61 @@ async def task_completion_readiness(
 ) -> list[dict[str, Any]]:
     """Revalidate every PR a ticket run is answerable for before completion.
 
+    Raises:
+        MemberCapabilityError: If a target is not ready.
+    """
+    results = await _answered_readiness(context, ticket_url, evidence)
+    blocked = [result for result in results if result.readiness != "ready"]
+    if blocked:
+        raise MemberCapabilityError(
+            "Task cannot be completed because PR readiness is blocked. "
+            + _blockers(blocked)
+        )
+    return [result.model_dump() for result in results]
+
+
+async def await_checks(
+    context: Context, ticket_url: str, run_id: str, evidence: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """End a ticket run to await its PRs' checks, saying so on each PR whose
+    checks are pending; the patrol resumes the run's work once they settle.
+
+    Raises:
+        MemberCapabilityError: Unless pending checks are all that blocks the
+            completion of the PRs the run answers for.
+    """
+    results = await _answered_readiness(context, ticket_url, evidence)
+    awaited = [result for result in results if result.readiness != "ready"]
+    if not awaited or any(
+        blocker.code != "checks_pending"
+        for result in awaited
+        for blocker in result.completion_blockers
+    ):
+        raise MemberCapabilityError(
+            "A run awaits checks only when pending checks are all that blocks "
+            "its PRs' completion. " + (_blockers(awaited) or "Every PR is ready.")
+        )
+    for result in awaited:
+        await pull_request_patrol.await_checks(
+            context.get_code_hosting_service(),
+            result.target.url,
+            person_id=context.person.person_id,
+            run_id=run_id,
+            subject=ticket_url,
+            head=result.head_sha,
+        )
+    return [result.model_dump() for result in results]
+
+
+async def _answered_readiness(
+    context: Context, ticket_url: str, evidence: list[dict[str, Any]]
+) -> list[Readiness]:
+    """The readiness of every open PR a ticket run is answerable for.
+
     PRs the run pushed to or opened (evidence) are always targets. The
     ticket itself, when it is a PR, and the PRs that refer to a ticket are
     targets only when the member authored them: a reviewer cannot make
     someone else's PR ready.
-
-    Raises:
-        MemberCapabilityError: If a target is not ready.
     """
     code = context.get_code_hosting_service()
     touched = _pull_request_urls(evidence)
@@ -303,20 +353,16 @@ async def task_completion_readiness(
             continue
         result = await code.readiness(url)
         if result.readiness != "not_applicable":
-            results.append(result.model_dump())
-    blocked = [result for result in results if result["readiness"] != "ready"]
-    if blocked:
-        details = "; ".join(
-            f"{result['target']['url']}: "
-            + ", ".join(
-                str(blocker["message"]) for blocker in result["completion_blockers"]
-            )
-            for result in blocked
-        )
-        raise MemberCapabilityError(
-            "Task cannot be completed because PR readiness is blocked. " + details
-        )
+            results.append(result)
     return results
+
+
+def _blockers(results: list[Readiness]) -> str:
+    return "; ".join(
+        f"{result.target.url}: "
+        + ", ".join(blocker.message for blocker in result.completion_blockers)
+        for result in results
+    )
 
 
 async def _referring_pull_requests(

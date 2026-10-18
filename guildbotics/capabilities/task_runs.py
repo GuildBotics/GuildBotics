@@ -12,10 +12,12 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, cast
 
 from guildbotics.entities.task_run import (
+    TASK_RUN_COMPLETIONS,
     TASK_RUN_TERMINAL_STATES,
+    TaskRunCompletion,
     TaskRunExecutionMode,
     TaskRunRecord,
     TaskRunResult,
@@ -520,7 +522,7 @@ class RunStore:
             raise TaskRunError(f"Task run '{run_id}' is not completed.")
         result = _result_subject(record)
         status = result.status if result is not None else _public_status(record.status)
-        if status not in {"done", "asking", "blocked"}:
+        if status not in TASK_RUN_COMPLETIONS:
             raise TaskRunError(f"Task run '{run_id}' has invalid status '{status}'.")
         subject_type = result.subject_type if result is not None else "ticket"
         evidence = self.evidence(run_id)
@@ -633,7 +635,9 @@ class RunStore:
             return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
         if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
             return False
-        if status == "asking":
+        if status in {"asking", "awaiting_checks"}:
+            # A run that awaits checks said so on each PR it awaits; that the
+            # PRs are its own was checked against their readiness.
             return bool(present & self.TICKET_COMMENT_EVIDENCE_TYPES)
         if status == "done" and _has_code_publish(records):
             return "pr_create" in present
@@ -676,21 +680,17 @@ def _device_id() -> str:
 
 
 def _record_status(status: str) -> str:
-    if status == "done":
+    if status in {"done", "awaiting_checks"}:
         return "succeeded"
     if status in {"asking", "blocked"}:
         return "failed"
     raise TaskRunError(f"Task run has invalid status '{status}'.")
 
 
-def _result_status(status: str) -> Literal["done", "asking", "blocked"]:
-    if status == "done":
-        return "done"
-    if status == "asking":
-        return "asking"
-    if status == "blocked":
-        return "blocked"
-    raise TaskRunError(f"Task run has invalid status '{status}'.")
+def _result_status(status: str) -> TaskRunCompletion:
+    if status not in TASK_RUN_COMPLETIONS:
+        raise TaskRunError(f"Task run has invalid status '{status}'.")
+    return cast(TaskRunCompletion, status)
 
 
 def _result_subject(record: TaskRunRecord) -> TaskRunResult | None:

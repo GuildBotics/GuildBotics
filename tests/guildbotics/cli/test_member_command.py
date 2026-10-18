@@ -204,6 +204,7 @@ _CODE_HOST_CAPABILITIES = (
     "pr_reaction",
     "artifact_download",
     "task_completion_readiness",
+    "await_checks",
 )
 
 
@@ -3864,6 +3865,77 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     # The ticket is the run's work, which no argument names.
     assert checked == [TICKET_WORK.identity]
     assert payload["subject_url"] == TICKET_WORK.identity
+
+
+def test_member_task_complete_awaits_pending_checks(
+    monkeypatch, bind_invocation, tmp_path
+):
+    """The run ends without a wait in the turn: what the capability told the
+    PR is the run's evidence, and the run is over, not failed."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _bind_workflow(bind_invocation, task_run_id="run-1")
+    person = Person(person_id="aiko", name="Aiko")
+    waiting = {
+        "target": _pr_target("https://github.com/owner/repo/pull/7"),
+        "readiness": "blocked",
+    }
+    ready = {
+        "target": _pr_target("https://github.com/owner/repo/pull/8"),
+        "readiness": "ready",
+    }
+    calls: list[tuple[str, str]] = []
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def await_checks(self, ticket_url, run_id, _evidence):
+            calls.append((ticket_url, run_id))
+            return [waiting, ready]
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _identifier: (FakeContext(person), person),
+    )
+    _fake_capabilities(monkeypatch, FakeService)
+    TaskRunStore().append("run-1", {"kind": "note", "message": "started"})
+
+    result = CliRunner().invoke(
+        member_module.member,
+        ["task", "complete", "--person", "aiko", "--status", "awaiting_checks"]
+        + ["--content-stdin"],
+        input="Waiting for CI.\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert calls == [(TICKET_WORK.identity, "run-1")]
+    assert (payload["status"], payload["evidence_types"]) == (
+        "awaiting_checks",
+        ["pr_comment"],
+    )
+    assert payload["pr_readiness"] == [waiting, ready]
+    [record] = TaskRunStore().records()
+    assert record.status == "succeeded"
+    assert record.result is not None and record.result.status == "awaiting_checks"
+
+
+def test_member_chat_complete_cannot_await_checks():
+    """Only a ticket run's PRs have checks to await."""
+    result = CliRunner().invoke(
+        member_module.member,
+        ["chat", "complete", "--person", "aiko", "--status", "awaiting_checks"]
+        + ["--content-stdin"],
+        input="Waiting.\n",
+    )
+
+    assert result.exit_code == 2
+    assert "'awaiting_checks' is not one of" in result.output
 
 
 def test_member_cli_help_stays_in_sync_with_capability_catalog():
