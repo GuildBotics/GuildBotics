@@ -3,7 +3,8 @@
 The same steps run against each provider: what a member writes reads back
 the same way and is named by the URL and the ids the reads give, a write
 outside the configured scope is refused before it is made, a review or an
-inline comment lands only on the head the member read, a pull request whose
+inline comment lands only on the head the member read, a merge closes every
+ticket the pull request links to be closed by it, a pull request whose
 head is current with passing CI is ready (and one whose base cannot be read
 is not judged at all), and the git remote names the repository it is the
 remote of. What a provider cannot do at all it refuses as unsupported.
@@ -19,7 +20,7 @@ import pytest_asyncio
 
 from guildbotics.entities.message import Message
 from guildbotics.integrations.factory import PROVIDERS
-from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.port import (
     ServiceError,
     ServiceNotFound,
@@ -67,8 +68,7 @@ async def _pull_request(host: Harness, branch: str = "feature", **fields):
         branch,
         fields.pop("body", ""),
         draft=False,
-        ticket_url=fields.pop("ticket_url", ""),
-        closes=fields.pop("closes", False),
+        tickets=fields.pop("tickets", []),
     )
 
 
@@ -96,8 +96,7 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
         "Fix login",
         "Body",
         draft=False,
-        ticket_url=ticket,
-        closes=True,
+        tickets=[TicketLink(ticket, closes=True)],
     )
     again = await code.create_pull_request(
         host.repository,
@@ -106,8 +105,7 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
         "Fix login",
         "Body",
         draft=False,
-        ticket_url=ticket,
-        closes=True,
+        tickets=[TicketLink(ticket, closes=True)],
     )
     readiness = await code.readiness(created.target.url)
     page = await code.read("pull_requests", created.target.url)
@@ -226,8 +224,7 @@ async def test_writes_outside_the_configured_scope_are_refused(host: Harness):
             "T",
             "B",
             draft=False,
-            ticket_url="",
-            closes=False,
+            tickets=[],
         )
     with pytest.raises(ServiceError, match="refused"):
         host.code.check_push(host.elsewhere)
@@ -282,7 +279,7 @@ async def test_a_pull_request_names_no_ticket(host: Harness):
     for closes in (True, False):
         with pytest.raises(ServiceNotFound):
             await _pull_request(
-                host, f"other-{closes}", ticket_url=first, closes=closes
+                host, f"other-{closes}", tickets=[TicketLink(first, closes)]
             )
     with pytest.raises(ServiceNotFound):
         await host.code.read("ticket_pull_requests", first)
@@ -361,20 +358,63 @@ async def test_the_pull_requests_of_another_services_ticket_are_unsupported(
 
 
 @pytest.mark.asyncio
+async def test_a_merge_closes_every_ticket_the_pull_request_closes(host: Harness):
+    first, second, third = [await _ticket(host, title) for title in "ABC"]
+    closing = await _pull_request(
+        host,
+        "feature",
+        tickets=[TicketLink(first, closes=True), TicketLink(second, closes=True)],
+    )
+    referring = await _pull_request(
+        host,
+        "other",
+        tickets=[TicketLink(third, closes=False), TicketLink(first, closes=False)],
+    )
+
+    for ticket, pulls in ((first, [closing, referring]), (second, [closing])):
+        page = await host.code.read("ticket_pull_requests", ticket)
+        assert sorted(p["url"] for p in page.items) == sorted(
+            p.target.url for p in pulls
+        )
+    host.merge(referring.target.url)
+    host.merge(closing.target.url)
+
+    async def state(ticket: str) -> str:
+        return (await host.tickets.read("tickets", ticket)).items[0]["state"]
+
+    assert [await state(ticket) for ticket in (first, second, third)] == [
+        "closed",
+        "closed",
+        "open",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_merge_closes_only_a_ticket_the_code_host_can_close(host: Harness):
+    """One ticket the merge cannot close is enough to open nothing, however
+    many it can."""
+    own = TicketLink(await _ticket(host), closes=True)
     before = len(host.writes)
 
     with pytest.raises(ServiceUnsupported):
-        await _pull_request(host, "feature", ticket_url=FOREIGN_TICKET, closes=True)
+        await _pull_request(
+            host, "feature", tickets=[own, TicketLink(FOREIGN_TICKET, closes=True)]
+        )
     # A ticket of another repository, though this service's, is not the
     # merge's to close.
     with pytest.raises(ServiceUnsupported):
-        await _pull_request(host, "other", ticket_url=host.theirs.url, closes=True)
+        await _pull_request(
+            host, "other", tickets=[own, TicketLink(host.theirs.url, closes=True)]
+        )
     with pytest.raises(ServiceNotFound):
-        await _pull_request(host, "fourth", ticket_url=host.missing_ticket)
+        await _pull_request(
+            host, "fourth", tickets=[own, TicketLink(host.missing_ticket, False)]
+        )
 
     assert host.writes[before:] == []
-    refers = await _pull_request(host, "third", ticket_url=FOREIGN_TICKET)
+    refers = await _pull_request(
+        host, "third", tickets=[TicketLink(FOREIGN_TICKET, closes=False)]
+    )
     assert refers.created
 
 

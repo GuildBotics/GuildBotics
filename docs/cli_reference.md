@@ -1284,7 +1284,7 @@ guildbotics member pr comment [OPTIONS]
 
 ## `guildbotics member pr create`
 
-Open a PR, or return the existing open PR for the same head and base branches. --issue-url links the ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes it; a code host that cannot close that ticket on a merge refuses --closes-issue.
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
 
 ```text
 guildbotics member pr create [OPTIONS]
@@ -1299,8 +1299,8 @@ guildbotics member pr create [OPTIONS]
 | `--title TEXT` | Pull request title. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
-| `--issue-url TEXT` | Related ticket URL to link to the PR. [default: ""] |
-| `--closes-issue / --refs-issue` | When --issue-url is set, link the ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close the ticket on a merge refuses --closes-issue. [default: refs-issue] |
+| `--issue-url TEXT` | Related ticket URL to link to the PR. May be repeated. |
+| `--closes-issue / --refs-issue` | Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue. [default: refs-issue] |
 | `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

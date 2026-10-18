@@ -10,7 +10,7 @@ to what it answers.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from tempfile import TemporaryFile
 from typing import IO, Any
@@ -49,6 +49,7 @@ from guildbotics.runtime.code_hosting_service import (
     ReplyWritten,
     ReviewCommentWritten,
     ReviewSubmitted,
+    TicketLink,
 )
 from guildbotics.runtime.port import (
     SemanticReaction,
@@ -185,23 +186,23 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         body: str,
         *,
         draft: bool,
-        ticket_url: str,
-        closes: bool,
+        tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         repository = self.repository(repository)
-        tickets = []
-        if ticket_url:
-            if self.serves(ticket_url):
-                ticket_url = self.url(self.item(ticket_url, "ticket"))
-            elif closes:
+        links = []
+        for ticket in tickets:
+            url = ticket.url
+            if self.serves(url):
+                url = self.url(self.item(url, "ticket"))
+            elif ticket.closes:
                 raise ServiceUnsupported(
                     t(
                         "integrations.branvil.api.closes_foreign",
                         repository=repository,
-                        url=ticket_url,
+                        url=url,
                     )
                 )
-            tickets.append({"url": ticket_url, "closes": closes})
+            links.append({"url": url, "closes": ticket.closes})
         answer = await self.call(
             "POST",
             f"/repos/{segment(repository)}/pulls",
@@ -211,7 +212,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
                 "title": title,
                 "body": body,
                 "draft": draft,
-                "tickets": tickets,
+                "tickets": links,
             },
         )
         pull = answer["pull"]

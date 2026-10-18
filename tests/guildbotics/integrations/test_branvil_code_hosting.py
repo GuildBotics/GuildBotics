@@ -10,6 +10,7 @@ import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.integrations.branvil import api
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.port import (
     ServiceError,
     ServiceNotFound,
@@ -33,7 +34,7 @@ PULL = f"{BASE}/{REPO}/-/pulls/1"
 async def _pull(double: BranvilDouble, code, author: str = MEMBER) -> str:
     double.branch("feature")
     created = await code.create_pull_request(
-        REPO, "feature", "", "Fix", "", draft=False, ticket_url="", closes=False
+        REPO, "feature", "", "Fix", "", draft=False, tickets=[]
     )
     double.pulls[created.target.url]["author"] = author
     return created.target.url
@@ -234,7 +235,13 @@ async def test_a_body_change_keeps_the_ticket_links_unless_they_are_dropped(
     double.branch("feature")
     url = (
         await code.create_pull_request(
-            REPO, "feature", "", "Fix", "", draft=False, ticket_url=ticket, closes=True
+            REPO,
+            "feature",
+            "",
+            "Fix",
+            "",
+            draft=False,
+            tickets=[TicketLink(ticket, closes=True)],
         )
     ).target.url
 

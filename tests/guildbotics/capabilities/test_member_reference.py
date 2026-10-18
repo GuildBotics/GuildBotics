@@ -28,9 +28,11 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member git commit" in text
     assert "include_diff=true" in text
     assert "guildbotics member pr create" in text
-    assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
+    assert "[--issue-url <url> ... [--closes-issue|--refs-issue]]" in text
+    assert "--issue-url, which may be repeated, links each ticket" in text
     assert (
-        "a code host that cannot close that ticket on a merge refuses --closes-issue"
+        "a code host that cannot close one of those tickets on a merge refuses "
+        "--closes-issue"
     ) in text
     assert "guildbotics member pr update" in text
     assert "guildbotics member pr review-comment" in text
@@ -66,10 +68,12 @@ def test_reference_includes_standard_work_procedure():
     assert "Inspect first" in text
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
+    assert "Pass `--issue-url` once for each ticket the PR works on" in text
     assert (
-        "add `--closes-issue` only when the ticket is complete once this PR merges "
-        "into the branch that receives its work"
+        "add `--closes-issue` only when every one of those tickets is complete once "
+        "this PR merges into the branch that receives its work"
     ) in text
+    assert "`--closes-issue` applies to all of them" in text
     assert "A child ticket can therefore be closed by a PR" in text
     assert "`--issue-url <child> --closes-issue`" in text
     assert "refer to the parent ticket on a standalone line" in text

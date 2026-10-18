@@ -3,7 +3,7 @@ git remote, and the pull request patrol."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import IO, Any
 from urllib.parse import urlparse
@@ -51,6 +51,7 @@ from guildbotics.runtime.code_hosting_service import (
     ReplyWritten,
     ReviewCommentWritten,
     ReviewSubmitted,
+    TicketLink,
 )
 from guildbotics.runtime.port import (
     SemanticReaction,
@@ -150,8 +151,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         body: str,
         *,
         draft: bool,
-        ticket_url: str,
-        closes: bool,
+        tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         repository = self.repository(repository)
         owner = repository.partition("/")[0]
@@ -171,8 +171,8 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         if existing:
             data, created = existing[0], False
         else:
-            if ticket_url:
-                body = await self._linked(repository, body, ticket_url, closes)
+            for ticket in tickets:
+                body = await self._linked(repository, body, ticket)
             data = (
                 await client.post(
                     endpoint,
@@ -195,31 +195,29 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             target=self.target(item, data),
         )
 
-    async def _linked(
-        self, repository: str, body: str, ticket_url: str, closes: bool
-    ) -> str:
-        """``body`` with the link to the ticket ``ticket_url``.
+    async def _linked(self, repository: str, body: str, ticket: TicketLink) -> str:
+        """``body`` with the link to ``ticket``.
 
         GitHub links, and closes on a merge, only an issue of the pull
         request's repository, by its number; another ticket is referred to by
         its URL.
 
         Raises:
-            ServiceNotFound: If ``ticket_url`` is this GitHub's address of no
+            ServiceNotFound: If the ticket's URL is this GitHub's address of no
                 issue that is there.
             ServiceUnsupported: If it is to close another ticket.
         """
-        ticket = self.item(ticket_url, "ticket") if self.serves(ticket_url) else None
-        if ticket is not None:
-            await self.fetch(ticket)
-            if ticket.repository.casefold() == repository.casefold():
-                return append_issue_link(body, ticket.number, closes=closes)
-        if closes:
+        url = ticket.url
+        issue = self.item(url, "ticket") if self.serves(url) else None
+        if issue is not None:
+            await self.fetch(issue)
+            if issue.repository.casefold() == repository.casefold():
+                return append_issue_link(body, issue.number, closes=ticket.closes)
+        if ticket.closes:
             raise ServiceUnsupported(
-                f"A merge into {repository} closes only an issue of it, not"
-                f" {ticket_url}."
+                f"A merge into {repository} closes only an issue of it, not {url}."
             )
-        return f"{body.rstrip()}\n\nRefs {ticket_url}".lstrip()
+        return f"{body.rstrip()}\n\nRefs {url}".lstrip()
 
     async def update_pull_request(
         self,

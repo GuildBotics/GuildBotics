@@ -1449,15 +1449,20 @@ def ticket_update(
     help="Pull request title.",
 )
 @_required_content_stdin_option
-@click.option("--issue-url", default="", help="Related ticket URL to link to the PR.")
+@click.option(
+    "--issue-url",
+    "issue_urls",
+    multiple=True,
+    help="Related ticket URL to link to the PR. May be repeated.",
+)
 @click.option(
     "--closes-issue/--refs-issue",
     "closes_issue",
     default=False,
     help=(
-        "When --issue-url is set, link the ticket so that merging the PR closes"
-        " it, or only refer to it. Defaults to referring; a code host that"
-        " cannot close the ticket on a merge refuses --closes-issue."
+        "Link every --issue-url ticket so that merging the PR closes it, or only"
+        " refer to it. Defaults to referring; a code host that cannot close one"
+        " of the tickets on a merge refuses --closes-issue."
     ),
 )
 @click.option(
@@ -1473,19 +1478,21 @@ def pr_create(
     head: str,
     base: str,
     title: str,
-    issue_url: str,
+    issue_urls: tuple[str, ...],
     closes_issue: bool,
     draft: str,
     output_format: str,
 ) -> _CommandWork:
     title = _validate_title(title)
-    if closes_issue and not issue_url.strip():
+    if not all(url.strip() for url in issue_urls):
+        raise click.UsageError("--issue-url must not be empty.")
+    if closes_issue and not issue_urls:
         raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
     return _code_hosting(
         person,
         lambda context: member_repository.pr_create(
-            context, repo, head, base, title, body, issue_url, draft, closes_issue
+            context, repo, head, base, title, body, issue_urls, draft, closes_issue
         ),
         evidence="pr_create",
         then=record_member_pr_create_event,

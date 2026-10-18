@@ -170,7 +170,6 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         frozenset(
             {
                 "git prepare",
-                "pr create",
                 "ticket comment",
                 "ticket update",
                 "ticket reaction add",
@@ -178,6 +177,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         ),
         _SCOPE,
     ),
+    "issue_urls": (SERVICE, frozenset({"pr create"}), _SCOPE),
     "pr_url": (
         SERVICE,
         frozenset(
