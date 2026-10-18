@@ -113,8 +113,7 @@ def pull_request(
             "reviewers": [],
             "reviews": [],
             "review_comments": [],
-            "ticket": None,
-            "closes": False,
+            "tickets": [],
             **fields,
         },
     )

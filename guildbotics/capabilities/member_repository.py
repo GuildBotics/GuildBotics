@@ -29,7 +29,7 @@ from guildbotics.capabilities.artifact_archive import (
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.entities.message import Message
-from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -159,7 +159,7 @@ async def pr_create(
     base: str,
     title: str,
     body: str,
-    ticket_url: str,
+    ticket_urls: Sequence[str],
     draft: str,
     closes: bool = False,
 ) -> dict[str, Any]:
@@ -170,8 +170,7 @@ async def pr_create(
         title,
         body,
         draft=draft == "true",
-        ticket_url=ticket_url,
-        closes=closes,
+        tickets=[TicketLink(url, closes) for url in ticket_urls],
     )
     return created.model_dump()
 

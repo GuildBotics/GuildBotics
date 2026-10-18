@@ -8,7 +8,7 @@ Whether a pull request's CI passes is the project's setting
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import IO, Any
@@ -30,6 +30,7 @@ from guildbotics.runtime.code_hosting_service import (
     ReplyWritten,
     ReviewCommentWritten,
     ReviewSubmitted,
+    TicketLink,
 )
 from guildbotics.runtime.port import (
     SemanticReaction,
@@ -122,7 +123,7 @@ class LocalCodeHostingService(CodeHostingService):
                 "merged": pull["merged"],
             }
             for ref, pull in store.items("pull_request")
-            if pull["ticket"] == ticket.url
+            if any(link["url"] == ticket.url for link in pull["tickets"])
         ]
 
     def _detail(self, ref: store.Ref, item: dict[str, Any]) -> dict[str, Any]:
@@ -229,8 +230,7 @@ class LocalCodeHostingService(CodeHostingService):
         body: str,
         *,
         draft: bool,
-        ticket_url: str,
-        closes: bool,
+        tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         base = base.strip() or await self.default_branch(repository)
         found = next(
@@ -243,7 +243,7 @@ class LocalCodeHostingService(CodeHostingService):
             None,
         )
         if found is None:
-            ticket = _linked(ticket_url, repository, closes)
+            links = [_linked(ticket, repository) for ticket in tickets]
             ref, number = store.new_ref("pull_request", repository)
             item = {
                 **items.new_item(number, title, body, self.person.person_id),
@@ -255,8 +255,7 @@ class LocalCodeHostingService(CodeHostingService):
                 "reviewers": [],
                 "reviews": [],
                 "review_comments": [],
-                "ticket": ticket,
-                "closes": closes and ticket is not None,
+                "tickets": links,
             }
             store.save(self.scope, ref, item)
         else:
@@ -280,7 +279,7 @@ class LocalCodeHostingService(CodeHostingService):
         ref = store.locate(url, "pull_request")
         item = store.load(ref)
         if drop_ticket_links:
-            item.update(ticket=None, closes=False)
+            item["tickets"] = []
         for key, value in (("body", body), ("title", title)):
             if value is not None:
                 item[key] = value
@@ -578,9 +577,9 @@ def _local_ticket(url: str) -> store.Ref | None:
     return store.locate(url, "ticket")
 
 
-def _linked(ticket_url: str, repository: str, closes: bool) -> str | None:
-    """The ticket a new pull request of ``repository`` refers to, as it keeps
-    it. A merge closes only a ticket of the repository's own.
+def _linked(ticket: TicketLink, repository: str) -> dict[str, Any]:
+    """The link to ``ticket`` a new pull request of ``repository`` keeps. A
+    merge closes only a ticket of the repository's own.
 
     Raises:
         ServiceNotFound: If it is a local ticket that is not there, or a local
@@ -588,18 +587,16 @@ def _linked(ticket_url: str, repository: str, closes: bool) -> str | None:
         ServiceUnsupported: If it is another repository's or another
             service's ticket, to be closed.
     """
-    if not ticket_url:
-        return None
-    ticket = _local_ticket(ticket_url)
-    if ticket is not None:
-        store.load(ticket)
-    if closes and (
-        ticket is None or store.tracker(ticket.place).get("repository") != repository
+    local = _local_ticket(ticket.url)
+    if local is not None:
+        store.load(local)
+    if ticket.closes and (
+        local is None or store.tracker(local.place).get("repository") != repository
     ):
         raise ServiceUnsupported(
-            f"A merge into {repository} closes only a ticket of it, not {ticket_url}."
+            f"A merge into {repository} closes only a ticket of it, not {ticket.url}."
         )
-    return ticket_url if ticket is None else ticket.url
+    return {"url": ticket.url if local is None else local.url, "closes": ticket.closes}
 
 
 def _at_head(url: str, head: str) -> tuple[store.Ref, dict[str, Any]]:

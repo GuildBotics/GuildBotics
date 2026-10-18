@@ -196,7 +196,7 @@ _NON_IDEMPOTENT_WRITERS = {
         m, REPO, "T", "B", False, human_approved=True
     ),
     "pr_create": lambda m: member_repository.pr_create(
-        m, REPO, "feature", "main", "T", "B", ISSUE, "false"
+        m, REPO, "feature", "main", "T", "B", [ISSUE], "false"
     ),
 }
 
@@ -1679,7 +1679,7 @@ async def test_ticket_update_refuses_what_is_no_issue_url(monkeypatch, url):
 # --------------------------------------------------------------------------- #
 
 
-async def _create(service, base="main", ticket_url="", draft="false", closes=False):
+async def _create(service, base="main", ticket_urls=(), draft="false", closes=False):
     return await member_repository.pr_create(
         _member(service),
         REPO,
@@ -1687,7 +1687,7 @@ async def _create(service, base="main", ticket_url="", draft="false", closes=Fal
         base,
         "Title",
         "Body",
-        ticket_url,
+        ticket_urls,
         draft,
         closes,
     )
@@ -1748,7 +1748,7 @@ async def test_pr_create_returns_the_open_pr_of_the_head_without_updating_it(
     github = _github().on("GET", f"/repos/{REPO}/pulls", [_pull(7, draft=False)])
     service = _service(github, monkeypatch)
 
-    result = await _create(service, ticket_url=ISSUE, draft="true")
+    result = await _create(service, ticket_urls=[ISSUE], draft="true")
 
     assert result == {
         "created": False,
@@ -1762,33 +1762,36 @@ async def test_pr_create_returns_the_open_pr_of_the_head_without_updating_it(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("ticket_url", "closes", "body"),
+    ("ticket_urls", "closes", "body"),
     [
-        (ISSUE, False, "Body\n\nRefs #42"),
-        (ISSUE, True, "Body\n\nCloses #42"),
+        ([ISSUE], False, "Body\n\nRefs #42"),
+        ([ISSUE], True, "Body\n\nCloses #42"),
+        # Each ticket gets its own line.
+        ([ISSUE, issue_url(43)], True, "Body\n\nCloses #42\n\nCloses #43"),
         # Another repository's issue, or another service's ticket, is
         # referred to by its URL.
         (
-            issue_url(5, "acme/other"),
+            [ISSUE, issue_url(5, "acme/other")],
             False,
-            f"Body\n\nRefs {issue_url(5, 'acme/other')}",
+            f"Body\n\nRefs #42\n\nRefs {issue_url(5, 'acme/other')}",
         ),
         (
-            "https://tickets.example.com/browse/OPS-7",
+            ["https://tickets.example.com/browse/OPS-7"],
             False,
             "Body\n\nRefs https://tickets.example.com/browse/OPS-7",
         ),
     ],
 )
-async def test_pr_create_links_the_ticket(monkeypatch, ticket_url, closes, body):
+async def test_pr_create_links_the_tickets(monkeypatch, ticket_urls, closes, body):
     github = (
         _github()
+        .on("GET", f"/repos/{REPO}/issues/43", _issue(43))
         .on("GET", "/repos/acme/other/issues/5", _issue(5))
         .on("POST", f"/repos/{REPO}/pulls", _pull(8))
     )
     service = _service(github, monkeypatch)
 
-    await _create(service, ticket_url=ticket_url, closes=closes)
+    await _create(service, ticket_urls=ticket_urls, closes=closes)
 
     assert github.bodies("POST", f"/repos/{REPO}/pulls")[0]["body"] == body
 
@@ -1816,7 +1819,9 @@ async def test_pr_create_refuses_a_ticket_it_cannot_close_before_opening(
     service = _service(github, monkeypatch)
 
     with pytest.raises(error):
-        await _create(service, ticket_url=ticket_url, closes=True)
+        # The repository's own issue first: one ticket it cannot close is
+        # enough to open nothing.
+        await _create(service, ticket_urls=[ISSUE, ticket_url], closes=True)
 
     assert github.writes == []
 
@@ -1828,7 +1833,7 @@ async def test_pr_create_outside_the_owner_is_refused_before_it_is_sent(monkeypa
 
     with pytest.raises(ServiceError, match="'acme'"):
         await member_repository.pr_create(
-            _member(service), "other/demo", "feature", "main", "T", "B", "", "false"
+            _member(service), "other/demo", "feature", "main", "T", "B", (), "false"
         )
 
     assert github.writes == []

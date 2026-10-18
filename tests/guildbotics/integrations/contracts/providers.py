@@ -2,7 +2,8 @@
 
 A provider's harness gives the code host and the tickets of one member, and
 what a contract cannot do through the ports: a branch on the remote, a new
-commit on it, an artifact of a commit, an assignment on the board. The
+commit on it, an artifact of a commit, an assignment on the board, a human's
+merge. The
 harness speaks as the ports do -- items by their URLs, comments and reviews by
 the ids their reads give -- and names its repository, its tracker, and a
 repository outside the member's scope by the paths its provider spells.
@@ -76,6 +77,9 @@ class Harness:
     assign: Callable[[str], None]
     #: Keep the CI artifact ``name`` of the commit ``sha``.
     artifact: Callable[[str, str, bytes], None]
+    #: A human merges the pull request ``url`` into its base, which closes the
+    #: tickets the code host links to be closed by it.
+    merge: Callable[[str], None]
     #: A ticket outside the member's scope, as the board's candidate.
     theirs: Task
     #: The id of its comment.
@@ -169,6 +173,19 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 
+    def merge(url: str) -> None:
+        ref = store.locate(url, "pull_request")
+        pull = store.load(ref)
+        pull.update(state="closed", merged=True, closed_at=store.now())
+        write(ref, pull)
+        for link in pull["tickets"]:
+            if link["closes"]:
+                closed = store.locate(link["url"], "ticket")
+                write(
+                    closed,
+                    {**store.load(closed), "state": "closed", "closed_at": store.now()},
+                )
+
     their_tracker = "other/team/tickets"
     tracker(their_tracker, None)
     theirs_ref = store.ref_of("ticket", their_tracker, 1)
@@ -218,6 +235,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         delete_branch,
         assign,
         artifact,
+        merge,
         Task(
             id=theirs_ref.url,
             url=theirs_ref.url,
@@ -269,6 +287,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.merge,
         Task(
             id=double.their_ticket,
             url=double.their_ticket,
@@ -313,6 +332,7 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.merge,
         Task(
             id=_THEIR_NODE,
             url=theirs,
@@ -349,6 +369,10 @@ def serve(double: GitHubDouble, monkeypatch) -> None:
 _THEIR_NODE = "THEIRS"
 _THEIR_COMMENT = "THEIRS_COMMENT"
 _ISSUE_LINK = re.compile(r"(?:Closes|Refs) #(\d+)")
+#: A line of a pull request's body that closes an issue on a merge.
+_CLOSING = re.compile(r"^Closes #(\d+)$", re.M)
+#: When the double closes something.
+_CLOSED_AT = "2026-07-10T01:00:00Z"
 
 
 class GitHubDouble:
@@ -395,6 +419,14 @@ class GitHubDouble:
             "workflow_run": {"id": 7, "head_sha": sha},
             "content": content,
         }
+
+    def merge(self, url: str) -> None:
+        """A human merges the pull request into the default branch: GitHub
+        closes the issues its body closes."""
+        pull = self.items[int(url.rsplit("/", 1)[1])]
+        pull.update(state="closed", merged_at=_CLOSED_AT, closed_at=_CLOSED_AT)
+        for number in _CLOSING.findall(pull["body"] or ""):
+            self.items[int(number)].update(state="closed", closed_at=_CLOSED_AT)
 
     def respond(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -478,7 +510,7 @@ class GitHubDouble:
             if method == "PATCH":
                 item.update(body)
                 if body.get("state") == "closed":
-                    item["closed_at"] = "2026-07-10T01:00:00Z"
+                    item["closed_at"] = _CLOSED_AT
             return item
         if match := re.fullmatch(r"/issues/(\d+)/labels(?:/(.+))?", route):
             return self._labels(method, int(match.group(1)), match.group(2), body)

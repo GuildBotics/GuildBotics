@@ -175,7 +175,7 @@ async def test_removing_a_label_the_ticket_does_not_carry_changes_nothing(member
 async def test_pull_request_work_reports_its_target(member):
     _remote_with("feature")
     created = await member_repository.pr_create(
-        member, REPOSITORY, "feature", "", "PR", "Body", "", "false"
+        member, REPOSITORY, "feature", "", "PR", "Body", (), "false"
     )
     url = created["target"]["url"]
     head = store.branch_tip(REPOSITORY, "feature")
@@ -354,10 +354,11 @@ async def test_task_completion_revalidates_what_the_run_answers_for(member):
     not the member's to make ready."""
     _remote_with("mine", "touched", "theirs")
     ticket_url = ticket(1)
-    mine = pull_request(2, "mine", author="aiko", ticket=ticket_url)
-    pull_request(3, "theirs", author="someone", ticket=ticket_url)
+    refers = [{"url": ticket_url, "closes": False}]
+    mine = pull_request(2, "mine", author="aiko", tickets=refers)
+    pull_request(3, "theirs", author="someone", tickets=refers)
     touched = pull_request(4, "touched", author="someone")
-    pull_request(5, "mine", author="aiko", ticket=ticket_url, state="closed")
+    pull_request(5, "mine", author="aiko", tickets=refers, state="closed")
 
     results = await member_repository.task_completion_readiness(
         member, ticket_url, [{"payload": {"pull_requests": [{"url": touched}]}}]

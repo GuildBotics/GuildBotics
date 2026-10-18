@@ -113,7 +113,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 async def test_issue_inspect_reads_a_local_ticket_and_the_prs_that_refer_to_it():
     member = local_member()
     url = ticket(1, title="Login", comments=[comment("someone", "it fails")])
-    pr = pull_request(2, "ticket/T-1", ticket=url)
+    pr = pull_request(2, "ticket/T-1", tickets=[{"url": url, "closes": False}])
     pull_request(3, "elsewhere")
 
     result = json.loads(await command("issue_inspect").main(member, url))

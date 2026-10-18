@@ -15,6 +15,7 @@ cannot do it at all.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import IO, Any
@@ -39,6 +40,15 @@ class GitCredential:
 
     username: str
     password: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class TicketLink:
+    """A ticket a pull request refers to, and whether merging the pull request
+    closes it."""
+
+    url: str
+    closes: bool
 
 
 class PullRequestHead(ReadModel):
@@ -148,16 +158,15 @@ class CodeHostingService(ABC):
         body: str,
         *,
         draft: bool,
-        ticket_url: str,
-        closes: bool,
+        tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         """Open a pull request, or return the open one of the same head and
         base. An empty ``base`` is the repository's default branch.
 
         Args:
-            ticket_url: A ticket the pull request refers to, if any.
-            closes: Whether merging it closes the ticket; a code host that
-                cannot link one that way raises ``ServiceUnsupported``.
+            tickets: The tickets the pull request refers to; a code host that
+                cannot link one of them to be closed by a merge raises
+                ``ServiceUnsupported`` before anything is written.
         """
         raise NotImplementedError
 

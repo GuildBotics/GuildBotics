@@ -11,6 +11,7 @@ import pytest
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.port import ServiceError, ServiceNotFound, WorkflowStatus
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
@@ -138,7 +139,7 @@ async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, 
     for branch, url in (("first", open_pull), ("second", merged)):
         double.branch(branch)
         await code.create_pull_request(
-            REPO, branch, "", branch, "", draft=False, ticket_url=url, closes=closes
+            REPO, branch, "", branch, "", draft=False, tickets=[TicketLink(url, closes)]
         )
     double.merge(next(u for u, p in double.pulls.items() if p["head"] == "second"))
     before = len(double.writes)
@@ -320,7 +321,7 @@ async def test_the_boards_closed_items_are_of_its_workspaces_repositories(
     double.branch("feature")
     pull = (
         await code.create_pull_request(
-            REPO, "feature", "", "Fix", "", draft=False, ticket_url="", closes=False
+            REPO, "feature", "", "Fix", "", draft=False, tickets=[]
         )
     ).target.url
     double.merge(pull)

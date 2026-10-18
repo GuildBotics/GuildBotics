@@ -275,8 +275,7 @@ async def test_a_ticket_operation_reaches_no_pull_request(board: Harness):
         "Feature",
         "",
         draft=False,
-        ticket_url="",
-        closes=False,
+        tickets=[],
     )
     url = pull.target.url
     written = await board.code.comment(url, "Hi")

@@ -154,11 +154,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member pr create --person <person> --repo <repository> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
-                "[--issue-url <url> [--closes-issue|--refs-issue]] [--draft true|false]",
+                "[--issue-url <url> ... [--closes-issue|--refs-issue]] [--draft true|false]",
                 "Open a PR, or return the existing open PR for the same head and base branches. "
-                "--issue-url links the ticket in the PR body as a reference, or with "
-                "--closes-issue so that merging the PR closes it; a code host that cannot "
-                "close that ticket on a merge refuses --closes-issue.",
+                "--issue-url, which may be repeated, links each ticket in the PR body as a "
+                "reference, or with --closes-issue so that merging the PR closes every one "
+                "of them; a code host that cannot close one of those tickets on a merge "
+                "refuses --closes-issue.",
             ),
             (
                 "guildbotics member pr update --person <person> --url <pr_url> "
@@ -378,8 +379,11 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When ticket work changed code, open or reuse a PR with `member pr "
-    "create`. Pass `--issue-url`, and add `--closes-issue` only when the ticket is "
-    "complete once this PR merges into the branch that receives its work. "
+    "create`. Pass `--issue-url` once for each ticket the PR works on, and add "
+    "`--closes-issue` only when every one of those tickets is complete once this PR "
+    "merges into the branch that receives its work. `--closes-issue` applies to all "
+    "of them, so with it link only the tickets the merge completes and refer to any "
+    "other on a standalone line in the body. "
     "A child ticket can therefore be closed by a PR to its parent's feature "
     "branch: pass the child with `--issue-url <child> --closes-issue` and refer to "
     "the parent ticket on a standalone line in the body. A PR from that feature "
