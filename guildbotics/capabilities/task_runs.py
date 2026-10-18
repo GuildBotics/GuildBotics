@@ -12,10 +12,12 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, cast
 
 from guildbotics.entities.task_run import (
+    TASK_RUN_COMPLETIONS,
     TASK_RUN_TERMINAL_STATES,
+    TaskRunCompletion,
     TaskRunExecutionMode,
     TaskRunRecord,
     TaskRunResult,
@@ -143,6 +145,8 @@ class RunStore:
         "git_publish",
         "issue_create",
     }
+    #: A PR whose checks the run awaits, recorded with the notice on it.
+    CHECKS_AWAITED_EVIDENCE: ClassVar[str] = "checks_awaited"
     TICKET_COMMENT_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
@@ -484,6 +488,14 @@ class RunStore:
             if isinstance(item, dict) and item.get("type")
         ]
 
+    def awaited_pull_requests(self, run_id: str) -> set[str]:
+        """The PRs whose checks the run awaits."""
+        return {
+            str(item["payload"].get("target", {}).get("url"))
+            for item in self.evidence(run_id)
+            if item["evidence_type"] == self.CHECKS_AWAITED_EVIDENCE
+        }
+
     def summaries_by_subject(self) -> dict[tuple[str, str], str]:
         """Map each ``(subject_id, person_id)`` to its latest completion summary."""
         latest: dict[tuple[str, str], tuple[str, str]] = {}
@@ -520,7 +532,7 @@ class RunStore:
             raise TaskRunError(f"Task run '{run_id}' is not completed.")
         result = _result_subject(record)
         status = result.status if result is not None else _public_status(record.status)
-        if status not in {"done", "asking", "blocked"}:
+        if status not in TASK_RUN_COMPLETIONS:
             raise TaskRunError(f"Task run '{run_id}' has invalid status '{status}'.")
         subject_type = result.subject_type if result is not None else "ticket"
         evidence = self.evidence(run_id)
@@ -631,6 +643,10 @@ class RunStore:
             if status == "asking":
                 return bool(present & self.CHAT_ASKING_EVIDENCE_TYPES)
             return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
+        if status == "awaiting_checks":
+            # The notice on each PR the run awaits, which their readiness
+            # admitted.
+            return self.CHECKS_AWAITED_EVIDENCE in present
         if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
             return False
         if status == "asking":
@@ -676,21 +692,17 @@ def _device_id() -> str:
 
 
 def _record_status(status: str) -> str:
-    if status == "done":
+    if status in {"done", "awaiting_checks"}:
         return "succeeded"
     if status in {"asking", "blocked"}:
         return "failed"
     raise TaskRunError(f"Task run has invalid status '{status}'.")
 
 
-def _result_status(status: str) -> Literal["done", "asking", "blocked"]:
-    if status == "done":
-        return "done"
-    if status == "asking":
-        return "asking"
-    if status == "blocked":
-        return "blocked"
-    raise TaskRunError(f"Task run has invalid status '{status}'.")
+def _result_status(status: str) -> TaskRunCompletion:
+    if status not in TASK_RUN_COMPLETIONS:
+        raise TaskRunError(f"Task run has invalid status '{status}'.")
+    return cast(TaskRunCompletion, status)
 
 
 def _result_subject(record: TaskRunRecord) -> TaskRunResult | None:

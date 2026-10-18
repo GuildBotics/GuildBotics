@@ -67,6 +67,15 @@ def test_reference_includes_standard_work_procedure():
     assert "### Standard work procedure" in text
     assert "Inspect first" in text
     assert "before publishing any code change" in text
+    # A turn in the isolated environment ends with its answer and stops what
+    # still runs there, so a background job's notice never arrives: a long
+    # verification is run to its end or polled for, never waited a fixed time.
+    assert "the completion notice of a background job never arrives" in text
+    assert "in the foreground with a timeout long enough" in text
+    assert "check for its completion marker at short intervals" in text
+    assert "Never wait a fixed time for it" in text
+    assert "never end the turn while it still runs" in text
+    assert "This covers only the commands you run inside the environment" in text
     assert "Stage with plain git" in text
     assert "Pass `--issue-url` once for each ticket the PR works on" in text
     assert (
@@ -98,6 +107,11 @@ def test_reference_includes_standard_work_procedure():
     assert "unless `readiness` is `ready`" in text
     assert "head must not be behind the current base" in text
     assert "checked head SHA must still be current" in text
+    # CI runs outside the environment: a ticket workflow run ends to await it
+    # and the patrol resumes the work, instead of waiting in the turn.
+    assert "In a ticket workflow run, do not wait for CI in the turn" in text
+    assert "`member task complete --status awaiting_checks`" in text
+    assert "the patrol resumes the work once the checks finish" in text
     # Observable-outcome principle: leave externally visible traces at the
     # work's entry point, and avoid duplicate / unwanted posts.
     assert "externally visible trace" in text

@@ -1,9 +1,10 @@
 """The local code host: repositories whose pull requests are files of the
 workspace (:mod:`.store`), and whose remote is a bare repository.
 
-Whether a pull request's CI passes is the project's setting
-``services.code_hosting_service.checks`` (``success``, the default, or
-``failure``): its one job, ``local``, runs once (attempt 1) on every head.
+A pull request's CI is one job, ``local``, run once (attempt 1) on every
+head. How it ends is the project's setting ``services.code_hosting_service.checks``:
+``success`` (the default), ``failure``, or ``pending``, which leaves it running
+until a conclusion is recorded for the head (:func:`.store.finish_checks`).
 """
 
 from __future__ import annotations
@@ -20,6 +21,14 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.local import items, store
+from guildbotics.integrations.pull_request_patrol import (
+    Comment,
+    PullRequest,
+    Review,
+    ReviewThread,
+    patrol,
+)
+from guildbotics.integrations.readiness import Freshness, readiness_of
 from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
@@ -51,8 +60,6 @@ from guildbotics.runtime.resources import (
 )
 from guildbotics.utils.i18n_tool import t
 
-_FEEDBACK = "pull_request_feedback"
-_REVIEW = "pull_request_review"
 #: The one job of a head's CI, and its one attempt.
 _JOB = "local"
 _ATTEMPT = 1
@@ -294,6 +301,8 @@ class LocalCodeHostingService(CodeHostingService):
             item, "review", self.person.person_id, body, verdict=verdict, commit=head
         )
         item["reviews"].append(review)
+        # A review answers the member's review request, as on every code host.
+        item["reviewers"] = [r for r in item["reviewers"] if r != self.person.person_id]
         store.save(self.scope, ref, item)
         return ReviewSubmitted(
             verdict=verdict, commit=head, url=None, target=items.target(ref, item)
@@ -385,86 +394,47 @@ class LocalCodeHostingService(CodeHostingService):
         head_sha = _head_sha(item)
         if not head_sha:
             raise ServiceError(f"{url} has no head commit.")
-        succeeds = self._checks == "success"
-        conclusion = "success" if succeeds else "failure"
-        result: dict[str, Any] = {
-            "target": items.target(ref, item).model_dump(),
-            "head_sha": head_sha,
-            "current_head_sha": head_sha,
-            "rollup": conclusion,
-            "checks": [
+        conclusion = store.checks(ref.place, head_sha) or self._checks
+        running = conclusion == "pending"
+        freshness = None
+        if item["state"] == "open":
+            base_sha = store.branch_tip(ref.place, item["base"])
+            if not base_sha:
+                raise ServiceError(
+                    f"The base branch '{item['base']}' of {url} is gone."
+                )
+            behind_by = store.git(
+                ref.place, "rev-list", "--count", f"{head_sha}..{base_sha}"
+            )
+            freshness = Freshness(base_sha, int(behind_by), base_sha)
+        failed = {
+            "job_id": f"{_JOB}@{_ATTEMPT}",
+            "name": _JOB,
+            "conclusion": conclusion,
+            "url": "",
+            "artifact_names": store.artifacts(ref.place, head_sha),
+            "log": "",
+            "log_bytes": 0,
+            "tail_limit_bytes": log_tail_bytes,
+            "truncated": False,
+        }
+        return readiness_of(
+            target=items.target(ref, item),
+            head_sha=head_sha,
+            current_head_sha=head_sha,
+            checks=[
                 {
                     "name": _JOB,
-                    "status": "completed",
-                    "conclusion": conclusion,
+                    "status": "in_progress" if running else "completed",
+                    "conclusion": None if running else conclusion,
                     "details_url": "",
                 }
             ],
-            "checks_expected": False,
-        }
-        if failed_logs:
-            result["failed_logs"] = (
-                []
-                if succeeds
-                else [
-                    {
-                        "job_id": f"{_JOB}@{_ATTEMPT}",
-                        "name": _JOB,
-                        "conclusion": "failure",
-                        "url": "",
-                        "artifact_names": store.artifacts(ref.place, head_sha),
-                        "log": "",
-                        "log_bytes": 0,
-                        "tail_limit_bytes": log_tail_bytes,
-                        "truncated": False,
-                    }
-                ]
-            )
-        if item["state"] != "open":
-            return Readiness.model_validate(
-                {
-                    **result,
-                    "base_sha": None,
-                    "behind_by": None,
-                    "out_of_date": None,
-                    "current_base_sha": None,
-                    "readiness": "not_applicable",
-                    "completion_blockers": [],
-                }
-            )
-        base_sha = store.branch_tip(ref.place, item["base"])
-        if not base_sha:
-            raise ServiceError(f"The base branch '{item['base']}' of {url} is gone.")
-        behind_by = int(
-            store.git(ref.place, "rev-list", "--count", f"{head_sha}..{base_sha}")
-        )
-        blockers = []
-        if behind_by:
-            blockers.append(
-                {
-                    "code": "base_out_of_date",
-                    "message": f"The PR head is {behind_by} commit(s) behind its base.",
-                    "next_action": "Merge or rebase the base branch, push, and check again.",
-                }
-            )
-        if not succeeds:
-            blockers.append(
-                {
-                    "code": "checks_failed",
-                    "message": "CI checks are failing.",
-                    "next_action": "Fix the failures and check again.",
-                }
-            )
-        return Readiness.model_validate(
-            {
-                **result,
-                "base_sha": base_sha,
-                "behind_by": behind_by,
-                "out_of_date": behind_by > 0,
-                "current_base_sha": base_sha,
-                "readiness": "blocked" if blockers else "ready",
-                "completion_blockers": blockers,
-            }
+            checks_expected=False,
+            freshness=freshness,
+            failed_logs=(
+                ([failed] if conclusion == "failure" else []) if failed_logs else None
+            ),
         )
 
     async def open_pull_requests(self, repository: str, branch: str) -> list[str]:
@@ -526,44 +496,94 @@ class LocalCodeHostingService(CodeHostingService):
         return [
             task
             for ref, pull in store.items("pull_request")
-            if (task := self._pull_request_work(ref, pull)) is not None
+            if (task := await self._patrol(ref, pull)) is not None
         ]
 
     async def refresh_pull_request(self, task: Task) -> Task | None:
         assert task.pull_request_url
         ref = store.locate(task.pull_request_url, "pull_request")
-        return self._pull_request_work(ref, store.load(ref))
+        return await self._patrol(ref, store.load(ref))
 
-    def _pull_request_work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
-        """Feedback the author has not answered, or a requested review of a
-        head the member has not reviewed."""
-        if item["state"] != "open" or item["draft"]:
-            return None
-        me = self.person.person_id
-        said = sorted(
-            (
-                entry
-                for key in ("comments", "reviews", "review_comments")
-                for entry in item[key]
-            ),
-            key=lambda said: said["created_at"],
+    async def _patrol(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
+        async def draft() -> None:
+            pull = store.load(ref)
+            pull["draft"] = True
+            store.save(self.scope, ref, pull)
+
+        return await patrol(
+            self,
+            _snapshot(ref, item),
+            self.person.person_id,
+            provider="local",
+            person_id=self.person.person_id,
+            draft=draft,
         )
-        if item["author"] == me:
-            work = _FEEDBACK if said and said[-1]["author"] != me else None
-        else:
-            reviewed = {r["commit"] for r in item["reviews"] if r["author"] == me}
-            needed = me in item["reviewers"] and _head_sha(item) not in reviewed
-            work = _REVIEW if needed else None
-        if work is None:
-            return None
-        return items.task(
-            ref,
-            item,
-            status=Task.IN_PROGRESS,
-            assignee=me,
-            pull_request_url=ref.url,
-            trigger_reason=work,
+
+
+def _snapshot(ref: store.Ref, item: dict[str, Any]) -> PullRequest:
+    """The pull request as the patrol sees it. An inline comment is a review
+    of the commit it is on: a root one stands alone, a reply only answers."""
+    reviews = [
+        Review(
+            author=review["author"],
+            body=review["body"],
+            submitted_at=review["created_at"],
+            commit_oid=review["commit"],
+            reply_only=False,
+            reactors=_reactors(review),
         )
+        for review in item["reviews"]
+    ] + [
+        Review(
+            author=comment["author"],
+            body="",
+            submitted_at=comment["created_at"],
+            commit_oid=comment["commit"],
+            reply_only=comment["in_reply_to"] is not None,
+            reactors=frozenset(),
+        )
+        for comment in item["review_comments"]
+    ]
+    return PullRequest(
+        id=ref.url,
+        label=ref.label,
+        url=ref.url,
+        title=item["title"],
+        body=item["body"],
+        open=item["state"] == "open",
+        is_draft=item["draft"],
+        created_at=item["created_at"],
+        author=item["author"],
+        head_oid=_head_sha(item),
+        # No human marks a local pull request ready for review.
+        ready_at="",
+        requested_reviewers=frozenset(item["reviewers"]),
+        reviews=tuple(sorted(reviews, key=lambda review: review.submitted_at)),
+        comments=tuple(
+            Comment(
+                author=comment["author"],
+                created_at=comment["created_at"],
+                reactors=_reactors(comment),
+                status=WorkflowStatus.from_payload(comment.get("status")),
+            )
+            for comment in item["comments"]
+        ),
+        threads=tuple(
+            ReviewThread(
+                # No local file keeps a thread resolved.
+                resolved=False,
+                participants=frozenset(comment["author"] for comment in comments),
+                last_author=comments[-1]["author"],
+                last_created_at=comments[-1]["created_at"],
+                last_reactors=_reactors(comments[-1]),
+            )
+            for _, comments in _threads(item)
+        ),
+    )
+
+
+def _reactors(entry: dict[str, Any]) -> frozenset[str]:
+    return frozenset(reaction["author"] for reaction in entry.get("reactions", []))
 
 
 def _local_ticket(url: str) -> store.Ref | None:

@@ -174,9 +174,10 @@ Trust rules that follow from this shape:
 - The workflow does not trust the agent's natural-language stdout as the result. Only
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
-- Ticket completion with `status=done` resolves the pull requests the run pushed to or opened
-  (run evidence) plus, when the member authored them, the ticket PR and the code host's PRs
-  that refer to the ticket (`ticket_pull_requests`), then revalidates each open PR against the code host's current state;
+- Ticket completion with `status=done` resolves the pull requests the run wrote to (run
+  evidence), the ticket PR, and the code host's PRs that refer to the ticket
+  (`ticket_pull_requests`), each only when the member authored it (the patrol resumes a
+  member only for its own PRs), then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
   remains pending, the head does not contain the current base, or the head/base changes
@@ -266,8 +267,8 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
   request asks something of a member (`integrations/pull_request_patrol.py`), whether a
   head may be reported complete (`integrations/readiness.py`), and whether an assigned
   ticket is a member's work now (`integrations/ticket_selection.py`) by applying these
-  shared rules to the snapshots they read; the services keep only their own data. The
-  reference provider `local` keeps its own simpler rules by design.
+  shared rules to the snapshots they read; the services keep only their own data, and
+  the reference provider `local` goes through the same rules.
 
 `branvil` (`integrations/branvil/`) is a code host and tickets of a
 [Branvil](branvil_integration.en.md) service that every machine reaches at the same
@@ -306,7 +307,12 @@ purpose:
   ticket, and the status comment of a failed or rate-limited run. The patrol selects
   outside any trace and dispatches each candidate in turn; a scheduled or manual run,
   or a routine that names the workflow with arguments, takes the ticket the patrol
-  would take next. The workflow only runs the turn.
+  would take next. The workflow only runs the turn. A turn does not wait for CI: when
+  pending checks are all that blocks completion, the member ends the run with
+  `member task complete --status awaiting_checks`, which leaves an `awaiting_checks`
+  status on each such PR; the patrol starts a `pull_request_checks` run once the checks
+  settle or the head moves, and `TicketSelector.run` ends that wait with a
+  `checks_settled` status unless the resumed run awaits the checks again.
 - **Manual runs**: a command a person starts runs inside one boundary, whether the
   Desktop runs it (`AppRuntime._execute_command`) or a local `guildbotics run` does
   (`cli/run.py`): a `manual` trace, `TaskRunCoordinator.track_work(source="manual")`

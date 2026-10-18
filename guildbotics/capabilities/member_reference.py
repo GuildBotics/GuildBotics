@@ -336,9 +336,10 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member task complete --person <person> "
-                "--status done|asking|blocked --content-file <file>",
+                "--status done|asking|blocked|awaiting_checks --content-file <file>",
                 "Finish the ticket workflow run on its ticket with evidence, "
-                "revalidating affected PR readiness before accepting done.",
+                "revalidating affected PR readiness before accepting done, or end "
+                "it to await the PRs' pending checks, which resume it.",
             ),
             (
                 "guildbotics member task status --person <person>",
@@ -376,6 +377,15 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     'code change. When one fails, never stop at "unrelated to this change": '
     "identify the cause, write the issue draft it deserves, and hand that draft to "
     "the requester for a decision instead of registering it or fixing it yourself.",
+    "Inside a workflow or delegated command's isolated environment, the turn ends "
+    "with your final answer, and whatever still runs in the environment stops with "
+    "it: the completion notice of a background job never arrives. Run a long "
+    "verification command (tests, builds, linters) in the foreground with a timeout "
+    "long enough for it to finish, or start it in the background and check for its "
+    "completion marker at short intervals until it appears. Never wait a fixed time "
+    "for it, and never end the turn while it still runs. This covers only the "
+    "commands you run inside the environment; CI runs outside it and is covered "
+    "below.",
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When ticket work changed code, open or reuse a PR with `member pr "
@@ -412,7 +422,11 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "available for inspection. `rollup=no_checks` is visible and does not block a "
     "repository whose base also has no checks; if the base has checks, an empty head is "
     "treated as registration pending. If an unrelated failure or an unavailable "
-    "check blocks completion, follow the failure-handling rule above and report that blocker.",
+    "check blocks completion, follow the failure-handling rule above and report that blocker. "
+    "In a ticket workflow run, do not wait for CI in the turn: when pending checks "
+    "(`checks_pending`) are the only blocker left, finish the run with `member task "
+    "complete --status awaiting_checks`, and the patrol resumes the work once the "
+    "checks finish or the head moves.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating ticket or PR for ticket-driven work, the review thread or PR "

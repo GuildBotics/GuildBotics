@@ -65,6 +65,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.drivers.context import resolve_member_context
+from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.factory import chat_provider_name
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -1788,8 +1789,11 @@ def task() -> None:
 @click.option(
     "--status",
     required=True,
-    type=click.Choice(["done", "asking", "blocked"]),
-    help="Run outcome.",
+    type=click.Choice(TASK_RUN_COMPLETIONS),
+    help=(
+        "Run outcome. awaiting_checks ends the run to await its PRs' pending "
+        "checks; the patrol resumes the work once they settle."
+    ),
 )
 @_required_content_stdin_option
 @_json_format_option
@@ -1805,15 +1809,20 @@ async def _task_complete(
     context, _ = _resolve(person)
     store = TaskRunStore()
     readiness: list[dict[str, Any]] = []
-    if status == "done":
+    if status in {"done", "awaiting_checks"}:
         try:
-            readiness = await member_repository.task_completion_readiness(
-                context, ticket_url, store.evidence(run_id)
-            )
+            if status == "done":
+                readiness = await member_repository.task_completion_readiness(
+                    context, ticket_url, store.evidence(run_id)
+                )
+            else:
+                readiness = await member_repository.await_checks(
+                    context, ticket_url, run_id, store
+                )
         finally:
             await context.aclose()
     payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
-    if status == "done":
+    if status in {"done", "awaiting_checks"}:
         payload["pr_readiness"] = readiness
     return payload
 

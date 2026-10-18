@@ -1345,6 +1345,7 @@ describe("ActivityHistoryPage", () => {
     ["retry_scheduled", "Retry scheduled", "activity-session-status-retry_scheduled"],
     ["abandoned", "Abandoned", "activity-session-status-abandoned"],
     ["incomplete", "Incomplete", "activity-session-status-incomplete"],
+    ["awaiting_checks", "Waiting for CI", "activity-session-status-awaiting_checks"],
   ] as const)(
     "shows a %s badge and tinted bar for a dispatch/completion status session",
     async (status, label, cssClass) => {

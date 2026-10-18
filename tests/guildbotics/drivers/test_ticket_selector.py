@@ -6,6 +6,7 @@ workflow only runs the AI CLI turn with the input selected here.
 
 import pytest
 
+from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.entities.task import Task
 from guildbotics.runtime.member_invocation import Work
@@ -468,3 +469,93 @@ def test_ticket_trace_attributes_for_ticket_and_pull_request():
         "target.title": "T",
         "target.url": pr_url,
     }
+
+
+def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
+    task = Task(
+        id=pull,
+        url=pull,
+        title="Pull request 2",
+        description="",
+        status=Task.IN_PROGRESS,
+        pull_request_url=pull,
+        trigger_reason=trigger,
+    )
+    return WorkflowInvocation(
+        command="workflows/ticket_driven_workflow",
+        person_id="aiko",
+        source="routine",
+        trigger_type="ticket",
+        payload={
+            "task": task.model_dump(),
+            "ticket_url": pull,
+            "pull_request_url": pull,
+            "trigger_reason": trigger,
+        },
+        work=Work.of_ticket(pull),
+    )
+
+
+def _completing(status: str, awaited: tuple[str, ...] = ()):
+    """A run whose member completes with ``status``, awaiting the checks of
+    the PRs ``awaited``."""
+
+    async def run_workflow(invocation: WorkflowInvocation) -> str:
+        store = TaskRunStore()
+        store.append_evidence(invocation.run_id, "pr_comment", {"id": "comment-1"})
+        for url in awaited:
+            store.append_evidence(
+                invocation.run_id, "checks_awaited", {"target": {"url": url}}
+            )
+        store.complete(
+            invocation.run_id, status, "summary", invocation.work.identity, "aiko"
+        )
+        return status
+
+    return run_workflow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trigger", "status", "awaits", "settled"),
+    [
+        ("pull_request_checks", "done", (), True),
+        ("pull_request_checks", "asking", (), True),
+        ("pull_request_checks", "awaiting_checks", ("resumed",), False),
+        ("pull_request_checks", "awaiting_checks", ("resumed", "other"), False),
+        # The run awaits another PR only: the resumed PR's wait is over.
+        ("pull_request_checks", "awaiting_checks", ("other",), True),
+        ("pull_request_feedback", "done", (), False),
+    ],
+)
+async def test_a_run_resumed_for_checks_ends_their_wait(
+    trigger, status, awaits, settled
+):
+    """Whatever the resumed run wrote on the PR, the host ends the wait with
+    a notice of its own, unless the run awaits that PR's checks again."""
+    context = _Context()
+    pull = pull_request(2, "feature", author="aiko")
+    other = pull_request(3, "other", author="aiko")
+    awaited = tuple({"resumed": pull, "other": other}[name] for name in awaits)
+    selector = TicketSelector(context)  # type: ignore[arg-type]
+
+    with trace_scope("routine", trace_id="trace-5", person_id="aiko"):
+        result = await selector.run(  # type: ignore[arg-type]
+            context.person,
+            _checks_invocation(pull, trigger),
+            _completing(status, awaited),
+        )
+
+    assert result == status
+    assert _statuses(pull) == (
+        [
+            WorkflowStatus(
+                reason="checks_settled",
+                person_id="aiko",
+                run_id="trace-5",
+                subject=pull,
+            )
+        ]
+        if settled
+        else []
+    )

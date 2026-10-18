@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  Hourglass,
   CircleDot,
   Clock3,
   ExternalLink,
@@ -74,8 +75,15 @@ import { traceStatusColor } from "../traceStatus";
 // (issue #313): a session can look identical to a successful one (clean
 // provider span) while actually waiting on a retry, permanently abandoned, or
 // missing its completion evidence. These need their own visual state so
-// Activity History does not show them as ordinary completed sessions.
-const STATUS_ALERT_PRIORITY = ["abandoned", "incomplete", "retry_scheduled"] as const;
+// Activity History does not show them as ordinary completed sessions. A run
+// that ended to await its PR's checks (#10) is no failure, but neither is its
+// work done, so it gets the same treatment, below every problem.
+const STATUS_ALERT_PRIORITY = [
+  "abandoned",
+  "incomplete",
+  "retry_scheduled",
+  "awaiting_checks",
+] as const;
 type StatusAlert = (typeof STATUS_ALERT_PRIORITY)[number];
 
 function sessionStatusAlert(status: string): StatusAlert | null {
@@ -765,6 +773,9 @@ function ActivityBlockBar({
     : block.status_alert
       ? `activity-session-status-${block.status_alert}`
       : "";
+  // Waiting for CI is no problem to look into, so it shows a wait, not an alert.
+  const StatusIcon =
+    !block.rate_limit && block.status_alert === "awaiting_checks" ? Hourglass : CircleAlert;
   const rateLimitReset = block.rate_limit ? formatRateLimitReset(block.rate_limit) : "";
   const ariaLabel = block.rate_limit
     ? `${t("activity.rateLimit.label")}: ${block.title}${
@@ -787,7 +798,7 @@ function ActivityBlockBar({
           }}
         >
           {block.rate_limit || block.status_alert ? (
-            <CircleAlert className="activity-session-alert-icon" size={13} aria-hidden="true" />
+            <StatusIcon className="activity-session-alert-icon" size={13} aria-hidden="true" />
           ) : null}
           <span>{block.title}</span>
         </button>

@@ -424,6 +424,12 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         assert "`readiness`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language
+        # Pending checks end the run instead of a wait in the turn, and the
+        # run the patrol resumes for them reports its outcome on the PR.
+        assert "done|asking|blocked|awaiting_checks" in body, language
+        assert "`checks_pending`" in body, language
+        assert "`pull_request_checks`" in body, language
+        assert "`pr comment`" in body, language
 
 
 def test_issue_comment_contract_not_in_chat_prompt():

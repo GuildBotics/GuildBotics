@@ -27,9 +27,19 @@ host records it, so every reviewer starts a new count; nothing else is stored.
 A review-limit notice by any member also counts as that point, so a PR
 announced before the limit made it a draft resumes too.
 
-Workflow status notices (rate limit, failure, review limit) are neither
-statements nor answers: they only suppress selection or mark the limit. A
-human marking the PR ready for review also ends every earlier hold.
+Checks role (``pull_request_checks``): the member's run on its own PR stopped
+to await the head's checks (its latest status notice there is
+``awaiting_checks``), and they have settled -- no ``checks_pending`` blocker
+is left -- or the head moved past the one it awaited. The wait lasts until the
+member's next status notice on the PR: a later wait, a failure, or the notice
+the host leaves when the resumed run ends otherwise
+(:func:`checks_settled`), so no comment a run writes or leaves out can end it
+early or keep it forever.
+
+Workflow status notices (rate limit, failure, review limit, awaiting and
+settled checks) are neither statements nor answers: they only suppress
+selection, mark the limit, or await the checks. A human marking the PR ready for review also ends
+every earlier hold.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
 PR into their own hands, and the code host leaves drafts out of the patrol
@@ -45,7 +55,7 @@ from dataclasses import dataclass
 
 from guildbotics.entities import Task
 from guildbotics.runtime.code_hosting_service import CodeHostingService
-from guildbotics.runtime.port import WorkflowStatus, WorkflowStatusReason
+from guildbotics.runtime.port import ServiceError, WorkflowStatus, WorkflowStatusReason
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.timestamps import parse_iso_datetime
 
@@ -53,6 +63,9 @@ FEEDBACK = "pull_request_feedback"
 REVIEW = "pull_request_review"
 REVIEW_LIMIT = "pull_request_review_limit"
 REVIEW_LIMIT_REASON: WorkflowStatusReason = "review_limit"
+CHECKS = "pull_request_checks"
+AWAITING_CHECKS_REASON: WorkflowStatusReason = "awaiting_checks"
+CHECKS_SETTLED_REASON: WorkflowStatusReason = "checks_settled"
 MAX_REVIEW_ROUNDS = 3
 
 _LOGGER = logging.getLogger(__name__)
@@ -288,6 +301,50 @@ def pull_request_work(pr: PullRequest, me: str) -> str | None:
     return _review_work(pr, me)
 
 
+def _awaited_checks(pr: PullRequest, me: str) -> WorkflowStatus | None:
+    """The checks the member's run on its own open PR stopped to await: its
+    latest status notice there says so; ``None`` otherwise. A rate limit
+    that has reset no longer stands between: the run it stopped was resumed
+    for the checks, which it must be again."""
+    notices = [
+        comment.status
+        for comment in pr.comments
+        if comment.author == me
+        and comment.status is not None
+        and (
+            comment.status.reason != "rate_limited" or comment.status.holds_selection()
+        )
+    ]
+    if (
+        not notices
+        or notices[-1].reason != AWAITING_CHECKS_REASON
+        or pr.author != me
+        or not pr.open
+        or pr.is_draft
+        or not pr.head_oid
+    ):
+        return None
+    return notices[-1]
+
+
+async def _checks_settled(
+    code: CodeHostingService, pr: PullRequest, awaited: WorkflowStatus
+) -> bool:
+    """Whether what the run awaits is over: the head moved, or the code host
+    no longer reports its checks pending. A read that fails tells nothing, so
+    the next patrol asks again."""
+    if pr.head_oid != awaited.head:
+        return True
+    try:
+        readiness = await code.readiness(pr.url)
+    except ServiceError as exc:
+        _LOGGER.warning(f"Could not read the checks of {pr.url}: {exc}")
+        return False
+    return all(
+        blocker.code != "checks_pending" for blocker in readiness.completion_blockers
+    )
+
+
 async def patrol(
     code: CodeHostingService,
     pr: PullRequest,
@@ -298,7 +355,9 @@ async def patrol(
     draft: Callable[[], Awaitable[object]],
 ) -> Task | None:
     """The task *pr* is for the member *me*; one at the re-review limit is
-    handed over instead (:func:`hand_over_at_review_limit`).
+    handed over instead (:func:`hand_over_at_review_limit`). Only the checks
+    role reads the code host beyond the snapshot, and only for a PR whose
+    member awaits its checks at the head the snapshot has.
 
     Args:
         code: The code host the PR is on.
@@ -310,7 +369,10 @@ async def patrol(
     """
     work = pull_request_work(pr, me)
     if work is None:
-        return None
+        awaited = _awaited_checks(pr, me)
+        if awaited is None or not await _checks_settled(code, pr, awaited):
+            return None
+        work = CHECKS
     if work == REVIEW_LIMIT:
         await hand_over_at_review_limit(code, pr.url, person_id, draft)
         return None
@@ -364,5 +426,46 @@ async def hand_over_at_review_limit(
         notice,
         status=WorkflowStatus(
             reason=reason, person_id=person_id, run_id="", subject=url
+        ),
+    )
+
+
+async def await_checks(
+    code: CodeHostingService,
+    url: str,
+    *,
+    person_id: str,
+    run_id: str,
+    subject: str,
+    head: str,
+) -> None:
+    """Say on the PR that the member's run stopped to await the checks of
+    ``head``; the patrol resumes the member once they settle."""
+    await code.comment(
+        url,
+        t("integrations.pull_request_patrol.awaiting_checks"),
+        status=WorkflowStatus(
+            reason=AWAITING_CHECKS_REASON,
+            person_id=person_id,
+            run_id=run_id,
+            subject=subject,
+            head=head,
+        ),
+    )
+
+
+async def checks_settled(
+    code: CodeHostingService, url: str, *, person_id: str, run_id: str
+) -> None:
+    """End the wait on the PR: the run resumed for its checks ended without
+    awaiting them again."""
+    await code.comment(
+        url,
+        t("integrations.pull_request_patrol.checks_settled"),
+        status=WorkflowStatus(
+            reason=CHECKS_SETTLED_REASON,
+            person_id=person_id,
+            run_id=run_id,
+            subject=url,
         ),
     )

@@ -33,7 +33,9 @@ SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
     "support",
 )
 
-WorkflowStatusReason = Literal["failed", "rate_limited", "review_limit"]
+WorkflowStatusReason = Literal[
+    "failed", "rate_limited", "review_limit", "awaiting_checks", "checks_settled"
+]
 #: What a status's payload names itself, and how it asks to be routed: what
 #: carries a status is never work.
 _STATUS_KIND = "workflow_error"
@@ -62,6 +64,8 @@ class WorkflowStatus(BaseModel):
     retry_after_at: str = ""
     #: The provider's own words for that, if any.
     retry_after_text: str = ""
+    #: The pull request head whose checks a run that awaits them stopped at.
+    head: str = ""
 
     def payload(self) -> dict[str, str]:
         """The status as its carriers write it: the fields it has, marked as a
@@ -83,7 +87,8 @@ class WorkflowStatus(BaseModel):
     def holds_selection(self, now: datetime | None = None) -> bool:
         """Whether the work stays out of selection: a failure until someone
         speaks again, a rate limit until its reset (or for good when the reset
-        is not known)."""
+        is not known). A wait for checks, and its end, hold nothing: what the
+        run awaits resumes it (:mod:`guildbotics.integrations.pull_request_patrol`)."""
         if self.reason == "failed":
             return True
         if self.reason != "rate_limited":
