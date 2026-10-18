@@ -496,12 +496,17 @@ def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
     )
 
 
-def _completing(status: str):
-    """A run whose member completes with ``status``."""
+def _completing(status: str, awaited: tuple[str, ...] = ()):
+    """A run whose member completes with ``status``, awaiting the checks of
+    the PRs ``awaited``."""
 
     async def run_workflow(invocation: WorkflowInvocation) -> str:
         store = TaskRunStore()
         store.append_evidence(invocation.run_id, "pr_comment", {"id": "comment-1"})
+        for url in awaited:
+            store.append_evidence(
+                invocation.run_id, "checks_awaited", {"target": {"url": url}}
+            )
         store.complete(
             invocation.run_id, status, "summary", invocation.work.identity, "aiko"
         )
@@ -512,24 +517,33 @@ def _completing(status: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("trigger", "status", "settled"),
+    ("trigger", "status", "awaits", "settled"),
     [
-        ("pull_request_checks", "done", True),
-        ("pull_request_checks", "asking", True),
-        ("pull_request_checks", "awaiting_checks", False),
-        ("pull_request_feedback", "done", False),
+        ("pull_request_checks", "done", (), True),
+        ("pull_request_checks", "asking", (), True),
+        ("pull_request_checks", "awaiting_checks", ("resumed",), False),
+        ("pull_request_checks", "awaiting_checks", ("resumed", "other"), False),
+        # The run awaits another PR only: the resumed PR's wait is over.
+        ("pull_request_checks", "awaiting_checks", ("other",), True),
+        ("pull_request_feedback", "done", (), False),
     ],
 )
-async def test_a_run_resumed_for_checks_ends_their_wait(trigger, status, settled):
+async def test_a_run_resumed_for_checks_ends_their_wait(
+    trigger, status, awaits, settled
+):
     """Whatever the resumed run wrote on the PR, the host ends the wait with
-    a notice of its own, unless the run awaits the checks again."""
+    a notice of its own, unless the run awaits that PR's checks again."""
     context = _Context()
     pull = pull_request(2, "feature", author="aiko")
+    other = pull_request(3, "other", author="aiko")
+    awaited = tuple({"resumed": pull, "other": other}[name] for name in awaits)
     selector = TicketSelector(context)  # type: ignore[arg-type]
 
     with trace_scope("routine", trace_id="trace-5", person_id="aiko"):
         result = await selector.run(  # type: ignore[arg-type]
-            context.person, _checks_invocation(pull, trigger), _completing(status)
+            context.person,
+            _checks_invocation(pull, trigger),
+            _completing(status, awaited),
         )
 
     assert result == status

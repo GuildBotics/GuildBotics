@@ -219,16 +219,16 @@ class TicketSelector:
 
 
 async def _settle_checks(context: Context, task: Task, run_id: str) -> None:
-    """End the wait a run resumed for its PR's checks answered, unless the
-    run awaits them again: the wait is the member's latest status notice on
-    the PR, and whatever the run itself wrote there, it would resume the
-    member on every patrol."""
+    """End the wait on the PR a run was resumed for, unless the run awaits
+    that PR's checks again: the wait is the member's latest status notice on
+    the PR, and whatever the run itself wrote there, or awaited elsewhere, it
+    would resume the member on every patrol."""
     if task.trigger_reason != pull_request_patrol.CHECKS or not task.pull_request_url:
         return
     # Like a failure's notice, this one cannot fail the run that ended: the
     # wait it leaves resumes the member on the next patrol instead.
     with suppress(Exception):
-        if RunStore().status(run_id).status == "awaiting_checks":
+        if task.pull_request_url in RunStore().awaited_pull_requests(run_id):
             return
         await pull_request_patrol.checks_settled(
             context.get_code_hosting_service(),

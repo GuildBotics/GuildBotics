@@ -17,6 +17,7 @@ import pytest
 
 from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.errors import MemberCapabilityError
+from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.integrations.local import store
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
@@ -329,19 +330,25 @@ async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
 
 @pytest.mark.asyncio
 async def test_task_completion_revalidates_what_the_run_answers_for(member):
-    """The PRs the run touched, and those that refer to the member's ticket
-    and the member wrote; a PR of someone else's that the run did not touch is
-    not the member's to make ready."""
+    """The PRs the run touched and those that refer to the member's ticket,
+    when the member wrote them; a PR of someone else's is not the member's to
+    make ready, whether the run touched it or not."""
     remote_with("mine", "touched", "theirs")
     ticket_url = ticket(1)
     refers = [{"url": ticket_url, "closes": False}]
     mine = pull_request(2, "mine", author="aiko", tickets=refers)
     pull_request(3, "theirs", author="someone", tickets=refers)
-    touched = pull_request(4, "touched", author="someone")
+    touched = pull_request(4, "touched", author="aiko")
     pull_request(5, "mine", author="aiko", tickets=refers, state="closed")
+    reviewed = pull_request(6, "theirs", author="someone")
 
     results = await member_repository.task_completion_readiness(
-        member, ticket_url, [{"payload": {"pull_requests": [{"url": touched}]}}]
+        member,
+        ticket_url,
+        [
+            {"payload": {"pull_requests": [{"url": touched}]}},
+            {"payload": {"target": {"kind": "pull_request", "url": reviewed}}},
+        ],
     )
 
     assert [result["target"]["url"] for result in results] == [mine, touched]
@@ -354,7 +361,7 @@ async def test_task_completion_takes_the_pull_requests_the_run_wrote_to(member):
     request to make ready."""
     remote_with("touched")
     ticket_url = ticket(1)
-    touched = pull_request(2, "touched", author="someone")
+    touched = pull_request(2, "touched", author="aiko")
 
     results = await member_repository.task_completion_readiness(
         member,
@@ -402,6 +409,15 @@ async def test_task_completion_refuses_a_blocked_pull_request():
         await member_repository.task_completion_readiness(failing, url, [])
 
 
+def _run(*evidence: dict) -> TaskRunStore:
+    """The ticket run ``run-1``, with the evidence it recorded."""
+    runs = TaskRunStore()
+    runs.append("run-1", {"kind": "note", "message": "started"})
+    for target in evidence:
+        runs.append_evidence("run-1", "pr_review", {"target": target})
+    return runs
+
+
 @pytest.mark.asyncio
 async def test_a_run_awaits_its_pull_requests_pending_checks():
     """Pending checks end the run instead of a wait in the turn: each PR whose
@@ -415,7 +431,8 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
     ready = pull_request(3, "ready", author="aiko", tickets=refers)
     store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "ready"), "success")
 
-    results = await member_repository.await_checks(pending, ticket_url, "run-1", [])
+    runs = _run()
+    results = await member_repository.await_checks(pending, ticket_url, "run-1", runs)
 
     assert [(r["target"]["url"], r["readiness"]) for r in results] == [
         (waiting, "blocked"),
@@ -432,20 +449,26 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
         "head": store.branch_tip(REPOSITORY, "mine"),
     }
     assert item(ready)["comments"] == []
+    # What the run awaits is what the PRs were told, one by one.
+    assert runs.awaited_pull_requests("run-1") == {waiting}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("checks", "behind", "match"),
+    ("checks", "behind", "draft", "match"),
     [
-        ("success", False, "Every PR is ready"),
-        ("failure", False, "CI checks are failing"),
-        ("pending", True, "behind its base"),
+        ("success", False, False, "No PR of the member's own is blocked"),
+        ("failure", False, False, "CI checks are failing"),
+        ("pending", True, False, "behind its base"),
+        # The patrol resumes nobody for a draft.
+        ("pending", False, True, "none of them a draft"),
     ],
 )
-async def test_a_run_awaits_checks_only_when_nothing_else_blocks(checks, behind, match):
+async def test_a_run_awaits_checks_only_when_nothing_else_blocks(
+    checks, behind, draft, match
+):
     remote_with("mine")
-    url = pull_request(2, "mine", author="aiko")
+    url = pull_request(2, "mine", author="aiko", draft=draft)
     if behind:
         seed = store.bare(REPOSITORY).parent / "seed"
         git = ["git", "-c", "user.name=S", "-c", "user.email=s@example.com"]
@@ -458,11 +481,33 @@ async def test_a_run_awaits_checks_only_when_nothing_else_blocks(checks, behind,
             check=True,
         )
 
+    runs = _run()
     with pytest.raises(MemberCapabilityError, match=re.escape(match)):
         await member_repository.await_checks(
-            local_member(checks=checks), url, "run-1", []
+            local_member(checks=checks), url, "run-1", runs
         )
     assert item(url)["comments"] == []
+    assert runs.awaited_pull_requests("run-1") == set()
+
+
+@pytest.mark.asyncio
+async def test_a_reviewer_neither_awaits_nor_waits_for_the_checks_it_reviewed():
+    """The patrol resumes a member only for its own PRs, so the checks of a PR
+    it reviewed are not its to await, nor do they hold its completion."""
+    remote_with("theirs")
+    pending = local_member(checks="pending")
+    url = pull_request(2, "theirs", author="someone")
+    runs = _run({"kind": "pull_request", "url": url})
+
+    with pytest.raises(MemberCapabilityError, match="No PR of the member's own"):
+        await member_repository.await_checks(pending, url, "run-1", runs)
+    assert item(url)["comments"] == []
+    assert (
+        await member_repository.task_completion_readiness(
+            pending, url, runs.evidence("run-1")
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

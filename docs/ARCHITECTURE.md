@@ -174,9 +174,10 @@ Trust rules that follow from this shape:
 - The workflow does not trust the agent's natural-language stdout as the result. Only
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
-- Ticket completion with `status=done` resolves the pull requests the run pushed to or opened
-  (run evidence) plus, when the member authored them, the ticket PR and the code host's PRs
-  that refer to the ticket (`ticket_pull_requests`), then revalidates each open PR against the code host's current state;
+- Ticket completion with `status=done` resolves the pull requests the run wrote to (run
+  evidence), the ticket PR, and the code host's PRs that refer to the ticket
+  (`ticket_pull_requests`), each only when the member authored it (the patrol resumes a
+  member only for its own PRs), then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
   remains pending, the head does not contain the current base, or the head/base changes

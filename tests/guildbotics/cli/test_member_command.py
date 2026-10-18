@@ -3890,8 +3890,11 @@ def test_member_task_complete_awaits_pending_checks(
         def __init__(self, *_args):
             pass
 
-        async def await_checks(self, ticket_url, run_id, _evidence):
+        async def await_checks(self, ticket_url, run_id, runs):
             calls.append((ticket_url, run_id))
+            runs.append_evidence(
+                run_id, "checks_awaited", {"target": waiting["target"]}
+            )
             return [waiting, ready]
 
         async def aclose(self):
@@ -3917,7 +3920,7 @@ def test_member_task_complete_awaits_pending_checks(
     assert calls == [(TICKET_WORK.identity, "run-1")]
     assert (payload["status"], payload["evidence_types"]) == (
         "awaiting_checks",
-        ["pr_comment"],
+        ["checks_awaited"],
     )
     assert payload["pr_readiness"] == [waiting, ready]
     [record] = TaskRunStore().records()

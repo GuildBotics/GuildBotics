@@ -1817,11 +1817,8 @@ async def _task_complete(
                 )
             else:
                 readiness = await member_repository.await_checks(
-                    context, ticket_url, run_id, store.evidence(run_id)
+                    context, ticket_url, run_id, store
                 )
-                for result in readiness:
-                    if result["readiness"] != "ready":
-                        store.append_evidence(run_id, "pr_comment", result)
         finally:
             await context.aclose()
     payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()

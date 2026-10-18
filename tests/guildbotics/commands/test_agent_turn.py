@@ -340,6 +340,9 @@ async def test_a_run_that_awaits_its_checks_is_complete(tmp_path, monkeypatch):
     async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
+        store.append_evidence(
+            "run-1", "checks_awaited", {"target": {"url": "https://example.test/pr/1"}}
+        )
         _ticket_completion(store, "run-1", "awaiting_checks")
         return "response"
 
