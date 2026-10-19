@@ -470,13 +470,9 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加え
 `/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
 `.venv`・`node_modules`・Rust の `target` はキャッシュしない。
 `test` は GitHub Actions と同じく `UV_LOCKED=1` を指定する。
-microVM は root で動くため、pytest は `setpriv` で `CAP_DAC_OVERRIDE` と
-`CAP_DAC_READ_SEARCH` を外して起動する。ファイルの読み取り権限を検査するテストでも
-`chmod(0)` が効くようにし、権限エラーのテストをスキップせず実行する。
-Branvil のソースは `.git` の無いアーカイブなので、`git ls-files` を使う境界テスト向けに
-一時的な Git index を作る（復元された `.ci` キャッシュは stage しない）。履歴は無いため、hatch-vcs のビルド用に
-`SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${BRANVIL_SHA}` を渡す。
-これは CI 内だけの版で、リリースの版の決め方は変えない。
+ジョブは GitHub Actions と同じく、履歴とタグを持つ Git のチェックアウトで、root でない
+ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
+権限エラーのテストに CI 用の手当ては要らない。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
 host の OS 境界の契約テストだけを実行する。同期の競合ルール・状態遷移、validator、
