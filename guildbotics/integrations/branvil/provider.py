@@ -220,23 +220,27 @@ async def _load_ci_image(archive: Path) -> list[str]:
     """Load ``archive``, a file on Branvil's machine, into its CI runner's
     image cache, and answer the references it loaded once the load is over.
 
+    Branvil keeps only its latest image operation, without an identity, and
+    answers even the request that began this load with whichever is the
+    latest by then. A load of ``archive`` is therefore recognized by what it
+    does: any load of the same file, whoever began it, loads what this one
+    would.
+
     Raises:
         ServiceError: If Branvil refuses the load, the load fails, or its
             outcome is lost to a restart of Branvil or to another image
             operation.
     """
 
-    def begun(operation: dict[str, Any]) -> tuple[str, str]:
-        return operation["started_at"], operation["target"]
+    def loads_archive(operation: dict[str, Any]) -> bool:
+        return (operation["kind"], operation["target"]) == ("load", str(archive))
 
     async with Admin(branvil_url()) as admin:
-        settings = await admin.call(
-            "POST", "/admin/ci/images/load", {"path": str(archive)}
-        )
-        load = begun(settings["operation"])
-        operation = settings["operation"]
+        operation = (
+            await admin.call("POST", "/admin/ci/images/load", {"path": str(archive)})
+        )["operation"]
         while (
-            operation and begun(operation) == load and operation["state"] == "running"
+            operation and loads_archive(operation) and operation["state"] == "running"
         ):
             await asyncio.sleep(_POLL_SECONDS)
             operation = (await admin.get("/admin/ci"))["operation"]
@@ -244,7 +248,7 @@ async def _load_ci_image(archive: Path) -> list[str]:
         raise ServiceError(
             t("integrations.branvil.provider.ci_load_lost", archive=archive)
         )
-    if begun(operation) != load:
+    if not loads_archive(operation):
         raise ServiceError(
             t("integrations.branvil.provider.ci_load_superseded", archive=archive)
         )

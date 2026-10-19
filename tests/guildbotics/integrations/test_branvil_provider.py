@@ -365,32 +365,91 @@ async def test_only_guildbotics_connection_loads_into_the_ci_runner(
     assert double.operation is None
 
 
-@pytest.mark.asyncio
-async def test_a_load_whose_outcome_another_operation_replaced_is_not_reported(
+def _replace_operation(
     monkeypatch,
+    double: BranvilDouble,
+    seen_in: str,
+    kind: str,
+    target: str,
+    state: str = "succeeded",
+) -> None:
+    """Make Branvil's latest operation another one, in ``state``, by the time
+    the answer named ``seen_in`` (``load``: the request that began the load;
+    ``ci``: a later read) is built. A running one never ends."""
+    answer = getattr(double, f"_{seen_in}")
+
+    def replaced(*args: Any) -> dict[str, Any]:
+        answer(*args)
+        double.operation = {
+            "kind": kind,
+            "target": target,
+            "state": state,
+            "detail": "broken" if state == "failed" else None,
+            "started_at": double.now(),
+            "finished_at": None if state == "running" else double.now(),
+            "loaded": [{"reference": "other/image:old"}]
+            if state == "succeeded"
+            else [],
+        }
+        return {"operation": dict(double.operation)}
+
+    monkeypatch.setattr(double, f"_{seen_in}", replaced)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seen_in", ["load", "ci"])
+@pytest.mark.parametrize("state", ["running", "succeeded"])
+@pytest.mark.parametrize(
+    ("kind", "target"),
+    [
+        ("pull", "other/image:old"),
+        # A pull is told from a load of the archive even by the same name.
+        ("pull", str(_ARCHIVE)),
+        ("load", "/srv/images/other.tar"),
+    ],
+    ids=["a_pull", "a_pull_by_the_archives_name", "a_load_of_another_archive"],
+)
+async def test_a_load_whose_outcome_another_operation_replaced_is_not_reported(
+    monkeypatch, seen_in: str, state: str, kind: str, target: str
 ):
     connect_admin()
     double = BranvilDouble()
     double.ci_outcome = [_IMAGE]
-    ci = double._ci
-
-    def superseded() -> dict[str, Any]:
-        # The load finished unseen, and another operation began after it.
-        double.operation = {
-            "kind": "pull",
-            "target": _IMAGE,
-            "state": "running",
-            "started_at": double.now(),
-        }
-        return ci()
-
-    monkeypatch.setattr(double, "_ci", superseded)
+    _replace_operation(monkeypatch, double, seen_in, kind, target, state)
 
     with pytest.raises(ServiceError) as raised:
         await _load_ci_image(monkeypatch, double)
 
     assert str(raised.value) == t(
         "integrations.branvil.provider.ci_load_superseded", archive=_ARCHIVE
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seen_in", ["load", "ci"])
+async def test_any_load_of_the_same_archive_answers_for_this_one(
+    monkeypatch, seen_in: str
+):
+    connect_admin()
+    double = BranvilDouble()
+    _replace_operation(monkeypatch, double, seen_in, "load", str(_ARCHIVE))
+
+    assert await _load_ci_image(monkeypatch, double) == ["other/image:old"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_load_of_the_same_archive_fails_this_one(monkeypatch):
+    connect_admin()
+    double = BranvilDouble()
+    _replace_operation(monkeypatch, double, "ci", "load", str(_ARCHIVE), "failed")
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double)
+
+    assert str(raised.value) == t(
+        "integrations.branvil.provider.ci_load_failed",
+        archive=_ARCHIVE,
+        detail="broken",
     )
 
 

@@ -391,10 +391,7 @@ class BranvilDouble:
                     finished_at=self.now(),
                     loaded=[]
                     if failed
-                    else [
-                        {"reference": r, "pinned": f"{r}@sha256:{'0' * 64}"}
-                        for r in self.ci_outcome
-                    ],
+                    else [{"reference": r} for r in self.ci_outcome],
                 )
         return {"operation": dict(operation) if operation else None}
 
