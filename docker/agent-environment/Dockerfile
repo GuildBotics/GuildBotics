@@ -20,8 +20,9 @@
 # snapshot.
 #
 # `scripts/build-agent-environment-image.sh` builds it for every architecture
-# the workspace's devices run, loads it on the building device, and declares
-# the digests in the workspace's environment declaration (`image:` in
+# the workspace's devices run, loads it on the building device and into the
+# CI runner of the workspace's code host, and declares the digests in the
+# workspace's environment declaration (`image:` in
 # `config/intelligences/agent_environment.yml`); the other devices load the
 # archive it prints. The image is per CPU architecture: the environment runs
 # the device's own CPU, so the declaration names one digest per

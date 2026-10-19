@@ -7,7 +7,7 @@ one ``project.services`` names for each kind; nothing else names a provider.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from html import escape
 from logging import Logger
@@ -334,3 +334,8 @@ class Provider:
     hub_port: Callable[[Mapping[str, Mapping[str, Any]]], int | None] = (
         lambda services: None
     )
+    #: Loads an image archive (``docker save`` or OCI), a file on the machine
+    #: the CI runner of its code host runs on, into that runner's image cache,
+    #: and answers the references it loaded; ``None`` when GuildBotics loads no
+    #: image into its CI. Raises ``ServiceError`` when the load fails.
+    load_ci_image: Callable[[Path], Coroutine[Any, Any, list[str]]] | None = None

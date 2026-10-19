@@ -28,6 +28,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
 | [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
 | [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
+| [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci) | Load an image archive into the CI runner of the workspace's code host. |
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
@@ -278,6 +279,7 @@ guildbotics environment image [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
 | [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
 | [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
+| [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci) | Load an image archive into the CI runner of the workspace's code host. |
 
 ## `guildbotics environment image declare`
 
@@ -329,6 +331,24 @@ guildbotics environment image load [OPTIONS] ARCHIVE
 | Option | Description |
 | --- | --- |
 | `--tag TEXT` | A reference to add to the loaded image, beyond the archive's own tags. |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment image load-ci`
+
+Load an image archive into the CI runner of the workspace's code host.
+
+Run it on the machine the CI runner runs on, with an archive built for
+that runner's CPU architecture: the code host reads the file there, by
+its resolved path. Each image reference the runner loaded is printed. A
+code host with no CI runner GuildBotics loads images into is left as it
+is.
+
+```text
+guildbotics environment image load-ci [OPTIONS] ARCHIVE
+```
+
+| Option | Description |
+| --- | --- |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics environment login`

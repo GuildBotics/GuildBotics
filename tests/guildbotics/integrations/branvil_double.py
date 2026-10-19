@@ -25,7 +25,8 @@ branch's commit is ``""`` with no ``behind_by``.
 Its administration answers as Branvil's public admin API does: a token is
 its member's, the owner's (the admin token GuildBotics holds, labelled
 ``app:GuildBotics``) administers members, their tokens and accounts,
-workspaces and entry links, and an agent may not (``403 forbidden``). A
+workspaces, entry links and the CI runner's image loads, and an agent may
+not (``403 forbidden``). A
 token issued with ``replace`` revokes the member's tokens of its label; the
 labels Branvil uses itself are refused. The consent screen is
 :meth:`BranvilDouble.authorize`, which answers the owner's choice with where
@@ -118,6 +119,12 @@ class BranvilDouble:
         self.workspaces = [SCOPE, THEIRS]
         #: The consent codes not yet exchanged.
         self._codes: dict[str, dict[str, str]] = {}
+        #: The latest image load into the CI runner, as Branvil reports it.
+        self.operation: dict[str, Any] | None = None
+        #: How a running load ends after ``ci_reads`` more reads of the CI
+        #: settings: the references it loaded, or why it failed.
+        self.ci_outcome: list[str] | str = []
+        self.ci_reads = 1
         self.member(OWNER, "owner")
         self.member(MEMBER, "agent")
         self.issue(OWNER, APP_LABEL, ADMIN)
@@ -287,7 +294,11 @@ class BranvilDouble:
             case "POST", ["session", "links"] if owner:
                 code = next(self._ids)
                 return 201, {"url": f"{BASE}/-/enter#code{code}", "expires_at": ""}
-            case (_, ["members" | "session", *_]) | ("POST", ["workspaces"]):
+            case "POST", ["admin", "ci", "images", "load"] if owner:
+                return 202, self._load(body["path"])
+            case "GET", ["admin", "ci"] if owner:
+                return 200, self._ci()
+            case (_, ["members" | "session" | "admin", *_]) | ("POST", ["workspaces"]):
                 raise Refusal(403, "forbidden", "The member may not do that.")
         match parts:
             case ["pulls"]:
@@ -349,6 +360,40 @@ class BranvilDouble:
                 self.accounts[name, host] = body
                 return 200, self.members[name]
         raise _missing("/".join(rest))
+
+    def _load(self, path: str) -> dict[str, Any]:
+        """Begin loading the archive at ``path`` into the CI runner."""
+        if not path.startswith("/"):
+            raise Refusal(400, "invalid", "Give the absolute path of the archive.")
+        if self.operation and self.operation["state"] == "running":
+            raise Refusal(409, "conflict", "Another image operation is running.")
+        self.operation = {
+            "kind": "load",
+            "target": path,
+            "state": "running",
+            "detail": None,
+            "started_at": self.now(),
+            "finished_at": None,
+            "loaded": [],
+        }
+        return {"operation": dict(self.operation)}
+
+    def _ci(self) -> dict[str, Any]:
+        """The CI settings, as far as GuildBotics reads them."""
+        operation = self.operation
+        if operation and operation["state"] == "running":
+            self.ci_reads -= 1
+            if self.ci_reads <= 0:
+                failed = isinstance(self.ci_outcome, str)
+                operation.update(
+                    state="failed" if failed else "succeeded",
+                    detail=self.ci_outcome if failed else None,
+                    finished_at=self.now(),
+                    loaded=[]
+                    if failed
+                    else [{"reference": r} for r in self.ci_outcome],
+                )
+        return {"operation": dict(operation) if operation else None}
 
     def _issued(self, name: str, label: str) -> tuple[str, dict[str, str]]:
         token = f"bvt_{next(self._ids)}"

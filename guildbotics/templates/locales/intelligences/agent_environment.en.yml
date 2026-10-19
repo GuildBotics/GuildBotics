@@ -54,6 +54,8 @@ en:
     mismatch: "Turns on this device run on the base image %{reference} at %{held}, not the %{digest} the declaration names for %{architecture}; load the declared image with `%{command}` to bring this device in line."
     undeclared: "Turns on this device run on the base image %{reference} at %{held}; the declaration names it for %{declared} but not for this device's architecture (%{architecture}). Declare the image for %{architecture} to bring the devices in line."
     wrong_architecture: "The archive %{path} holds an image built for %{architecture}, which this device (%{device}) cannot run."
+    no_ci_runner: "The workspace's code host has no CI runner GuildBotics loads images into; there is nothing to load."
+    loading_ci: "Waiting for the CI runner to load %{archive}..."
   snapshot:
     missing: "The agent environment is missing on this device."
     stale: "The agent environment on this device is older than the declaration."

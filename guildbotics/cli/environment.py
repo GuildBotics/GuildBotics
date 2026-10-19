@@ -46,7 +46,10 @@ from guildbotics.environment.toolchain import (
     ToolchainError,
     load_toolchain,
 )
+from guildbotics.integrations.factory import ci_image_loader
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, cli_agent_info
+from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.fileio import (
     get_primary_config_dir,
     save_yaml_file,
@@ -95,6 +98,33 @@ def image_load_command(archive: Path, tag: str | None) -> None:
         raise click.ClickException(str(exc)) from exc
     for image in loaded:
         click.echo(f"loaded {_image_line(image)}")
+
+
+@image_group.command(name="load-ci")
+@click.argument(
+    "archive",
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=Path),
+)
+def image_load_ci_command(archive: Path) -> None:
+    """Load an image archive into the CI runner of the workspace's code host.
+
+    Run it on the machine the CI runner runs on, with an archive built for
+    that runner's CPU architecture: the code host reads the file there, by
+    its resolved path. Each image reference the runner loaded is printed. A
+    code host with no CI runner GuildBotics loads images into is left as it
+    is.
+    """
+    load = ci_image_loader(YamlTeamLoader().load())
+    if load is None:
+        click.echo(t("intelligences.agent_environment.image.no_ci_runner"))
+        return
+    click.echo(t("intelligences.agent_environment.image.loading_ci", archive=archive))
+    try:
+        references = asyncio.run(load(archive))
+    except ServiceError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for reference in references:
+        click.echo(f"loaded {reference}")
 
 
 @image_group.command(name="list")

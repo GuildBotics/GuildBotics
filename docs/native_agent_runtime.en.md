@@ -152,9 +152,14 @@ build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
 the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
-`never`). The image for developing GuildBotics itself
+`never`). When the CI jobs of the workspace's code host run on the same image
+(Branvil), load the archive into its CI runner too with `guildbotics environment
+image load-ci <archive>`, on the machine the runner runs on: a pipeline names the
+image by its tag alone, so the runner's cache decides the version the jobs get.
+The image for developing GuildBotics itself
 (`docker/agent-environment/Dockerfile`; `scripts/build-agent-environment-image.sh`
-builds every architecture, loads, and declares) is the worked example.
+builds every architecture, loads it here and into the CI runner, and declares) is
+the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
 

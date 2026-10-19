@@ -1,8 +1,9 @@
 """The one place a provider is chosen: each kind of service is the provider
 ``project.services`` names for it."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from logging import Logger
+from pathlib import Path
 from typing import Any
 
 from guildbotics.entities import Person, Service, Team
@@ -38,6 +39,17 @@ def configured_providers(team: Team) -> list[Provider]:
     """The providers the project's services are, each once."""
     names = {team.project.get_service_name(service) for service in Service}
     return [provider for name, provider in PROVIDERS.items() if name in names]
+
+
+def ci_image_loader(
+    team: Team,
+) -> Callable[[Path], Coroutine[Any, Any, list[str]]] | None:
+    """How the project's code host loads an image archive into its CI runner
+    (see :attr:`Provider.load_ci_image`); ``None`` when GuildBotics loads no
+    image into its CI."""
+    name = team.project.get_service_name(Service.CODE_HOSTING_SERVICE)
+    provider = PROVIDERS.get(name)
+    return provider.load_ci_image if provider else None
 
 
 def chat_provider_name(team: Team) -> str:

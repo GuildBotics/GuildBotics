@@ -16,7 +16,11 @@ import pytest
 
 import guildbotics
 from guildbotics.entities.team import Project, Service, Team
-from guildbotics.integrations.factory import PROVIDERS, configured_providers
+from guildbotics.integrations.factory import (
+    PROVIDERS,
+    ci_image_loader,
+    configured_providers,
+)
 from guildbotics.integrations.provider import SetupItems
 
 PACKAGE = Path(guildbotics.__file__).parent / "integrations"
@@ -222,3 +226,21 @@ def test_the_checks_of_a_members_credential_are_exactly_those_flagged(name):
     assert checks["credential"] == _CREDENTIAL_CHECKS.get(name, set())
     # A code is either of a credential or not, wherever it is made.
     assert not checks["credential"] & checks["other"]
+
+
+@pytest.mark.parametrize(
+    ("code_host", "loads"),
+    [("branvil", True), ("github", False), ("local", False), ("", False)],
+)
+def test_only_branvils_ci_runner_is_loaded_with_images(
+    code_host: str, loads: bool
+) -> None:
+    """The project's code host chooses the CI runner an image is loaded into;
+    only Branvil's takes one from GuildBotics."""
+    services = {"code_hosting_service": {"name": code_host}} if code_host else {}
+    team = Team(project=Project(services=services), members=[])
+
+    assert ci_image_loader(team) is (
+        PROVIDERS["branvil"].load_ci_image if loads else None
+    )
+    assert [n for n, p in PROVIDERS.items() if p.load_ci_image] == ["branvil"]

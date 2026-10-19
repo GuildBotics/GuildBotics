@@ -36,8 +36,14 @@ from guildbotics.environment.snapshot import (
     snapshot_name,
 )
 from guildbotics.environment.status import login_command
+from guildbotics.integrations.branvil import provider as branvil_provider
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.integrations.branvil_double import (
+    BranvilDouble,
+    connect_admin,
+    serve,
+)
 
 
 @pytest.fixture
@@ -575,6 +581,78 @@ def test_image_load_reads_the_archive_and_prints_what_it_added(
 
     absent = _invoke(workspace, "image", "load", str(tmp_path / "none.tar"))
     assert absent.exit_code == 2
+
+
+def _code_host(workspace: Path, name: str) -> None:
+    team = workspace / ".guildbotics" / "config" / "team"
+    team.mkdir(parents=True, exist_ok=True)
+    (team / "project.yml").write_text(
+        yaml.safe_dump(
+            {"services": {"code_hosting_service": {"name": name, "workspace": "acme"}}}
+        )
+    )
+
+
+def test_image_load_ci_loads_into_the_code_hosts_ci_runner(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _code_host(workspace, "branvil")
+    connect_admin()
+    double = BranvilDouble()
+    double.ci_outcome = ["local/agent:1", "local/agent:latest"]
+    serve(double, monkeypatch)
+    monkeypatch.setattr(branvil_provider, "_POLL_SECONDS", 0)
+    monkeypatch.chdir(workspace)
+    (workspace / "agent.tar").write_bytes(b"tar")
+    archive = (workspace / "agent.tar").resolve()
+
+    result = _invoke(workspace, "image", "load-ci", "agent.tar")
+
+    assert result.exit_code == 0, result.output
+    # Branvil reads the archive on its own machine, by its resolved path.
+    assert double.operation is not None
+    assert double.operation["target"] == str(archive)
+    assert result.output == (
+        t("intelligences.agent_environment.image.loading_ci", archive=archive)
+        + "\nloaded local/agent:1\nloaded local/agent:latest\n"
+    )
+
+    double.ci_outcome = "not an image archive"
+    failed = _invoke(workspace, "image", "load-ci", "agent.tar")
+    assert failed.exit_code == 1
+    assert "not an image archive" in failed.output
+
+    absent = _invoke(workspace, "image", "load-ci", "none.tar")
+    assert absent.exit_code == 2
+
+
+def test_image_load_ci_leaves_a_code_host_without_a_ci_runner(
+    workspace: Path, tmp_path: Path
+) -> None:
+    _code_host(workspace, "github")
+    archive = tmp_path / "agent.tar"
+    archive.write_bytes(b"tar")
+
+    result = _invoke(workspace, "image", "load-ci", str(archive))
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        t("intelligences.agent_environment.image.no_ci_runner") + "\n"
+    )
+
+
+def test_image_load_ci_needs_a_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    archive = tmp_path / "agent.tar"
+    archive.write_bytes(b"tar")
+
+    result = CliRunner().invoke(main, ["environment", "image", "load-ci", str(archive)])
+
+    assert result.exit_code == 1
+    # The group refuses before the code host is looked up.
+    assert "No GuildBotics workspace is selected." in result.output
 
 
 def test_image_commands_report_a_runtime_refusal(
