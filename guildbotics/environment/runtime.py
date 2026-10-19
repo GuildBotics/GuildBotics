@@ -17,11 +17,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
+import traceback
 from collections.abc import (
     Awaitable,
     Callable,
@@ -35,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from importlib.resources import as_file, files
+from logging import getLogger
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -45,6 +49,8 @@ from guildbotics.environment.spec import (
 from guildbotics.utils.fileio import get_machine_state_path, host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 
+_LOGGER = getLogger(__name__)
+
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
 _NAME_PREFIX = "guildbotics-"
 #: The one sandbox a snapshot is built in; a device builds one at a time.
@@ -53,6 +59,16 @@ _BUILD_NAME = _NAME_PREFIX + "build"
 #: read-only turn's working directory, a cover over a denied directory; never
 #: a workspace.
 _SCRATCH_MIB = 64
+#: Size of a disk of the microVM's own (the command's ``/tmp``): the size of
+#: the root disk the runtime gives the snapshot by default, so a turn can put
+#: there as much as on the microVM's disk. Only what is written takes room.
+_DISK_MIB = 4096
+#: How the named volume of a disk of the microVM's own is named: after the
+#: microVM, which removes it once it is gone.
+_DISK_NAME = re.compile(re.escape(_NAME_PREFIX) + r"[0-9a-f]{12}-\d+")
+#: Longer than a microVM takes to boot: a disk older than this that no
+#: running microVM holds was left behind.
+_DISK_BOOT_SECONDS = 600
 #: The exit code reported when the guest process ended without one: the
 #: runtime killed it, or its exec session broke.
 _KILLED = -1
@@ -364,6 +380,7 @@ class AgentEnvironment:
         self,
         sandbox: Any,
         spec: AgentEnvironmentSpec,
+        disks: Iterable[str],
         on_close: Callable[[], None] | None = None,
         before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
     ) -> None:
@@ -371,6 +388,7 @@ class AgentEnvironment:
         self._closed = False
         self._on_close = on_close
         self._before_stop = before_stop
+        self._disks = tuple(disks)
         self.spec = spec
 
     @classmethod
@@ -393,22 +411,32 @@ class AgentEnvironment:
         failed, the turn ended, or the turn was cancelled. ``before_stop`` is
         what it has to take out of the microVM's memory while it still runs
         (a refreshed login), after its processes have ended; it runs at
-        most once, and not when the boot failed.
+        most once, and not when the boot failed. A disk of the microVM's own
+        outlives the sandbox, so it is removed once the microVM is gone.
         """
         import microsandbox
 
         name = _NAME_PREFIX + secrets.token_hex(6)
+        disks = _disks(spec, name)
         try:
-            sandbox = await microsandbox.Sandbox.create(
-                name,
-                from_snapshot=snapshot,
-                ephemeral=True,
-                memory=memory_mib,
-                cpus=cpus,
-                # The working directory may be a copy made after the boot.
-                workdir="/",
-                volumes=_volumes(spec),
-                network=_network(spec),
+            await _remove_stale_disks()
+            # Held by the environment alone, which drops it once stopped.
+            environment = cls(
+                await microsandbox.Sandbox.create(
+                    name,
+                    from_snapshot=snapshot,
+                    ephemeral=True,
+                    memory=memory_mib,
+                    cpus=cpus,
+                    # The working directory may be a copy made after the boot.
+                    workdir="/",
+                    volumes=_volumes(spec, disks),
+                    network=_network(spec),
+                ),
+                spec,
+                disks.values(),
+                on_close,
+                before_stop,
             )
         except BaseException as exc:
             # Cancellation is not an ``Exception``: a turn the service
@@ -426,10 +454,11 @@ class AgentEnvironment:
                     cpus=cpus,
                 )
             ) from exc
-        environment = cls(sandbox, spec, on_close, before_stop)
         try:
-            await _ipv4_only(sandbox)
-        except BaseException:
+            await _ipv4_only(environment._sandbox)
+        except BaseException as exc:
+            # The failed call's frames still hold the sandbox.
+            traceback.clear_frames(exc.__traceback__)
             await environment.close()
             raise
         return environment
@@ -517,7 +546,9 @@ class AgentEnvironment:
         runs; the microVM is stopped whether that succeeds or not, and its
         error is raised once it is gone. What the caller has to do once the
         microVM is gone runs even when the stop itself is cancelled, because
-        the turn's state is on this device either way.
+        the turn's state is on this device either way. Its own disks go last,
+        once nothing holds the sandbox: the runtime keeps them locked until
+        the sandbox is dropped. One left behind is removed before a later boot.
         """
         if self._closed:
             return
@@ -532,8 +563,18 @@ class AgentEnvironment:
                 with suppress(Exception):
                     await self._sandbox.destroy(force=True)
             finally:
-                if self._on_close is not None:
-                    self._on_close()
+                self._sandbox = None
+                try:
+                    if self._on_close is not None:
+                        self._on_close()
+                finally:
+                    for disk in self._disks:
+                        try:
+                            await _remove_disk(disk)
+                        except Exception as exc:
+                            _LOGGER.warning(
+                                "The microVM's disk %s was left behind: %s", disk, exc
+                            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -869,14 +910,49 @@ async def _relay_lines(
     await asyncio.gather(pump(process.stdout), pump(process.stderr))
 
 
-def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
-    """The SDK volumes for the spec's mounts.
+def _disks(spec: AgentEnvironmentSpec, name: str) -> dict[str, str]:
+    """The named volume each disk mount of the microVM ``name`` is, by where."""
+    disks = (mount.guest for mount in spec.mounts if mount.disk)
+    return {guest: f"{name}-{index}" for index, guest in enumerate(disks)}
+
+
+async def _remove_disk(name: str) -> None:
+    from microsandbox import Volume
+
+    await Volume.remove(name)
+
+
+async def _remove_stale_disks() -> None:
+    """Remove the disks of microVMs whose process ended before removing them.
+
+    The runtime refuses to remove a disk a running microVM holds, which is
+    the expected answer for another command's, so refusals pass unsaid. One
+    still booting holds its disk only once it runs, so a disk younger than
+    any boot is left to its microVM.
+    """
+    from microsandbox import Volume
+
+    # The runtime tells when a volume was created in milliseconds.
+    stale = (time.time() - _DISK_BOOT_SECONDS) * 1000
+    with suppress(Exception):
+        for volume in await Volume.list():
+            if (
+                _DISK_NAME.fullmatch(volume.name)
+                and volume.created_at is not None
+                and volume.created_at < stale
+            ):
+                with suppress(Exception):
+                    await _remove_disk(volume.name)
+
+
+def _volumes(spec: AgentEnvironmentSpec, disks: Mapping[str, str]) -> dict[str, Any]:
+    """The SDK volumes for the spec's mounts, its disk mounts named ``disks``.
 
     Recheck all host sources without following links and pass the checked
     names unchanged. A link introduced after this check remains in the name
     microsandbox receives and is refused there rather than resolved here.
     """
-    from microsandbox import Volume
+    from microsandbox import NamedVolumeMode, Volume, VolumeKind
 
     from guildbotics.environment.contract import (
         builtin_denied,
@@ -893,9 +969,17 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
 
     return {
         mount.guest: (
-            Volume.tmpfs(size_mib=_SCRATCH_MIB, readonly=mount.readonly)
-            if mount.host is None
-            else Volume.bind(str(mount.host), readonly=mount.readonly)
+            Volume.bind(str(mount.host), readonly=mount.readonly)
+            if mount.host is not None
+            else Volume.named(
+                disks[mount.guest],
+                mode=NamedVolumeMode.CREATE,
+                kind=VolumeKind.DISK,
+                size_mib=_DISK_MIB,
+                readonly=mount.readonly,
+            )
+            if mount.disk
+            else Volume.tmpfs(size_mib=_SCRATCH_MIB, readonly=mount.readonly)
         )
         for mount in spec.mounts
     }

@@ -345,6 +345,13 @@ admission; turns cannot create such links because protected files are not mounte
   the disk snapshot. `guildbotics environment status` and the Desktop's
   **Agent execution environment** screen show the assigned values.
 
+  A command's microVM keeps `/tmp` on a disk of its own, the same 4 GiB as its
+  root disk, so what a turn unpacks there uses no memory. Only what is written
+  takes room on the device, and the disk is removed when the microVM stops
+  (one left behind by a GuildBotics process that was killed is removed by a
+  later boot). An environment that holds a login keeps `/tmp` in memory, as it
+  keeps the login, so nothing of the login reaches a disk.
+
 - **Network**: one workspace-wide `network:` block in
   `intelligences/agent_environment.yml` states what every member and slot may
   reach, whether through the command's own code, a turn's shell command and its

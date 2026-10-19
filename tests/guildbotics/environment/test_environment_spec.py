@@ -26,6 +26,7 @@ from guildbotics.environment.contract import (
     resolve_access,
 )
 from guildbotics.environment.spec import (
+    TMP,
     WORKTREE_SOURCE,
     AgentEnvironmentSpecError,
     EnvironmentMount,
@@ -40,6 +41,8 @@ from guildbotics.utils import os_language
 from guildbotics.utils.safe_paths import inspect_host_path
 
 _NAMESERVERS = ("10.0.0.53",)
+#: Every command's microVM has its /tmp on a disk of its own.
+_TMP_DISK = EnvironmentMount(TMP, None, readonly=False, disk=True)
 
 
 def build_environment_spec(*args: object, **kwargs: object) -> object:
@@ -84,6 +87,7 @@ def test_a_working_directory_no_grant_opens_is_worked_on_as_a_copy(
     assert spec.cwd == guest_path(cwd)
     assert spec.home == guest_path(tmp_path.resolve())
     assert spec.mounts == (
+        _TMP_DISK,
         EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
     )
     assert spec.worktree == WorktreeCopy(cwd, inspect_host_path(cwd).identities[-1])
@@ -176,6 +180,7 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
     assert spec.home == guest_path(home)
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
+        _TMP_DISK,
         EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True),
         EnvironmentMount(guest_path(exchange), exchange, readonly=False, user=True),
         EnvironmentMount(
@@ -262,7 +267,10 @@ def test_an_absent_grant_is_not_mounted(tmp_path: Path) -> None:
         )
     )
     spec = build_environment_spec(_contract(access), cwd)
-    assert spec.mounts == (EnvironmentMount(WORKTREE_SOURCE, cwd, True, user=True),)
+    assert spec.mounts == (
+        _TMP_DISK,
+        EnvironmentMount(WORKTREE_SOURCE, cwd, True, user=True),
+    )
 
 
 def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
@@ -293,6 +301,7 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
 
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
+        _TMP_DISK,
         EnvironmentMount(guest_path(cwd), None, readonly=False, user=True),
         EnvironmentMount(guest_path(exchange), exchange, readonly=True, user=True),
         EnvironmentMount(
@@ -311,7 +320,34 @@ def test_read_only_cwd_is_guest_owned_and_writable(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     spec = build_environment_spec(_contract(read_only=True), home, home=home)
-    assert spec.mounts == (EnvironmentMount(guest_path(home), None, False, user=True),)
+    assert spec.mounts == (
+        _TMP_DISK,
+        EnvironmentMount(guest_path(home), None, False, user=True),
+    )
+
+
+def test_the_command_s_tmp_is_on_a_disk_of_its_own_outermost_first(
+    tmp_path: Path,
+) -> None:
+    """What a turn unpacks in /tmp uses no memory, and a mount under /tmp
+    (a working directory there, on a Linux host) is mounted over it."""
+    cwd = _work(tmp_path)
+    spec = build_environment_spec(_contract(), cwd)
+
+    assert spec.mounts[0] == _TMP_DISK
+    assert spec.directories[TMP] is False
+
+
+def test_a_host_tmp_the_contract_mounts_is_not_covered_by_a_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The host's own /tmp, granted on a Linux host, is already on a disk."""
+    granted = EnvironmentMount(TMP, _work(tmp_path), readonly=False, user=True)
+    monkeypatch.setattr(spec_module, "_mounts", lambda *_, **__: ((granted,), None))
+
+    spec = build_environment_spec(_contract(), tmp_path)
+
+    assert spec.mounts == (granted,)
 
 
 def test_what_guildbotics_binds_itself_keeps_its_access_on_a_read_only_turn(
@@ -542,7 +578,7 @@ def test_workspace_root_is_refused_but_its_explicit_clone_is_allowed(
         _contract(access), _work(tmp_path), home=home, worktrees=[clone]
     )
     assert EnvironmentMount(guest_path(clone), clone, False) in spec.mounts
-    assert all(m.host is not None for m in spec.mounts)
+    assert all(m.host is not None for m in spec.mounts if m != _TMP_DISK)
 
 
 @pytest.mark.parametrize(

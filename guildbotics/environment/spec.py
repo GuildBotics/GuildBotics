@@ -26,7 +26,8 @@ worktree is an explicit child of protected state, opened for its own sake.
 Every host source is checked without following links; a source containing a
 protected directory is refused, including read-only sources. No deny covers
 are mounted. The trees a device's PATH derives are not mounted at all: the
-agent's tools live inside the environment.
+agent's tools live inside the environment. The command's ``/tmp`` is on a disk
+of the microVM's own rather than in its memory (:data:`TMP`).
 
 Network: the microVM's gateway enforces the one rule the contract states.
 Unrestricted opens all egress; otherwise egress is closed except DNS, the
@@ -69,6 +70,10 @@ GUEST_HOST_ALIAS = "host.microsandbox.internal"
 #: Where a working directory the command works on a copy of is mounted,
 #: read-only, for the copy to be made from (:class:`WorktreeCopy`).
 WORKTREE_SOURCE = "/run/guildbotics/worktree"
+#: The command's temporary directory: on a disk of the microVM's own, so what
+#: a turn unpacks there as on any Linux uses no memory (the runtime's default
+#: is a tmpfs of a quarter of the memory, at most 512 MiB).
+TMP = "/tmp"
 
 _LOGGER = getLogger(__name__)
 
@@ -82,16 +87,20 @@ class EnvironmentMount:
     """One mount inside the microVM.
 
     ``host`` is the host directory bound at ``guest``, or None for an empty
-    directory of the microVM's own: a read-only turn's working directory or
-    a login's state. It holds
+    directory of the microVM's own: a read-only turn's working directory,
+    a login's state, or the command's ``/tmp``. It holds
     nothing of the host and is discarded with the microVM, so it is writable:
-    a mount nested under it needs a mount point made there.
+    a mount nested under it needs a mount point made there. It is in the
+    microVM's memory, which keeps a login's state off every disk, unless
+    ``disk`` puts it on a disk of the microVM's own, for what may be larger
+    than the memory can spare.
     """
 
     guest: str
     host: Path | None
     readonly: bool
     user: bool = False
+    disk: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +223,13 @@ def build_environment_spec(
         () if contract.read_only else worktrees,
         read_only=contract.read_only,
     )
-    all_mounts = (*opened, *mounts)
+    # Outermost first, unless the contract mounts something at /tmp itself.
+    tmp = (
+        ()
+        if any(mount.guest == TMP for mount in opened)
+        else (EnvironmentMount(TMP, None, readonly=False, disk=True),)
+    )
+    all_mounts = (*tmp, *opened, *mounts)
     # Every host bind, including provider files and code/config mounts, uses
     # the same path and protected-ancestor check. Guest tmpfs needs no host.
     for mount in all_mounts:
