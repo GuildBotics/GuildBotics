@@ -1,20 +1,15 @@
 # Linux checks from .github/workflows/ci.yml and desktop-typescript.yml.
 # The runner supplies the image version, CPUs, memory and network access.
-# Commands start in /work with CI metadata only; each array entry has its own
-# shell. Keep dependency caches here, rather than relying on HOME.
+# Commands start in /work, a Git checkout of the commit with its history and
+# tags, as a user that is not root, with CI metadata only; each array entry has
+# its own shell. Keep dependency caches here, rather than relying on HOME.
 
 [[jobs]]
 name = "test"
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
-# Source-boundary tests enumerate tracked files; the archive has no Git index.
-# Exclude restored dependency caches from this temporary index.
-git init -q
-git add -- . ':!.ci'
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1
-# This temporary repository has no history, so hatch-vcs needs a version.
-export SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0+g${BRANVIL_SHA}"
 uv sync --extra test --extra dev
 uv run --no-sync python scripts/generate-cli-reference.py --check
 uv run --no-sync ruff format --check guildbotics tests
@@ -22,8 +17,7 @@ uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-# The VM runs as root; permission tests must not bypass chmod(0).
-setpriv --bounding-set=-dac_override,-dac_read_search uv run --no-sync python -m pytest tests/ -n auto --durations=30
+uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
