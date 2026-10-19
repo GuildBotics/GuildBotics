@@ -448,7 +448,8 @@ member 向けエージェント指示（SKILL / workflow プロンプト）は�
 
 ## 開発時の基本コマンド（CI 準拠）
 
-CI (`.github/workflows/ci.yml`) で使われている手順:
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) と Branvil の
+[`test` ジョブ](.branvil/ci.toml)で使われている手順:
 
 ```bash
 uv sync --extra test --extra dev
@@ -460,6 +461,19 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
 uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
+
+Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
+`markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
+`npm run quality`）をジョブごとの microVM で実行する。image は
+`guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
+ジョブの環境には CI メタデータしか無いため、uv/npm のキャッシュは
+`/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
+`.venv`・`node_modules`・Rust の `target` はキャッシュしない。
+`test` は GitHub Actions と同じく `UV_LOCKED=1` を指定する。
+Branvil のソースは `.git` の無いアーカイブなので、`git ls-files` を使う境界テスト向けに
+一時的な Git index を作る（復元された `.ci` キャッシュは stage しない）。履歴は無いため、hatch-vcs のビルド用に
+`SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${BRANVIL_SHA}` を渡す。
+これは CI 内だけの版で、リリースの版の決め方は変えない。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
 host の OS 境界の契約テストだけを実行する。同期の競合ルール・状態遷移、validator、

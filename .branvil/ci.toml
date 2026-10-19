@@ -1,0 +1,44 @@
+# Linux checks from .github/workflows/ci.yml and desktop-typescript.yml.
+# The runner supplies the image version, CPUs, memory and network access.
+# Commands start in /work with CI metadata only; each array entry has its own
+# shell. Keep dependency caches here, rather than relying on HOME.
+
+[[jobs]]
+name = "test"
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+# Source-boundary tests enumerate tracked files; the archive has no Git index.
+# Exclude restored dependency caches from this temporary index.
+git init -q
+git add -- . ':!.ci'
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1
+# This temporary repository has no history, so hatch-vcs needs a version.
+export SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0+g${BRANVIL_SHA}"
+uv sync --extra test --extra dev
+uv run --no-sync python scripts/generate-cli-reference.py --check
+uv run --no-sync ruff format --check guildbotics tests
+uv run --no-sync ruff check guildbotics
+uv run --no-sync mypy guildbotics
+uv run --no-sync pylint guildbotics
+uv run --no-sync lint-imports
+uv run --no-sync python -m pytest tests/ -n auto --durations=30
+''']
+timeout_secs = 3600
+cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
+
+[[jobs]]
+name = "markdown-links"
+image = "guildbotics/agent-environment:dev"
+commands = ["lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills"]
+timeout_secs = 300
+
+[[jobs]]
+name = "desktop-quality"
+image = "guildbotics/agent-environment:dev"
+commands = [
+  "cd desktop && npm_config_cache=/work/.ci/npm npm ci",
+  "cd desktop && npm_config_cache=/work/.ci/npm npm run quality",
+]
+timeout_secs = 1800
+cache = { paths = [".ci/npm"], key_files = ["desktop/package-lock.json"] }
