@@ -78,14 +78,16 @@ RUN arch="$(uname -m)" \
 ENV RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \
     REAL_CARGO=/opt/cargo/bin/cargo
-COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN curl -fsSL https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal \
             --default-toolchain "${RUST_VERSION}" --component rustfmt --component clippy \
     && for tool in rustc rustup rustfmt cargo-fmt cargo-clippy clippy-driver; do \
         ln -s "/opt/cargo/bin/${tool}" "/usr/local/bin/${tool}"; \
     done \
-    && cargo --version && rustfmt --version
+    && rustfmt --version
+# After rustup: its installer refuses to install over a `cargo` on PATH.
+COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
+RUN cargo --version
 
 # lychee, at the version the CI's markdown-links job pins. The static musl
 # build: the x86_64 glibc build wants a newer glibc than bookworm has.
