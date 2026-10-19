@@ -8,8 +8,10 @@ microVM and how it turns the runtime's events into a process.
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import re
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -127,6 +129,7 @@ class _Fs:
 class _Sandbox:
     created: dict[str, Any] = {}
     instance: _Sandbox | None = None
+    volumes: _Volumes
     #: What the IPv4-only switch exits with, right after boot.
     ipv4_only_code: int = 0
 
@@ -143,8 +146,18 @@ class _Sandbox:
         if name.startswith("fail"):
             raise microsandbox.MicrosandboxError("no hypervisor")
         cls.created = {"name": name, **kwargs}
-        cls.instance = cls()
-        return cls.instance
+        instance = cls()
+        disks = [
+            volume.named
+            for volume in kwargs.get("volumes", {}).values()
+            if volume.kind == MountKind.NAMED
+        ]
+        # The runtime locks a disk until the sandbox holding it is dropped, so
+        # a sandbox with disks is held here weakly: only the runtime holds it.
+        cls.instance = None if disks else instance
+        for disk in disks:
+            cls.volumes.lockers[disk] = weakref.ref(instance)
+        return instance
 
     async def exec_stream(self, cmd: str, args: list[str], **kwargs: Any) -> _Handle:
         if cmd == "explode":
@@ -165,8 +178,41 @@ class _Sandbox:
         self.destroyed = True
 
 
+class _Volumes:
+    """The runtime's named volumes: their names, when each was created, and
+    the ones a running microVM holds, which the runtime refuses to remove."""
+
+    def __init__(self) -> None:
+        self.created_at: dict[str, float | None] = {}
+        self.held: set[str] = set()
+        self.lockers: dict[str, weakref.ref[Any]] = {}
+        self.removed: list[str] = []
+
+    async def list(self) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(name=name, created_at=created)
+            for name, created in self.created_at.items()
+        ]
+
+    async def remove(self, name: str) -> None:
+        gc.collect()
+        locker = self.lockers.get(name)
+        if name in self.held or (locker is not None and locker() is not None):
+            raise microsandbox.MicrosandboxError(f"{name} is attached")
+        self.removed.append(name)
+        self.created_at.pop(name, None)
+
+
 @pytest.fixture
-def sandbox(monkeypatch, tmp_path) -> type[_Sandbox]:
+def volumes(monkeypatch) -> _Volumes:
+    fake = _Volumes()
+    monkeypatch.setattr(microsandbox.Volume, "list", fake.list)
+    monkeypatch.setattr(microsandbox.Volume, "remove", fake.remove)
+    return fake
+
+
+@pytest.fixture
+def sandbox(monkeypatch, tmp_path, volumes) -> type[_Sandbox]:
     global _HOST_ROOT
     _HOST_ROOT = tmp_path / "mounts"
     (_HOST_ROOT / "repo").mkdir(parents=True)
@@ -174,6 +220,7 @@ def sandbox(monkeypatch, tmp_path) -> type[_Sandbox]:
     _Sandbox.created = {}
     _Sandbox.instance = None
     _Sandbox.ipv4_only_code = 0
+    _Sandbox.volumes = volumes
     monkeypatch.setattr(microsandbox, "Sandbox", _Sandbox)
     return _Sandbox
 
@@ -452,7 +499,7 @@ def test_bind_keeps_the_checked_name_after_validation_and_before_the_sdk(
     monkeypatch.setattr(contract, "validate_mount_source", validate_then_swap)
     monkeypatch.setattr(microsandbox.Volume, "bind", record)
     volume = runtime._volumes(
-        _spec(mounts=(EnvironmentMount("/work", source, False),))
+        _spec(mounts=(EnvironmentMount("/work", source, False),)), {}
     )["/work"]
     assert names == [str(source)]
     assert volume.bind == str(source)
@@ -469,7 +516,7 @@ def test_a_workspace_registered_after_spec_creation_is_protected(sandbox, tmp_pa
     spec = build_environment_spec(AccessContract(), source, nameservers=("1.1.1.1",))
     register_workspace(source / "new-workspace")
     with pytest.raises(AccessContractError):
-        runtime._volumes(spec)
+        runtime._volumes(spec, {})
 
 
 @pytest.mark.asyncio
@@ -777,6 +824,140 @@ async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     sandbox.instance.stop_error = microsandbox.MicrosandboxError("stuck")
     await stuck.close()
     assert sandbox.instance.destroyed
+
+
+# --- a disk of the microVM's own ---------------------------------------------------
+
+
+_TMP_DISK = EnvironmentMount("/tmp", None, readonly=False, disk=True)
+
+
+@pytest.mark.asyncio
+async def test_a_disk_mount_is_a_disk_of_the_microvm_s_own_removed_after_it(
+    sandbox: type[_Sandbox], volumes: _Volumes, monkeypatch
+) -> None:
+    """The command's /tmp uses no memory: it is a disk volume created for
+    this microVM, named after it, and removed once the microVM is gone,
+    after the caller's own clean-up."""
+    order: list[str] = []
+    spec = _spec(mounts=(_TMP_DISK, *_spec().mounts))
+    environment = await AgentEnvironment.start(
+        spec, snapshot="s", on_close=lambda: order.append("on_close"), **_RESOURCES
+    )
+
+    name = sandbox.created["name"]
+    tmp = sandbox.created["volumes"]["/tmp"]
+    assert list(sandbox.created["volumes"])[0] == "/tmp"
+    assert (tmp.kind, tmp.named, tmp.named_kind, tmp.named_mode) == (
+        MountKind.NAMED,
+        f"{name}-0",
+        microsandbox.VolumeKind.DISK,
+        microsandbox.NamedVolumeMode.CREATE,
+    )
+    assert (tmp.size_mib, tmp.readonly) == (runtime._DISK_MIB, False)
+    assert runtime._DISK_NAME.fullmatch(tmp.named)
+
+    async def remove(volume: str) -> None:
+        order.append("remove")
+        await volumes.remove(volume)
+
+    monkeypatch.setattr(microsandbox.Volume, "remove", remove)
+    await environment.close()
+
+    assert volumes.removed == [f"{name}-0"]
+    assert order == ["on_close", "remove"]
+
+
+@pytest.mark.asyncio
+async def test_a_microvm_that_cannot_switch_off_ipv6_removes_its_disk(
+    sandbox: type[_Sandbox], volumes: _Volumes
+) -> None:
+    sandbox.ipv4_only_code = 2
+
+    with pytest.raises(AgentEnvironmentError):
+        await AgentEnvironment.start(
+            _spec(mounts=(_TMP_DISK,)), snapshot="s", **_RESOURCES
+        )
+
+    # Removed while the failure is raised: nothing of the boot holds the sandbox.
+    assert volumes.removed == [f"{sandbox.created['name']}-0"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_removal_does_not_fail_the_close(
+    sandbox: type[_Sandbox], volumes: _Volumes, caplog
+) -> None:
+    environment = await AgentEnvironment.start(
+        _spec(mounts=(_TMP_DISK,)), snapshot="s", **_RESOURCES
+    )
+    disk = f"{sandbox.created['name']}-0"
+    volumes.held.add(disk)
+
+    await environment.close()
+
+    assert volumes.removed == []
+    assert disk in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_failing_clean_up_of_the_caller_still_removes_the_disk(
+    sandbox: type[_Sandbox], volumes: _Volumes
+) -> None:
+    def fail() -> None:
+        raise OSError("state not handed back")
+
+    environment = await AgentEnvironment.start(
+        _spec(mounts=(_TMP_DISK,)), snapshot="s", on_close=fail, **_RESOURCES
+    )
+
+    with pytest.raises(OSError):
+        await environment.close()
+
+    assert volumes.removed == [f"{sandbox.created['name']}-0"]
+
+
+@pytest.mark.asyncio
+async def test_a_boot_removes_disks_left_behind_by_microvms_that_are_gone(
+    sandbox: type[_Sandbox], volumes: _Volumes, monkeypatch
+) -> None:
+    """A disk outlives a process that died with its microVM. Only GuildBotics'
+    own disks are removed, and only ones older than any boot: a younger one
+    may be another microVM's, still booting; a running one's the runtime
+    refuses to remove, and that refusal does not stop the boot."""
+    now = 1_000_000.0
+    monkeypatch.setattr(runtime.time, "time", lambda: now)
+    # The runtime tells when a volume was created in milliseconds.
+    old = (now - runtime._DISK_BOOT_SECONDS - 1) * 1000
+    volumes.created_at.update(
+        {
+            "guildbotics-0123456789ab-0": old,
+            "guildbotics-ba9876543210-0": old,
+            "guildbotics-aaaaaaaaaaaa-0": (now - 1) * 1000,
+            "guildbotics-bbbbbbbbbbbb-0": None,
+            "guildbotics-build": old,
+            "someone-else": old,
+        }
+    )
+    volumes.held.add("guildbotics-ba9876543210-0")
+
+    await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
+
+    assert volumes.removed == ["guildbotics-0123456789ab-0"]
+    assert sandbox.instance is not None
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_that_cannot_list_its_volumes_still_boots(
+    sandbox: type[_Sandbox], monkeypatch
+) -> None:
+    async def refuse() -> list[Any]:
+        raise microsandbox.MicrosandboxError("database locked")
+
+    monkeypatch.setattr(microsandbox.Volume, "list", refuse)
+
+    await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
+
+    assert sandbox.instance is not None
 
 
 # --- the login's environment ------------------------------------------------------

@@ -1090,6 +1090,7 @@ def test_every_bind_and_microvm_entry_uses_the_checked_mount_boundary() -> None:
         lambda call: getattr(call.func, "id", None) == "EnvironmentMount"
     ) == {
         ("guildbotics/environment/spec.py", "_mounts"),
+        ("guildbotics/environment/spec.py", "build_environment_spec"),
         ("guildbotics/environment/provider_state.py", "bind_state"),
         (
             "guildbotics/environment/provider_state.py",
@@ -2016,6 +2017,9 @@ _FIXED_TMP = {
     ),
     ("guildbotics/utils/safe_paths.py", "_host_alias"): (
         "spells out what macOS's /tmp is, to compare a path, not to use it"
+    ),
+    ("guildbotics/environment/spec.py", "<module>"): (
+        "the command's microVM's own /tmp, on a disk of its own"
     ),
 }
 
