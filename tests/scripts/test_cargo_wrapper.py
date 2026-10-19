@@ -1,9 +1,10 @@
 """Tests for the agent environment image's cargo wrapper.
 
 The wrapper runs against a fake real cargo (REAL_CARGO) that records every call,
-answers ``metadata`` the way Cargo does (the nearest Cargo.toml above the
-working directory, CARGO_TARGET_DIR when set) and removes the target directory
-on ``clean``, and a fake ``rustc`` on PATH whose ``-vV`` output the test sets.
+answers ``metadata`` the way Cargo does (the workspace of ``--manifest-path``
+or else the nearest Cargo.toml above the working directory, and
+CARGO_TARGET_DIR when set) and removes the target directory on ``clean``, and a
+fake ``rustc`` on PATH whose ``-vV`` output the test sets.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,19 +39,39 @@ import json, os, shutil, sys
 from pathlib import Path
 
 args = sys.argv[1:]
-with open(os.environ["CARGO_LOG"], "a", encoding="utf-8") as log:
-    log.write(json.dumps({"cwd": os.getcwd(), "args": args}) + "\\n")
-if args[:1] == ["metadata"]:
-    root = next(
-        (d for d in [Path.cwd(), *Path.cwd().parents] if (d / "Cargo.toml").is_file()),
-        None,
-    )
-    if root is None:
+
+
+def option(name):
+    values = [b for a, b in zip(args, args[1:]) if a == name]
+    values += [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
+    return values[0] if values else None
+
+
+def workspace():
+    manifest = option("--manifest-path")
+    if manifest:
+        root = Path(manifest).resolve().parent
+    else:
+        root = next(
+            (d for d in [Path.cwd(), *Path.cwd().parents] if (d / "Cargo.toml").is_file()),
+            None,
+        )
+    if root is None or not (root / "Cargo.toml").is_file():
         sys.exit("error: could not find `Cargo.toml`")
-    target = os.environ.get("CARGO_TARGET_DIR") or str(root / "target")
-    print(json.dumps({"target_directory": target, "workspace_root": str(root)}))
+    target = option("--target-dir") or os.environ.get("CARGO_TARGET_DIR") or root / "target"
+    return root, Path(target).resolve()
+
+
+entry = {"args": args, "target_dir": os.environ.get("CARGO_TARGET_DIR")}
+if args[:1] == ["clean"]:
+    entry["removed"] = str(workspace()[1])
+with open(os.environ["CARGO_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(entry) + "\\n")
+if args[:1] == ["metadata"]:
+    root, target = workspace()
+    print(json.dumps({"target_directory": str(target), "workspace_root": str(root)}))
 elif args[:1] == ["clean"]:
-    shutil.rmtree(args[args.index("--target-dir") + 1])
+    shutil.rmtree(entry["removed"])
 else:
     print("real cargo ran")
     sys.exit(int(os.environ.get("CARGO_EXIT", "0")))
@@ -112,12 +134,16 @@ class Cargo:
 
     def calls(self) -> list[list[str]]:
         """Return the arguments of every call the last run made to the real cargo."""
-        lines = self.log.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line)["args"] for line in lines]
+        return [entry["args"] for entry in self.entries()]
 
-    def cleans(self) -> list[list[str]]:
-        """Return the ``cargo clean`` calls of the last run."""
-        return [args for args in self.calls() if args[:1] == ["clean"]]
+    def entries(self) -> list[dict[str, Any]]:
+        """Return what the real cargo recorded of every call in the last run."""
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        return [json.loads(line) for line in lines]
+
+    def cleans(self) -> list[str]:
+        """Return the target directory each ``cargo clean`` of the last run removed."""
+        return [entry["removed"] for entry in self.entries() if "removed" in entry]
 
     def build_stale(self, target: Path | None = None) -> Path:
         """Leave an output in the target directory and return it."""
@@ -145,15 +171,7 @@ def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "real cargo ran\n"
-    assert cargo.cleans() == [
-        [
-            "clean",
-            "--manifest-path",
-            str(cargo.project / "Cargo.toml"),
-            "--target-dir",
-            str(cargo.target),
-        ]
-    ]
+    assert cargo.cleans() == [str(cargo.target)]
     assert cargo.calls()[-1] == ["build", "--release"]
     assert not stale.exists()
     mark = (cargo.target / ".build-conditions").read_text(encoding="utf-8")
@@ -221,7 +239,7 @@ def test_target_dir_from_the_environment_is_the_one_kept(
 
     cargo("test")
 
-    assert [args[-1] for args in cargo.cleans()] == [str(elsewhere)]
+    assert cargo.cleans() == [str(elsewhere)]
     assert not stale.exists()
     assert untouched.exists()
     assert (elsewhere / ".build-conditions").is_file()
@@ -258,3 +276,92 @@ def test_cargo_home_elsewhere_still_runs_the_real_cargo(
     assert result.stdout == "real cargo ran\n"
     assert cargo.calls()[-1] == ["test", "--locked"]
     assert not stale.exists()
+
+
+@pytest.mark.parametrize(
+    "spelling", [["--target-dir", "custom"], ["--target-dir=custom"]]
+)
+def test_target_dir_of_the_command_is_the_one_kept(
+    cargo: Cargo, spelling: list[str]
+) -> None:
+    custom = cargo.project / "custom"
+    stale = cargo.build_stale(custom)
+    unused = cargo.build_stale()
+
+    cargo("check", *spelling)
+
+    assert cargo.cleans() == [str(custom)]
+    assert not stale.exists()
+    assert_tagged_as_cache(custom)
+    assert (custom / ".build-conditions").is_file()
+    assert unused.exists()
+    assert not (cargo.target / ".build-conditions").exists()
+    # The variable stands in for the option only in the wrapper's own calls.
+    assert [entry["target_dir"] for entry in cargo.entries()] == [
+        "custom",
+        "custom",
+        None,
+    ]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [["--manifest-path", "project/Cargo.toml"], ["--manifest-path=project/Cargo.toml"]],
+)
+def test_manifest_path_of_the_command_is_followed_from_outside(
+    cargo: Cargo, tmp_path: Path, spelling: list[str]
+) -> None:
+    stale = cargo.build_stale()
+
+    result = cargo("check", *spelling, cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert cargo.cleans() == [str(cargo.target)]
+    assert not stale.exists()
+    assert (cargo.target / ".build-conditions").is_file()
+
+
+def test_arguments_after_the_separator_are_not_cargo_options(cargo: Cargo) -> None:
+    custom = cargo.project / "custom"
+    untouched = cargo.build_stale(custom)
+    stale = cargo.build_stale()
+
+    cargo("run", "--", "--target-dir", "custom")
+
+    assert cargo.cleans() == [str(cargo.target)]
+    assert not stale.exists()
+    assert untouched.exists()
+    assert cargo.calls()[-1] == ["run", "--", "--target-dir", "custom"]
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "forwarded"),
+    [
+        (
+            ["--config", 'build.build-dir="bd"'],
+            [],
+            ["--config", 'build.build-dir="bd"'],
+        ),
+        ([], ['--config=build.build-dir="bd"'], ['--config=build.build-dir="bd"']),
+        (
+            [],
+            ["--manifest-path", "Cargo.toml", "--release", "--config", "a.toml"],
+            ["--manifest-path", "Cargo.toml", "--config", "a.toml"],
+        ),
+        ([], ["--manifest-path=Cargo.toml"], ["--manifest-path=Cargo.toml"]),
+    ],
+)
+def test_options_choosing_the_directories_reach_metadata_and_clean(
+    cargo: Cargo, before: list[str], after: list[str], forwarded: list[str]
+) -> None:
+    # A build directory (build.build-dir) is cleaned only by a clean that is
+    # given the same configuration.
+    cargo.build_stale()
+
+    cargo(*before, "check", *after)
+
+    metadata, clean = [
+        args for args in cargo.calls() if args[:1] in (["metadata"], ["clean"])
+    ]
+    assert metadata == ["metadata", "--no-deps", "--format-version", "1", *forwarded]
+    assert clean == ["clean", *forwarded]
