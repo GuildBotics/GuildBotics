@@ -548,26 +548,25 @@ def _sandbox_overrides(spec: TurnSpec) -> dict[str, Any]:
     """Codex's own sandbox: the environment, as seen from inside it.
 
     The environment is the boundary and everything it holds is already
-    allowed, so the profile mirrors it rather than narrowing it: the whole
-    guest is readable, and every directory the environment bound is
-    writable or read-only exactly as it was mounted -- what the user
-    granted read/write is read/write for Codex's commands too. A working
-    directory the environment mounted writable -- itself, or a directory it
-    is under, since the turns of a command share one environment, each in
-    its own working directory -- is Codex's workspace root, its ``.git`` included since
-    the agent stages its own changes; a read-only one is not named one,
-    because Codex makes directories inside every workspace root and cannot
-    start a session on one it may not write. The temporary directories are
-    writable as Codex spells them, and the network is on; which hosts is the environment's
-    gateway's to decide. Naming ``/`` writable instead would lose
-    ``/dev/null`` (measured on 0.153.4), and Codex's ``workspace-write``
-    default would close the network and ask for approvals, which no
-    headless turn can give.
+    allowed, so the profile mirrors it rather than narrowing it: the
+    microVM's own disk is writable -- a tool of the image writes its caches
+    and dependencies where the image put them -- and every directory the
+    environment bound is writable or read-only exactly as it was mounted:
+    what the user granted read/write is read/write for Codex's commands too,
+    a read-only mount stays read-only. Neither a workspace root nor the
+    temporary directories need naming, since the disk they are on is already
+    writable, and the network is on; which hosts is the environment's
+    gateway's to decide. Codex's ``workspace-write`` default would close the
+    network and ask for approvals, which no headless turn can give.
 
     What the inner sandbox adds is one thing: Codex's own state under
     ``~/.codex`` -- its credentials above all -- is hidden from the agent's
     commands. The environment binds the entries Codex itself needs there;
-    the profile never names them, so the deny stands.
+    the profile never names them, so the deny stands. It holds for the turn
+    only: what a command changes on the writable disk -- Codex's install and
+    system config among it -- is what the later turns of the same command
+    start from, as for every provider whose inner sandbox is off, until the
+    microVM is discarded.
 
     Codex enforces the profile -- and reads the working directory's
     instructions through it -- with the bubblewrap it bundles. A bubblewrap
@@ -576,29 +575,16 @@ def _sandbox_overrides(spec: TurnSpec) -> dict[str, Any]:
     start), so the image ships none.
     """
     state = f"{spec.home}/.codex"
-    mounts = {
-        guest: "read" if readonly else "write"
-        for guest, readonly in spec.mounts.items()
-        if not PurePosixPath(guest).is_relative_to(state)
-    }
-    workspace = max(
-        (guest for guest in mounts if PurePosixPath(spec.cwd).is_relative_to(guest)),
-        key=lambda guest: len(PurePosixPath(guest).parts),
-        default=None,
-    )
     profile = f"permissions.{_PERMISSION_PROFILE}"
     return {
         "default_permissions": _PERMISSION_PROFILE,
         f"{profile}.filesystem": {
-            "/": "read",
-            **mounts,
-            **(
-                {":workspace_roots": {".": "write", ".git": "write"}}
-                if workspace is not None and mounts[workspace] == "write"
-                else {}
-            ),
-            ":tmpdir": "write",
-            ":slash_tmp": "write",
+            "/": "write",
+            **{
+                guest: "read" if readonly else "write"
+                for guest, readonly in spec.mounts.items()
+                if not PurePosixPath(guest).is_relative_to(state)
+            },
             state: "deny",
         },
         f"{profile}.network.enabled": True,

@@ -115,6 +115,19 @@ A successful turn prints `pong`. For Codex, the default image has no
 bubblewrap, so this turn tests its bundled helper; the log says "Codex could
 not find bubblewrap on PATH". Keep the image's bubblewrap exclusion.
 
+The `pong` turn runs no command under Codex's permission profile. For Codex,
+obtain approval for one more turn that does:
+
+```bash
+printf -- '---\nbrain: agent\n---\n\nRun this shell command and reply with its output only: %s\n' \
+  "sh -c 'echo x > /dev/null && touch /opt/.probe && ! test -r ~/.codex/auth.json && echo sandbox-ok'" \
+  > "$C/commands/sandbox_probe.md"
+uv run --no-sync guildbotics run sandbox_probe --person tester --cwd "$VERIFICATION_WS/work"
+```
+
+It prints `sandbox-ok` when the profile keeps `/dev/null` usable, lets the
+command write the microVM's own disk, and still hides `~/.codex`.
+
 Record passed, failed, and skipped tests with their reasons. Exit code zero
 does not prove a requested check ran: missing snapshots or unmet prerequisites
 can skip real-device tests. Mark skipped or unexecuted checks as unverified.

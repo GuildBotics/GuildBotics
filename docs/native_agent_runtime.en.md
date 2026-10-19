@@ -412,14 +412,14 @@ the setting is changed.
 Inside the environment each provider's own sandbox stays on, but never
 narrower than the environment: everything the microVM holds is already
 allowed, so what the inner sandbox adds is hiding the provider's own
-credentials from the agent's commands and keeping provider settings from
-changing between turns. Codex runs under a permission profile that mirrors
-the environment's mounts -- the whole guest readable, every directory the
-environment bound writable or read-only exactly as it was mounted (so a
-read/write grant is read/write for Codex's commands too), a writable working
-directory (its `.git` included) and the temporary directories writable, the
-network on -- and hides `~/.codex`; the profile never names `/` as writable,
-because Codex 0.153 then loses `/dev/null`.
+credentials from the agent's commands. The microVM's own disk is writable, so
+what a command changes there (the provider's install and system config
+included) is still there for the later turns of the same command. Codex runs
+under a permission profile that mirrors the environment's mounts -- the
+microVM's own disk writable (so the image's tools write their caches and
+dependencies where the image put them), every directory the environment bound
+writable or read-only exactly as it was mounted (so a read/write grant is
+read/write for Codex's commands too), the network on -- and hides `~/.codex`.
 Codex always uses the non-interactive `never` approval policy, and any
 unexpected approval request is declined. Claude Code runs with
 `bypassPermissions` and `sandbox.enabled=false` (and `IS_SANDBOX=1`, since the
@@ -436,7 +436,7 @@ runs on the microVM's kernel is checked only when optional real-device
 verification is requested; unattended pin updates do not establish that it works.
 
 Only the provider's sessions and its account files that hold no credential
-survive a turn, bound from this device's store
+survive the microVM, bound from this device's store
 (`~/.guildbotics/data/agent_environment/<provider>/`) and shared by every
 member. The login is never in a turn (see "Logins kept outside the microVM"). The provider's settings and skills are the snapshot's and return to it
 whenever a microVM is discarded.
