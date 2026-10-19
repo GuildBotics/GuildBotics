@@ -132,6 +132,12 @@ def cargo(tmp_path: Path) -> Cargo:
     return Cargo(tmp_path)
 
 
+def assert_tagged_as_cache(target: Path) -> None:
+    """The wrapper creates the directory, so it tags it as Cargo would."""
+    tag = (target / "CACHEDIR.TAG").read_text(encoding="utf-8")
+    assert tag.startswith("Signature: 8a477f597d28d172789f06886806bc55\n")
+
+
 def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
     stale = cargo.build_stale()
 
@@ -154,6 +160,7 @@ def test_target_without_a_mark_is_cleaned_and_marked(cargo: Cargo) -> None:
     assert mark.startswith(RUSTC)
     assert '[profile.dev.package."*"]\ndebug = false\n' in mark
     assert "[dependencies]" not in mark
+    assert_tagged_as_cache(cargo.target)
 
 
 def test_missing_target_is_marked_without_cleaning(cargo: Cargo) -> None:
@@ -161,6 +168,7 @@ def test_missing_target_is_marked_without_cleaning(cargo: Cargo) -> None:
 
     assert cargo.cleans() == []
     assert (cargo.target / ".build-conditions").is_file()
+    assert_tagged_as_cache(cargo.target)
 
 
 @pytest.mark.parametrize(

@@ -37,7 +37,15 @@ print(metadata["workspace_root"])' <<<"$metadata") || return
     echo "Build conditions of $target changed or are unknown; running cargo clean." >&2
     "$cargo" clean --manifest-path "$manifest" --target-dir "$target" || return
   fi
-  mkdir -p "$target" && printf '%s\n' "$conditions" >"$mark"
+  # The target directory does not exist here. Cargo tags one it creates as a
+  # cache (https://bford.info/cachedir/) and leaves one that exists alone, so
+  # the tag is written along with the directory.
+  mkdir -p "$target" &&
+    printf '%s\n' "Signature: 8a477f597d28d172789f06886806bc55" \
+      "# This file is a cache directory tag created by cargo." \
+      "# For information about cache directory tags see https://bford.info/cachedir/" \
+      >"$target/CACHEDIR.TAG" &&
+    printf '%s\n' "$conditions" >"$mark"
 }
 
 clean_stale_target
