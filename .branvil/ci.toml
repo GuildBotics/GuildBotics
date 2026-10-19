@@ -22,7 +22,8 @@ uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-uv run --no-sync python -m pytest tests/ -n auto --durations=30
+# The VM runs as root; permission tests must not bypass chmod(0).
+setpriv --bounding-set=-dac_override,-dac_read_search uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }

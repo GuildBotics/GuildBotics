@@ -470,6 +470,9 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加え
 `/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
 `.venv`・`node_modules`・Rust の `target` はキャッシュしない。
 `test` は GitHub Actions と同じく `UV_LOCKED=1` を指定する。
+microVM は root で動くため、pytest は `setpriv` で `CAP_DAC_OVERRIDE` と
+`CAP_DAC_READ_SEARCH` を外して起動する。ファイルの読み取り権限を検査するテストでも
+`chmod(0)` が効くようにし、権限エラーのテストをスキップせず実行する。
 Branvil のソースは `.git` の無いアーカイブなので、`git ls-files` を使う境界テスト向けに
 一時的な Git index を作る（復元された `.ci` キャッシュは stage しない）。履歴は無いため、hatch-vcs のビルド用に
 `SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${BRANVIL_SHA}` を渡す。
