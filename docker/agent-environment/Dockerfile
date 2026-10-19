@@ -74,9 +74,10 @@ RUN arch="$(uname -m)" \
 # rustup proxies are linked into /usr/local/bin and find the toolchain through
 # RUSTUP_HOME; cargo keeps its registry under CARGO_HOME. `cargo` itself is
 # cargo-wrapper.sh, which cleans a target directory built under other build
-# conditions before running the rustup proxy.
+# conditions before running the rustup proxy named by REAL_CARGO.
 ENV RUSTUP_HOME=/opt/rustup \
-    CARGO_HOME=/opt/cargo
+    CARGO_HOME=/opt/cargo \
+    REAL_CARGO=/opt/cargo/bin/cargo
 COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN curl -fsSL https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal \

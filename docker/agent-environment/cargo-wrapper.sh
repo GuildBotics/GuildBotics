@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The image's `cargo`: removes a target directory built under other build
-# conditions, then runs the real cargo ($CARGO_HOME/bin/cargo) with the same
-# arguments.
+# conditions, then runs the real cargo with the same arguments. The image names
+# the real cargo in REAL_CARGO rather than leaving it to CARGO_HOME, which a
+# command may point elsewhere (a registry it can write to).
 #
 # Cargo names its outputs after the compiler and the profile settings, so when
 # either changes it builds everything again under new names and leaves the old
@@ -15,7 +16,7 @@
 # together on an unmarked target may both clean.
 set -u
 
-cargo="${CARGO_HOME}/bin/cargo"
+cargo="$REAL_CARGO"
 
 clean_stale_target() {
   local metadata target root manifest mark conditions

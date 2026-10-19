@@ -1,6 +1,6 @@
 """Tests for the agent environment image's cargo wrapper.
 
-The wrapper runs against a fake CARGO_HOME whose ``cargo`` records every call,
+The wrapper runs against a fake real cargo (REAL_CARGO) that records every call,
 answers ``metadata`` the way Cargo does (the nearest Cargo.toml above the
 working directory, CARGO_TARGET_DIR when set) and removes the target directory
 on ``clean``, and a fake ``rustc`` on PATH whose ``-vV`` output the test sets.
@@ -62,7 +62,7 @@ class Cargo:
     """Run the wrapper as a project's ``cargo`` and read what the real one did."""
 
     def __init__(self, tmp_path: Path) -> None:
-        self.home = tmp_path / "cargo home"
+        self.real = tmp_path / "rustup proxies/cargo"
         self.tools = tmp_path / "tools"
         self.log = tmp_path / "cargo.log"
         self.project = tmp_path / "project"
@@ -70,7 +70,7 @@ class Cargo:
         self.rustc = RUSTC
         self.env: dict[str, str] = {}
         for path, source in [
-            (self.home / "bin/cargo", FAKE_CARGO),
+            (self.real, FAKE_CARGO),
             (
                 self.tools / "rustc",
                 "import os\nprint(os.environ['RUSTC_VV'], end='')\n",
@@ -97,7 +97,7 @@ class Cargo:
                     for key, value in os.environ.items()
                     if not key.startswith(("CARGO", "RUSTUP"))
                 },
-                "CARGO_HOME": str(self.home),
+                "REAL_CARGO": str(self.real),
                 "CARGO_LOG": str(self.log),
                 "PATH": f"{self.tools}{os.pathsep}{os.environ['PATH']}",
                 "RUSTC_VV": self.rustc,
@@ -235,3 +235,18 @@ def test_outside_a_project_only_the_real_cargo_runs(
     assert result.stdout == "real cargo ran\n"
     assert cargo.calls() == [["metadata", "--no-deps", "--format-version", "1"], args]
     assert list(outside.iterdir()) == []
+
+
+def test_cargo_home_elsewhere_still_runs_the_real_cargo(
+    cargo: Cargo, tmp_path: Path
+) -> None:
+    # A command may point CARGO_HOME at a registry it can write to.
+    cargo.env["CARGO_HOME"] = str(tmp_path / "writable registry")
+    stale = cargo.build_stale()
+
+    result = cargo("test", "--locked")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "real cargo ran\n"
+    assert cargo.calls()[-1] == ["test", "--locked"]
+    assert not stale.exists()
