@@ -9,7 +9,8 @@
 #     ruff, mypy, pylint and pytest
 #   - Node.js 24, as the Desktop workflows run it, for the frontend checks
 #   - the Rust toolchain and the Tauri system libraries for `cargo check` /
-#     `scripts/desktop-test-rust.sh`
+#     `scripts/desktop-test-rust.sh`; `cargo` is cargo-wrapper.sh, which first
+#     cleans a target directory built under other build conditions
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
@@ -71,16 +72,22 @@ RUN arch="$(uname -m)" \
 
 # The Rust toolchain, with rustfmt and clippy, outside any home directory. The
 # rustup proxies are linked into /usr/local/bin and find the toolchain through
-# RUSTUP_HOME; cargo keeps its registry under CARGO_HOME.
+# RUSTUP_HOME; cargo keeps its registry under CARGO_HOME. `cargo` itself is
+# cargo-wrapper.sh, which cleans a target directory built under other build
+# conditions before running the rustup proxy named by REAL_CARGO.
 ENV RUSTUP_HOME=/opt/rustup \
-    CARGO_HOME=/opt/cargo
+    CARGO_HOME=/opt/cargo \
+    REAL_CARGO=/opt/cargo/bin/cargo
 RUN curl -fsSL https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal \
             --default-toolchain "${RUST_VERSION}" --component rustfmt --component clippy \
-    && for tool in cargo rustc rustup rustfmt cargo-fmt cargo-clippy clippy-driver; do \
+    && for tool in rustc rustup rustfmt cargo-fmt cargo-clippy clippy-driver; do \
         ln -s "/opt/cargo/bin/${tool}" "/usr/local/bin/${tool}"; \
     done \
-    && cargo --version && rustfmt --version
+    && rustfmt --version
+# After rustup: its installer refuses to install over a `cargo` on PATH.
+COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
+RUN cargo --version
 
 # lychee, at the version the CI's markdown-links job pins. The static musl
 # build: the x86_64 glibc build wants a newer glibc than bookworm has.
