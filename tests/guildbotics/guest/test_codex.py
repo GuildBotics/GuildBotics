@@ -1018,18 +1018,18 @@ def test_overrides_are_spelled_as_toml_values() -> None:
 
 
 def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() -> None:
-    """Every directory the environment bound is readable or writable for
-    Codex's commands exactly as it was mounted; the whole guest is readable;
+    """The microVM's own disk is writable for Codex's commands (a tool of the
+    image writes its caches where the image put them); every directory the
+    environment bound is readable or writable exactly as it was mounted;
     only Codex's own state is hidden, and its bound entries are never named."""
-    home = "/home/u"
     spec = TurnSpec(
         cwd="/work/repo",
-        home=home,
+        home="/home/u",
         mounts={
             "/work/repo": False,
             "/home/u/Documents/GuildBotics": False,
             "/home/u/notes": True,
-            "/work/repo/private": False,
+            "/home/u/notes/drafts": False,
             "/home/u/.codex/auth.json": False,
             "/home/u/.codex/sessions": False,
         },
@@ -1041,62 +1041,44 @@ def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() 
     assert overrides["default_permissions"] == "guildbotics"
     assert overrides["permissions.guildbotics.network.enabled"] is True
     assert overrides["permissions.guildbotics.filesystem"] == {
-        "/": "read",
+        "/": "write",
         "/work/repo": "write",
         "/home/u/Documents/GuildBotics": "write",
         "/home/u/notes": "read",
-        "/work/repo/private": "write",
-        ":workspace_roots": {".": "write", ".git": "write"},
-        ":tmpdir": "write",
-        ":slash_tmp": "write",
-        "/home/u/.codex": "deny",
-    }
-
-
-def test_a_read_only_working_directory_is_not_a_workspace_root() -> None:
-    """Codex makes directories inside every workspace root and cannot start a
-    session on one mounted read-only (measured on 0.153.4: bwrap cannot
-    mkdir `.codex`), so a turn working in a `read` grant has the profile
-    mirror that mount as read, and no more."""
-    spec = TurnSpec(
-        cwd="/work/assist",
-        home="/home/u",
-        mounts={"/work/assist": True},
-        env={},
-    )
-
-    assert _sandbox_overrides(spec)["permissions.guildbotics.filesystem"] == {
-        "/": "read",
-        "/work/assist": "read",
-        ":tmpdir": "write",
-        ":slash_tmp": "write",
+        "/home/u/notes/drafts": "write",
         "/home/u/.codex": "deny",
     }
 
 
 @pytest.mark.parametrize(
-    ("cwd", "workspace_root"),
-    [
-        ("/work/repo/package", True),
-        ("/work/repo/private/deeper", False),
-    ],
+    "cwd", ["/work/repo", "/work/repo/package", "/work/repo/private", "/work/vm"]
 )
-def test_a_turn_working_deeper_than_its_mount_is_judged_by_that_mount(
-    cwd: str, workspace_root: bool
-) -> None:
+def test_the_profile_does_not_depend_on_the_working_directory(cwd: str) -> None:
     """The turns of a command share one environment, each in its own working
-    directory: one under a writable mount is a workspace root, one under a
-    read-only corner of it is not."""
+    directory, and none is named in the profile: each is writable or not as
+    the mount it is under, or the microVM's own disk, makes it."""
     spec = TurnSpec(
         cwd=cwd,
         home="/home/u",
-        mounts={
-            "/work/repo": False,
-            "/work/repo/private": True,
-        },
+        mounts={"/work/repo": False, "/work/repo/private": True},
         env={},
     )
 
-    filesystem = _sandbox_overrides(spec)["permissions.guildbotics.filesystem"]
+    assert _sandbox_overrides(spec)["permissions.guildbotics.filesystem"] == {
+        "/": "write",
+        "/work/repo": "write",
+        "/work/repo/private": "read",
+        "/home/u/.codex": "deny",
+    }
 
-    assert (":workspace_roots" in filesystem) is workspace_root
+
+def test_codex_state_stays_hidden_under_a_writable_mount_above_it() -> None:
+    """A read/write grant of the whole home directory still leaves Codex's own
+    state hidden: the deny is more specific than the grant."""
+    spec = TurnSpec(cwd="/home/u", home="/home/u", mounts={"/home/u": False}, env={})
+
+    assert _sandbox_overrides(spec)["permissions.guildbotics.filesystem"] == {
+        "/": "write",
+        "/home/u": "write",
+        "/home/u/.codex": "deny",
+    }

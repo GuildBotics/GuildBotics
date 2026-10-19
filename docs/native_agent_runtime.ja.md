@@ -316,12 +316,12 @@ hostで作成済みの保護ファイルへのハードリンクは、コピー�
 
 隔離環境の中では各プロバイダ自身のsandboxも有効のままですが、環境より狭めることはしません。
 microVMの中にあるものはすべて許可済みなので、内側のsandboxが足すのは、エージェントのコマンドから
-プロバイダ自身の認証情報を隠すことと、プロバイダ設定の変更をターンをまたいで残さないことです。
-Codexは環境のmountをそのまま写したpermission profileで動きます: guest全体を読め、環境がbindした
-各ディレクトリはmountされたとおりに書き込み可または読み取り専用（`read_write`のgrantはCodexの
-コマンドからも読み書きできる）、書き込み可の作業ディレクトリ（`.git`を含む）と一時ディレクトリは書き込み可、
-ネットワークは有効、`~/.codex`だけを隠します。profileで`/`を書き込み可能にすると、Codex 0.153では
-`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
+プロバイダ自身の認証情報を隠すことです。microVM自身のディスクは書き込めるので、コマンドがそこで
+変えたもの（プロバイダの本体やシステムの設定を含む）は、同じコマンドの後のターンにも残ります。
+Codexは環境のmountをそのまま写したpermission profileで動きます: microVM自身のディスクは書き込み可
+（imageのツールがimageの決めた場所へキャッシュや依存を書けるように）、環境がbindした各ディレクトリは
+mountされたとおりに書き込み可または読み取り専用（`read_write`のgrantはCodexのコマンドからも読み書きできる）、
+ネットワークは有効、`~/.codex`だけを隠します。Codexは常に
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
 `bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
 rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
@@ -332,7 +332,7 @@ rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡しま�
 microVMのkernelで動くかは、任意の実機確認を依頼されたときに確かめます。無人の固定版更新では
 その動作を確認しません。
 
-ターンをまたいで残るのはプロバイダのセッションと、認証情報を含まないアカウント情報だけで、この端末の
+microVMをまたいで残るのはプロバイダのセッションと、認証情報を含まないアカウント情報だけで、この端末の
 store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
 ログインはturnに置きません（後述の「VMの外で管理するログイン」）。
 プロバイダの設定やskillはsnapshot側のもので、microVMを破棄するたびに元へ戻ります。
