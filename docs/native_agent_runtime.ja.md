@@ -117,7 +117,7 @@ digestで名付けられるので、読み込み直せば古い扱いになり�
 [member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
 備えていれば何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
-（`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
+（`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。ワークスペースのコードホストのCIのジョブが同じimageで動く場合（Branvil）は、CIランナーが動くマシンで`guildbotics environment image load-ci <アーカイブ>`を実行し、CIランナーにも読み込みます（パイプラインはimageをタグだけで指すので、ジョブがどの版で動くかはランナーのキャッシュで決まります）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuild、この端末とCIランナーへの読み込み、宣言）が実例です。
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください。開発中（`tauri dev`）は、起動に使ったターミナルや Visual Studio Code が対象です。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と Desktop に同じ拒否理由を表示します。
 

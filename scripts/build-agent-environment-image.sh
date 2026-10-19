@@ -13,11 +13,15 @@
 # builds foreign platforms through emulation is enough), each saved as
 # <ARCHIVE_DIR>/<reference>-<arch>.tar (default ARCHIVE_DIR:
 # dist/agent-environment). The archive for this device's architecture is
-# loaded here with `guildbotics environment image load`; the declaration is
-# then given every architecture's digest with `guildbotics environment image
-# declare`, so the other devices only have to load their archive (the path to
-# copy is printed at the end). Devices of another architecture run with the
-# image they last loaded, and say so, until they load the new archive.
+# loaded here with `guildbotics environment image load`, and into the CI
+# runner of the workspace's code host with `guildbotics environment image
+# load-ci` (CI jobs run on the same image, named by its tag alone, so the
+# runner's cache decides the version they get; run this on the machine the
+# runner runs on); the declaration is then given every architecture's digest
+# with `guildbotics environment image declare`, so the other devices only
+# have to load their archive (the path to copy is printed at the end).
+# Devices of another architecture run with the image they last loaded, and
+# say so, until they load the new archive.
 #
 # GUILDBOTICS_CLI names the CLI that loads and declares (default: the
 # Desktop's managed CLI, or `guildbotics` on PATH); set it to `uv run
@@ -82,6 +86,7 @@ done
 
 if [ -n "${native_archive}" ]; then
     cli image load "${native_archive}"
+    cli image load-ci "${native_archive}"
 fi
 cli image declare "${reference}" "${declare_args[@]}"
 

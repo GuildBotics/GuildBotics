@@ -3,6 +3,7 @@ on Branvil itself, and what the setup screens store."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -10,14 +11,17 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.entities.team import Person
+from guildbotics.integrations.branvil import provider as branvil_provider
 from guildbotics.integrations.branvil.setup import Workspace
 from guildbotics.integrations.factory import PROVIDERS, hub_ports
+from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
     SCOPE,
     BranvilDouble,
     connect_admin,
+    serve,
     services,
 )
 
@@ -250,3 +254,155 @@ def test_the_hub_port_is_branvils_loopback_port(
     if connection is not None:
         connect_admin(base_url=connection)
     assert hub_ports(services) == ports
+
+
+_IMAGE = "guildbotics/agent-environment:dev"
+_ARCHIVE = Path("/srv/images/agent-environment-arm64.tar")
+
+
+async def _load_ci_image(
+    monkeypatch, double: BranvilDouble, archive: Path = _ARCHIVE
+) -> list[str]:
+    serve(double, monkeypatch)
+    monkeypatch.setattr(branvil_provider, "_POLL_SECONDS", 0)
+    assert BRANVIL.load_ci_image is not None
+    return await BRANVIL.load_ci_image(archive)
+
+
+@pytest.mark.asyncio
+async def test_an_archive_is_loaded_into_the_ci_runner_once_the_load_is_over(
+    monkeypatch,
+):
+    connect_admin()
+    double = BranvilDouble()
+    double.ci_outcome, double.ci_reads = [_IMAGE], 3
+
+    loaded = await _load_ci_image(monkeypatch, double)
+
+    assert loaded == [_IMAGE]
+    assert double.writes == ["POST /api/v1/admin/ci/images/load"]
+    assert double.operation is not None
+    assert (double.operation["target"], double.operation["state"]) == (
+        str(_ARCHIVE),
+        "succeeded",
+    )
+    assert double.ci_reads == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_load_says_why(monkeypatch):
+    connect_admin()
+    double = BranvilDouble()
+    double.ci_outcome = "the archive holds no image"
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double)
+
+    assert str(raised.value) == t(
+        "integrations.branvil.provider.ci_load_failed",
+        archive=_ARCHIVE,
+        detail="the archive holds no image",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("archive", "running", "status", "code", "message"),
+    [
+        (_ARCHIVE, True, 409, "conflict", "Another image operation is running."),
+        (
+            Path("images/agent.tar"),
+            False,
+            400,
+            "invalid",
+            "Give the absolute path of the archive.",
+        ),
+    ],
+    ids=["another_running", "relative"],
+)
+async def test_a_load_branvil_refuses_is_not_waited_for(
+    monkeypatch, archive: Path, running: bool, status: int, code: str, message: str
+):
+    connect_admin()
+    double = BranvilDouble()
+    if running:
+        double.operation = {"kind": "pull", "target": "x", "state": "running"}
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double, archive)
+
+    assert str(raised.value) == t(
+        "integrations.branvil.api.refused",
+        operation="POST /api/v1/admin/ci/images/load",
+        status=status,
+        code=code,
+        message=message,
+    )
+    assert double.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("admin", "message"),
+    [
+        ("", t("integrations.branvil.api.not_connected")),
+        # An agent's token administers nothing.
+        ("bvt_aiko", "forbidden"),
+    ],
+    ids=["not_connected", "not_the_owners"],
+)
+async def test_only_guildbotics_connection_loads_into_the_ci_runner(
+    monkeypatch, admin: str, message: str
+):
+    if admin:
+        connect_admin(admin)
+    double = BranvilDouble()
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double)
+
+    assert message in str(raised.value)
+    assert double.operation is None
+
+
+@pytest.mark.asyncio
+async def test_a_load_whose_outcome_another_operation_replaced_is_not_reported(
+    monkeypatch,
+):
+    connect_admin()
+    double = BranvilDouble()
+    double.ci_outcome = [_IMAGE]
+    ci = double._ci
+
+    def superseded() -> dict[str, Any]:
+        # The load finished unseen, and another operation began after it.
+        double.operation = {
+            "kind": "pull",
+            "target": _IMAGE,
+            "state": "running",
+            "started_at": double.now(),
+        }
+        return ci()
+
+    monkeypatch.setattr(double, "_ci", superseded)
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double)
+
+    assert str(raised.value) == t(
+        "integrations.branvil.provider.ci_load_superseded", archive=_ARCHIVE
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_load_branvil_forgot_in_a_restart_is_reported_as_lost(monkeypatch):
+    connect_admin()
+    double = BranvilDouble()
+    monkeypatch.setattr(double, "_ci", lambda: {"operation": None})
+
+    with pytest.raises(ServiceError) as raised:
+        await _load_ci_image(monkeypatch, double)
+
+    assert str(raised.value) == t(
+        "integrations.branvil.provider.ci_load_lost", archive=_ARCHIVE
+    )

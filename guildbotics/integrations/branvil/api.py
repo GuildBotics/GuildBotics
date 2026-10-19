@@ -13,8 +13,9 @@ one percent-encoded path segment.
 Every request of a member's client that is not a read passes the write gate
 before it is sent: it must name a repository of the configured workspace, the
 scope. GuildBotics' own client (:class:`Admin`), with the admin token Branvil
-issued it on the owner's consent, administers Branvil for the setup screens
-and the checks: members, their tokens and accounts, workspaces, entry links.
+issued it on the owner's consent, administers Branvil for the setup screens,
+the checks and the environment's images: members, their tokens and accounts,
+workspaces, entry links, image loads into the CI runner.
 It is the host's alone.
 Every failure comes out as the ports' failure, told from Branvil's status and
 error code.
