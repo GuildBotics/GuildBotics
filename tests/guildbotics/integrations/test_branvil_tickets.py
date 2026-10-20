@@ -5,14 +5,22 @@ over, and the patrol's order."""
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.runtime.code_hosting_service import TicketLink
-from guildbotics.runtime.port import ServiceError, ServiceNotFound, WorkflowStatus
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
@@ -166,23 +174,10 @@ async def test_a_ticket_of_another_workspace_is_neither_work_nor_written_to(
     assert await tickets.candidates() == []
     assert (await tickets.read("tickets", url)).items[0]["lane"] is None
     with pytest.raises(ServiceError, match="refused"):
-        await tickets.add(url)
-    with pytest.raises(ServiceError, match="refused"):
         await tickets.move(Task(url=url, title="", description=""), "done")
 
     assert double.writes[before:] == []
     assert double.tickets[url]["lane"] == "ready"
-
-
-@pytest.mark.asyncio
-async def test_a_ticket_off_the_board_is_not_moved_onto_it(monkeypatch):
-    double, _, tickets = services(monkeypatch)
-    url = double._ticket(REPO, "Loose", "", [])["url"]
-
-    with pytest.raises(ServiceError, match=SCOPE):
-        await tickets.move(Task(url=url, title="", description=""), "in_progress")
-
-    assert double.tickets[url]["lane"] is None
 
 
 @pytest.mark.asyncio
@@ -227,15 +222,30 @@ async def test_a_ticket_reads_as_its_one_assignee_or_none(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_ticket_on_the_board_is_not_put_on_it_again(monkeypatch):
-    double, _, tickets = services(monkeypatch)
-    url = _ticket(double)
-    before = len(double.writes)
+async def test_a_ticket_is_created_in_the_new_lane_and_never_off_the_board(
+    monkeypatch,
+):
+    double = BranvilDouble()
+    sent: list[dict] = []
+    respond = double.respond
 
-    assert await tickets.add(url) is True
+    def recorded(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/tickets"):
+            sent.append(json.loads(request.content))
+        return respond(request)
 
-    assert double.writes[before:] == []
-    assert double.tickets[url]["lane"] == "ready"
+    monkeypatch.setattr(double, "respond", recorded)
+    _, _, tickets = services(monkeypatch, double)
+
+    with pytest.raises(
+        ServiceUnsupported,
+        match=re.escape(t("integrations.branvil.api.every_on_board")),
+    ):
+        await tickets.create_ticket(REPO, "Loose", "", [], add_to_board=False)
+    created = await tickets.create_ticket(REPO, "Fix login", "", [])
+
+    assert [body["lane"] for body in sent] == ["new"]
+    assert double.tickets[created.target.url]["lane"] == "new"
 
 
 @pytest.mark.asyncio
@@ -331,12 +341,12 @@ async def test_the_boards_closed_items_are_of_its_workspaces_repositories(
     # The workspace's pull requests are listed with no card on the board.
     assert [item.url for item in await tickets.closed_since(*window)] == [pull]
 
-    # So are its closed tickets, on the board or not; another workspace's are not.
-    loose = double._ticket(REPO, "Loose", "", [])["url"]
+    # So are its closed tickets; another workspace's are not.
+    closed = double._ticket(REPO, "Closed", "", [])["url"]
     theirs = double._ticket(THEIR_REPO, "Elsewhere", "", [])["url"]
-    for url in (loose, theirs):
-        double.tickets[url].update(state="closed", closed_at=double.now())
-    assert {item.url for item in await tickets.closed_since(*window)} == {pull, loose}
+    for url in (closed, theirs):
+        double.tickets[url].update(state="closed", closed_at=double.now(), lane="done")
+    assert {item.url for item in await tickets.closed_since(*window)} == {pull, closed}
 
 
 async def _relate(tickets, url: str, **relations) -> None:

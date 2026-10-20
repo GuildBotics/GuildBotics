@@ -35,7 +35,7 @@ class DummyTicketService(TicketService):
     async def comment(self, url, body, *, status=None):
         raise NotImplementedError
 
-    async def create_ticket(self, tracker, title, body, labels):
+    async def create_ticket(self, tracker, title, body, labels, *, add_to_board=True):
         raise NotImplementedError
 
     async def update_ticket(self, url, **_changes):
@@ -51,9 +51,6 @@ class DummyTicketService(TicketService):
         return None
 
     async def move(self, task, lane) -> bool:
-        return False
-
-    async def add(self, ticket_url: str) -> bool:
         return False
 
     async def closed_since(self, start, end) -> list:

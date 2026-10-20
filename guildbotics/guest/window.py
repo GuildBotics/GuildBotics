@@ -154,7 +154,7 @@ class WindowTicketService(TicketService):
     async def comment(self, url: str, body: str, **_: Any) -> CommentWritten:
         raise _unavailable("Commenting on a ticket")
 
-    async def create_ticket(self, tracker: str, *_: Any) -> TicketCreated:
+    async def create_ticket(self, tracker: str, *_: Any, **__: Any) -> TicketCreated:
         raise _unavailable("Creating a ticket")
 
     async def update_ticket(self, url: str, **_: Any) -> TicketUpdated:
@@ -171,9 +171,6 @@ class WindowTicketService(TicketService):
 
     async def move(self, task: Task, lane: MoveLane) -> bool:
         raise _unavailable("Moving a ticket")
-
-    async def add(self, ticket_url: str) -> bool:
-        raise _unavailable("Putting a ticket on the board")
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
         raise _unavailable("The board's closed work")

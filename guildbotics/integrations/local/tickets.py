@@ -117,14 +117,20 @@ class LocalTicketService(TicketService):
         return items.comment(self.scope, ref, self.person.person_id, body, status)
 
     async def create_ticket(
-        self, tracker: str, title: str, body: str, labels: Sequence[str]
+        self,
+        tracker: str,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        *,
+        add_to_board: bool = True,
     ) -> TicketCreated:
         defined = _defined_labels(tracker, labels)
         ref, number = store.new_ref("ticket", tracker)
         item = {
             **items.new_item(number, title, body, self.person.person_id),
             "labels": defined,
-            "lane": None,
+            "lane": Task.NEW if add_to_board else None,
             "parent": None,
             "blocked_by": [],
         }
@@ -209,13 +215,6 @@ class LocalTicketService(TicketService):
         ref = store.locate(task.url, "ticket")
         item = store.load(ref)
         item["lane"] = lane
-        store.save(self.scope, ref, item)
-        return True
-
-    async def add(self, ticket_url: str) -> bool:
-        ref = store.locate(ticket_url, "ticket")
-        item = store.load(ref)
-        item["lane"] = item["lane"] or Task.NEW
         store.save(self.scope, ref, item)
         return True
 

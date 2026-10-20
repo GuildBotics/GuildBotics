@@ -3,7 +3,8 @@
 The same steps run against each provider: a ticket the member writes reads
 back the same way, named by its URL and the ids its reads give; a ticket
 assigned to the member in the ready lane is a candidate, moves to the working
-lane, and is re-read as work still to do there; a ticket is put on the board;
+lane, and is re-read as work still to do there; a created ticket is on the
+board unless asked otherwise, which a board holding every ticket refuses;
 the board's closed work is listed for the activity history. A write outside
 the configured scope -- a ticket, a comment, a reaction, a lane -- is refused
 before it is made.
@@ -118,7 +119,7 @@ async def test_a_ticket_reads_back_as_it_was_written(board: Harness):
     assert (ticket["tracker"], ticket["repository"], ticket["lane"]) == (
         board.tracker,
         board.repository,
-        None,
+        "new",
     )
     assert ticket["key"] and ticket["label"] == created.target.label
     assert [(c["id"], c["body"], c["author_type"]) for c in comments.items] == [
@@ -239,12 +240,33 @@ async def test_a_ready_ticket_is_not_taken_while_a_ticket_it_is_blocked_by_is_op
 
 
 @pytest.mark.asyncio
-async def test_a_ticket_is_put_on_the_board_without_being_assigned(board: Harness):
+async def test_a_created_ticket_is_on_the_board_without_being_assigned(
+    board: Harness,
+):
     url = await _ticket(board, "Later")
 
-    assert await board.tickets.add(url) is True
     assert (await board.tickets.read("tickets", url)).items[0]["lane"] == "new"
     assert await board.tickets.candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_is_created_off_the_board_or_refused_as_unsupported(
+    board: Harness,
+):
+    before = len(board.writes)
+
+    if "off_board" in board.features:
+        created = await board.tickets.create_ticket(
+            board.tracker, "Loose", "", [], add_to_board=False
+        )
+        [ticket] = (await board.tickets.read("tickets", created.target.url)).items
+        assert ticket["lane"] is None
+    else:
+        with pytest.raises(ServiceUnsupported):
+            await board.tickets.create_ticket(
+                board.tracker, "Loose", "", [], add_to_board=False
+            )
+        assert board.writes[before:] == []
 
 
 @pytest.mark.asyncio
@@ -281,7 +303,7 @@ async def test_the_boards_closed_work_is_listed(board: Harness):
 @pytest.mark.asyncio
 async def test_writes_outside_the_configured_scope_are_refused(board: Harness):
     """Another scope's ticket is readable, and nothing of it is the member's
-    to write: not a ticket, a comment, a reaction, a lane, or the board."""
+    to write: not a ticket, a comment, a reaction, or a lane."""
     theirs = board.theirs.url or ""
     mine = await _ticket(board, "Mine")
     before = len(board.writes)
@@ -294,8 +316,6 @@ async def test_writes_outside_the_configured_scope_are_refused(board: Harness):
         await board.tickets.add_reaction(theirs, board.their_comment, "ack")
     with pytest.raises(ServiceError, match="refused"):
         await board.tickets.move(board.theirs, "in_progress")
-    with pytest.raises(ServiceError, match="refused"):
-        await board.tickets.add(theirs)
     # Nor is a relation of the member's ticket to it, refused by the scope
     # before anything is sent (a service may refuse it too, in other words).
     with pytest.raises(ServiceError, match="Writes are limited to"):
@@ -372,8 +392,6 @@ async def test_a_ticket_operation_reaches_no_pull_request(board: Harness):
         await board.tickets.comment(url, "Hi")
     with pytest.raises(ServiceNotFound):
         await board.tickets.add_reaction(url, written.id, "ack")
-    with pytest.raises(ServiceNotFound):
-        await board.tickets.add(url)
     with pytest.raises(ServiceNotFound):
         await board.tickets.update_ticket(
             url,

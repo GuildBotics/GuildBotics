@@ -258,8 +258,21 @@ class GitHubTicketService(GitHubApi, TicketService):
         return await self.post_comment(self.item(url, "ticket"), body, status)
 
     async def create_ticket(
-        self, tracker: str, title: str, body: str, labels: Sequence[str]
+        self,
+        tracker: str,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        *,
+        add_to_board: bool = True,
     ) -> TicketCreated:
+        """Open an issue in ``tracker`` and, if ``add_to_board``, add it to the
+        configured Project.
+
+        Raises:
+            ServiceError: Saying the issue was created, if it could not be
+                added to the Project: the member does not open it again.
+        """
         repository = self.repository(tracker)
         payload: dict[str, Any] = {"title": title, "body": body}
         if labels:
@@ -267,7 +280,21 @@ class GitHubTicketService(GitHubApi, TicketService):
         client = await self.client()
         data = (await client.post(f"/repos/{repository}/issues", json=payload)).json()
         item = self.item(str(data["html_url"]), "ticket")
-        return TicketCreated(labels=_label_names(data), target=self.target(item, data))
+        created = TicketCreated(
+            labels=_label_names(data), target=self.target(item, data)
+        )
+        if add_to_board:
+            try:
+                await self._get_project_item_id(str(data["node_id"]))
+            except ServiceError as exc:
+                raise ServiceError(
+                    t(
+                        "integrations.github.response.created_off_board",
+                        url=created.target.url,
+                        message=str(exc),
+                    )
+                ) from exc
+        return created
 
     async def update_ticket(
         self,
@@ -892,12 +919,6 @@ class GitHubTicketService(GitHubApi, TicketService):
                 "opt": option_id,
             },
         )
-        return True
-
-    async def add(self, ticket_url: str) -> bool:
-        """Add the issue to the configured Project."""
-        data = await self.fetch(self.item(ticket_url, "ticket"))
-        await self._get_project_item_id(str(data["node_id"]))
         return True
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:

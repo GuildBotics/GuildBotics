@@ -151,6 +151,8 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
 
 - A ticket has at most one assignee: the agent that works on it. Assigning another
   member replaces the assignee, so two members never take up the same ticket.
+- Every ticket is in a lane of its workspace's board: a ticket a member creates goes to
+  **New**, and `member ticket create --no-add-to-board` is refused.
 - A ticket assigned to the member in the **Ready** lane of the workspace's board is
   taken up and moved to **In progress**; one in **In progress** is taken up again when
   someone else has spoken since the member last did. Once a pull request refers to the

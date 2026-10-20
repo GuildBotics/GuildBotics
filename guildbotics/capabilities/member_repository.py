@@ -97,18 +97,10 @@ async def ticket_create(
     human_approved: bool = False,
 ) -> dict[str, Any]:
     _require_human_approval(human_approved, "Creating a ticket")
-    tickets = _tickets(context)
-    created = await tickets.create_ticket(tracker, title, body, _cleaned(labels))
-    on_board = False
-    if add_to_board:
-        try:
-            on_board = await tickets.add(created.target.url)
-        except ServiceError as exc:
-            raise ServiceError(
-                f"{created.target.url} was created, but it could not be put on"
-                f" the board: {exc}"
-            ) from exc
-    return {**created.model_dump(), "on_board": on_board}
+    created = await _tickets(context).create_ticket(
+        tracker, title, body, _cleaned(labels), add_to_board=add_to_board
+    )
+    return created.model_dump()
 
 
 async def ticket_update(

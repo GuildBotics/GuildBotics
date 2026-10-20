@@ -1282,7 +1282,9 @@ async def test_create_ticket_uses_the_trackers_own_labels(monkeypatch):
     )
     service = ticket_service(github, monkeypatch)
 
-    created = await service.create_ticket(REPO, "New", "Body", ["BUG", "docs", "bug"])
+    created = await service.create_ticket(
+        REPO, "New", "Body", ["BUG", "docs", "bug"], add_to_board=False
+    )
 
     assert github.bodies("POST", f"/repos/{REPO}/issues") == [
         {"title": "New", "body": "Body", "labels": ["bug", "Docs"]}
@@ -1628,7 +1630,6 @@ _TICKET_OPERATIONS = {
         state_reason=None,
     ),
     "reaction": lambda s, url: s.add_reaction(url, "issuecomment-5", "ack"),
-    "board": lambda s, url: s.add(url),
     "read": lambda s, url: s.read("tickets", url),
     "comments": lambda s, url: s.read("ticket_comments", url),
 }
@@ -1807,21 +1808,6 @@ def _board_github() -> ScriptedGitHub:
         .on_graphql(UPDATE_PROJECT_ITEM_STATUS, {"updateProjectV2ItemFieldValue": {}})
         .on_graphql(_FIELDS, _status_field("Todo", "In Progress", "Done"))
     )
-
-
-@pytest.mark.asyncio
-async def test_add_puts_the_issue_on_the_configured_project(monkeypatch):
-    github = _board_github()
-    service = ticket_service(github, monkeypatch)
-    service._project_node_id = "PROJECT"
-
-    assert await service.add(issue_url(7)) is True
-
-    assert [b["query"] for b in github.documents()] == [
-        NODE_REPOSITORY,
-        ADD_PROJECT_ITEM,
-    ]
-    assert github.documents()[-1]["variables"] == {"proj": "PROJECT", "content": "I_7"}
 
 
 @pytest.mark.asyncio

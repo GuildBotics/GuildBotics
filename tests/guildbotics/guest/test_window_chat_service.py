@@ -243,7 +243,9 @@ _TASK = Task(id="1", url=_TICKET_URL, title="Fix it", description="")
     "call",
     [
         lambda s: s.comment(_TICKET_URL, "hello"),
-        lambda s: s.create_ticket("acme/team/demo", "title", "body", []),
+        lambda s: s.create_ticket(
+            "acme/team/demo", "title", "body", [], add_to_board=False
+        ),
         lambda s: s.update_ticket(
             _TICKET_URL,
             body=None,
@@ -256,7 +258,6 @@ _TASK = Task(id="1", url=_TICKET_URL, title="Fix it", description="")
         lambda s: s.candidates(),
         lambda s: s.refresh(_TASK),
         lambda s: s.move(_TASK, "in_progress"),
-        lambda s: s.add(_TICKET_URL),
         lambda s: s.closed_since(datetime.now(UTC), datetime.now(UTC)),
     ],
     ids=[
@@ -267,7 +268,6 @@ _TASK = Task(id="1", url=_TICKET_URL, title="Fix it", description="")
         "candidates",
         "refresh",
         "move",
-        "add",
         "closed_since",
     ],
 )

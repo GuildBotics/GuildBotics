@@ -13,7 +13,9 @@ relation only to a ticket of its workspace (``400 invalid``), its move into
 request's link that closes only to a ticket of its repository (``422
 unsupported``), and an artifact only if it is a zip archive. A repository
 (``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
-requests, and a ticket is on its workspace's board or on none. A ticket keeps
+requests, and a ticket is always in a lane of its workspace's board: a new one in
+the lane it names, ``new`` if none, and a lane that is not one (``null``
+included) is refused (``400 invalid``). A ticket keeps
 its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
 shown from both sides. It does not hold writes to the member's scope -- the
 provider refuses those before any request. As Branvil does, it records an author's
@@ -229,9 +231,9 @@ class BranvilDouble:
         for link in self.pulls[url]["tickets"]:
             ticket = self.tickets.get(link["url"])
             if link["closes"] and ticket is not None:
-                ticket.update(state="closed", state_reason="completed", closed_at=at)
-                if ticket["lane"]:
-                    ticket["lane"] = "done"
+                ticket.update(
+                    state="closed", state_reason="completed", closed_at=at, lane="done"
+                )
 
     # -- the API ----------------------------------------------------------------
 
@@ -443,7 +445,9 @@ class BranvilDouble:
                 }
             case "POST", ["tickets"]:
                 labels = _defined(repo, body["labels"])
-                ticket = self._ticket(repo, body["title"], body["body"], labels)
+                ticket = self._ticket(
+                    repo, body["title"], body["body"], labels, _lane(body, "new")
+                )
                 return 201, self._view(ticket)
             case _, ["tickets", number, *more]:
                 url = f"{BASE}/{repo}/-/tickets/{number}"
@@ -577,6 +581,9 @@ class BranvilDouble:
                     ticket["closed_at"] = (
                         self.now() if ticket["state"] == "closed" else None
                     )
+                # A ticket closed on the board leaves its lane for done.
+                if state_changed and ticket["state"] == "closed":
+                    ticket["lane"] = "done"
                 for key, more in (("labels", added), ("blocked_by", blockers)):
                     removed = body.get(f"remove_{key}", [])
                     kept = [name for name in ticket[key] if name not in removed]
@@ -596,14 +603,13 @@ class BranvilDouble:
             case "GET", ["pulls"]:
                 return 200, self._page(self._linked(url), params)
             case "PUT", ["board"]:
-                if body["lane"] not in (None, *LANES):
-                    raise Refusal(400, "invalid", f"No lane {body['lane']}.")
-                if body["lane"] == "in_progress" != ticket["lane"] and any(
+                lane = _lane(body)
+                if lane == "in_progress" != ticket["lane"] and any(
                     self.tickets[blocker]["state"] == "open"
                     for blocker in ticket["blocked_by"]
                 ):
                     raise Refusal(409, "blocked", f"{url} waits for its blockers.")
-                ticket["lane"] = body["lane"]
+                ticket["lane"] = lane
                 return 200, self._view(ticket)
         raise _missing("/".join(rest))
 
@@ -660,6 +666,7 @@ class BranvilDouble:
         title: str,
         body: str,
         labels: list[str],
+        lane: str = "new",
         author: str = MEMBER,
     ) -> dict[str, Any]:
         number = 1 + sum(t["repository"] == repo for t in self.tickets.values())
@@ -675,7 +682,7 @@ class BranvilDouble:
             "author": author,
             "assignee": None,
             "labels": labels,
-            "lane": None,
+            "lane": lane,
             "parent": None,
             "blocked_by": [],
             "created_at": self.now(),
@@ -930,6 +937,14 @@ _PASSED = {
     "details_url": f"{BASE}/{REPO}/-/jobs/att_1",
     "artifact_names": [],
 }
+
+
+def _lane(body: dict[str, Any], default: str | None = None) -> str:
+    """The lane ``body`` names, ``default`` if it names none."""
+    lane = body.get("lane", default)
+    if lane not in LANES:
+        raise Refusal(400, "invalid", f"No lane {lane}.")
+    return lane
 
 
 def _defined(repo: str, labels: list[str]) -> list[str]:

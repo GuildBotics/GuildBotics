@@ -85,10 +85,21 @@ class TicketService(ABC):
 
     @abstractmethod
     async def create_ticket(
-        self, tracker: str, title: str, body: str, labels: Sequence[str]
+        self,
+        tracker: str,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        *,
+        add_to_board: bool = True,
     ) -> TicketCreated:
-        """Open a ticket in ``tracker``; labels are the tracker's own, never
-        new ones."""
+        """Open a ticket in ``tracker``, in the board's new lane unless not
+        ``add_to_board``; labels are the tracker's own, never new ones.
+
+        Raises:
+            ServiceUnsupported: If not ``add_to_board`` and the board holds
+                every ticket.
+        """
 
     @abstractmethod
     async def update_ticket(
@@ -137,14 +148,6 @@ class TicketService(ABC):
 
         Returns:
             Whether it moved: a board without that lane leaves it where it is.
-        """
-
-    @abstractmethod
-    async def add(self, ticket_url: str) -> bool:
-        """Put the ticket on the board.
-
-        Returns:
-            Whether it is on it: ``False`` when no board is configured.
         """
 
     @abstractmethod
