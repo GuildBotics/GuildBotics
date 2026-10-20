@@ -287,12 +287,22 @@ class GitHubTicketService(GitHubApi, TicketService):
         new_parent = self.item(parent, "ticket") if parent else None
         adding = [self.item(blocker, "ticket") for blocker in add_blocked_by]
         removing = [self.item(blocker, "ticket") for blocker in remove_blocked_by]
-        # A relation is written on this issue or on its parent, and the related
-        # issue shows it too, so each related issue must be the member's to
-        # write; the gate sees only the repository a request is sent to.
-        for related in (new_parent, *adding, *removing):
-            if related is not None:
-                check_path(self.owner, related.repository, provider="github")
+
+        # Every issue whose relations change must be the member's to write,
+        # checked before anything is written: a relation is written on this
+        # issue or on its old or new parent, and the gate sees only the
+        # repository a request is sent to. The old parent is known once the
+        # issue's relations are read.
+        def check(*changed: GitHubItem | None) -> None:
+            for issue in changed:
+                if issue is not None:
+                    check_path(self.owner, issue.repository, provider="github")
+
+        check(item, new_parent, *adding, *removing)
+        place = await self._place(item) if parent is not None or adding else None
+        current = place["parent"] if place and parent is not None else None
+        old_parent = self.item(current["url"], "ticket") if current else None
+        check(old_parent)
         payload: dict[str, Any] = {}
         if body is not None:
             payload["body"] = body
@@ -307,10 +317,7 @@ class GitHubTicketService(GitHubApi, TicketService):
         # PATCH succeeded so a failed PATCH leaves the labels untouched.
         additions = await self._defined_labels(item.repository, add_labels)
         data = await self.fetch(item)
-        # The issue's relations as they are, read before any write as every
-        # related issue is.
-        place = await self._place(item) if parent is not None or adding else {}
-        if adding:
+        if place and adding:
             # GitHub refuses a blocker the issue already has; adding it changes
             # nothing, as adding a label it carries does.
             had = {issue["url"].casefold() for issue in _nodes(place["blockedBy"])}
@@ -334,7 +341,7 @@ class GitHubTicketService(GitHubApi, TicketService):
         if additions:
             await client.post(labels, json={"labels": list(additions)})
         if parent is not None:
-            await self._reparent(data["id"], place["parent"], new_parent)
+            await self._reparent(data["id"], old_parent, new_parent)
         dependencies = f"{item.conversation}/dependencies/blocked_by"
         for blocker in blockers:
             await client.post(dependencies, json={"issue_id": blocker})
@@ -360,29 +367,30 @@ class GitHubTicketService(GitHubApi, TicketService):
     async def _reparent(
         self,
         issue_id: int,
-        current: dict[str, Any] | None,
+        current: GitHubItem | None,
         parent: GitHubItem | None,
     ) -> None:
-        """Move the issue ``issue_id`` from ``current``, the parent its place
-        names, to ``parent``, or to none.
+        """Move the issue ``issue_id`` from its ``current`` parent to
+        ``parent``, or to none.
 
         A sub-issue is added to and removed from its parent, by its id; GitHub
         moves one that has a parent only when told to replace it.
         """
-        had = current["url"] if current else ""
-        if had.casefold() == (self.url(parent) if parent else "").casefold():
-            return
         client = await self.client()
         if parent is None:
-            await client.request(
-                "DELETE",
-                f"{self.item(had, 'ticket').conversation}/sub_issue",
-                json={"sub_issue_id": issue_id},
-            )
-        else:
+            if current is not None:
+                await client.request(
+                    "DELETE",
+                    f"{current.conversation}/sub_issue",
+                    json={"sub_issue_id": issue_id},
+                )
+        elif (
+            current is None
+            or self.url(current).casefold() != self.url(parent).casefold()
+        ):
             await client.post(
                 f"{parent.conversation}/sub_issues",
-                json={"sub_issue_id": issue_id, "replace_parent": bool(had)},
+                json={"sub_issue_id": issue_id, "replace_parent": current is not None},
             )
 
     async def _defined_labels(

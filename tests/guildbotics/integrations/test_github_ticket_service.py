@@ -1482,6 +1482,40 @@ async def test_a_tickets_parent_is_written_on_the_parent_by_the_childs_id(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("parent", [issue_url(1), ""])
+async def test_leaving_a_parent_outside_the_owner_is_refused_and_writes_nothing(
+    monkeypatch, parent
+):
+    """Moving the issue to another parent, or out of its parent, changes the
+    parent it leaves too: one outside the owner refuses the whole update,
+    before any of its other changes is sent."""
+    github = (
+        _issues()
+        .on("GET", f"/repos/{REPO}/issues/7", _issue(7, id=7007))
+        .on("GET", f"/repos/{REPO}/issues/1", _issue(1))
+        .on_graphql(
+            "projectItems(first: 100)",
+            _on_project(parent=_relative(2, repository="other/demo")),
+        )
+    )
+    service = ticket_service(github, monkeypatch)
+
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await service.update_ticket(
+            issue_url(7),
+            body="new",
+            title=None,
+            add_labels=[],
+            remove_labels=[],
+            state=None,
+            state_reason=None,
+            parent=parent,
+        )
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "relations",
     [

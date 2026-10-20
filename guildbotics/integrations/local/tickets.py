@@ -149,6 +149,9 @@ class LocalTicketService(TicketService):
         item = store.load(ref)
         additions = _defined_labels(ref.place, add_labels)
         if parent is not None:
+            # The parent it leaves changes too.
+            if item["parent"]:
+                self._related(item["parent"])
             item["parent"] = self._related(parent) if parent else None
         removed = [self._related(blocker) for blocker in remove_blocked_by]
         blockers = [blocker for blocker in item["blocked_by"] if blocker not in removed]
@@ -235,8 +238,8 @@ class LocalTicketService(TicketService):
         """The files are opened per operation."""
 
     def _related(self, url: str) -> str:
-        """The URL of the ticket ``url`` names, one the member may relate a
-        ticket to.
+        """The URL of the ticket ``url`` names, one whose relations the member
+        may change: a ticket related to, or the parent a ticket leaves.
 
         Raises:
             ServiceNotFound: If there is no such ticket.

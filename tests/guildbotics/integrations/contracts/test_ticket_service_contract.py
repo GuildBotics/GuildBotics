@@ -304,6 +304,15 @@ async def test_writes_outside_the_configured_scope_are_refused(board: Harness):
         await _relate(board, mine, add_blocked_by=[theirs])
     with pytest.raises(ServiceError, match="Writes are limited to"):
         await _relate(board, mine, remove_blocked_by=[theirs])
+    # Nor a relation of it to the member's ticket, which would change it.
+    for relation in (
+        {"parent": mine},
+        {"parent": ""},
+        {"add_blocked_by": [mine]},
+        {"remove_blocked_by": [mine]},
+    ):
+        with pytest.raises(ServiceError, match="Writes are limited to"):
+            await _relate(board, theirs, **relation)
 
     assert board.writes[before:] == []
     assert (await board.tickets.read("tickets", theirs)).items[0]["title"] == "Theirs"
