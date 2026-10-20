@@ -200,6 +200,8 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
             "labels": [],
             "assignees": [],
             "lane": Task.READY,
+            "parent": None,
+            "blocked_by": [],
             "created_at": store.now(),
             "closed_at": None,
             "comments": [
@@ -377,8 +379,9 @@ _CLOSED_AT = "2026-07-10T01:00:00Z"
 
 class GitHubDouble:
     """GitHub, as far as the contracts ask it: it keeps the issues, pull
-    requests, comments, reviews, branches, artifacts and Project items it is
-    sent, and answers a comment or review only at an address of its own."""
+    requests, comments, reviews, branches, artifacts, Project items, sub-issues
+    and dependencies it is sent, and answers a comment or review only at an
+    address of its own."""
 
     def __init__(self) -> None:
         self.writes: list[str] = []
@@ -392,6 +395,9 @@ class GitHubDouble:
         self.board: dict[int, str] = {}
         #: Each issue's cross-references: the pull requests that name it.
         self.timeline: dict[int, list[int]] = {}
+        #: Each issue's parent, and the issues each one is blocked by.
+        self.parents: dict[int, int] = {}
+        self.blocked_by: dict[int, list[int]] = {}
         self._ids = count(100)
         self._revisions = count(1)
 
@@ -455,6 +461,8 @@ class GitHubDouble:
             return httpx.Response(404, json={"message": "Not Found"})
         if answer == ():
             return httpx.Response(204)
+        if isinstance(answer, httpx.Response):
+            return answer
         return httpx.Response(201 if request.method == "POST" else 200, json=answer)
 
     def _theirs(self, method: str, route: str) -> httpx.Response:
@@ -514,6 +522,22 @@ class GitHubDouble:
             return item
         if match := re.fullmatch(r"/issues/(\d+)/labels(?:/(.+))?", route):
             return self._labels(method, int(match.group(1)), match.group(2), body)
+        if match := re.fullmatch(r"/issues/(\d+)/sub_issues?", route):
+            return self._sub_issue(method, int(match.group(1)), body)
+        if match := re.fullmatch(
+            r"/issues/(\d+)/dependencies/blocked_by(?:/(\d+))?", route
+        ):
+            blockers = self.blocked_by.setdefault(int(match.group(1)), [])
+            blocker = self._number(int(match.group(2) or body["issue_id"]))
+            if method == "DELETE":
+                if blocker not in blockers:
+                    return None
+                blockers.remove(blocker)
+            elif blocker in blockers:
+                return httpx.Response(422, json={"message": "Validation Failed"})
+            else:
+                blockers.append(blocker)
+            return self.items[blocker]
         if match := re.fullmatch(r"/issues/(\d+)/comments", route):
             number = int(match.group(1))
             if number not in self.items:
@@ -595,6 +619,35 @@ class GitHubDouble:
             return []
         return None
 
+    def _number(self, issue_id: int) -> int:
+        """The number of the issue whose id is ``issue_id``."""
+        return next(n for n, item in self.items.items() if item["id"] == issue_id)
+
+    def _sub_issue(self, method: str, parent: int, body: dict) -> Any:
+        child = self._number(body["sub_issue_id"])
+        if method == "DELETE":
+            if self.parents.get(child) != parent:
+                return None
+            del self.parents[child]
+        elif child in self.parents and not body.get("replace_parent"):
+            return httpx.Response(422, json={"message": "Validation Failed"})
+        else:
+            self.parents[child] = parent
+        return self.items[parent]
+
+    def _relatives(self, numbers: list[int]) -> dict[str, Any]:
+        """The issues ``numbers`` name, as one page of a GraphQL connection."""
+        return {"nodes": [self._relative(n) for n in numbers], "pageInfo": _LAST}
+
+    def _relative(self, number: int) -> dict[str, Any]:
+        item = self.items[number]
+        return {
+            "url": item["html_url"],
+            "title": item["title"],
+            "number": number,
+            "state": item["state"].upper(),
+        }
+
     def _labels(self, method: str, number: int, name: str | None, body: dict) -> Any:
         item = self.items.get(number)
         if item is None:
@@ -638,6 +691,7 @@ class GitHubDouble:
         number = len(self.items) + 1
         collection = "pull" if kind == "pull_request" else "issues"
         item: dict[str, Any] = {
+            "id": 1000 + number,
             "number": number,
             "node_id": f"NODE{number}",
             "title": body["title"],
@@ -718,7 +772,22 @@ class GitHubDouble:
                 ]
             )
             items = {"nodes": nodes, "pageInfo": {"hasNextPage": False}}
-            return {"repository": {"issue": {"projectItems": items}}}
+            parent = self.parents.get(number)
+            return {
+                "repository": {
+                    "issue": {
+                        "projectItems": items,
+                        "parent": None if parent is None else self._relative(parent),
+                        "subIssues": self._relatives(
+                            [c for c, p in self.parents.items() if p == number]
+                        ),
+                        "blockedBy": self._relatives(self.blocked_by.get(number, [])),
+                        "blocking": self._relatives(
+                            [b for b, of in self.blocked_by.items() if number in of]
+                        ),
+                    }
+                }
+            }
         raise AssertionError(f"unexpected GraphQL: {query}")
 
     def _project(self) -> list[dict[str, Any]]:
@@ -746,6 +815,12 @@ class GitHubDouble:
                         "timelineItems": {"nodes": []},
                         "labels": {"nodes": []},
                         "repository": {"name": "demo", "owner": {"login": OWNER}},
+                        "issueDependenciesSummary": {
+                            "blockedBy": sum(
+                                self.items[blocker]["state"] == "open"
+                                for blocker in self.blocked_by.get(number, [])
+                            )
+                        },
                     },
                 }
             )

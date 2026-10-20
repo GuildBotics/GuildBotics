@@ -6,8 +6,8 @@ from guildbotics.commands.repository import RepositoryReader, display
 
 COMMAND_METADATA = {
     "description": {
-        "en": "Inspect a ticket, its comments, its lane, and the pull requests that refer to it.",
-        "ja": "チケットの本文・コメント・レーンと、参照している PR を確認します。",
+        "en": "Inspect a ticket, its comments, its lane, its related tickets, and the pull requests that refer to it.",
+        "ja": "チケットの本文・コメント・レーン・関係するチケットと、参照している PR を確認します。",
     },
     "read_only": True,
 }

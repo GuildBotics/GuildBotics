@@ -1,6 +1,7 @@
 """GitHub as a member's tickets: the issues it reads and writes, and the
 Projects board it selects work from."""
 
+import json
 import logging
 from typing import Any
 
@@ -115,6 +116,7 @@ def _item(
     assigned_events: list[dict[str, str]] | None = None,
     created_at: str = "2026-01-01T00:00:00Z",
     field: str = AGENT_FIELD,
+    open_blockers: int = 0,
 ) -> dict:
     field_values: list[dict[str, Any]] = [{"field": {"name": "Status"}, "name": status}]
     if agent:
@@ -142,6 +144,7 @@ def _item(
                 ]
             },
             "repository": {"name": "demo", "owner": {"login": OWNER}},
+            "issueDependenciesSummary": {"blockedBy": open_blockers},
         },
     }
 
@@ -416,6 +419,28 @@ async def test_open_pr_keeps_its_issue_out_of_the_working_lane(monkeypatch):
 
     assert await service.first_task() is None
     assert service.moved == []
+
+
+@pytest.mark.asyncio
+async def test_a_ready_ticket_is_not_taken_while_an_issue_it_is_blocked_by_is_open(
+    monkeypatch,
+):
+    """GitHub counts the open issues one is blocked by on the board's read, so
+    a blocked ready ticket is passed over unread; one already being worked on
+    is not stopped by a blocker added meanwhile."""
+    service, github = _board(
+        monkeypatch,
+        items=[
+            _item(number=1, status="Todo", open_blockers=1),
+            _item(number=2, status="In Progress", open_blockers=1),
+        ],
+        comments={2: [_comment("human", "Also do this")]},
+    )
+
+    [task] = await service.candidates()
+
+    assert task.url == issue_url(2)
+    assert f"GET /repos/{REPO}/issues/1/comments" not in github.sent
 
 
 @pytest.mark.asyncio
@@ -1091,16 +1116,33 @@ def _status_field(*names: str) -> dict:
     }
 
 
-def _on_project(*items: dict, more: bool = False) -> dict:
+def _connection(*nodes: dict, more: bool = False) -> dict:
+    return {"nodes": list(nodes), "pageInfo": {"hasNextPage": more}}
+
+
+def _on_project(*items: dict, more: bool = False, **relations: Any) -> dict:
+    """The issue's project items, and the issues it is related to."""
     return {
         "repository": {
             "issue": {
-                "projectItems": {
-                    "nodes": list(items),
-                    "pageInfo": {"hasNextPage": more},
-                }
+                "projectItems": _connection(*items, more=more),
+                "parent": None,
+                "subIssues": _connection(),
+                "blockedBy": _connection(),
+                "blocking": _connection(),
+                **relations,
             }
         }
+    }
+
+
+def _relative(number: int, state: str = "OPEN", repository: str = REPO) -> dict:
+    """An issue as the read of a related one names it."""
+    return {
+        "url": issue_url(number, repository),
+        "title": f"issue {number}",
+        "number": number,
+        "state": state,
     }
 
 
@@ -1155,10 +1197,68 @@ async def test_a_ticket_reads_its_lane_on_the_configured_board(
             assignees=[LOGIN],
             labels=["bug"],
             lane=lane,
+            parent=None,
+            children=[],
+            blocked_by=[],
+            blocks=[],
         ).model_dump()
     ]
     [lookup] = [b for b in github.documents() if "projectItems" in b["query"]]
     assert lookup["variables"] == {"owner": OWNER, "repo": "demo", "number": 7}
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_reads_the_issues_it_is_related_to(monkeypatch):
+    """The relations come with the board's read of the issue, in one request,
+    each related issue with its state as the REST reads spell it."""
+    github = _issues().on_graphql(
+        "projectItems(first: 100)",
+        _on_project(
+            parent=_relative(1),
+            subIssues=_connection(_relative(2, "CLOSED"), _relative(3)),
+            blockedBy=_connection(_relative(4, repository="acme/other")),
+            blocking=_connection(_relative(5)),
+        ),
+    )
+    service = ticket_service(github, monkeypatch)
+    service._project_node_id = "PROJECT"
+
+    [ticket] = (await service.read("tickets", issue_url(7))).items
+
+    def relative(number: int, state: str = "open", repository: str = REPO) -> dict:
+        return {
+            "kind": "ticket",
+            "url": issue_url(number, repository),
+            "title": f"issue {number}",
+            "label": f"#{number}",
+            "state": state,
+        }
+
+    assert {
+        key: ticket[key] for key in ("parent", "children", "blocked_by", "blocks")
+    } == {
+        "parent": relative(1),
+        "children": [relative(2, "closed"), relative(3)],
+        "blocked_by": [relative(4, repository="acme/other")],
+        "blocks": [relative(5)],
+    }
+    assert [b for b in github.documents() if "blockedBy" in b["query"]] == [
+        b for b in github.documents() if "projectItems" in b["query"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_related_to_more_issues_than_one_page_is_not_guessed(
+    monkeypatch,
+):
+    github = _issues().on_graphql(
+        "projectItems(first: 100)", _on_project(blocking=_connection(more=True))
+    )
+    service = ticket_service(github, monkeypatch)
+    service._project_node_id = "PROJECT"
+
+    with pytest.raises(ServiceError):
+        await service.read("tickets", issue_url(7))
 
 
 @pytest.mark.asyncio
@@ -1312,6 +1412,174 @@ async def test_update_ticket_refuses_an_undefined_label_before_writing(monkeypat
         )
 
     assert github.writes == []
+
+
+def _relate(service: GitHubTicketService, url: str, **relations: Any):
+    """Change only the relations of the issue ``url``."""
+    return service.update_ticket(
+        url,
+        body=None,
+        title=None,
+        add_labels=[],
+        remove_labels=[],
+        state=None,
+        state_reason=None,
+        **relations,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current", "parent", "writes", "sent"),
+    [
+        # Into a parent: added to it by the child's id.
+        (
+            None,
+            issue_url(1),
+            [f"POST /repos/{REPO}/issues/1/sub_issues"],
+            {"sub_issue_id": 7007, "replace_parent": False},
+        ),
+        # Moved from another parent, which GitHub does only when told to.
+        (
+            _relative(2),
+            issue_url(1),
+            [f"POST /repos/{REPO}/issues/1/sub_issues"],
+            {"sub_issue_id": 7007, "replace_parent": True},
+        ),
+        # Out of its parent: removed from the parent its place names.
+        (
+            _relative(2),
+            "",
+            [f"DELETE /repos/{REPO}/issues/2/sub_issue"],
+            {"sub_issue_id": 7007},
+        ),
+        # Already where it is asked to be, as GitHub spells either.
+        (_relative(1, repository="ACME/Demo"), issue_url(1), [], None),
+        (None, "", [], None),
+    ],
+)
+async def test_a_tickets_parent_is_written_on_the_parent_by_the_childs_id(
+    monkeypatch, current, parent, writes, sent
+):
+    github = (
+        _issues()
+        .on("GET", f"/repos/{REPO}/issues/7", _issue(7, id=7007))
+        .on("GET", f"/repos/{REPO}/issues/1", _issue(1))
+        .on_graphql("projectItems(first: 100)", _on_project(parent=current))
+        .on("POST", f"/repos/{REPO}/issues/1/sub_issues", _issue(1))
+        .on("DELETE", f"/repos/{REPO}/issues/2/sub_issue", _issue(2))
+    )
+    service = ticket_service(github, monkeypatch)
+
+    await _relate(service, issue_url(7), parent=parent)
+
+    assert github.writes == writes
+    assert [
+        json.loads(r.content)
+        for r in github.requests
+        if f"{r.method} {r.url.path}" in writes
+    ] == ([sent] if sent else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "relations",
+    [
+        {"parent": issue_url(404)},
+        {"add_blocked_by": [issue_url(404)]},
+        {"remove_blocked_by": [issue_url(404)]},
+    ],
+)
+async def test_a_relation_to_an_issue_that_is_not_there_writes_nothing(
+    monkeypatch, relations
+):
+    """Every related issue is read before the first write, so the update's
+    other changes are not made either."""
+    github = _issues().on_graphql("projectItems(first: 100)", _on_project())
+    service = ticket_service(github, monkeypatch)
+
+    with pytest.raises(ServiceNotFound):
+        await service.update_ticket(
+            issue_url(7),
+            body="new",
+            title=None,
+            add_labels=[],
+            remove_labels=[],
+            state=None,
+            state_reason=None,
+            **relations,
+        )
+
+    assert github.writes == []
+
+
+@pytest.mark.asyncio
+async def test_a_tickets_blockers_are_written_by_their_ids(monkeypatch):
+    """Adding one the issue is already blocked by (as GitHub spells it), or
+    removing one it is not blocked by, changes nothing."""
+    dependencies = f"/repos/{REPO}/issues/7/dependencies/blocked_by"
+    github = (
+        _issues()
+        .on_graphql(
+            "projectItems(first: 100)",
+            _on_project(blockedBy=_connection(_relative(6, repository="ACME/Demo"))),
+        )
+        .on("GET", f"/repos/{REPO}/issues/3", _issue(3, id=3003))
+        .on("GET", f"/repos/{REPO}/issues/4", _issue(4, id=4004))
+        .on("GET", f"/repos/{REPO}/issues/5", _issue(5, id=5005))
+        .on("POST", dependencies, _issue(3))
+        .on("DELETE", f"{dependencies}/4004", _issue(4))
+        # #5 does not block #7: GitHub answers the DELETE with 404.
+    )
+    service = ticket_service(github, monkeypatch)
+
+    await _relate(
+        service,
+        issue_url(7),
+        add_blocked_by=[issue_url(3), issue_url(6)],
+        remove_blocked_by=[issue_url(4), issue_url(5)],
+    )
+
+    assert github.writes == [
+        f"POST {dependencies}",
+        f"DELETE {dependencies}/4004",
+        f"DELETE {dependencies}/5005",
+    ]
+    assert github.bodies("POST", dependencies) == [{"issue_id": 3003}]
+    assert f"GET /repos/{REPO}/issues/6" not in github.sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "relations",
+    [
+        {"parent": issue_url(1, "other/demo")},
+        {"add_blocked_by": [issue_url(3), issue_url(1, "other/demo")]},
+        {"remove_blocked_by": [issue_url(1, "other/demo")]},
+    ],
+)
+async def test_a_relation_to_an_issue_outside_the_owner_is_refused_unsent(
+    monkeypatch, relations
+):
+    """A blocker is written on the member's own issue, where the gate would let
+    it through, but the other issue shows it too: it is refused before any
+    request, with the rest of the update."""
+    github = _issues()
+    service = ticket_service(github, monkeypatch)
+
+    with pytest.raises(ServiceError, match="refused"):
+        await service.update_ticket(
+            issue_url(7),
+            body="new",
+            title=None,
+            add_labels=[],
+            remove_labels=[],
+            state=None,
+            state_reason=None,
+            **relations,
+        )
+
+    assert github.requests == []
 
 
 _TICKET_OPERATIONS = {

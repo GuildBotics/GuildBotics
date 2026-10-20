@@ -3,7 +3,12 @@ and the board that is their lanes and whose they are (``assignees``).
 
 A ticket in the ready lane is the member's to take unless the member spoke
 last; one in the working lane is taken up again when someone else has spoken
-since, or when nobody has said anything yet.
+since, or when nobody has said anything yet. A ticket in the ready lane
+is not taken while a ticket it is blocked by is open.
+
+A ticket keeps the URLs of its ``parent`` and of the tickets it is
+``blocked_by``; its children and the tickets it blocks are the tickets that
+name it so.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
+from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
@@ -27,6 +33,7 @@ from guildbotics.runtime.resources import (
     CommentWritten,
     ReactionAdded,
     ReadPage,
+    TicketRelative,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
@@ -62,6 +69,8 @@ class LocalTicketService(TicketService):
         ref = store.locate(subject, "ticket")
         item = store.load(ref)
         if resource == "tickets":
+            others = store.items("ticket")
+            parent = item["parent"]
             ticket = {
                 **items.target(ref, item).model_dump(),
                 "key": ref.name,
@@ -72,6 +81,18 @@ class LocalTicketService(TicketService):
                 "assignees": item["assignees"],
                 "labels": item["labels"],
                 "lane": item["lane"],
+                "parent": _relative(parent) if parent else None,
+                "children": [
+                    _relative(other.url)
+                    for other, each in others
+                    if each["parent"] == ref.url
+                ],
+                "blocked_by": [_relative(url) for url in item["blocked_by"]],
+                "blocks": [
+                    _relative(other.url)
+                    for other, each in others
+                    if ref.url in each["blocked_by"]
+                ],
             }
             return ReadPage.of(resource, [ticket], target=items.target(ref, item))
         comments = [
@@ -104,6 +125,8 @@ class LocalTicketService(TicketService):
             **items.new_item(number, title, body, self.person.person_id),
             "labels": defined,
             "lane": None,
+            "parent": None,
+            "blocked_by": [],
         }
         store.save(self.scope, ref, item)
         return TicketCreated(labels=defined, target=items.target(ref, item))
@@ -118,10 +141,22 @@ class LocalTicketService(TicketService):
         remove_labels: Sequence[str],
         state: str | None,
         state_reason: str | None,
+        parent: str | None = None,
+        add_blocked_by: Sequence[str] = (),
+        remove_blocked_by: Sequence[str] = (),
     ) -> TicketUpdated:
         ref = store.locate(url, "ticket")
         item = store.load(ref)
         additions = _defined_labels(ref.place, add_labels)
+        if parent is not None:
+            item["parent"] = self._related(parent) if parent else None
+        removed = [self._related(blocker) for blocker in remove_blocked_by]
+        blockers = [blocker for blocker in item["blocked_by"] if blocker not in removed]
+        item["blocked_by"] = blockers + [
+            blocker
+            for blocker in map(self._related, add_blocked_by)
+            if blocker not in blockers
+        ]
         state_changed = state is not None and item["state"] != state
         for key, value in (("body", body), ("title", title), ("state", state)):
             if value is not None:
@@ -199,10 +234,27 @@ class LocalTicketService(TicketService):
     async def aclose(self) -> None:
         """The files are opened per operation."""
 
+    def _related(self, url: str) -> str:
+        """The URL of the ticket ``url`` names, one the member may relate a
+        ticket to.
+
+        Raises:
+            ServiceNotFound: If there is no such ticket.
+            ServiceError: If its tracker is outside the member's scope.
+        """
+        ref = store.locate(url, "ticket")
+        store.load(ref)
+        check_path(self.scope, ref.place, provider="local")
+        return ref.url
+
     def _work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
         me = self.person.person_id
         lane = item["lane"]
         if lane not in _LANES or me not in item["assignees"]:
+            return None
+        if lane == Task.READY and any(
+            _relative(blocker).state == "open" for blocker in item["blocked_by"]
+        ):
             return None
         comments = item["comments"]
         mine = bool(comments) and comments[-1]["author"] == me
@@ -215,6 +267,13 @@ class LocalTicketService(TicketService):
         if reason is None:
             return None
         return items.task(ref, item, status=lane, assignee=me, trigger_reason=reason)
+
+
+def _relative(url: str) -> TicketRelative:
+    """The ticket ``url`` names, as a ticket related to it reads it."""
+    ref = store.locate(url, "ticket")
+    item = store.load(ref)
+    return TicketRelative(**items.target(ref, item).model_dump(), state=item["state"])
 
 
 def _defined_labels(tracker: str, labels: Sequence[str]) -> list[str]:

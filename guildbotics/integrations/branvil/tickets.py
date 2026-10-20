@@ -34,6 +34,7 @@ from guildbotics.runtime.resources import (
     ReactionAdded,
     ReadPage,
     Ticket,
+    TicketRelative,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
@@ -85,6 +86,10 @@ class BranvilTicketService(BranvilApi, TicketService):
             assignees=[str(data["assignee"]["name"])] if data["assignee"] else [],
             labels=list(data.get("labels") or []),
             lane=data["lane"] if self._on_board(data) else None,
+            parent=data["parent"] and self._relative(data["parent"]),
+            children=[self._relative(entry) for entry in data["children"]],
+            blocked_by=[self._relative(entry) for entry in data["blocked_by"]],
+            blocks=[self._relative(entry) for entry in data["blocks"]],
         )
         return ReadPage.of(resource, [ticket], target=self.target(item, data))
 
@@ -115,8 +120,16 @@ class BranvilTicketService(BranvilApi, TicketService):
         remove_labels: Sequence[str],
         state: str | None,
         state_reason: str | None,
+        parent: str | None = None,
+        add_blocked_by: Sequence[str] = (),
+        remove_blocked_by: Sequence[str] = (),
     ) -> TicketUpdated:
         item = self.item(url, "ticket")
+        # A relation is written to both tickets: each is in the scope.
+        for related in filter(None, (parent, *add_blocked_by, *remove_blocked_by)):
+            check_path(
+                self.workspace, self.item(related, "ticket").place, provider=PROVIDER
+            )
         changes = {
             "body": body,
             "title": title,
@@ -128,8 +141,11 @@ class BranvilTicketService(BranvilApi, TicketService):
             item.api,
             {
                 **{key: value for key, value in changes.items() if value is not None},
+                **({} if parent is None else {"parent": parent or None}),
                 "add_labels": list(add_labels),
                 "remove_labels": list(remove_labels),
+                "add_blocked_by": list(add_blocked_by),
+                "remove_blocked_by": list(remove_blocked_by),
             },
         )
         data = answer["ticket"]
@@ -246,15 +262,26 @@ class BranvilTicketService(BranvilApi, TicketService):
             self.workspace, str(ticket["repository"])
         )
 
+    def _relative(self, ticket: dict[str, Any]) -> TicketRelative:
+        return TicketRelative(
+            **self.target(_ticket_item(ticket), ticket).model_dump(),
+            state=str(ticket["state"]),
+        )
+
     def _task(self, card: dict[str, Any]) -> Task | None:
         """The card as a task of the member, if it is one: open, in a lane of
-        the member's work on the board, and the member is its one assignee."""
+        the member's work on the board, not waiting in the ready lane for a
+        ticket it is blocked by, and the member is its one assignee."""
         me = username(self.person).casefold()
         if not (
             me
             and card["state"] == "open"
             and self._on_board(card)
             and card["lane"] in _LANES
+            and not (
+                card["lane"] == Task.READY
+                and any(entry["state"] == "open" for entry in card["blocked_by"])
+            )
             and card["assignee"]
             and card["assignee"]["name"].casefold() == me
         ):

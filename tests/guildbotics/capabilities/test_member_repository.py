@@ -141,6 +141,23 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
 
 
 @pytest.mark.asyncio
+async def test_ticket_update_changes_relations_alone(member):
+    child, parent, blocker = ticket(1), ticket(2), ticket(3)
+
+    with pytest.raises(MemberCapabilityError, match="at least one"):
+        await member_repository.ticket_update(member, child, add_blocked_by=[" "])
+    await member_repository.ticket_update(
+        member, child, parent=parent, add_blocked_by=[f" {blocker} "]
+    )
+    assert (item(child)["parent"], item(child)["blocked_by"]) == (parent, [blocker])
+    # An empty parent makes it a part of none.
+    await member_repository.ticket_update(
+        member, child, parent="", remove_blocked_by=[blocker]
+    )
+    assert (item(child)["parent"], item(child)["blocked_by"]) == (None, [])
+
+
+@pytest.mark.asyncio
 async def test_removing_a_label_the_ticket_does_not_carry_changes_nothing(member):
     url = ticket(1, labels=["bug"])
 

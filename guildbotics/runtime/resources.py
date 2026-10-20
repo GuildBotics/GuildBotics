@@ -74,6 +74,12 @@ class WorkTarget(ReadModel):
 Lane = Literal["new", "ready", "in_progress", "done"]
 
 
+class TicketRelative(WorkTarget):
+    """A ticket another ticket is related to, with its state."""
+
+    state: str
+
+
 class Ticket(WorkTarget):
     #: What names the ticket in its service, short enough for a branch name
     #: (``ticket/<key>``): ``123``, ``PROJ-123``.
@@ -89,6 +95,14 @@ class Ticket(WorkTarget):
     labels: list[str]
     #: The ticket's lane on the board; ``None`` when it is not on it.
     lane: Lane | None
+    #: The ticket this one is a part of, meant to be completed once its
+    #: children are closed.
+    parent: TicketRelative | None
+    children: list[TicketRelative]
+    #: The tickets meant to be closed before this one is started.
+    blocked_by: list[TicketRelative]
+    #: The tickets this one must be closed before.
+    blocks: list[TicketRelative]
 
 
 class PullRequest(WorkTarget):
