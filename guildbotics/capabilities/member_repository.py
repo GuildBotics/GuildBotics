@@ -121,20 +121,29 @@ async def ticket_update(
     state: str | None = None,
     state_reason: str | None = None,
     human_approved: bool = False,
+    parent: str | None = None,
+    add_blocked_by: Sequence[str] = (),
+    remove_blocked_by: Sequence[str] = (),
 ) -> dict[str, Any]:
     if state is not None:
         _require_human_approval(
             human_approved, f"Changing the ticket state to '{state}'"
         )
     add_labels, remove_labels = _cleaned(add_labels), _cleaned(remove_labels)
+    add_blocked_by, remove_blocked_by = (
+        _cleaned(add_blocked_by),
+        _cleaned(remove_blocked_by),
+    )
     if (
         body is None
         and title is None
         and state is None
-        and not (add_labels or remove_labels)
+        and parent is None
+        and not (add_labels or remove_labels or add_blocked_by or remove_blocked_by)
     ):
         raise MemberCapabilityError(
-            "ticket update needs at least one of body, title, labels, or state."
+            "ticket update needs at least one of body, title, labels, state, "
+            "parent, or blockers."
         )
     updated = await _tickets(context).update_ticket(
         url,
@@ -144,6 +153,9 @@ async def ticket_update(
         remove_labels=remove_labels,
         state=state,
         state_reason=state_reason,
+        parent=parent,
+        add_blocked_by=add_blocked_by,
+        remove_blocked_by=remove_blocked_by,
     )
     return updated.model_dump()
 

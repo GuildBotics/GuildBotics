@@ -37,6 +37,7 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
+from guildbotics.integrations.repository_scope import check_path
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
@@ -55,6 +56,7 @@ from guildbotics.runtime.resources import (
     ReactionAdded,
     ReadPage,
     Ticket,
+    TicketRelative,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
@@ -66,8 +68,10 @@ from guildbotics.runtime.ticket_service import (
 )
 from guildbotics.utils.i18n_tool import t
 
-#: The project items of an issue, with their Status.
-_ISSUE_PROJECT_ITEMS = """
+#: The project items of an issue, with their Status, and the issues it is
+#: related to. GitHub holds at most 100 sub-issues of an issue; more of any
+#: kind than one page fails the read rather than leave some out.
+_ISSUE_PLACE = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
@@ -80,9 +84,14 @@ query($owner: String!, $repo: String!, $number: Int!) {
         }
         pageInfo { hasNextPage }
       }
+      parent { ...Relative }
+      subIssues(first: 100) { nodes { ...Relative } pageInfo { hasNextPage } }
+      blockedBy(first: 100) { nodes { ...Relative } pageInfo { hasNextPage } }
+      blocking(first: 100) { nodes { ...Relative } pageInfo { hasNextPage } }
     }
   }
 }
+fragment Relative on Issue { url title number state }
 """
 
 #: The board's single-select fields: Status, and the Agent field when set up.
@@ -144,6 +153,7 @@ query($proj: ID!, $cursor: String) {
               }
               labels(first: 10) { nodes { name } }
               repository { name owner { login } }
+              issueDependenciesSummary { blockedBy }
             }
           }
         }
@@ -221,6 +231,8 @@ class GitHubTicketService(GitHubApi, TicketService):
         with reading(resource):
             if resource == "tickets":
                 data = await self.fetch(item, bounded=True)
+                place = await self._place(item)
+                parent = place["parent"]
                 ticket = Ticket(
                     **self.target(item, data).model_dump(),
                     key=str(item.number),
@@ -230,7 +242,11 @@ class GitHubTicketService(GitHubApi, TicketService):
                     state=data["state"],
                     assignees=[user["login"] for user in data.get("assignees") or []],
                     labels=[label["name"] for label in data.get("labels") or []],
-                    lane=await self._lane(item),
+                    lane=await self._lane(place),
+                    parent=_relative(parent) if parent else None,
+                    children=_relatives(place["subIssues"]),
+                    blocked_by=_relatives(place["blockedBy"]),
+                    blocks=_relatives(place["blocking"]),
                 )
                 return ReadPage.of(resource, [ticket], target=self.target(item, data))
             request = request_of(self, resource, subject, conditions)
@@ -263,8 +279,30 @@ class GitHubTicketService(GitHubApi, TicketService):
         remove_labels: Sequence[str],
         state: str | None,
         state_reason: str | None,
+        parent: str | None = None,
+        add_blocked_by: Sequence[str] = (),
+        remove_blocked_by: Sequence[str] = (),
     ) -> TicketUpdated:
         item = self.item(url, "ticket")
+        new_parent = self.item(parent, "ticket") if parent else None
+        adding = [self.item(blocker, "ticket") for blocker in add_blocked_by]
+        removing = [self.item(blocker, "ticket") for blocker in remove_blocked_by]
+
+        # Every issue whose relations change must be the member's to write,
+        # checked before anything is written: a relation is written on this
+        # issue or on its old or new parent, and the gate sees only the
+        # repository a request is sent to. The old parent is known once the
+        # issue's relations are read.
+        def check(*changed: GitHubItem | None) -> None:
+            for issue in changed:
+                if issue is not None:
+                    check_path(self.owner, issue.repository, provider="github")
+
+        check(item, new_parent, *adding, *removing)
+        place = await self._place(item) if parent is not None or adding else None
+        current = place["parent"] if place and parent is not None else None
+        old_parent = self.item(current["url"], "ticket") if current else None
+        check(old_parent)
         payload: dict[str, Any] = {}
         if body is not None:
             payload["body"] = body
@@ -279,6 +317,16 @@ class GitHubTicketService(GitHubApi, TicketService):
         # PATCH succeeded so a failed PATCH leaves the labels untouched.
         additions = await self._defined_labels(item.repository, add_labels)
         data = await self.fetch(item)
+        if place and adding:
+            # GitHub refuses a blocker the issue already has; adding it changes
+            # nothing, as adding a label it carries does.
+            had = {issue["url"].casefold() for issue in _nodes(place["blockedBy"])}
+            adding = [b for b in adding if self.url(b).casefold() not in had]
+        if new_parent is not None:
+            await self.fetch(new_parent)
+        # The dependency endpoints name an issue by its id, not its number.
+        blockers = [(await self.fetch(b))["id"] for b in adding]
+        unblockers = [(await self.fetch(b))["id"] for b in removing]
         state_changed = state is not None and data.get("state") != state
         client = await self.client()
         if payload:
@@ -292,6 +340,15 @@ class GitHubTicketService(GitHubApi, TicketService):
                 await client.delete(f"{labels}/{quote(name, safe='')}")
         if additions:
             await client.post(labels, json={"labels": list(additions)})
+        if parent is not None:
+            await self._reparent(data["id"], old_parent, new_parent)
+        dependencies = f"{item.conversation}/dependencies/blocked_by"
+        for blocker in blockers:
+            await client.post(dependencies, json={"issue_id": blocker})
+        for blocker in unblockers:
+            # One the issue is not blocked by is already removed.
+            with suppress(GitHubNotFound):
+                await client.delete(f"{dependencies}/{blocker}")
         if additions or remove_labels:
             data = await self.fetch(item)
         return TicketUpdated(
@@ -306,6 +363,35 @@ class GitHubTicketService(GitHubApi, TicketService):
         self, url: str, target_id: str, reaction: SemanticReaction
     ) -> ReactionAdded:
         return await self.react(self.item(url, "ticket"), target_id, reaction)
+
+    async def _reparent(
+        self,
+        issue_id: int,
+        current: GitHubItem | None,
+        parent: GitHubItem | None,
+    ) -> None:
+        """Move the issue ``issue_id`` from its ``current`` parent to
+        ``parent``, or to none.
+
+        A sub-issue is added to and removed from its parent, by its id; GitHub
+        moves one that has a parent only when told to replace it.
+        """
+        client = await self.client()
+        if parent is None:
+            if current is not None:
+                await client.request(
+                    "DELETE",
+                    f"{current.conversation}/sub_issue",
+                    json={"sub_issue_id": issue_id},
+                )
+        elif (
+            current is None
+            or self.url(current).casefold() != self.url(parent).casefold()
+        ):
+            await client.post(
+                f"{parent.conversation}/sub_issues",
+                json={"sub_issue_id": issue_id, "replace_parent": current is not None},
+            )
 
     async def _defined_labels(
         self, repository: str, labels: Sequence[str]
@@ -337,19 +423,20 @@ class GitHubTicketService(GitHubApi, TicketService):
                 resolved.append(canonical)
         return resolved
 
-    async def _lane(self, item: GitHubItem) -> Lane | None:
-        """The issue's lane on the configured board; ``None`` off it."""
+    async def _place(self, item: GitHubItem) -> dict[str, Any]:
+        """The issue's project items and the issues it is related to."""
         owner, name = item.repository.split("/")
         data = await self.graphql(
-            _ISSUE_PROJECT_ITEMS, {"owner": owner, "repo": name, "number": item.number}
+            _ISSUE_PLACE, {"owner": owner, "repo": name, "number": item.number}
         )
-        items = data["repository"]["issue"]["projectItems"]
-        if items["pageInfo"]["hasNextPage"]:
-            raise ServiceError(t("integrations.github.response.response"))
+        return data["repository"]["issue"]
+
+    async def _lane(self, place: dict[str, Any]) -> Lane | None:
+        """The issue's lane on the configured board; ``None`` off it."""
         project = await self._project_node()
         on_board = [
             node
-            for node in items["nodes"]
+            for node in _nodes(place["projectItems"])
             if (node.get("project") or {}).get("id") == project
         ]
         if not on_board:
@@ -725,13 +812,18 @@ class GitHubTicketService(GitHubApi, TicketService):
             task_metadata[issue["id"]] = {
                 "assigned": is_assigned,
                 "assigned_at": assigned_at,
+                # The open issues it is blocked by.
+                "blocked": issue["issueDependenciesSummary"]["blockedBy"] > 0,
             }
         return sorted(tasks), task_metadata
 
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
-        if not metadata["assigned"]:
+        # A ticket is not started while an issue it is blocked by is open.
+        if not metadata["assigned"] or (
+            task.status == Task.READY and metadata["blocked"]
+        ):
             return None
         assert task.url
         item = self.item(task.url, "ticket")
@@ -892,6 +984,27 @@ def _repository_of(content: dict[str, Any]) -> str:
         for part in (str(owner.get("login") or ""), str(repository.get("name") or ""))
         if part
     )
+
+
+def _nodes(connection: dict[str, Any]) -> list[dict[str, Any]]:
+    """The nodes of ``connection``, which must all be on its one page."""
+    if connection["pageInfo"]["hasNextPage"]:
+        raise ServiceError(t("integrations.github.response.response"))
+    return connection["nodes"]
+
+
+def _relative(issue: dict[str, Any]) -> TicketRelative:
+    return TicketRelative(
+        kind="ticket",
+        url=issue["url"],
+        title=issue["title"],
+        label=f"#{issue['number']}",
+        state=str(issue["state"]).lower(),
+    )
+
+
+def _relatives(connection: dict[str, Any]) -> list[TicketRelative]:
+    return [_relative(issue) for issue in _nodes(connection)]
 
 
 def _label_names(issue: dict[str, Any]) -> list[str]:

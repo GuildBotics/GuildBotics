@@ -101,10 +101,19 @@ class TicketService(ABC):
         remove_labels: Sequence[str],
         state: str | None,
         state_reason: str | None,
+        parent: str | None = None,
+        add_blocked_by: Sequence[str] = (),
+        remove_blocked_by: Sequence[str] = (),
     ) -> TicketUpdated:
         """Change a ticket; a label is added or removed without touching the
         labels others set meanwhile, and removing one it does not carry
-        changes nothing."""
+        changes nothing.
+
+        Its relations to other tickets, named by their URLs, change the same
+        way: ``parent`` is the ticket it becomes a part of (``""`` makes it
+        part of none, ``None`` keeps it), and ``add_blocked_by`` /
+        ``remove_blocked_by`` change the tickets it is blocked by. A ticket's
+        children and the tickets it blocks change by updating those tickets."""
 
     @abstractmethod
     async def add_reaction(
@@ -114,7 +123,9 @@ class TicketService(ABC):
 
     @abstractmethod
     async def candidates(self) -> list[Task]:
-        """The member's actionable tickets in patrol order."""
+        """The member's actionable tickets in patrol order. A ticket of the
+        ready lane blocked by an open ticket is not one: it is not started
+        until its blockers are closed."""
 
     @abstractmethod
     async def refresh(self, task: Task) -> Task | None:

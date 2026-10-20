@@ -2717,6 +2717,80 @@ def test_member_update_rejects_an_empty_title(command, url_option):
     assert "title must not be empty." in result.output
 
 
+@pytest.mark.parametrize(
+    ("options", "relations"),
+    [
+        (
+            [
+                "--parent",
+                "https://github.com/owner/repo/issues/1",
+                "--add-blocked-by",
+                "https://github.com/owner/repo/issues/2",
+                "--add-blocked-by",
+                "https://github.com/owner/repo/issues/3",
+                "--remove-blocked-by",
+                "https://github.com/owner/repo/issues/4",
+            ],
+            {
+                "parent": "https://github.com/owner/repo/issues/1",
+                "add_blocked_by": (
+                    "https://github.com/owner/repo/issues/2",
+                    "https://github.com/owner/repo/issues/3",
+                ),
+                "remove_blocked_by": ("https://github.com/owner/repo/issues/4",),
+            },
+        ),
+        (
+            ["--parent", ""],
+            {"parent": "", "add_blocked_by": (), "remove_blocked_by": ()},
+        ),
+    ],
+)
+def test_member_issue_update_passes_the_relations(monkeypatch, options, relations):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls = {}
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def ticket_update(self, ticket_url, **kwargs):
+            calls.update(kwargs)
+            return {
+                "body": "",
+                "state": "open",
+                "state_changed": False,
+                "labels": [],
+                "target": _ticket_target(ticket_url, "#42", "Child"),
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda identifier: (FakeContext(person), person),
+    )
+    _fake_capabilities(monkeypatch, FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "ticket",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/issues/42",
+            *options,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert {key: calls[key] for key in relations} == relations
+
+
 def test_member_issue_update_rejects_state_reason_without_close():
     result = CliRunner().invoke(
         member_module.member,
@@ -2857,6 +2931,9 @@ def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
         "state": "closed",
         "state_reason": "completed",
         "human_approved": True,
+        "parent": None,
+        "add_blocked_by": (),
+        "remove_blocked_by": (),
         "closed": True,
     }
     assert activity_calls[0][0] is person
@@ -2918,6 +2995,9 @@ def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
         "state": None,
         "state_reason": None,
         "human_approved": False,
+        "parent": None,
+        "add_blocked_by": (),
+        "remove_blocked_by": (),
         "closed": True,
     }
 
@@ -2981,6 +3061,9 @@ def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
         "state": None,
         "state_reason": None,
         "human_approved": False,
+        "parent": None,
+        "add_blocked_by": (),
+        "remove_blocked_by": (),
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""

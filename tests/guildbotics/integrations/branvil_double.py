@@ -7,13 +7,16 @@ answered only under the item it belongs to, a branch only by its exact
 name, a review or an inline comment only on the current head
 (``409 head_moved``) and only on a file the pull request changes
 (``400 invalid``; every branch commit changes ``CHANGED``), a label only if
-the ticket's repository defines it (``400 label_undefined``), a new pull
+the ticket's repository defines it (``400 label_undefined``), a ticket's
+relation only to a ticket of its workspace (``400 invalid``), its move into
+``in_progress`` only once its blockers are closed (``409 blocked``), a new pull
 request's link that closes only to a ticket of its repository (``422
 unsupported``), and an artifact only if it is a zip archive. A repository
 (``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
-requests, and a ticket is on its workspace's board or on none. It does not
-hold writes to the member's scope -- the provider refuses those before any
-request. As Branvil does, it records an author's
+requests, and a ticket is on its workspace's board or on none. A ticket keeps
+its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
+shown from both sides. It does not hold writes to the member's scope -- the
+provider refuses those before any request. As Branvil does, it records an author's
 approval of its own pull request (which counts toward no merge); a verdict
 or a new inline comment consumes its author's review request, a reply does
 not; marking a pull request ready for review (or opening it as one) sets
@@ -440,7 +443,8 @@ class BranvilDouble:
                 }
             case "POST", ["tickets"]:
                 labels = _defined(repo, body["labels"])
-                return 201, self._ticket(repo, body["title"], body["body"], labels)
+                ticket = self._ticket(repo, body["title"], body["body"], labels)
+                return 201, self._view(ticket)
             case _, ["tickets", number, *more]:
                 url = f"{BASE}/{repo}/-/tickets/{number}"
                 if url not in self.tickets:
@@ -559,21 +563,28 @@ class BranvilDouble:
         ticket = self.tickets[url]
         match method, rest:
             case "GET", []:
-                return 200, ticket
+                return 200, self._view(ticket)
             case "PATCH", []:
                 added = _defined(ticket["repository"], body.get("add_labels", []))
+                blockers = body.get("add_blocked_by", [])
+                for related in filter(None, [body.get("parent"), *blockers]):
+                    self._related(url, related)
                 state_changed = body.get("state", ticket["state"]) != ticket["state"]
-                for key in ("title", "body", "state", "state_reason"):
+                for key in ("title", "body", "state", "state_reason", "parent"):
                     if key in body:
                         ticket[key] = body[key]
                 if state_changed:
                     ticket["closed_at"] = (
                         self.now() if ticket["state"] == "closed" else None
                     )
-                removed = body.get("remove_labels", [])
-                kept = [name for name in ticket["labels"] if name not in removed]
-                ticket["labels"] = kept + [name for name in added if name not in kept]
-                return 200, {"ticket": ticket, "state_changed": state_changed}
+                for key, more in (("labels", added), ("blocked_by", blockers)):
+                    removed = body.get(f"remove_{key}", [])
+                    kept = [name for name in ticket[key] if name not in removed]
+                    ticket[key] = kept + [name for name in more if name not in kept]
+                return 200, {
+                    "ticket": self._view(ticket),
+                    "state_changed": state_changed,
+                }
             case "GET", ["comments"]:
                 return 200, self._page(self.entries[url]["comments"], params)
             case "POST", ["comments"]:
@@ -587,8 +598,13 @@ class BranvilDouble:
             case "PUT", ["board"]:
                 if body["lane"] not in (None, *LANES):
                     raise Refusal(400, "invalid", f"No lane {body['lane']}.")
+                if body["lane"] == "in_progress" != ticket["lane"] and any(
+                    self.tickets[blocker]["state"] == "open"
+                    for blocker in ticket["blocked_by"]
+                ):
+                    raise Refusal(409, "blocked", f"{url} waits for its blockers.")
                 ticket["lane"] = body["lane"]
-                return 200, ticket
+                return 200, self._view(ticket)
         raise _missing("/".join(rest))
 
     def _workspace(self, workspace: str, rest: list[str], params: dict) -> Any:
@@ -598,7 +614,7 @@ class BranvilDouble:
         if rest == ["board", "cards"]:
             lanes = params["lane"].split(",")
             cards = [
-                ticket
+                self._view(ticket)
                 | {
                     "comments": self.entries[url]["comments"],
                     "pull_requests": self._linked(url),
@@ -660,11 +676,45 @@ class BranvilDouble:
             "assignee": None,
             "labels": labels,
             "lane": None,
+            "parent": None,
+            "blocked_by": [],
             "created_at": self.now(),
             "closed_at": None,
         }
         self.entries[url] = {"comments": []}
         return self.tickets[url]
+
+    def _related(self, url: str, other: str) -> None:
+        """Refuse a relation of the ticket ``url`` to ``other`` unless both
+        are tickets of one workspace."""
+        if other not in self.tickets:
+            raise _missing(other)
+        workspaces = {
+            self.tickets[ticket]["repository"].partition("/")[0]
+            for ticket in (url, other)
+        }
+        if len(workspaces) > 1:
+            raise Refusal(400, "invalid", f"{other} is of another workspace.")
+
+    def _view(self, ticket: dict[str, Any]) -> dict[str, Any]:
+        """The ticket as Branvil answers it, its relations shown from both
+        sides."""
+        url = ticket["url"]
+
+        def relative(other: str) -> dict[str, Any]:
+            keys = ("url", "repository", "key", "title", "state", "state_reason")
+            return {key: self.tickets[other][key] for key in keys}
+
+        return ticket | {
+            "parent": ticket["parent"] and relative(ticket["parent"]),
+            "children": [
+                relative(u) for u, t in self.tickets.items() if t["parent"] == url
+            ],
+            "blocked_by": [relative(blocker) for blocker in ticket["blocked_by"]],
+            "blocks": [
+                relative(u) for u, t in self.tickets.items() if url in t["blocked_by"]
+            ],
+        }
 
     def _new_pull(self, repo: str, body: dict) -> tuple[int, Any]:
         base = body["base"] or "main"

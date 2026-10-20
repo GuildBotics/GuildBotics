@@ -337,3 +337,76 @@ async def test_the_boards_closed_items_are_of_its_workspaces_repositories(
     for url in (loose, theirs):
         double.tickets[url].update(state="closed", closed_at=double.now())
     assert {item.url for item in await tickets.closed_since(*window)} == {pull, loose}
+
+
+async def _relate(tickets, url: str, **relations) -> None:
+    await tickets.update_ticket(
+        url,
+        body=None,
+        title=None,
+        add_labels=[],
+        remove_labels=[],
+        state=None,
+        state_reason=None,
+        **relations,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_ticket_waits_in_the_ready_lane_but_not_once_started(
+    monkeypatch,
+):
+    double, _, tickets = services(monkeypatch)
+    ready, working = _ticket(double), _ticket(double, lane="in_progress")
+    blocker = double._ticket(REPO, "Blocker", "", [])["url"]
+    for url in (ready, working):
+        await _relate(tickets, url, add_blocked_by=[blocker])
+
+    assert await _reasons(tickets) == [(working, "working_lane")]
+    assert await tickets.refresh(Task(url=ready, title="", description="")) is None
+    # Branvil itself refuses to start it.
+    with pytest.raises(ServiceError, match="blocked"):
+        await tickets.move(Task(url=ready, title="", description=""), "in_progress")
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_names_no_parent_keeps_it(monkeypatch):
+    double, _, tickets = services(monkeypatch)
+    parent, child = [double._ticket(REPO, t, "", [])["url"] for t in ("P", "C")]
+    await _relate(tickets, child, parent=parent)
+
+    await tickets.update_ticket(
+        child,
+        body=None,
+        title="Renamed",
+        add_labels=[],
+        remove_labels=[],
+        state=None,
+        state_reason=None,
+    )
+
+    [read] = (await tickets.read("tickets", child)).items
+    assert (read["title"], read["parent"]["url"], read["parent"]["label"]) == (
+        "Renamed",
+        parent,
+        "#1",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", ["parent", "add_blocked_by", "remove_blocked_by"])
+async def test_a_relation_to_another_workspace_is_refused_before_any_request(
+    monkeypatch, relation
+):
+    double, _, tickets = services(monkeypatch)
+    url = double._ticket(REPO, "Mine", "", [])["url"]
+    theirs = double.their_ticket
+    before = len(double.writes)
+
+    # The scope's refusal, before anything is sent.
+    with pytest.raises(ServiceError, match=f"Writes are limited to '{SCOPE}'"):
+        await _relate(
+            tickets, url, **{relation: theirs if relation == "parent" else [theirs]}
+        )
+
+    assert double.writes[before:] == []

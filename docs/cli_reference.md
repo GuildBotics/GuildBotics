@@ -104,7 +104,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, or state; empty content removes the body. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -1555,7 +1555,7 @@ guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`). |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, or state; empty content removes the body. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 
 ## `guildbotics member ticket comment`
 
@@ -1648,7 +1648,7 @@ guildbotics member ticket read [OPTIONS]
 
 ## `guildbotics member ticket update`
 
-Change a ticket's body, title, labels, or state; empty content removes the body.
+Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent.
 
 ```text
 guildbotics member ticket update [OPTIONS]
@@ -1665,6 +1665,9 @@ guildbotics member ticket update [OPTIONS]
 | `--remove-label TEXT` | Remove a label from the ticket. Repeat for several labels. |
 | `--state [open\|closed]` | Close or reopen the ticket; requires --human-approved. |
 | `--state-reason [completed\|not_planned]` | Why the ticket is closed; requires --state closed. |
+| `--parent TEXT` | URL of the ticket this one becomes a part of; "" makes it a part of none. |
+| `--add-blocked-by TEXT` | URL of a ticket that must be closed before this one is started. Repeat for several tickets. |
+| `--remove-blocked-by TEXT` | URL of a ticket this one is no longer blocked by. Repeat for several tickets. |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

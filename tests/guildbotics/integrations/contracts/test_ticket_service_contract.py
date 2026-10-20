@@ -57,6 +57,24 @@ async def _ticket(board: Harness, title: str = "Fix login") -> str:
     return (await board.tickets.create_ticket(board.tracker, title, "", [])).target.url
 
 
+async def _relate(board: Harness, url: str, **relations) -> None:
+    """Change only the relations of ticket ``url``."""
+    await board.tickets.update_ticket(
+        url,
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state=None,
+        state_reason=None,
+        **relations,
+    )
+
+
+async def _read(board: Harness, url: str) -> dict:
+    return (await board.tickets.read("tickets", url)).items[0]
+
+
 @pytest.mark.asyncio
 async def test_a_ticket_reads_back_as_it_was_written(board: Harness):
     tickets = board.tickets
@@ -170,6 +188,57 @@ async def test_an_assigned_ready_ticket_is_taken_and_moved_to_the_working_lane(
 
 
 @pytest.mark.asyncio
+async def test_relations_read_back_from_both_sides_and_are_taken_back(board: Harness):
+    parent, child, blocker = [
+        await _ticket(board, title) for title in ("Parent", "Child", "Blocker")
+    ]
+
+    await _relate(board, child, parent=parent)
+    await _relate(board, parent, add_blocked_by=[blocker])
+    # Adding one it is blocked by already changes nothing, as labels do.
+    await _relate(board, parent, add_blocked_by=[blocker])
+
+    read = await _read(board, parent)
+    assert [
+        (c["kind"], c["url"], c["title"], c["state"]) for c in read["children"]
+    ] == [("ticket", child, "Child", "open")]
+    assert [(b["url"], b["state"]) for b in read["blocked_by"]] == [(blocker, "open")]
+    assert (read["parent"], read["blocks"]) == (None, [])
+    assert (await _read(board, child))["parent"]["url"] == parent
+    assert [b["url"] for b in (await _read(board, blocker))["blocks"]] == [parent]
+
+    await _relate(board, child, parent="")
+    await _relate(board, parent, remove_blocked_by=[blocker])
+
+    read = await _read(board, parent)
+    assert (read["children"], read["blocked_by"]) == ([], [])
+    assert (await _read(board, child))["parent"] is None
+    assert (await _read(board, blocker))["blocks"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_ready_ticket_is_not_taken_while_a_ticket_it_is_blocked_by_is_open(
+    board: Harness,
+):
+    url, blocker = await _ticket(board, "Blocked"), await _ticket(board, "Blocker")
+    await _relate(board, url, add_blocked_by=[blocker])
+    board.assign(url)
+
+    assert await board.tickets.candidates() == []
+
+    await board.tickets.update_ticket(
+        blocker,
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state="closed",
+        state_reason="not_planned",
+    )
+    assert [task.url for task in await board.tickets.candidates()] == [url]
+
+
+@pytest.mark.asyncio
 async def test_a_ticket_is_put_on_the_board_without_being_assigned(board: Harness):
     url = await _ticket(board, "Later")
 
@@ -214,6 +283,7 @@ async def test_writes_outside_the_configured_scope_are_refused(board: Harness):
     """Another scope's ticket is readable, and nothing of it is the member's
     to write: not a ticket, a comment, a reaction, a lane, or the board."""
     theirs = board.theirs.url or ""
+    mine = await _ticket(board, "Mine")
     before = len(board.writes)
 
     with pytest.raises(ServiceError, match="refused"):
@@ -226,6 +296,23 @@ async def test_writes_outside_the_configured_scope_are_refused(board: Harness):
         await board.tickets.move(board.theirs, "in_progress")
     with pytest.raises(ServiceError, match="refused"):
         await board.tickets.add(theirs)
+    # Nor is a relation of the member's ticket to it, refused by the scope
+    # before anything is sent (a service may refuse it too, in other words).
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await _relate(board, mine, parent=theirs)
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await _relate(board, mine, add_blocked_by=[theirs])
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await _relate(board, mine, remove_blocked_by=[theirs])
+    # Nor a relation of it to the member's ticket, which would change it.
+    for relation in (
+        {"parent": mine},
+        {"parent": ""},
+        {"add_blocked_by": [mine]},
+        {"remove_blocked_by": [mine]},
+    ):
+        with pytest.raises(ServiceError, match="Writes are limited to"):
+            await _relate(board, theirs, **relation)
 
     assert board.writes[before:] == []
     assert (await board.tickets.read("tickets", theirs)).items[0]["title"] == "Theirs"

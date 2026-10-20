@@ -100,6 +100,8 @@ def ticket(number: int = 1, *, place: str = TRACKER, **fields: Any) -> str:
             "labels": [],
             "assignees": [],
             "lane": None,
+            "parent": None,
+            "blocked_by": [],
             "created_at": store.now(),
             "closed_at": None,
             "comments": [],

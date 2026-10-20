@@ -236,6 +236,10 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "add_to_board": (CONTENT, frozenset({"ticket create"}), ""),
     "state": (CONTENT, frozenset({"ticket update"}), ""),
     "state_reason": (CONTENT, frozenset({"ticket update"}), ""),
+    # The tickets a ticket is related to: each is checked against the scope.
+    "parent": (SERVICE, frozenset({"ticket update"}), _SCOPE),
+    "add_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
+    "remove_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "closes_issue": (CONTENT, frozenset({"pr create"}), ""),
     "draft": (CONTENT, frozenset({"pr create"}), ""),
     "drop_issue_links": (CONTENT, frozenset({"pr update"}), ""),

@@ -1392,6 +1392,24 @@ def ticket_create(
     type=click.Choice(["completed", "not_planned"]),
     help="Why the ticket is closed; requires --state closed.",
 )
+@click.option(
+    "--parent",
+    default=None,
+    help='URL of the ticket this one becomes a part of; "" makes it a part of none.',
+)
+@click.option(
+    "--add-blocked-by",
+    "add_blocked_by",
+    multiple=True,
+    help="URL of a ticket that must be closed before this one is started. "
+    "Repeat for several tickets.",
+)
+@click.option(
+    "--remove-blocked-by",
+    "remove_blocked_by",
+    multiple=True,
+    help="URL of a ticket this one is no longer blocked by. Repeat for several tickets.",
+)
 @_human_approved_option
 @_json_format_option
 def ticket_update(
@@ -1403,15 +1421,28 @@ def ticket_update(
     remove_labels: tuple[str, ...],
     state: str | None,
     state_reason: str | None,
+    parent: str | None,
+    add_blocked_by: tuple[str, ...],
+    remove_blocked_by: tuple[str, ...],
     human_approved: bool,
     output_format: str,
 ) -> _CommandWork:
     if state_reason and state != "closed":
         raise click.UsageError("--state-reason requires --state closed.")
-    if not (content_stdin or title is not None or add_labels or remove_labels or state):
+    if not (
+        content_stdin
+        or title is not None
+        or add_labels
+        or remove_labels
+        or state
+        or parent is not None
+        or add_blocked_by
+        or remove_blocked_by
+    ):
         raise click.UsageError(
             "ticket update needs --content-stdin/--content-file, --title, --add-label, "
-            "--remove-label, or --state."
+            "--remove-label, --state, --parent, --add-blocked-by, or "
+            "--remove-blocked-by."
         )
     body = _read_stdin("ticket body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
@@ -1427,6 +1458,9 @@ def ticket_update(
             state=state,
             state_reason=state_reason,
             human_approved=human_approved,
+            parent=parent,
+            add_blocked_by=add_blocked_by,
+            remove_blocked_by=remove_blocked_by,
         ),
         evidence="issue_update",
         then=record_member_issue_close_event,

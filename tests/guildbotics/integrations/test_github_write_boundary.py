@@ -79,6 +79,8 @@ WRITES = {
     ("integrations/github/ticket_service.py", "update_ticket", "patch"): REPOSITORY,
     ("integrations/github/ticket_service.py", "update_ticket", "post"): REPOSITORY,
     ("integrations/github/ticket_service.py", "update_ticket", "delete"): REPOSITORY,
+    ("integrations/github/ticket_service.py", "_reparent", "post"): REPOSITORY,
+    ("integrations/github/ticket_service.py", "_reparent", "request"): REPOSITORY,
     ("integrations/github/repository_scope.py", "_node_in_scope", "post"): GRAPHQL,
     (
         "integrations/github/github_utils.py",

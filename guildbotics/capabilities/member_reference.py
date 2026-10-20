@@ -82,7 +82,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics run repository/issue_inspect --person <person> url=<ticket_url>",
-                "Read a ticket, its comments, its lane on the board, and the pull "
+                "Read a ticket, its comments, its lane on the board, its parent, "
+                "children, and the tickets it is blocked by or blocks, and the pull "
                 "requests that refer to it.",
             ),
             (
@@ -110,9 +111,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member ticket update --person <person> --url <ticket_url> "
                 "[--content-file <file>] [--title <title>] [--add-label <name> ...] "
                 "[--remove-label <name> ...] "
-                "[--state open|closed [--state-reason completed|not_planned] --human-approved]",
-                "Change a ticket's body, title, labels, or state; empty content "
-                "removes the body.",
+                "[--state open|closed [--state-reason completed|not_planned] --human-approved] "
+                "[--parent <ticket_url>] [--add-blocked-by <ticket_url> ...] "
+                "[--remove-blocked-by <ticket_url> ...]",
+                "Change a ticket's body, title, labels, state, parent, or the tickets "
+                "it is blocked by; empty content removes the body, and an empty "
+                "`--parent` the parent.",
             ),
             (
                 "guildbotics member ticket reaction add --person <person> --url <ticket_url> "
@@ -506,7 +510,12 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Say what the member thinks the priority should be, and why, in the ticket comment, PR "
     "comment, or thread where the work was requested, and leave the recording to a human.",
     "What the inspect commands read maps to writes like this: `ticket update` writes body, "
-    "title, labels, and state, and `pr update` writes body and title. Assignees and the "
+    "title, labels, state, `parent`, and `blocked_by`, and `pr update` writes body and "
+    "title. A ticket's `children` and `blocks` change by updating those tickets: a child "
+    "names its parent, a blocked ticket the tickets it is blocked by. A parent is meant to "
+    "be completed only once its children are closed, and a ticket to be started only once "
+    "the tickets it is blocked by are closed: the patrol does not start a blocked ticket, "
+    "and a service may refuse either. Assignees and the "
     "lane are read-only on purpose, because who takes a ticket is assigned by a human on "
     "the board; PR state, draft, and base are read-only for the same reason (the "
     "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
