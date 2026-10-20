@@ -1446,7 +1446,6 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
                 "target": _ticket_target(
                     "https://github.com/owner/repo/issues/2", "#2", title
                 ),
-                "on_board": add_to_board,
             }
 
         async def aclose(self):
@@ -1525,7 +1524,6 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
         "https://github.com/owner/repo/issues/1"
     )
     assert activity_calls[1][2]["target"]["title"] == "Issue title"
-    assert json.loads(create.output)["on_board"] is False
 
 
 def test_member_issue_api_failures_do_not_record_activity(monkeypatch):

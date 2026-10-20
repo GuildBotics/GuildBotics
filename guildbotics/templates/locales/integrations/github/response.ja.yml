@@ -10,3 +10,4 @@ ja:
   rejected: "GitHub が要求を拒否したか、この取得先を一時的に制限しています。要求を確認し、時間をおいて再試行してください。"
   http: "GitHub への要求が失敗しました（HTTP %{status}）。"
   transport: "GitHub への要求を完了できませんでした。接続を確認して再試行してください。"
+  created_off_board: "%{url} は作成しましたが、ボードに載せられませんでした: %{message}"

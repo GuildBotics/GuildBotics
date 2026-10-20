@@ -60,48 +60,19 @@ async def test_ticket_create_needs_a_human_and_lands_on_the_board(member):
     assert result == {
         "labels": [],
         "target": {"kind": "ticket", "url": url, "title": "T", "label": "T-1"},
-        "on_board": True,
     }
     assert item(url)["lane"] == Task.NEW
 
 
 @pytest.mark.asyncio
-async def test_ticket_create_off_the_board_says_so(member):
+async def test_ticket_create_off_the_board(member):
     tracker()
 
     result = await member_repository.ticket_create(
         member, TRACKER, "T", "B", False, human_approved=True
     )
 
-    assert result["on_board"] is False
     assert item(result["target"]["url"])["lane"] is None
-
-
-@pytest.mark.asyncio
-async def test_a_board_failure_after_creation_says_the_ticket_was_created(
-    member, monkeypatch
-):
-    """The ticket is there whatever the board did: the failure says so, so
-    the member does not open it a second time."""
-    tracker()
-
-    async def refuse(_url):
-        raise ServiceError("The board is unavailable.")
-
-    monkeypatch.setattr(member.tickets, "add", refuse)
-
-    url = f"local://tickets/{TRACKER}/T-1"
-    with pytest.raises(
-        ServiceError,
-        match=re.escape(
-            f"{url} was created, but it could not be put on the board: "
-            "The board is unavailable."
-        ),
-    ):
-        await member_repository.ticket_create(
-            member, TRACKER, "T", "B", True, human_approved=True
-        )
-    assert [kept["title"] for kept in _tickets_kept()] == ["T"]
 
 
 @pytest.mark.asyncio

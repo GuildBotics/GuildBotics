@@ -1340,7 +1340,10 @@ def ticket_comment(
 @click.option(
     "--add-to-board/--no-add-to-board",
     default=True,
-    help="Put the created ticket on the configured board.",
+    help=(
+        "Put the created ticket on the configured board; a board that keeps"
+        " every ticket refuses --no-add-to-board."
+    ),
 )
 @_human_approved_option
 @_json_format_option

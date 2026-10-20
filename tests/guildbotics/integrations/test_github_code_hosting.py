@@ -1395,7 +1395,6 @@ async def test_ticket_create_opens_the_ticket_and_puts_it_on_the_board(monkeypat
     github = (
         _github()
         .on("POST", f"/repos/{REPO}/issues", _issue(43, title="Follow-up"))
-        .on("GET", f"/repos/{REPO}/issues/43", _issue(43, title="Follow-up"))
         .on_graphql(
             NODE_REPOSITORY,
             {"node": {"repository": {"name": "demo", "owner": {"login": OWNER}}}},
@@ -1415,7 +1414,6 @@ async def test_ticket_create_opens_the_ticket_and_puts_it_on_the_board(monkeypat
     assert result == {
         "labels": [],
         "target": _target(issue_url(43), "Follow-up").model_dump(),
-        "on_board": True,
     }
     assert github.bodies("POST", f"/repos/{REPO}/issues") == [
         {"title": "Follow-up", "body": "Body"}
@@ -1435,7 +1433,6 @@ async def test_a_failed_board_add_is_reported_after_the_ticket_was_created(
     github = (
         _github()
         .on("POST", f"/repos/{REPO}/issues", _issue(43))
-        .on("GET", f"/repos/{REPO}/issues/43", _issue(43))
         .on_graphql(
             NODE_REPOSITORY,
             {"node": {"repository": {"name": "demo", "owner": {"login": OWNER}}}},
@@ -1446,12 +1443,18 @@ async def test_a_failed_board_add_is_reported_after_the_ticket_was_created(
         )
     )
 
-    with pytest.raises(ServiceError, match="could not be put on the board") as raised:
+    with pytest.raises(ServiceError) as raised:
         await member_repository.ticket_create(
             _tickets(github, monkeypatch), REPO, "T", "B", True, human_approved=True
         )
 
-    assert issue_url(43) in str(raised.value)
+    assert str(raised.value).startswith(
+        t(
+            "integrations.github.response.created_off_board",
+            url=issue_url(43),
+            message="",
+        )
+    )
     assert "SECRET" not in str(raised.value)
     assert github.writes[0] == f"POST /repos/{REPO}/issues"
 

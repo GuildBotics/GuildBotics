@@ -247,7 +247,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ),
         "comment-1",
         store.ref_of("ticket", tickets_tracker, 404).url,
-        frozenset({"request_changes", "artifacts"}),
+        frozenset({"request_changes", "artifacts", "off_board"}),
         writes,
     )
 
@@ -344,7 +344,7 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         ),
         "issuecomment-1",
         f"https://github.com/{REPO}/issues/404",
-        frozenset({"request_changes", "artifacts", "dependency_alerts"}),
+        frozenset({"request_changes", "artifacts", "dependency_alerts", "off_board"}),
         double.writes,
     )
 

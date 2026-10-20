@@ -27,7 +27,12 @@ from guildbotics.integrations.ticket_selection import (
     select,
     since_assignment,
 )
-from guildbotics.runtime.port import SemanticReaction, ServiceError, WorkflowStatus
+from guildbotics.runtime.port import (
+    SemanticReaction,
+    ServiceError,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
     CommentWritten,
@@ -99,12 +104,26 @@ class BranvilTicketService(BranvilApi, TicketService):
         return await self.post_comment(self.item(url, "ticket"), body, status)
 
     async def create_ticket(
-        self, tracker: str, title: str, body: str, labels: Sequence[str]
+        self,
+        tracker: str,
+        title: str,
+        body: str,
+        labels: Sequence[str],
+        *,
+        add_to_board: bool = True,
     ) -> TicketCreated:
+        """Open a ticket in the new lane of the board of its repository's
+        workspace: Branvil keeps every ticket on it.
+
+        Raises:
+            ServiceUnsupported: If not ``add_to_board``.
+        """
+        if not add_to_board:
+            raise ServiceUnsupported(t("integrations.branvil.api.every_on_board"))
         data = await self.call(
             "POST",
             f"/repos/{segment(self.repository(tracker))}/tickets",
-            {"title": title, "body": body, "labels": list(labels)},
+            {"title": title, "body": body, "labels": list(labels), "lane": Task.NEW},
         )
         return TicketCreated(
             labels=list(data["labels"]), target=self.target(_ticket_item(data), data)
@@ -200,37 +219,14 @@ class BranvilTicketService(BranvilApi, TicketService):
         """Move a ticket of the workspace's board to ``lane``.
 
         Raises:
-            ServiceError: If the ticket is not on that board.
+            ServiceError: If the ticket's repository is outside the scope,
+                its board not the workspace's.
         """
         assert task.url
         item = self.item(task.url, "ticket")
-        if not self._on_board(await self._placed(item)):
-            raise ServiceError(
-                t(
-                    "integrations.branvil.api.off_board",
-                    url=self.url(item),
-                    workspace=self.workspace,
-                )
-            )
+        check_path(self.workspace, item.place, provider=PROVIDER)
         await self.call("PUT", f"{item.api}/board", {"lane": lane})
         return True
-
-    async def add(self, ticket_url: str) -> bool:
-        item = self.item(ticket_url, "ticket")
-        if not self._on_board(await self._placed(item)):
-            await self.call("PUT", f"{item.api}/board", {"lane": Task.NEW})
-        return True
-
-    async def _placed(self, item: BranvilItem) -> dict[str, Any]:
-        """The ticket ``item``, to be placed on the workspace's board: its
-        repository is in the scope, checked before anything, as a ticket
-        already on the board is not written to.
-
-        Raises:
-            ServiceError: If it is outside the scope.
-        """
-        check_path(self.workspace, item.place, provider=PROVIDER)
-        return await self.get(item.api)
 
     async def closed_since(self, start: datetime, end: datetime) -> list[ClosedItem]:
         closed = await self.items(
@@ -256,11 +252,10 @@ class BranvilTicketService(BranvilApi, TicketService):
         return f"/workspaces/{segment(self.workspace)}/board"
 
     def _on_board(self, ticket: dict[str, Any]) -> bool:
-        """Whether ``ticket`` is on the workspace's board: in a lane, and of a
-        repository of the workspace (another workspace's board is not it)."""
-        return ticket["lane"] is not None and in_scope(
-            self.workspace, str(ticket["repository"])
-        )
+        """Whether ``ticket`` is on the workspace's board: every ticket is on
+        the board of its repository's workspace, and another workspace's
+        board is not it."""
+        return in_scope(self.workspace, str(ticket["repository"]))
 
     def _relative(self, ticket: dict[str, Any]) -> TicketRelative:
         return TicketRelative(

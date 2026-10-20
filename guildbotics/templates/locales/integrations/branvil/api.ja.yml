@@ -23,4 +23,4 @@ ja:
   no_head: "%{url} に head のコミットがありません。"
   no_base: "%{url} の base ブランチがありません。"
   artifact_too_large: "成果物 '%{name}' は上限の %{limit} バイトを超えています。人に取得を依頼してください。"
-  off_board: "%{url} はワークスペース %{workspace} のボードにありません。先にボードに載せてください。"
+  every_on_board: "Branvil はすべてのチケットをワークスペースのボードに置きます。ボードに載せないチケットは作れません。"

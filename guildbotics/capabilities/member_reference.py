@@ -105,7 +105,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "--title <title> --content-file <file> [--label <name> ...] "
                 "[--add-to-board|--no-add-to-board] --human-approved",
                 "Open a follow-up ticket a human asked for, in the tracker a ticket's "
-                "read names (`tracker`).",
+                "read names (`tracker`); a board that keeps every ticket refuses "
+                "`--no-add-to-board`.",
             ),
             (
                 "guildbotics member ticket update --person <person> --url <ticket_url> "

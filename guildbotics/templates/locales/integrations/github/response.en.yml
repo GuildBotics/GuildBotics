@@ -10,3 +10,4 @@ en:
   rejected: "GitHub rejected the request or temporarily limited this endpoint. Check the request and retry later."
   http: "The GitHub request failed (HTTP %{status})."
   transport: "Could not complete the GitHub request. Check connectivity and retry."
+  created_off_board: "%{url} was created, but it could not be put on the board: %{message}"

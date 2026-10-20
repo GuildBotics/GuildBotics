@@ -100,7 +100,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
 | [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
-| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`). |
+| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
@@ -1552,7 +1552,7 @@ guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
-| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`). |
+| [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
 | [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
@@ -1576,7 +1576,7 @@ guildbotics member ticket comment [OPTIONS]
 
 ## `guildbotics member ticket create`
 
-Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`).
+Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`.
 
 ```text
 guildbotics member ticket create [OPTIONS]
@@ -1590,7 +1590,7 @@ guildbotics member ticket create [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--label TEXT` | Label already defined in the tracker. Repeat for several labels. |
-| `--add-to-board / --no-add-to-board` | Put the created ticket on the configured board. [default: add-to-board] |
+| `--add-to-board / --no-add-to-board` | Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board. [default: add-to-board] |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
