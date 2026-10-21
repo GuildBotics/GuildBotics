@@ -20,6 +20,7 @@ from guildbotics.environment.snapshot import SnapshotUpkeep
 from guildbotics.environment.status import device_status
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
+from guildbotics.runtime.port import ServiceUnavailable
 from guildbotics.runtime.workflow_invocation import (
     TICKET_WORKFLOW_COMMAND,
     WorkflowInvocation,
@@ -301,6 +302,8 @@ class TaskScheduler:
                             "scheduled", person, scheduled_task.command, start_time
                         ),
                     )
+                if ok is None:
+                    scheduled_task.defer()
                 consecutive_errors, should_stop = self._update_consecutive_errors(
                     ok,
                     source="scheduled",
@@ -344,6 +347,7 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
+            ok: bool | None
             # Any other routine, one naming the ticket workflow with arguments
             # included, runs as a command whose entry selects its ticket.
             ticket_patrol = routine_command == TICKET_WORKFLOW_COMMAND
@@ -437,7 +441,7 @@ class TaskScheduler:
         person: Person,
         command: str,
         start_time: datetime.datetime,
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool | None, bool]:
         """Refresh and dispatch one candidate from the current patrol batch.
 
         Selection runs outside any trace and outside the execution boundary:
@@ -467,6 +471,10 @@ class TaskScheduler:
                     return True, True
             candidate = candidates.pop(0)
             invocation = self._run(loop, selector.refresh(person, candidate))
+        except ServiceUnavailable as exc:
+            self._ticket_patrol_candidates.pop(person.person_id, None)
+            context.logger.info("Deferring ticket patrol: %s", exc)
+            return None, True
         except Exception as exc:
             # Bind outside the except block: Python unbinds `exc` when the
             # block exits, but the closure runs inside run_with_logging.
@@ -507,18 +515,16 @@ class TaskScheduler:
             command=command,
             attributes=attributes,
         ) as trace:
-            ok = bool(
-                self._run_work(
-                    loop,
-                    person,
-                    "routine",
-                    command,
-                    run_with_logging(context, command, "routine", _dispatch),
-                    work_id=trace.trace_id,
-                    work_identity=_ticket_slot_identity(
-                        person, command, start_time, invocation
-                    ),
-                )
+            ok = self._run_work(
+                loop,
+                person,
+                "routine",
+                command,
+                run_with_logging(context, command, "routine", _dispatch),
+                work_id=trace.trace_id,
+                work_identity=_ticket_slot_identity(
+                    person, command, start_time, invocation
+                ),
             )
         if not candidates:
             self._ticket_patrol_candidates.pop(person.person_id, None)
@@ -553,7 +559,8 @@ class TaskScheduler:
 
         The boundary sits inside the awaited coroutine, as it does for chat, so
         both a failure and a forced cancellation reach it and close the run as
-        failed or cancelled; only then is the failure turned into ``False``.
+        failed, cancelled or deferred; only then is a failure turned into
+        ``False`` or an unavailable service into ``None`` (a skipped cycle).
         """
 
         async def _tracked() -> Any:
@@ -569,6 +576,8 @@ class TaskScheduler:
 
         try:
             return self._run(loop, _tracked())
+        except ServiceUnavailable:
+            return None
         except TaskRunSyncUnavailableError as exc:
             self.context.logger.warning(
                 "Service work result is not shared yet: %s", exc
@@ -680,7 +689,7 @@ class TaskScheduler:
             self._sleep_interruptible(min(self._chat_poll_interval, remaining))
 
     def _update_consecutive_errors(
-        self, ok: bool, *, source: str, consecutive_errors: int
+        self, ok: bool | None, *, source: str, consecutive_errors: int
     ):
         """Update error counter and decide whether to stop the worker loop.
 
@@ -692,6 +701,8 @@ class TaskScheduler:
         Returns:
             A tuple of (new_consecutive_errors, should_stop).
         """
+        if ok is None:
+            return consecutive_errors, False
         if not ok:
             if self._stop_event.is_set():
                 # Shutdown is in progress: a command that was rejected or

@@ -23,6 +23,7 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_from_exception,
     workflow_rate_limit_notice_text,
 )
+from guildbotics.drivers.execution import failure_status
 from guildbotics.entities import Person, Task
 from guildbotics.entities.team import Service
 from guildbotics.integrations import pull_request_patrol
@@ -139,6 +140,8 @@ class TicketSelector:
                     )
                 )
             except Exception as exc:
+                if failure_status(exc, self._source) == "deferred":
+                    raise
                 notice = await self._settle_failure(context, invocation, run_id, exc)
                 if notice is None:
                     raise

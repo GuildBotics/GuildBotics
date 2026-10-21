@@ -10,7 +10,7 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.entities.task import Task
 from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.port import WorkflowStatus
+from guildbotics.runtime.port import ServiceUnavailable, WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import current_trace, trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language, t
@@ -299,6 +299,29 @@ async def test_failed_move_is_reported_like_a_failed_run(monkeypatch):
 
     assert called == []
     assert len(_statuses()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["routine", "scheduled", "manual"])
+async def test_an_unavailable_move_is_deferred_only_for_autonomous_work(
+    monkeypatch, source
+):
+    context = _Context()
+    task = _task()
+
+    async def unavailable(*_args):
+        raise ServiceUnavailable("not connected")
+
+    monkeypatch.setattr(context.member.tickets, "move", unavailable)
+    with trace_scope(source, trace_id="unavailable-move", person_id="aiko"):
+        with pytest.raises(ServiceUnavailable):
+            await TicketSelector(context, source=source).run(
+                context.person, _invocation(task, source), unavailable
+            )
+    assert item(ISSUE_URL)["lane"] == Task.READY
+    assert [status.reason for status in _statuses()] == (
+        ["failed"] if source == "manual" else []
+    )
 
 
 @pytest.mark.asyncio

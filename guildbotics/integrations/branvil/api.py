@@ -25,8 +25,8 @@ refuses connections. A member's client sends a request again while it could
 not connect at all, within the calling member command's remaining time. A
 request that may have reached Branvil is never sent again, since a write
 would land twice.
-Once a wait ran out, the client does not wait again until Branvil answers
-it, so that a Branvil that stays stopped costs one wait, not one per request.
+Once a wait ran out, no client in this process waits again for that endpoint
+until any client receives an answer, so a new context does not renew the wait.
 GuildBotics' own client does not wait: the setup screens and the check that
 Branvil answers say whether it answers now.
 Without a caller deadline, each request gets a finite operation budget:
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
@@ -57,6 +58,7 @@ from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
     ServiceNotFound,
+    ServiceUnavailable,
     ServiceUnsupported,
     WorkflowStatus,
 )
@@ -77,6 +79,25 @@ PROVIDER = "branvil"
 _TIMEOUT_SECONDS = 10.0
 #: Limit an unbudgeted request's occupation of its caller to five minutes.
 _UNBUDGETED_OPERATION_SECONDS = 300.0
+_RECONNECT_LOCK = threading.Lock()
+
+
+@dataclass
+class _Reachability:
+    """The endpoint's exhausted wait and responses observed by this process."""
+
+    exhausted: bool = False
+    answers: int = 0
+
+
+_REACHABILITY: dict[str, _Reachability] = {}
+
+
+def _reachability(origin: str) -> _Reachability:
+    with _RECONNECT_LOCK:
+        return _REACHABILITY.setdefault(origin, _Reachability())
+
+
 #: How long it waits between two attempts to connect.
 _RECONNECT_INTERVAL_SECONDS = 1.0
 #: What fails before a request leaves for Branvil: no connection was made.
@@ -191,10 +212,14 @@ class Unreachable(ServiceError):
     """Branvil did not answer at all."""
 
 
+class NotConnected(Unreachable, ServiceUnavailable):
+    """The request never left for Branvil."""
+
+
 class _Client(httpx.AsyncClient):
     """A client whose failures to reach Branvil are the ports' failure, and
     which sends a request again while it cannot connect, within the caller's
-    deadline, unless its last wait ran out with no answer since.
+    deadline, unless this endpoint's wait ran out with no answer since.
 
     Sending again is safe because the request never left: every body is
     bytes, which a second send repeats as they were.
@@ -203,13 +228,14 @@ class _Client(httpx.AsyncClient):
     def __init__(self, *, wait: bool, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._wait = wait
-        #: Whether a wait ran out and Branvil has not answered since.
-        self._waited_out = False
+        self._reachability = _reachability(self._origin)
         hooks = self.event_hooks
         self.event_hooks = {**hooks, "response": [self._answered, *hooks["response"]]}
 
     async def _answered(self, response: httpx.Response) -> None:
-        self._waited_out = False
+        with _RECONNECT_LOCK:
+            self._reachability.exhausted = False
+            self._reachability.answers += 1
 
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         # Resolve at send time: a client can outlive several member invocations.
@@ -217,6 +243,8 @@ class _Client(httpx.AsyncClient):
         if self._wait and deadline is None:
             deadline = time.monotonic() + _UNBUDGETED_OPERATION_SECONDS
         while True:
+            with _RECONNECT_LOCK:
+                answers = self._reachability.answers
             try:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError
@@ -228,14 +256,21 @@ class _Client(httpx.AsyncClient):
                     return await super().send(request, **kwargs)
             except (httpx.RequestError, TimeoutError) as exc:
                 connected = not isinstance(exc, _NOT_CONNECTED)
-                if not connected and deadline is not None and not self._waited_out:
+                with _RECONNECT_LOCK:
+                    exhausted = self._reachability.exhausted
+                if not connected and deadline is not None and not exhausted:
                     left = deadline - time.monotonic()
                     if left > 0:
                         await asyncio.sleep(min(_RECONNECT_INTERVAL_SECONDS, left))
                         if time.monotonic() < deadline:
                             continue
-                self._waited_out |= not connected or isinstance(exc, TimeoutError)
-                raise Unreachable(
+                if self._wait and not connected:
+                    with _RECONNECT_LOCK:
+                        # A concurrent response invalidates this older refusal.
+                        if self._reachability.answers == answers:
+                            self._reachability.exhausted = True
+                failure = Unreachable if connected else NotConnected
+                raise failure(
                     t("integrations.branvil.api.timeout", base_url=self._origin)
                     if isinstance(exc, (httpx.TimeoutException, TimeoutError))
                     else t(

@@ -45,19 +45,33 @@ to Branvil within its remaining execution time. For example, if 50 seconds of it
 300-second budget have elapsed, a Branvil operation or `member git` before fetching or
 pushing can wait for the remaining 250 seconds. Requests share that deadline; starting
 another request does not renew the budget. An attempt in progress is also bounded by
-the deadline. Exhausting it fails with `Unreachable` as before.
+the deadline. Exhausting it raises `Unreachable`; a known unconnected request also
+has the `ServiceUnavailable` type described below.
 
 Without a caller deadline (a scheduler patrol or a standalone interactive member CLI),
 each request gets a 300-second operation budget. Five minutes limits how long one
 service call may occupy a worker or interactive CLI; it is not an estimate of how
 long Branvil needs to restart. Host calls that select tickets, move their lanes or
 post workflow status comments also use this budget. The ordinary HTTP timeout still
-applies to each attempt. Once a wait has run out, requests on the same client fail
-without retrying until Branvil answers again. A request Branvil may already have
+applies to each attempt. Once a connection wait has run out, no client in the same
+process retries that base URL until any client observes a response. Recreating a
+context, or another member's patrol, does not renew the wait. Member, admin and health
+responses all clear this state; a failed admin or health probe does not set it.
+A request Branvil may already have
 received is never sent again, so a write does not land twice. The setup screens and the check that
 Branvil answers do not wait: they report whether Branvil answers now. Through the SSH
 forward of a machine other than the Hub, a Branvil that refuses connections looks like a
 connection that was accepted and then dropped, so there it is not waited for.
+
+When no connection could be made, the provider raises the port's `ServiceUnavailable`
+type. Autonomous patrols and scheduled commands defer that work: they leave no failed
+workflow comment, record a started run as `deferred` (shown as information in Activity),
+and preserve the worker's consecutive-error count. Other work, including chat, keeps
+running. Later patrols probe Branvil without another connection wait and resume work
+when it answers. A manual command still returns its error. Authentication refusals,
+timeouts without proof of nonconnection and failures after a request may have arrived remain failures;
+they are never silently retried as unavailable work.
+An unavailable scheduled occurrence stays due and is retried on a later scheduler cycle.
 
 ## Prepare Branvil
 

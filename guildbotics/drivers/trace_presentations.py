@@ -9,7 +9,7 @@ from guildbotics.utils.rate_limit_display import rate_limit_reset_display
 
 TracePresentation = LivePresentation
 
-_COMMAND_PHASES = frozenset({"started", "finished", "failed"})
+_COMMAND_PHASES = frozenset({"started", "finished", "failed", "deferred"})
 _SERVICE_PHASES = frozenset({"starting", "running", "stopping", "stopped", "failed"})
 _MILLISECONDS_PER_SECOND = 1000
 _AGENT_LABELS = {
@@ -205,9 +205,15 @@ def _command_presentation(
         label_key=f"diagnostics.executions.eventTypes.command_{phase}",
         label=f"command.{phase}",
         message=(
-            failure if phase == "failed" and failure else command or f"command.{phase}"
+            failure
+            if phase in {"failed", "deferred"} and failure
+            else command or f"command.{phase}"
         ),
-        tone="danger" if phase == "failed" else "success",
+        tone="danger"
+        if phase == "failed"
+        else "info"
+        if phase == "deferred"
+        else "success",
     )
 
 

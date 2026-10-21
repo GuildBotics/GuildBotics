@@ -208,6 +208,10 @@ class ScheduledCommand(BaseModel):
             self._executed = False
         return False
 
+    def defer(self) -> None:
+        """Keep this occurrence due after an operation could not connect."""
+        self._executed = False
+
     def __str__(self):
         # Return string with command, schedule, next_run and execution status
         return (

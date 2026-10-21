@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -7,11 +8,12 @@ import pytest
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.entities.task import Task
+from guildbotics.entities.task import ScheduledCommand, Task
 from guildbotics.intelligences.agent_runtime.wire import (
     CommandAccess,
 )
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+from guildbotics.runtime.port import ServiceUnavailable
 from guildbotics.utils.correlation import current_trace
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.command_environment_doubles import runs_as
@@ -661,7 +663,9 @@ def _run_scheduler_slot(scheduler: TaskScheduler, source: str) -> tuple[int, boo
     start = dt.datetime(2026, 1, 1, 9, 0, 0)
     try:
         if source == "scheduled":
-            scheduled = SimpleNamespace(command="sched", should_run=lambda now: True)
+            scheduled = SimpleNamespace(
+                command="sched", should_run=lambda now: True, defer=lambda: None
+            )
             return scheduler._process_scheduled_tasks(
                 loop, scheduler.context, person, [scheduled], start, 0
             )
@@ -685,6 +689,124 @@ def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> 
     assert [(record.source, record.status) for record in records] == [
         (source, "failed")
     ]
+
+
+@pytest.mark.parametrize("source", ["scheduled", "routine"])
+def test_unavailable_scheduler_command_is_deferred_without_counting_an_error(
+    monkeypatch, source
+):
+    class UnavailableRunner(_FailingRunner):
+        async def run(self):
+            raise ServiceUnavailable("not connected")
+
+    scheduler = TaskScheduler(_Context(_Person()))
+    runs_as(monkeypatch, UnavailableRunner)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+    assert _run_scheduler_slot(scheduler, source) == (0, False)
+    assert [record.status for record in RunStore().records()] == ["deferred"]
+    assert scheduler._update_consecutive_errors(
+        None, source=source, consecutive_errors=2
+    ) == (2, False)
+
+
+def test_deferred_scheduled_occurrence_stays_due_until_service_recovers(monkeypatch):
+    attempts = []
+
+    class RecoveringRunner(_FailingRunner):
+        async def run(self):
+            attempts.append(self.command_name)
+            if len(attempts) == 1:
+                raise ServiceUnavailable("not connected")
+            return "done"
+
+    scheduler = TaskScheduler(_Context(_Person()))
+    runs_as(monkeypatch, RecoveringRunner)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+    scheduled = ScheduledCommand(command="sched", schedule="0 9 * * *")
+    start = dt.datetime(2026, 1, 1, 9)
+    scheduled._next_random = start
+    scheduled._next_boundary = start
+    loop = asyncio.new_event_loop()
+    try:
+        errors = 2
+        for minute in (0, 5, 6):
+            errors, stopped = scheduler._process_scheduled_tasks(
+                loop,
+                scheduler.context,
+                scheduler.context.person,
+                [scheduled],
+                start + dt.timedelta(minutes=minute),
+                errors,
+            )
+            assert (errors, stopped) == (2 if minute == 0 else 0, False)
+    finally:
+        loop.close()
+    assert attempts == ["sched", "sched"]
+    assert sorted(record.status for record in RunStore().records()) == [
+        "deferred",
+        "succeeded",
+    ]
+
+
+@pytest.mark.parametrize("outage_phase", ["candidates", "refresh"])
+def test_ticket_outage_keeps_the_worker_and_chat_alive_and_recovers(
+    monkeypatch, outage_phase, caplog
+):
+    from guildbotics.drivers import ticket_selector, workflow_dispatcher
+
+    class Clock(dt.datetime):
+        current = dt.datetime(2026, 1, 1, 9)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    person = _Person(["workflows/ticket_driven_workflow"])
+    context = _Context(person)
+    context.logger = logging.getLogger("outage-worker")
+    scheduler = TaskScheduler(context, routine_interval_minutes=1)
+    cycles, chats, dispatched = [], [], []
+
+    async def candidates(self, person):
+        if outage_phase == "candidates" and len(cycles) < 4:
+            raise ServiceUnavailable("not connected")
+        return [_ticket_task()]
+
+    async def refresh(self, person, candidate):
+        if outage_phase == "refresh" and len(cycles) < 4:
+            raise ServiceUnavailable("not connected")
+        return _ticket_invocation()
+
+    async def dispatch(self, invocation, person):
+        dispatched.append(invocation)
+        scheduler.shutdown()
+
+    async def chat(person, stop_event=None):
+        chats.append(person.person_id)
+        return 1
+
+    def wait_with_chat(loop, person, seconds):
+        if scheduler._stop_event.is_set():
+            return
+        cycles.append(Clock.current)
+        assert len(cycles) <= 5
+        loop.run_until_complete(scheduler._process_pending_chat(person))
+        Clock.current += dt.timedelta(minutes=1)
+
+    monkeypatch.setattr(task_scheduler.datetime, "datetime", Clock)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", candidates)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", refresh)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "run", _passthrough_run)
+    monkeypatch.setattr(workflow_dispatcher.WorkflowDispatcher, "dispatch", dispatch)
+    monkeypatch.setattr(scheduler._chat_dispatcher, "process_person", chat)
+    monkeypatch.setattr(scheduler, "_sleep_with_chat", wait_with_chat)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+
+    scheduler._process_tasks_list(person, [])
+    assert len(chats) == 4
+    assert len(dispatched) == 1
+    assert [record.status for record in RunStore().records()] == ["succeeded"]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 def test_force_stopped_scheduler_command_is_recorded_as_cancelled(

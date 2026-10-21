@@ -10,6 +10,13 @@ from guildbotics.utils import rate_limit_display
 from guildbotics.utils.i18n_tool import set_language
 
 
+@pytest.fixture(autouse=True)
+def _isolated_branvil_retry_state(monkeypatch):
+    from guildbotics.integrations.branvil import api
+
+    monkeypatch.setattr(api, "_REACHABILITY", {})
+
+
 @pytest.fixture
 def local_rate_limit_timezone(monkeypatch, request):
     """Fix the host timezone without changing process-global OS state."""

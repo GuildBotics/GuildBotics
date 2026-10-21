@@ -903,6 +903,15 @@ doing the work, keeping the evidence earlier attempts recorded. A run whose
 outcome could not be observed (`result_unknown`) keeps its input, because the
 work may already have taken effect elsewhere; only the user starts it again.
 
+An autonomous operation that could not connect to its service ends as `deferred`,
+through the port's `ServiceUnavailable` type. This terminal state releases its input
+for a later attempt and appears as information in Activity. Its command boundary
+records `command.deferred` rather than a failure; the scheduler preserves its error
+count and continues other work; a deferred scheduled occurrence stays due. Manual callers and failures after a request may have
+arrived retain their usual failure behavior. Shared record schema 3 introduces this
+state so older builds reject the new records instead of misreading them. Every run
+write stamps the current schema, including updates to an existing record.
+
 A run record means work was taken. The ticket patrol selects its ticket outside
 the boundary and claims a slot only for a ticket it dispatches, so an idle patrol
 leaves no record (and no trace). A chat event is different: whether it holds work

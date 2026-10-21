@@ -433,6 +433,7 @@ def _is_finished_boundary(item: dict[str, Any]) -> bool:
     return str(item.get("type") or "") in {
         "command.finished",
         "command.failed",
+        "command.deferred",
         "member.command.finished",
         "member.command.failed",
         "system.finished",

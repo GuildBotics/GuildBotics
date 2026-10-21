@@ -16,11 +16,12 @@ TaskRunState = Literal[
     "cancelled",
     "interrupted",
     "result_unknown",
+    "deferred",
 ]
 TASK_RUN_TERMINAL_STATES = frozenset(
     state for state in get_args(TaskRunState) if state != "running"
 )
-TASK_RUN_UNDONE_STATES = frozenset({"failed", "cancelled", "interrupted"})
+TASK_RUN_UNDONE_STATES = frozenset({"failed", "cancelled", "interrupted", "deferred"})
 """Terminal states that tell us the run's work did not take effect.
 
 ``result_unknown`` is deliberately not one of them: it means the process that
@@ -78,7 +79,7 @@ class TaskRunRecord(BaseModel):
     def left_work_undone(self) -> bool:
         """Whether the run ended in a state that proves its work did not happen.
 
-        A run that raised, was cancelled, or lost its owner device left the
+        A run that was deferred, raised, was cancelled, or lost its owner device left the
         work undone, so the same work identity may be attempted again under
         this run. A run that recorded a result is done, including the
         ``asking`` and ``blocked`` completions stored with a ``failed``

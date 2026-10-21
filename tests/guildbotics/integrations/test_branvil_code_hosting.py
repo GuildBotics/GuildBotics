@@ -22,6 +22,7 @@ from guildbotics.runtime.port import (
     ServiceError,
     ServiceNotFound,
     ServiceUnsupported,
+    ServiceUnavailable,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import MAX_PAGE_BYTES
@@ -779,6 +780,7 @@ async def test_a_request_that_may_have_reached_branvil_is_not_sent_again(
     assert str(raised.value) == t(f"integrations.branvil.api.{key}", base_url=BASE)
     assert double.writes[before:] == ["POST /api/v1/repos/acme%2Fdemo/pulls/1/comments"]
     assert clock.sleeps == []
+    assert not isinstance(raised.value, ServiceUnavailable)
 
 
 @pytest.mark.asyncio
@@ -919,3 +921,83 @@ async def test_a_connect_attempt_cannot_outlast_the_callers_budget(monkeypatch):
             await _health_of(client)
     assert entered.is_set()
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["member", "admin", "health"])
+async def test_exhaustion_survives_clients_until_any_client_observes_an_answer(
+    monkeypatch, answer
+):
+    double, code, tickets = services(monkeypatch)
+    respond = double.respond
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(api.Unreachable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0
+
+    # This service owns a different client, just as a fresh context does.
+    with pytest.raises(api.Unreachable):
+        await tickets.candidates()
+    assert clock.now == 300.0
+    with pytest.raises(api.Unreachable):
+        await _ASKS["member"]()
+    assert clock.now == 300.0
+
+    monkeypatch.setattr(double, "respond", respond)
+    await _ASKS[answer]()
+    clock = refuse(double, monkeypatch, times=200)
+    assert await code.default_branch(REPO) == "main"
+    assert clock.now == 200.0
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_endpoint_does_not_use_another_endpoints_budget(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0
+    with pytest.raises(ServiceUnavailable):
+        await _health_of(
+            api.connect(
+                "http://127.0.0.1:7879", token="", scope=SCOPE, person_id=MEMBER
+            )
+        )
+    assert clock.now == 600.0
+
+
+@pytest.mark.asyncio
+async def test_a_response_during_the_last_sleep_invalidates_the_old_refusal(
+    monkeypatch,
+):
+    double, code, _ = services(monkeypatch)
+    respond = double.respond
+    clock = refuse(double, monkeypatch)
+
+    async def sleep_and_observe(seconds):
+        await clock.sleep(seconds)
+        if clock.now == 300.0:
+            monkeypatch.setattr(double, "respond", respond)
+            await api.health(BASE)
+
+    monkeypatch.setattr(api.asyncio, "sleep", sleep_and_observe)
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+
+    # The older exhausted request must not overwrite the response's fact.
+    clock = refuse(double, monkeypatch, times=200)
+    assert await code.default_branch(REPO) == "main"
+    assert clock.now == 200.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", ["admin", "health"])
+async def test_a_failed_probe_does_not_consume_a_members_wait(monkeypatch, probe):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(ServiceUnavailable):
+        await _ASKS[probe]()
+    assert clock.now == 0.0
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0
