@@ -836,22 +836,25 @@ async def test_git_is_told_of_a_branvil_that_stays_out_of_reach(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
-async def test_recovery_uses_the_invocations_remaining_time(monkeypatch, operation):
+@pytest.mark.parametrize(("deadline", "refusals"), [(300.0, 200), (600.0, 400)])
+async def test_recovery_uses_the_invocations_remaining_time(
+    monkeypatch, operation, deadline, refusals
+):
     double, code, _ = services(monkeypatch)
-    clock = refuse(double, monkeypatch, times=200)
+    clock = refuse(double, monkeypatch, times=refusals)
     # The client already exists; time spent before this request is not renewed.
     clock.now = 50.0
-    with member_invocation_scope(MemberInvocation(deadline=300.0)):
+    with member_invocation_scope(MemberInvocation(deadline=deadline)):
         result = await getattr(code, operation)(
             *([REPO] if operation == "default_branch" else [])
         )
     assert result
-    assert clock.now == 250.0
+    assert clock.now == 50.0 + refusals
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("start", "deadline"), [(50.0, None), (50.0, 50.0), (50.0, 52.5)]
+    ("start", "deadline"), [(50.0, 0.0), (50.0, 50.0), (50.0, 52.5)]
 )
 @pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
 async def test_wait_ends_at_the_callers_deadline(
@@ -867,6 +870,34 @@ async def test_wait_ends_at_the_callers_deadline(
             )
     assert clock.now == (deadline or start)
     assert clock.sleeps == ([1.0, 1.0, 0.5] if deadline and deadline > start else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_a_caller_without_a_deadline_has_a_finite_operation_budget(
+    monkeypatch, operation, recovers
+):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, times=200 if recovers else float("inf"))
+    clock.now = 50.0
+
+    async def request():
+        return await getattr(code, operation)(
+            *([REPO] if operation == "default_branch" else [])
+        )
+
+    if recovers:
+        assert await request()
+        assert clock.now == 250.0
+    else:
+        with pytest.raises(api.Unreachable):
+            await request()
+        assert clock.now == 350.0
+        # Even another operation budget does not renew an exhausted client.
+        with pytest.raises(api.Unreachable):
+            await request()
+        assert clock.now == 350.0
 
 
 @pytest.mark.asyncio

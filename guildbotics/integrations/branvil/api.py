@@ -29,8 +29,9 @@ Once a wait ran out, the client does not wait again until Branvil answers
 it, so that a Branvil that stays stopped costs one wait, not one per request.
 GuildBotics' own client does not wait: the setup screens and the check that
 Branvil answers say whether it answers now.
-Without a caller deadline, no reconnection wait is added: a patrol must be
-free to check its other services and can ask Branvil on its next pass.
+Without a caller deadline, each request gets a finite operation budget:
+one unavailable service must not occupy a host worker or interactive CLI
+indefinitely. This bounds caller resource use, not predicted server downtime.
 """
 
 from __future__ import annotations
@@ -74,6 +75,8 @@ from guildbotics.utils.secret_store import identity_secret_store
 DEFAULT_BASE_URL = "http://127.0.0.1:7878"
 PROVIDER = "branvil"
 _TIMEOUT_SECONDS = 10.0
+#: Limit an unbudgeted request's occupation of its caller to five minutes.
+_UNBUDGETED_OPERATION_SECONDS = 300.0
 #: How long it waits between two attempts to connect.
 _RECONNECT_INTERVAL_SECONDS = 1.0
 #: What fails before a request leaves for Branvil: no connection was made.
@@ -211,6 +214,8 @@ class _Client(httpx.AsyncClient):
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         # Resolve at send time: a client can outlive several member invocations.
         deadline = current_member_invocation().deadline if self._wait else None
+        if self._wait and deadline is None:
+            deadline = time.monotonic() + _UNBUDGETED_OPERATION_SECONDS
         while True:
             try:
                 if deadline is not None and time.monotonic() >= deadline:

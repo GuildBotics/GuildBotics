@@ -48,10 +48,12 @@ another request does not renew the budget. An attempt in progress is also bounde
 the deadline. Exhausting it fails with `Unreachable` as before.
 
 Without a caller deadline (a scheduler patrol or a standalone interactive member CLI),
-no reconnection wait is added. This keeps a stopped Branvil from holding up work with
-other services; a later patrol or command can check again. The ordinary HTTP timeout
-still applies to each attempt. Once a wait has run out, requests on the same client
-fail without retrying until Branvil answers again. A request Branvil may already have
+each request gets a 300-second operation budget. Five minutes limits how long one
+service call may occupy a worker or interactive CLI; it is not an estimate of how
+long Branvil needs to restart. Host calls that select tickets, move their lanes or
+post workflow status comments also use this budget. The ordinary HTTP timeout still
+applies to each attempt. Once a wait has run out, requests on the same client fail
+without retrying until Branvil answers again. A request Branvil may already have
 received is never sent again, so a write does not land twice. The setup screens and the check that
 Branvil answers do not wait: they report whether Branvil answers now. Through the SSH
 forward of a machine other than the Hub, a Branvil that refuses connections looks like a
