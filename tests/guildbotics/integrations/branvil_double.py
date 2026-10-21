@@ -45,6 +45,7 @@ does, while the clients wait on a virtual :class:`Clock`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -1000,7 +1001,9 @@ def wait_virtually(monkeypatch: Any) -> Clock:
 
     clock = Clock()
     monkeypatch.setattr(api, "time", SimpleNamespace(monotonic=clock.monotonic))
-    monkeypatch.setattr(api, "asyncio", SimpleNamespace(sleep=clock.sleep))
+    monkeypatch.setattr(
+        api, "asyncio", SimpleNamespace(sleep=clock.sleep, timeout=asyncio.timeout)
+    )
     return clock
 
 

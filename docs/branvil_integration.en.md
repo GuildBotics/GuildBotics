@@ -40,13 +40,19 @@ Hub machine                                 another machine
 When nothing forwards the port, every Branvil operation fails with "Branvil is not
 reachable at …", and **Setup → Verification** reports *Branvil is not reachable*.
 
-A Branvil that is restarting (it restarts itself when its code moves on) is waited for:
-a member's Branvil operation, and `member git` before it fetches or pushes, tries to
-connect again for up to 2 minutes, and only then fails as before. Once that wait has run
-out, the requests that follow on the same connection (the rest of one patrol, for
-example) fail at once until Branvil answers again, so a Branvil that stays stopped is
-waited for once, not once per request. A request Branvil may already have received is
-never sent again, so a write does not land twice. The setup screens and the check that
+A member command invoked through a running command's broker retries failed connections
+to Branvil within its remaining execution time. For example, if 50 seconds of its
+300-second budget have elapsed, a Branvil operation or `member git` before fetching or
+pushing can wait for the remaining 250 seconds. Requests share that deadline; starting
+another request does not renew the budget. An attempt in progress is also bounded by
+the deadline. Exhausting it fails with `Unreachable` as before.
+
+Without a caller deadline (a scheduler patrol or a standalone interactive member CLI),
+no reconnection wait is added. This keeps a stopped Branvil from holding up work with
+other services; a later patrol or command can check again. The ordinary HTTP timeout
+still applies to each attempt. Once a wait has run out, requests on the same client
+fail without retrying until Branvil answers again. A request Branvil may already have
+received is never sent again, so a write does not land twice. The setup screens and the check that
 Branvil answers do not wait: they report whether Branvil answers now. Through the SSH
 forward of a machine other than the Hub, a Branvil that refuses connections looks like a
 connection that was accepted and then dropped, so there it is not waited for.

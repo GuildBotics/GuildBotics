@@ -158,6 +158,8 @@ class MemberInvocation:
     trace_id: str = ""
     lease: PersonExecutionLease | None = None
     guest: CommandGuest | None = None
+    #: Absolute time.monotonic deadline; None when the caller has no time budget.
+    deadline: float | None = None
 
 
 _current_invocation: ContextVar[MemberInvocation | None] = ContextVar(

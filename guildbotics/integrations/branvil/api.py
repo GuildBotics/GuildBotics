@@ -22,12 +22,15 @@ error code.
 
 Branvil restarts itself when its code moves on, and for those seconds it
 refuses connections. A member's client sends a request again while it could
-not connect at all, for up to :data:`_RECONNECT_SECONDS`; a request that may
-have reached Branvil is never sent again, since a write would land twice.
+not connect at all, within the calling member command's remaining time. A
+request that may have reached Branvil is never sent again, since a write
+would land twice.
 Once a wait ran out, the client does not wait again until Branvil answers
 it, so that a Branvil that stays stopped costs one wait, not one per request.
 GuildBotics' own client does not wait: the setup screens and the check that
 Branvil answers say whether it answers now.
+Without a caller deadline, no reconnection wait is added: a patrol must be
+free to check its other services and can ask Branvil on its next pass.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote
@@ -46,6 +50,7 @@ from guildbotics.entities import Person, Service, Team
 from guildbotics.entities.message import Message
 from guildbotics.integrations.repository_scope import check_path, refuse, valid_path
 from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.runtime.port import (
     SEMANTIC_REACTIONS,
     SemanticReaction,
@@ -69,8 +74,6 @@ from guildbotics.utils.secret_store import identity_secret_store
 DEFAULT_BASE_URL = "http://127.0.0.1:7878"
 PROVIDER = "branvil"
 _TIMEOUT_SECONDS = 10.0
-#: How long a member's request waits for a Branvil it cannot connect to.
-_RECONNECT_SECONDS = 120.0
 #: How long it waits between two attempts to connect.
 _RECONNECT_INTERVAL_SECONDS = 1.0
 #: What fails before a request leaves for Branvil: no connection was made.
@@ -187,16 +190,16 @@ class Unreachable(ServiceError):
 
 class _Client(httpx.AsyncClient):
     """A client whose failures to reach Branvil are the ports' failure, and
-    which sends a request again while it cannot connect, for ``patience``
-    seconds, unless its last wait ran out with no answer since.
+    which sends a request again while it cannot connect, within the caller's
+    deadline, unless its last wait ran out with no answer since.
 
     Sending again is safe because the request never left: every body is
     bytes, which a second send repeats as they were.
     """
 
-    def __init__(self, *, patience: float, **kwargs: Any) -> None:
+    def __init__(self, *, wait: bool, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._patience = patience
+        self._wait = wait
         #: Whether a wait ran out and Branvil has not answered since.
         self._waited_out = False
         hooks = self.event_hooks
@@ -206,23 +209,35 @@ class _Client(httpx.AsyncClient):
         self._waited_out = False
 
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        deadline = time.monotonic() + (0.0 if self._waited_out else self._patience)
+        # Resolve at send time: a client can outlive several member invocations.
+        deadline = current_member_invocation().deadline if self._wait else None
         while True:
             try:
-                return await super().send(request, **kwargs)
-            except httpx.RequestError as exc:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError
+                async with (
+                    asyncio.timeout(max(0.0, deadline - time.monotonic()))
+                    if deadline is not None
+                    else nullcontext()
+                ):
+                    return await super().send(request, **kwargs)
+            except (httpx.RequestError, TimeoutError) as exc:
                 connected = not isinstance(exc, _NOT_CONNECTED)
-                if connected or time.monotonic() >= deadline:
-                    self._waited_out = self._waited_out or not connected
-                    raise Unreachable(
-                        t("integrations.branvil.api.timeout", base_url=self._origin)
-                        if isinstance(exc, httpx.TimeoutException)
-                        else t(
-                            "integrations.branvil.api.unreachable",
-                            base_url=self._origin,
-                        )
-                    ) from None
-            await asyncio.sleep(_RECONNECT_INTERVAL_SECONDS)
+                if not connected and deadline is not None and not self._waited_out:
+                    left = deadline - time.monotonic()
+                    if left > 0:
+                        await asyncio.sleep(min(_RECONNECT_INTERVAL_SECONDS, left))
+                        if time.monotonic() < deadline:
+                            continue
+                self._waited_out |= not connected or isinstance(exc, TimeoutError)
+                raise Unreachable(
+                    t("integrations.branvil.api.timeout", base_url=self._origin)
+                    if isinstance(exc, (httpx.TimeoutException, TimeoutError))
+                    else t(
+                        "integrations.branvil.api.unreachable",
+                        base_url=self._origin,
+                    )
+                ) from None
 
     @property
     def _origin(self) -> str:
@@ -232,12 +247,12 @@ class _Client(httpx.AsyncClient):
 def _client(
     base_url: str,
     token: str,
-    patience: float,
+    wait: bool,
     unauthorized: Callable[[], ServiceError],
     *gate: Callable[[httpx.Request], Awaitable[None]],
 ) -> httpx.AsyncClient:
     """A client of the Branvil API at ``base_url`` with ``token``, which
-    waits ``patience`` seconds for a Branvil it cannot connect to, and whose
+    waits within the caller's deadline if ``wait`` is true, and whose
     refused token is ``unauthorized()``."""
 
     async def check(response: httpx.Response) -> None:
@@ -248,7 +263,7 @@ def _client(
             raise _failure(response)
 
     return _Client(
-        patience=patience,
+        wait=wait,
         base_url=f"{base_url}/api/v1",
         headers={"Authorization": f"Bearer {token}"} if token else {},
         timeout=_TIMEOUT_SECONDS,
@@ -283,7 +298,7 @@ def connect(
         record_auth_failure(person_id)
         return Unauthorized(t("integrations.branvil.api.authentication"))
 
-    return _client(base_url, token, _RECONNECT_SECONDS, unauthorized, gate)
+    return _client(base_url, token, True, unauthorized, gate)
 
 
 def administer(base_url: str, token: str) -> httpx.AsyncClient:
@@ -299,7 +314,7 @@ def administer(base_url: str, token: str) -> httpx.AsyncClient:
     return _client(
         base_url,
         token,
-        0.0,
+        False,
         lambda: Unauthorized(t("integrations.branvil.api.admin_refused")),
     )
 
