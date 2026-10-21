@@ -8,6 +8,7 @@ from typing import Any
 
 from guildbotics.capabilities.command_failures import command_failure_payload
 from guildbotics.drivers.command_runner import prepare_host_command, run_main_command
+from guildbotics.drivers.execution import failure_status
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 from guildbotics.runtime.workflow_invocation import WorkflowSource
@@ -50,7 +51,11 @@ def command_boundary(
         yield
     except BaseException as exc:
         record_correlated_event(
-            event_type="command.failed",
+            event_type=(
+                "command.deferred"
+                if failure_status(exc, task_type) == "deferred"
+                else "command.failed"
+            ),
             default_source=task_type,
             person_id=person_id,
             command=command_name,
@@ -90,6 +95,9 @@ async def run_with_logging(
         ):
             await action()
     except Exception as e:
+        if failure_status(e, task_type) == "deferred":
+            context.logger.info("Deferring %s command: %s", task_type, e)
+            raise
         context.logger.error(
             f"Error running {task_type} command '{command_name}' for person "
             f"'{person.person_id}': {e}"

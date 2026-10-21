@@ -325,11 +325,12 @@ class MemberCapabilityBroker:
             return _rejected("Member command stdin is too large.")
         if reason := _rejection_reason(arguments, person_id):
             return _rejected(reason)
-        if self._guest is not None:
-            invocation = replace(
-                invocation,
-                guest=self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS),
-            )
+        deadline = time.monotonic() + _COMMAND_TIMEOUT_SECONDS
+        invocation = replace(
+            invocation,
+            deadline=deadline,
+            guest=self._guest.until(deadline) if self._guest is not None else None,
+        )
         run = partial(self._run, arguments, invocation, cwd=cwd, stdin=stdin)
         cancelled = threading.Event()
 
@@ -351,7 +352,7 @@ class MemberCapabilityBroker:
         async def answer() -> MemberCommandResult:
             try:
                 exit_code, stdout, stderr = await asyncio.wait_for(
-                    asyncio.shield(work), timeout=_COMMAND_TIMEOUT_SECONDS
+                    asyncio.shield(work), timeout=max(0.0, deadline - time.monotonic())
                 )
             except TimeoutError:
                 cancelled.set()

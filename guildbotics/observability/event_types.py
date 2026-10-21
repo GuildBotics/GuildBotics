@@ -8,6 +8,7 @@ COMMAND_LIFECYCLE_EVENT_TYPES = frozenset(
         "command.started",
         "command.finished",
         "command.failed",
+        "command.deferred",
         "member.command.started",
         "member.command.finished",
         "member.command.failed",

@@ -12,6 +12,9 @@ from guildbotics.drivers.execution import (
     WorkRejectedError,
 )
 from guildbotics.entities.task_run import TASK_RUN_TERMINAL_STATES
+from guildbotics.runtime.port import ServiceUnavailable
+from guildbotics.drivers.utils import command_boundary
+from guildbotics.observability.trace_status import TraceStatus, resolve_trace_status
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
@@ -425,6 +428,33 @@ def test_task_run_begin_retries_every_terminal_state_that_left_work_undone(
         assert len(retried.record.provider_evidence) == 1
     finally:
         set_workspace_sync_port(None)
+
+
+@pytest.mark.parametrize("source", ["routine", "scheduled", "manual"])
+def test_unavailable_work_closes_as_deferred_without_a_failure_record(source):
+    coordinator = TaskRunCoordinator()
+    events = []
+    with (
+        pytest.raises(ServiceUnavailable),
+        diagnostics_record_scope(events.append),
+        trace_scope(source, trace_id="unavailable-work", person_id="aiko"),
+        coordinator.track_work(
+            source=source,
+            person_id="aiko",
+            command="ticket",
+            work_id="unavailable-work",
+        ),
+        command_boundary(command_name="ticket", task_type=source, person_id="aiko"),
+    ):
+        raise ServiceUnavailable("not connected")
+    [record] = RunStore().records()
+    assert record.status == ("failed" if source == "manual" else "deferred")
+    assert record.finished_at is not None
+    assert record.left_work_undone
+    status = TraceStatus()
+    status.observe(record.status)
+    assert status.resolve() == ("failed" if source == "manual" else "info")
+    assert resolve_trace_status(events) == ("failed" if source == "manual" else "info")
 
 
 def test_task_run_begin_moves_a_reopened_run_to_the_device_running_it() -> None:

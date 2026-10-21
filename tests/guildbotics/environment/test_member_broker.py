@@ -101,6 +101,7 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
 
     context = _context(tmp_path, work=work)
     broker = _active_broker(context, run_in_process)
+    before = time.monotonic()
 
     result = await broker.execute(
         "turn-1", ["context", "--person", "aiko"], stdin="member input"
@@ -116,6 +117,7 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
                 participant_labels='{"U1":"aiko"}',
                 trace_id="trace-parent",
                 lease=context.lease,
+                deadline=calls[0]["invocation"].deadline,
             ),
             "cwd": context.cwd,
             "stdin": "member input",
@@ -124,6 +126,9 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
     ]
     # A worker thread of its own: Click and asyncio.run need one per command.
     assert calls[0]["thread"] != threading.get_ident()
+    deadline = calls[0]["invocation"].deadline
+    timeout = member_broker._COMMAND_TIMEOUT_SECONDS
+    assert before + timeout <= deadline <= time.monotonic() + timeout
     assert (result.exit_code, result.stdout, result.stderr) == (3, "out", "err")
 
 
@@ -139,6 +144,7 @@ async def test_each_member_command_is_handed_the_commands_environment(tmp_path) 
 
     def run_in_process(arguments, invocation, *, cwd, stdin):
         handed.append(invocation.guest)
+        assert invocation.guest[1] == invocation.deadline
         return 0, "", ""
 
     broker = _active_broker(_context(tmp_path), run_in_process)

@@ -5,6 +5,8 @@ import os
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 
+import pytest
+
 from guildbotics.observability.session_transcripts import (
     STANDARD_STDERR_TAIL_BYTES,
     SessionTranscriptStore,
@@ -31,8 +33,12 @@ def _record(event_type: str, *, trace_id: str | None = "trace-1") -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    "boundary", ["command.finished", "command.failed", "command.deferred"]
+)
 def test_trace_routes_full_records_to_session_and_summary_to_index(
     tmp_path: Path,
+    boundary: str,
 ) -> None:
     store = SessionTranscriptStore(tmp_path / "run/diagnostics.jsonl")
 
@@ -44,7 +50,7 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
     }
     io_route = store.route(io_record)
     error_route = store.route(_record("agent_runtime.failed"))
-    finished = store.route(_record("command.finished"))
+    finished = store.route(_record(boundary))
 
     assert [item["type"] for item in started.index_records] == [
         "session.pointer",
@@ -52,7 +58,7 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
     ]
     assert io_route.index_records == []
     assert error_route.index_records == []
-    assert [item["type"] for item in finished.index_records] == ["command.finished"]
+    assert [item["type"] for item in finished.index_records] == [boundary]
     records = store.trace_records("trace-1")
     assert [item["kind"] for item in records] == [
         "event",
@@ -63,7 +69,7 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
     assert records[-1]["payload"] == {
         "event_count": 3,
         "log_count": 0,
-        "error_count": 1,
+        "error_count": 2 if boundary == "command.failed" else 1,
         "span_count": 1,
     }
 

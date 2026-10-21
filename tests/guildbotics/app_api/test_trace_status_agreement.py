@@ -52,6 +52,7 @@ _BASE: dict[str, Any] = {
 _BOUNDARY_OUTCOMES = {
     "command.finished": "succeeded",
     "command.failed": "failed",
+    "command.deferred": "deferred",
 }
 
 
@@ -72,6 +73,7 @@ STAGES: dict[str, list[dict[str, Any]]] = {
     "llm decision finished, agent turn still running": _stage("span.finished"),
     "command boundary closed": _stage("span.finished", "command.finished"),
     "command boundary failed": _stage("span.finished", "command.failed"),
+    "unavailable service deferred": _stage("span.failed", "command.deferred"),
     "workflow completion recorded": _stage(
         "span.finished", "command.finished", "workflow.completed"
     ),
@@ -139,3 +141,9 @@ def test_running_chat_workflow_is_not_shown_as_success(tmp_path: Path) -> None:
     records = STAGES["llm decision finished, agent turn still running"]
     assert _timeline_status(records) == "running"
     assert _diagnostics_status(records, tmp_path / "diag.jsonl") == "running"
+
+
+def test_unavailable_service_is_information_on_both_screens(tmp_path: Path) -> None:
+    records = STAGES["unavailable service deferred"]
+    assert _timeline_status(records) == "info"
+    assert _diagnostics_status(records, tmp_path / "diag.jsonl") == "info"

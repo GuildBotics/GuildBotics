@@ -60,6 +60,16 @@ def test_command_failure_prefers_failure_detail() -> None:
     assert presentation.tone == "danger"
 
 
+def test_deferred_command_has_an_informational_presentation() -> None:
+    presentation = normalize_trace_presentation(
+        _event("command.deferred", payload={"message": "Service unavailable."})
+    )
+    assert supports_trace_event("command.deferred")
+    assert presentation.label_key.endswith("command_deferred")
+    assert presentation.message == "Service unavailable."
+    assert presentation.tone == "info"
+
+
 def test_ticket_comment_uses_structured_target() -> None:
     presentation = normalize_trace_presentation(
         _event(

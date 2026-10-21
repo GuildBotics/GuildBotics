@@ -604,7 +604,9 @@ class RunStore:
                         device_id=self.device_id,
                     )
                 updated = mutate(current)
-                return updated.model_dump()
+                return updated.model_copy(
+                    update={"schema_version": SHARED_RECORD_SCHEMA_VERSION}
+                ).model_dump()
 
             payload, change = update_shared_json_with_change(
                 path, _apply, workspace_root=workspace_root

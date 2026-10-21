@@ -45,6 +45,7 @@ does, while the clients wait on a virtual :class:`Clock`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -1000,7 +1001,9 @@ def wait_virtually(monkeypatch: Any) -> Clock:
 
     clock = Clock()
     monkeypatch.setattr(api, "time", SimpleNamespace(monotonic=clock.monotonic))
-    monkeypatch.setattr(api, "asyncio", SimpleNamespace(sleep=clock.sleep))
+    monkeypatch.setattr(
+        api, "asyncio", SimpleNamespace(sleep=clock.sleep, timeout=asyncio.timeout)
+    )
     return clock
 
 
@@ -1010,16 +1013,21 @@ def refuse(
     times: float = math.inf,
     error: type[httpx.TransportError] = httpx.ConnectError,
     method: str = "",
+    path: str = "",
 ) -> Clock:
     """Have ``double`` refuse its next ``times`` connections (of ``method``
-    only, if named) with ``error``, before any request reaches it; the
+    and ``path`` only, if named) with ``error``, before any request reaches it; the
     clients wait on the clock returned."""
     clock = wait_virtually(monkeypatch)
     respond = double.respond
     refused = count(1)
 
     def refusing(request: httpx.Request) -> httpx.Response:
-        if (not method or request.method == method) and next(refused) <= times:
+        if (
+            (not method or request.method == method)
+            and (not path or request.url.path == path)
+            and next(refused) <= times
+        ):
             raise error("refused", request=request)
         return respond(request)
 

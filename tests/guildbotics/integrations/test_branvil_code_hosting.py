@@ -5,16 +5,24 @@ and how a Branvil that is restarting is waited for."""
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import httpx
 import pytest
 
 from guildbotics.entities.task import Task
 from guildbotics.integrations.branvil import api
 from guildbotics.runtime.code_hosting_service import TicketLink
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    member_invocation_scope,
+)
 from guildbotics.runtime.port import (
     ServiceError,
     ServiceNotFound,
     ServiceUnsupported,
+    ServiceUnavailable,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import MAX_PAGE_BYTES
@@ -649,6 +657,15 @@ async def test_a_refused_token_is_recorded_as_the_members(monkeypatch):
 # -- a Branvil that is restarting -----------------------------------------
 
 _INTERVAL = api._RECONNECT_INTERVAL_SECONDS
+_BUDGET = 300.0
+
+
+@pytest.fixture
+def caller_budget(monkeypatch):
+    # The retry tests use a virtual clock starting at zero.
+    wait_virtually(monkeypatch)
+    with member_invocation_scope(MemberInvocation(deadline=_BUDGET)):
+        yield
 
 
 async def _health_of(client: httpx.AsyncClient) -> None:
@@ -670,7 +687,9 @@ _ASKS = {
 @pytest.mark.parametrize(
     ("ask", "waits"), [("member", True), ("admin", False), ("health", False)]
 )
-async def test_only_a_members_client_waits_for_branvil(monkeypatch, ask, waits):
+async def test_only_a_members_client_waits_for_branvil(
+    monkeypatch, ask, waits, caller_budget
+):
     double = BranvilDouble()
     serve(double, monkeypatch)
     clock = refuse(double, monkeypatch)
@@ -678,11 +697,13 @@ async def test_only_a_members_client_waits_for_branvil(monkeypatch, ask, waits):
     with pytest.raises(api.Unreachable):
         await _ASKS[ask]()
 
-    assert clock.now >= api._RECONNECT_SECONDS if waits else clock.sleeps == []
+    assert clock.now == _BUDGET if waits else clock.sleeps == []
 
 
 @pytest.mark.asyncio
-async def test_a_read_waits_for_a_branvil_that_is_restarting(monkeypatch):
+async def test_a_read_waits_for_a_branvil_that_is_restarting(
+    monkeypatch, caller_budget
+):
     double, code, _ = services(monkeypatch)
     clock = refuse(double, monkeypatch, times=3)
 
@@ -694,6 +715,7 @@ async def test_a_read_waits_for_a_branvil_that_is_restarting(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_write_waits_for_a_branvil_that_is_restarting_and_lands_once(
     monkeypatch,
+    caller_budget,
 ):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code)
@@ -713,7 +735,7 @@ async def test_a_write_waits_for_a_branvil_that_is_restarting_and_lands_once(
     [(httpx.ConnectError, "unreachable"), (httpx.ConnectTimeout, "timeout")],
 )
 async def test_a_branvil_that_stays_out_of_reach_is_said_so_after_the_wait(
-    monkeypatch, error, key
+    monkeypatch, error, key, caller_budget
 ):
     double, code, _ = services(monkeypatch)
     clock = refuse(double, monkeypatch, error=error)
@@ -722,7 +744,7 @@ async def test_a_branvil_that_stays_out_of_reach_is_said_so_after_the_wait(
         await code.default_branch(REPO)
 
     assert str(raised.value) == t(f"integrations.branvil.api.{key}", base_url=BASE)
-    assert api._RECONNECT_SECONDS <= clock.now <= api._RECONNECT_SECONDS + 2 * _INTERVAL
+    assert clock.now == _BUDGET
 
 
 @pytest.mark.asyncio
@@ -736,7 +758,7 @@ async def test_a_branvil_that_stays_out_of_reach_is_said_so_after_the_wait(
     ],
 )
 async def test_a_request_that_may_have_reached_branvil_is_not_sent_again(
-    monkeypatch, error, key
+    monkeypatch, error, key, caller_budget
 ):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code)
@@ -758,11 +780,13 @@ async def test_a_request_that_may_have_reached_branvil_is_not_sent_again(
     assert str(raised.value) == t(f"integrations.branvil.api.{key}", base_url=BASE)
     assert double.writes[before:] == ["POST /api/v1/repos/acme%2Fdemo/pulls/1/comments"]
     assert clock.sleeps == []
+    assert not isinstance(raised.value, ServiceUnavailable)
 
 
 @pytest.mark.asyncio
 async def test_a_branvil_that_stays_stopped_is_waited_for_once_until_it_answers(
     monkeypatch,
+    caller_budget,
 ):
     double, code, _ = services(monkeypatch)
     respond = double.respond
@@ -772,21 +796,23 @@ async def test_a_branvil_that_stays_stopped_is_waited_for_once_until_it_answers(
     waited = len(clock.sleeps)
 
     # The service's next request, git's included, fails at once.
-    with pytest.raises(api.Unreachable):
-        await code.git_credential()
+    with member_invocation_scope(MemberInvocation(deadline=2 * _BUDGET)):
+        with pytest.raises(api.Unreachable):
+            await code.git_credential()
     assert len(clock.sleeps) == waited
 
     # Once Branvil answers, a later outage is waited for again.
     monkeypatch.setattr(double, "respond", respond)
-    assert await code.default_branch(REPO) == "main"
+    with member_invocation_scope(MemberInvocation(deadline=2 * _BUDGET)):
+        assert await code.default_branch(REPO) == "main"
     clock = refuse(double, monkeypatch)
     with pytest.raises(api.Unreachable):
         await code.default_branch(REPO)
-    assert clock.now >= api._RECONNECT_SECONDS
+    assert clock.now == _BUDGET
 
 
 @pytest.mark.asyncio
-async def test_git_waits_for_a_branvil_that_is_restarting(monkeypatch):
+async def test_git_waits_for_a_branvil_that_is_restarting(monkeypatch, caller_budget):
     double, code, _ = services(monkeypatch)
     clock = refuse(double, monkeypatch, times=3)
 
@@ -797,7 +823,9 @@ async def test_git_waits_for_a_branvil_that_is_restarting(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_git_is_told_of_a_branvil_that_stays_out_of_reach(monkeypatch):
+async def test_git_is_told_of_a_branvil_that_stays_out_of_reach(
+    monkeypatch, caller_budget
+):
     double, code, _ = services(monkeypatch)
     clock = refuse(double, monkeypatch)
 
@@ -805,4 +833,171 @@ async def test_git_is_told_of_a_branvil_that_stays_out_of_reach(monkeypatch):
         await code.git_credential()
 
     assert str(raised.value) == t("integrations.branvil.api.unreachable", base_url=BASE)
-    assert clock.now >= api._RECONNECT_SECONDS
+    assert clock.now == _BUDGET
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
+@pytest.mark.parametrize(("deadline", "refusals"), [(300.0, 200), (600.0, 400)])
+async def test_recovery_uses_the_invocations_remaining_time(
+    monkeypatch, operation, deadline, refusals
+):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, times=refusals)
+    # The client already exists; time spent before this request is not renewed.
+    clock.now = 50.0
+    with member_invocation_scope(MemberInvocation(deadline=deadline)):
+        result = await getattr(code, operation)(
+            *([REPO] if operation == "default_branch" else [])
+        )
+    assert result
+    assert clock.now == 50.0 + refusals
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start", "deadline"), [(50.0, 0.0), (50.0, 50.0), (50.0, 52.5)]
+)
+@pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
+async def test_wait_ends_at_the_callers_deadline(
+    monkeypatch, start, deadline, operation
+):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+    clock.now = start
+    with member_invocation_scope(MemberInvocation(deadline=deadline)):
+        with pytest.raises(api.Unreachable):
+            await getattr(code, operation)(
+                *([REPO] if operation == "default_branch" else [])
+            )
+    assert clock.now == (deadline or start)
+    assert clock.sleeps == ([1.0, 1.0, 0.5] if deadline and deadline > start else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["default_branch", "git_credential"])
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_a_caller_without_a_deadline_has_a_finite_operation_budget(
+    monkeypatch, operation, recovers
+):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, times=200 if recovers else float("inf"))
+    clock.now = 50.0
+
+    async def request():
+        return await getattr(code, operation)(
+            *([REPO] if operation == "default_branch" else [])
+        )
+
+    if recovers:
+        assert await request()
+        assert clock.now == 250.0
+    else:
+        with pytest.raises(api.Unreachable):
+            await request()
+        assert clock.now == 350.0
+        # Even another operation budget does not renew an exhausted client.
+        with pytest.raises(api.Unreachable):
+            await request()
+        assert clock.now == 350.0
+
+
+@pytest.mark.asyncio
+async def test_a_connect_attempt_cannot_outlast_the_callers_budget(monkeypatch):
+    client = api.connect(BASE, token="", scope=SCOPE, person_id=MEMBER)
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def stalled(request):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    client._transport = httpx.MockTransport(stalled)
+    client._mounts = {}
+    with member_invocation_scope(MemberInvocation(deadline=time.monotonic() + 0.05)):
+        with pytest.raises(api.Unreachable):
+            await _health_of(client)
+    assert entered.is_set()
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["member", "admin", "health"])
+async def test_exhaustion_survives_clients_until_any_client_observes_an_answer(
+    monkeypatch, answer
+):
+    double, code, tickets = services(monkeypatch)
+    respond = double.respond
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(api.Unreachable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0
+
+    # This service owns a different client, just as a fresh context does.
+    with pytest.raises(api.Unreachable):
+        await tickets.candidates()
+    assert clock.now == 300.0
+    with pytest.raises(api.Unreachable):
+        await _ASKS["member"]()
+    assert clock.now == 300.0
+
+    monkeypatch.setattr(double, "respond", respond)
+    await _ASKS[answer]()
+    clock = refuse(double, monkeypatch, times=200)
+    assert await code.default_branch(REPO) == "main"
+    assert clock.now == 200.0
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_endpoint_does_not_use_another_endpoints_budget(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0
+    with pytest.raises(ServiceUnavailable):
+        await _health_of(
+            api.connect(
+                "http://127.0.0.1:7879", token="", scope=SCOPE, person_id=MEMBER
+            )
+        )
+    assert clock.now == 600.0
+
+
+@pytest.mark.asyncio
+async def test_a_response_during_the_last_sleep_invalidates_the_old_refusal(
+    monkeypatch,
+):
+    double, code, _ = services(monkeypatch)
+    respond = double.respond
+    clock = refuse(double, monkeypatch)
+
+    async def sleep_and_observe(seconds):
+        await clock.sleep(seconds)
+        if clock.now == 300.0:
+            monkeypatch.setattr(double, "respond", respond)
+            await api.health(BASE)
+
+    monkeypatch.setattr(api.asyncio, "sleep", sleep_and_observe)
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+
+    # The older exhausted request must not overwrite the response's fact.
+    clock = refuse(double, monkeypatch, times=200)
+    assert await code.default_branch(REPO) == "main"
+    assert clock.now == 200.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", ["admin", "health"])
+async def test_a_failed_probe_does_not_consume_a_members_wait(monkeypatch, probe):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(ServiceUnavailable):
+        await _ASKS[probe]()
+    assert clock.now == 0.0
+    with pytest.raises(ServiceUnavailable):
+        await code.default_branch(REPO)
+    assert clock.now == 300.0

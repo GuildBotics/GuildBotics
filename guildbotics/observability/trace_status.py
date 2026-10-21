@@ -15,8 +15,10 @@ Four layers answer it, strongest first:
    dispatch event, because the ticket workflow shares this completion layer
    but exhausts its attempt budget by posting an error comment instead of
    scheduling a retry, so missing evidence alone resolves to ``incomplete``
-4. what the trace's own records show: a failure anywhere, the completion event
-   recorded by the layer that opened the trace, or work that has started
+4. what the trace's own records show: an explicit deferred boundary resolves to
+   information despite its failed service span; otherwise a failure anywhere,
+   the completion event recorded by the layer that opened the trace, or work
+   that has started
 
 Only layer 4's ``TRACE_COMPLETED_EVENT_TYPES`` can make a trace ``success`` on
 their own. A finished provider span cannot: it reports that one call returned,
@@ -60,6 +62,7 @@ _LIFECYCLE_OBSERVATIONS = {
     "cancelled": "failed",
     "interrupted": "failed",
     "result_unknown": "info",
+    "deferred": "info",
 }
 
 
@@ -76,6 +79,7 @@ class TraceStatus:
         self._completion = ""
         self._dispatch = ""
         self._rate_limited = False
+        self._deferred = False
 
     def observe(self, lifecycle_status: str) -> None:
         """Take the run's lifecycle record as layer 4.
@@ -97,7 +101,9 @@ class TraceStatus:
         if kind != "event":
             return
         event_type = str(item.get("type") or "")
-        if event_type == "workflow.rate_limited":
+        if event_type == "command.deferred":
+            self._deferred = True
+        elif event_type == "workflow.rate_limited":
             self._rate_limited = True
         elif event_type in _DISPATCH_DECISIONS:
             self._dispatch = _DISPATCH_DECISIONS[event_type]
@@ -134,6 +140,8 @@ class TraceStatus:
             return "success"
         if self._completion == "awaiting_checks":
             return "awaiting_checks"
+        if self._deferred:
+            return "info"
         return self._observed
 
 

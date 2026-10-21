@@ -10,17 +10,35 @@ from typing import Any, Literal
 from guildbotics.capabilities.task_runs import RunStore, trace_stamp
 from guildbotics.drivers.live_state import LivePresentation, LiveStatePort
 from guildbotics.drivers.trace_presentations import normalize_trace_presentation
-from guildbotics.entities.task_run import TaskRunExecutionMode, TaskRunRecord
+from guildbotics.entities.task_run import (
+    TaskRunExecutionMode,
+    TaskRunRecord,
+    TaskRunState,
+)
 from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
 )
+from guildbotics.runtime.port import ServiceUnavailable
 from guildbotics.utils.correlation import new_id
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import ChangeSet, await_shared_change
 
 WorkSource = Literal["manual", "scheduled", "routine", "event_queue"]
+
+
+def failure_status(error: BaseException, source: str) -> TaskRunState:
+    """Classify an execution's failure without losing a temporary deferral.
+
+    A manual caller gets its error directly; autonomous work can retry an
+    operation that never reached its service on a later cycle.
+    """
+    if source != "manual" and isinstance(error, ServiceUnavailable):
+        return "deferred"
+    return "cancelled" if type(error).__name__ == "CancelledError" else "failed"
+
+
 WorkRejectionReason = Literal[
     "draining",
     "lease_unavailable",
@@ -312,6 +330,8 @@ class ExecutionStatusPublisher:
                     safe_summary=(
                         "Execution completed."
                         if status == "succeeded"
+                        else "Execution deferred."
+                        if status == "deferred"
                         else "Execution failed."
                     ),
                     attributes=attributes,
@@ -584,13 +604,15 @@ class TaskRunCoordinator(ExecutionCoordinator):
                 ):
                     yield work
             except BaseException as exc:
-                status = (
-                    "cancelled" if type(exc).__name__ == "CancelledError" else "failed"
-                )
+                status = failure_status(exc, work.source)
                 if autonomous:
                     try:
                         self.finish(
-                            work.id, status, "Execution was cancelled or failed."
+                            work.id,
+                            status,
+                            "Waiting for an unavailable service."
+                            if status == "deferred"
+                            else "Execution was cancelled or failed.",
                         )
                     finally:
                         self._status_publisher.finished(

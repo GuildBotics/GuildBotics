@@ -5,6 +5,24 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunStore
 from guildbotics.entities.task_run import TaskRunRecord
+from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+
+
+def test_deferred_existing_run_is_written_with_current_schema(tmp_path):
+    store = RunStore(tmp_path)
+    store.start_record(
+        "run-1", work_kind="ticket", execution_mode="autonomous", member_id="member"
+    )
+    path = tmp_path / "run-1" / "result.json"
+    payload = json.loads(path.read_text())
+    payload["schema_version"] = SHARED_RECORD_SCHEMA_VERSION - 1
+    path.write_text(json.dumps(payload))
+
+    store.finish_record("run-1", status="deferred")
+
+    payload = json.loads(path.read_text())
+    assert payload["schema_version"] == SHARED_RECORD_SCHEMA_VERSION
+    assert payload["status"] == "deferred"
 
 
 def test_task_run_complete_requires_write_evidence(tmp_path):
