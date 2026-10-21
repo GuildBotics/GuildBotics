@@ -39,17 +39,21 @@ Branvil sends the browser; its code is exchanged once, for the redirect it
 was given and the verifier of its challenge, for a new admin token.
 
 ``writes`` lists the writes it accepted, as ``"<method> <path>"``.
+:func:`refuse` has it refuse connections, as a Branvil that is restarting
+does, while the clients wait on a virtual :class:`Clock`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from itertools import count
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
@@ -966,11 +970,61 @@ def serve(double: BranvilDouble, monkeypatch: Any) -> None:
 
     def served(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         client = made(*args, **kwargs)
-        client._transport = httpx.MockTransport(double.respond)
+        # Looked up on each request, so that a test may change how it answers.
+        client._transport = httpx.MockTransport(lambda r: double.respond(r))
         client._mounts = {}
         return client
 
     monkeypatch.setattr(api, "_client", served)
+
+
+class Clock:
+    """The time Branvil's clients wait on, which a sleep moves on at once."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        #: Every wait, in seconds.
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def wait_virtually(monkeypatch: Any) -> Clock:
+    """Have Branvil's clients wait on a virtual clock."""
+    from guildbotics.integrations.branvil import api
+
+    clock = Clock()
+    monkeypatch.setattr(api, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(api, "asyncio", SimpleNamespace(sleep=clock.sleep))
+    return clock
+
+
+def refuse(
+    double: BranvilDouble,
+    monkeypatch: Any,
+    times: float = math.inf,
+    error: type[httpx.TransportError] = httpx.ConnectError,
+    method: str = "",
+) -> Clock:
+    """Have ``double`` refuse its next ``times`` connections (of ``method``
+    only, if named) with ``error``, before any request reaches it; the
+    clients wait on the clock returned."""
+    clock = wait_virtually(monkeypatch)
+    respond = double.respond
+    refused = count(1)
+
+    def refusing(request: httpx.Request) -> httpx.Response:
+        if (not method or request.method == method) and next(refused) <= times:
+            raise error("refused", request=request)
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", refusing)
+    return clock
 
 
 def connect_admin(token: str = ADMIN, base_url: str = BASE) -> None:

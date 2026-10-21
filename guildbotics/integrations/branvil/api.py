@@ -19,11 +19,22 @@ workspaces, entry links, image loads into the CI runner.
 It is the host's alone.
 Every failure comes out as the ports' failure, told from Branvil's status and
 error code.
+
+Branvil restarts itself when its code moves on, and for those seconds it
+refuses connections. A member's client sends a request again while it could
+not connect at all, for up to :data:`_RECONNECT_SECONDS`; a request that may
+have reached Branvil is never sent again, since a write would land twice.
+Once a wait ran out, the client does not wait again until Branvil answers
+it, so that a Branvil that stays stopped costs one wait, not one per request.
+GuildBotics' own client does not wait: the setup screens and the check that
+Branvil answers say whether it answers now.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -58,6 +69,12 @@ from guildbotics.utils.secret_store import identity_secret_store
 DEFAULT_BASE_URL = "http://127.0.0.1:7878"
 PROVIDER = "branvil"
 _TIMEOUT_SECONDS = 10.0
+#: How long a member's request waits for a Branvil it cannot connect to.
+_RECONNECT_SECONDS = 120.0
+#: How long it waits between two attempts to connect.
+_RECONNECT_INTERVAL_SECONDS = 1.0
+#: What fails before a request leaves for Branvil: no connection was made.
+_NOT_CONNECTED = (httpx.ConnectError, httpx.ConnectTimeout)
 #: How much of Branvil's own words a failure repeats.
 _MESSAGE_LIMIT = 500
 _COLLECTIONS: dict[WorkKind, str] = {"ticket": "tickets", "pull_request": "pulls"}
@@ -169,19 +186,43 @@ class Unreachable(ServiceError):
 
 
 class _Client(httpx.AsyncClient):
-    """A client whose failures to reach Branvil are the ports' failure."""
+    """A client whose failures to reach Branvil are the ports' failure, and
+    which sends a request again while it cannot connect, for ``patience``
+    seconds, unless its last wait ran out with no answer since.
+
+    Sending again is safe because the request never left: every body is
+    bytes, which a second send repeats as they were.
+    """
+
+    def __init__(self, *, patience: float, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._patience = patience
+        #: Whether a wait ran out and Branvil has not answered since.
+        self._waited_out = False
+        hooks = self.event_hooks
+        self.event_hooks = {**hooks, "response": [self._answered, *hooks["response"]]}
+
+    async def _answered(self, response: httpx.Response) -> None:
+        self._waited_out = False
 
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        try:
-            return await super().send(request, **kwargs)
-        except httpx.TimeoutException:
-            raise Unreachable(
-                t("integrations.branvil.api.timeout", base_url=self._origin)
-            ) from None
-        except httpx.RequestError:
-            raise Unreachable(
-                t("integrations.branvil.api.unreachable", base_url=self._origin)
-            ) from None
+        deadline = time.monotonic() + (0.0 if self._waited_out else self._patience)
+        while True:
+            try:
+                return await super().send(request, **kwargs)
+            except httpx.RequestError as exc:
+                connected = not isinstance(exc, _NOT_CONNECTED)
+                if connected or time.monotonic() >= deadline:
+                    self._waited_out = self._waited_out or not connected
+                    raise Unreachable(
+                        t("integrations.branvil.api.timeout", base_url=self._origin)
+                        if isinstance(exc, httpx.TimeoutException)
+                        else t(
+                            "integrations.branvil.api.unreachable",
+                            base_url=self._origin,
+                        )
+                    ) from None
+            await asyncio.sleep(_RECONNECT_INTERVAL_SECONDS)
 
     @property
     def _origin(self) -> str:
@@ -191,10 +232,12 @@ class _Client(httpx.AsyncClient):
 def _client(
     base_url: str,
     token: str,
+    patience: float,
     unauthorized: Callable[[], ServiceError],
     *gate: Callable[[httpx.Request], Awaitable[None]],
 ) -> httpx.AsyncClient:
-    """A client of the Branvil API at ``base_url`` with ``token``, whose
+    """A client of the Branvil API at ``base_url`` with ``token``, which
+    waits ``patience`` seconds for a Branvil it cannot connect to, and whose
     refused token is ``unauthorized()``."""
 
     async def check(response: httpx.Response) -> None:
@@ -205,6 +248,7 @@ def _client(
             raise _failure(response)
 
     return _Client(
+        patience=patience,
         base_url=f"{base_url}/api/v1",
         headers={"Authorization": f"Bearer {token}"} if token else {},
         timeout=_TIMEOUT_SECONDS,
@@ -215,7 +259,8 @@ def _client(
 def connect(
     base_url: str, *, token: str, scope: str, person_id: str
 ) -> httpx.AsyncClient:
-    """A member's client of the Branvil API at ``base_url``.
+    """A member's client of the Branvil API at ``base_url``, which waits
+    for a Branvil that is restarting.
 
     Args:
         base_url: Where Branvil is reached.
@@ -238,12 +283,13 @@ def connect(
         record_auth_failure(person_id)
         return Unauthorized(t("integrations.branvil.api.authentication"))
 
-    return _client(base_url, token, unauthorized, gate)
+    return _client(base_url, token, _RECONNECT_SECONDS, unauthorized, gate)
 
 
 def administer(base_url: str, token: str) -> httpx.AsyncClient:
     """GuildBotics' own client of the Branvil API at ``base_url``, which
-    writes to no repository and so passes no member's write gate.
+    writes to no repository and so passes no member's write gate, and which
+    tells at once that Branvil does not answer.
 
     Args:
         base_url: Where Branvil is reached.
@@ -253,17 +299,18 @@ def administer(base_url: str, token: str) -> httpx.AsyncClient:
     return _client(
         base_url,
         token,
+        0.0,
         lambda: Unauthorized(t("integrations.branvil.api.admin_refused")),
     )
 
 
 async def health(base_url: str) -> None:
-    """Confirm that Branvil's API v1 answers at ``base_url``.
+    """Confirm that Branvil's API v1 answers at ``base_url`` now.
 
     Raises:
         ServiceError: If it does not.
     """
-    async with connect(base_url, token="", scope="", person_id="") as client:
+    async with administer(base_url, "") as client:
         try:
             answer = _json(await client.get("/health"))
         except Unreachable:
@@ -295,14 +342,16 @@ class Calls:
     async def call(
         self, method: str, path: str, body: dict[str, Any] | None = None
     ) -> Any:
-        """What Branvil answers to a write, which is sent once."""
+        """What Branvil answers to a write, which is sent again only if it
+        could not connect."""
         return _json(await self.client().request(method, path, json=body))
 
     async def get(self, path: str, **params: Any) -> Any:
         return _json(await self.client().get(path, params=params))
 
     async def put_file(self, path: str, content: bytes) -> Any:
-        """What Branvil answers to a file put at ``path`` (a picture)."""
+        """What Branvil answers to a file put at ``path`` (a picture), sent
+        as :meth:`call` sends a write."""
         return _json(await self.client().put(path, content=content))
 
     async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:

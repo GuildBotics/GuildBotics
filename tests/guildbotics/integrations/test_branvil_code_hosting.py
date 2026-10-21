@@ -1,7 +1,7 @@
 """The Branvil code host beyond what the port's contract asks: the pull
 request patrol, readiness and its failed logs, the addresses it knows, the
-member's git credential, and how Branvil's answers become the ports'
-failures."""
+member's git credential, how Branvil's answers become the ports' failures,
+and how a Branvil that is restarting is waited for."""
 
 from __future__ import annotations
 
@@ -23,9 +23,13 @@ from tests.guildbotics.integrations.branvil_double import (
     BASE,
     MEMBER,
     REPO,
+    SCOPE,
     THEIR_REPO,
     BranvilDouble,
+    refuse,
+    serve,
     services,
+    wait_virtually,
 )
 
 PULL = f"{BASE}/{REPO}/-/pulls/1"
@@ -533,6 +537,9 @@ async def test_git_authenticates_with_the_members_name_and_token(monkeypatch):
 async def test_without_a_token_nothing_reaches_branvil(monkeypatch):
     double, code, _ = services(monkeypatch)
     monkeypatch.delenv("AIKO_BRANVIL_TOKEN")
+    monkeypatch.setattr(
+        double, "respond", lambda request: pytest.fail(f"{request.url} was asked")
+    )
 
     with pytest.raises(ServiceError, match="AIKO_BRANVIL_TOKEN"):
         await code.git_credential()
@@ -639,21 +646,163 @@ async def test_a_refused_token_is_recorded_as_the_members(monkeypatch):
     assert event["attributes"]["credential.provider"] == "branvil"
 
 
+# -- a Branvil that is restarting -----------------------------------------
+
+_INTERVAL = api._RECONNECT_INTERVAL_SECONDS
+
+
+async def _health_of(client: httpx.AsyncClient) -> None:
+    async with client:
+        await client.get("/health")
+
+
+#: Each way to ask Branvil, by whose it is.
+_ASKS = {
+    "member": lambda: _health_of(
+        api.connect(BASE, token="", scope=SCOPE, person_id=MEMBER)
+    ),
+    "admin": lambda: _health_of(api.administer(BASE, "")),
+    "health": lambda: api.health(BASE),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ask", "waits"), [("member", True), ("admin", False), ("health", False)]
+)
+async def test_only_a_members_client_waits_for_branvil(monkeypatch, ask, waits):
+    double = BranvilDouble()
+    serve(double, monkeypatch)
+    clock = refuse(double, monkeypatch)
+
+    with pytest.raises(api.Unreachable):
+        await _ASKS[ask]()
+
+    assert clock.now >= api._RECONNECT_SECONDS if waits else clock.sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_a_read_waits_for_a_branvil_that_is_restarting(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, times=3)
+
+    assert await code.default_branch(REPO) == "main"
+
+    assert clock.sleeps == [_INTERVAL] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_write_waits_for_a_branvil_that_is_restarting_and_lands_once(
+    monkeypatch,
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    before = len(double.writes)
+    clock = refuse(double, monkeypatch, times=3, method="POST")
+
+    await code.comment(url, "Hi")
+
+    assert double.writes[before:] == ["POST /api/v1/repos/acme%2Fdemo/pulls/1/comments"]
+    assert [entry["body"] for entry in double.entries[url]["comments"]] == ["Hi"]
+    assert clock.sleeps == [_INTERVAL] * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "key"),
+    [(httpx.ConnectError, "unreachable"), (httpx.ConnectTimeout, "timeout")],
+)
+async def test_a_branvil_that_stays_out_of_reach_is_said_so_after_the_wait(
+    monkeypatch, error, key
+):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, error=error)
+
+    with pytest.raises(api.Unreachable) as raised:
+        await code.default_branch(REPO)
+
+    assert str(raised.value) == t(f"integrations.branvil.api.{key}", base_url=BASE)
+    assert api._RECONNECT_SECONDS <= clock.now <= api._RECONNECT_SECONDS + 2 * _INTERVAL
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "key"),
     [
-        (httpx.ConnectError("refused"), "unreachable"),
-        (httpx.ReadTimeout("slow"), "timeout"),
+        (httpx.ReadTimeout, "timeout"),
+        (httpx.RemoteProtocolError, "unreachable"),
+        (httpx.ReadError, "unreachable"),
+        (httpx.WriteError, "unreachable"),
     ],
 )
-async def test_a_branvil_out_of_reach_is_said_so(monkeypatch, error, key):
-    def fail(request: httpx.Request) -> httpx.Response:
-        raise error
+async def test_a_request_that_may_have_reached_branvil_is_not_sent_again(
+    monkeypatch, error, key
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    before = len(double.writes)
+    clock = wait_virtually(monkeypatch)
+    respond = double.respond
 
-    code = _answering(monkeypatch, fail)
+    def lost(request: httpx.Request) -> httpx.Response:
+        answer = respond(request)
+        if request.method == "POST":
+            raise error("lost", request=request)
+        return answer
 
-    with pytest.raises(ServiceError) as raised:
-        await code.default_branch(REPO)
+    monkeypatch.setattr(double, "respond", lost)
+
+    with pytest.raises(api.Unreachable) as raised:
+        await code.comment(url, "Hi")
 
     assert str(raised.value) == t(f"integrations.branvil.api.{key}", base_url=BASE)
+    assert double.writes[before:] == ["POST /api/v1/repos/acme%2Fdemo/pulls/1/comments"]
+    assert clock.sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_a_branvil_that_stays_stopped_is_waited_for_once_until_it_answers(
+    monkeypatch,
+):
+    double, code, _ = services(monkeypatch)
+    respond = double.respond
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(api.Unreachable):
+        await code.default_branch(REPO)
+    waited = len(clock.sleeps)
+
+    # The service's next request, git's included, fails at once.
+    with pytest.raises(api.Unreachable):
+        await code.git_credential()
+    assert len(clock.sleeps) == waited
+
+    # Once Branvil answers, a later outage is waited for again.
+    monkeypatch.setattr(double, "respond", respond)
+    assert await code.default_branch(REPO) == "main"
+    clock = refuse(double, monkeypatch)
+    with pytest.raises(api.Unreachable):
+        await code.default_branch(REPO)
+    assert clock.now >= api._RECONNECT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_git_waits_for_a_branvil_that_is_restarting(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch, times=3)
+
+    credential = await code.git_credential()
+
+    assert (credential.username, credential.password) == (MEMBER, "bvt_aiko")
+    assert clock.sleeps == [_INTERVAL] * 3
+
+
+@pytest.mark.asyncio
+async def test_git_is_told_of_a_branvil_that_stays_out_of_reach(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    clock = refuse(double, monkeypatch)
+
+    with pytest.raises(api.Unreachable) as raised:
+        await code.git_credential()
+
+    assert str(raised.value) == t("integrations.branvil.api.unreachable", base_url=BASE)
+    assert clock.now >= api._RECONNECT_SECONDS
