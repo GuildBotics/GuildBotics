@@ -16,7 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1225,6 +1225,43 @@ async def test_the_environment_is_given_nothing_but_git_identity(member):
     for argv, _, env in member.guest.runs:
         assert set(env) <= _GUEST_ENV_KEYS, argv
         assert _TOKEN not in " ".join([*argv, *env.values()])
+
+
+@pytest.mark.asyncio
+async def test_git_connects_to_origin_only_after_the_credential_is_asked(
+    member, host_git, monkeypatch
+):
+    """The code host waits in ``git_credential`` until it answers, so each
+    operation asks for the credential before any of its git connects."""
+    code = member.service.code
+    credential = code.git_credential
+    #: How many host processes had started at each ask.
+    asked: list[int] = []
+
+    async def ask() -> GitCredential:
+        asked.append(len(host_git))
+        return await credential()
+
+    monkeypatch.setattr(code, "git_credential", ask)
+
+    async def connections(operation: Callable[[], Awaitable[object]]) -> list[str]:
+        """What the operation's git does that connects, once it asked."""
+        host_git.clear()
+        asked.clear()
+        await operation()
+        runs = [i for i, call in enumerate(host_git) if call.env.get("GIT_PASSWORD")]
+        assert len(asked) == 1 and runs and asked[0] <= runs[0]
+        return [
+            next(arg for arg in host_git[i].args if arg in ("fetch", "push"))
+            for i in runs
+        ]
+
+    def publish() -> Awaitable[object]:
+        member.stage()
+        return member.run(lambda s: s.publish(member.clone, "message"))
+
+    assert await connections(member.prepare) == ["fetch"]
+    assert await connections(publish) == ["fetch", "push"]
 
 
 # -- the user's own repository ------------------------------------------------

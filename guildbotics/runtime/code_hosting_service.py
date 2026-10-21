@@ -261,7 +261,11 @@ class CodeHostingService(ABC):
         raise NotImplementedError
 
     async def git_credential(self) -> GitCredential | None:
-        """The credential git authenticates with as the member; None for none."""
+        """The credential git authenticates with as the member; None for none.
+
+        It is asked right before git connects to the code host, so a provider
+        that waits for a host unreachable for a moment does so here.
+        """
         raise NotImplementedError
 
     def check_push(self, repository: str) -> None:

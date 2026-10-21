@@ -444,11 +444,16 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
 
     async def git_credential(self) -> GitCredential:
         """The member's name and token: Branvil's Smart HTTP takes a member's
-        token as the password of the member's name."""
+        token as the password of the member's name.
+
+        It is handed out once Branvil answers, which the member's client
+        waits for while Branvil restarts, so that git does not meet a Branvil
+        that is restarting. Without a token, nothing is asked of Branvil.
+        """
         name = username(self.person)
         if not name:
             raise ServiceError(t("integrations.branvil.api.username_missing"))
-        self.client()  # the token, or why there is none
+        await self.get("/health")
         return GitCredential(
             username=name, password=self.person.get_secret("BRANVIL_TOKEN")
         )
