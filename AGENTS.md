@@ -469,7 +469,7 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加え
 `guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
 ジョブの環境には CI メタデータしか無いため、uv/npm のキャッシュは
 `/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
-`.venv`・`node_modules`・Rust の `target` はキャッシュしない。
+`.venv`・`node_modules` はキャッシュしない。Rust の `target` をキャッシュするのは、Branvil を build する `branvil-integration` だけ。
 `test` は `UV_LOCKED=1` を指定する。
 ジョブは履歴とタグを持つ Git のチェックアウトで、root でない
 ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
@@ -485,7 +485,7 @@ GitHub から clone した Branvil の main とこのコミットで実行する
 しか届かない）。確かめるのはチケットと関係、push・PR・マージ、チェックによる readiness の
 3 経路だけで、それ以外は契約テストが受け持つ。必須チェックではない。`integrations/branvil/` を
 変えたら、手元でも Branvil のチェックアウトから `scripts/guildbotics-smoke.sh <このリポジトリ>` を
-実行する（`uv sync --extra test --extra dev` 済みであること）。失敗したら、ログが両リポジトリの
+実行する（`uv sync --extra test --extra dev` 済みで、Rust の toolchain があること）。失敗したら、ログが両リポジトリの
 コミットを示すので、壊したのがこのコミットか Branvil の main かを見て、壊した側で直す。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
