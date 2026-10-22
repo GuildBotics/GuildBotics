@@ -425,10 +425,12 @@ class Calls:
 
 class Admin(Calls):
     """Branvil as GuildBotics administers it with the admin token, which
-    the identities' Secrets hold once the owner consented."""
+    the identities' Secrets hold once the owner consented, or with another
+    token of the owner's that ``token`` names."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, token: str = "") -> None:
         self.base_url = base_url
+        self._token = token
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> Admin:
@@ -445,7 +447,7 @@ class Admin(Calls):
             ServiceError: If this machine holds none.
         """
         if self._client is None:
-            token = identity_secret_store().get("BRANVIL_ADMIN_TOKEN")
+            token = self._token or identity_secret_store().get("BRANVIL_ADMIN_TOKEN")
             if not token:
                 raise Unauthorized(t("integrations.branvil.api.not_connected"))
             self._client = administer(self.base_url, token)

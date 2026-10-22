@@ -12,7 +12,7 @@ import {
 import { RequiredLabel } from "../../formParts";
 import type { FieldErrors, ServiceUi } from "../types";
 import { branvilKey, createWorkspace, listWorkspaces } from "./api";
-import { BranvilConnection, useConnection } from "./BranvilConnection";
+import { BranvilConnection, BranvilGitConfig, useConnection } from "./BranvilConnection";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -133,6 +133,7 @@ function service(kind: ServiceKind): ServiceUi {
     return (
       <Stack>
         {first ? <BranvilConnection /> : null}
+        {first ? <BranvilGitConfig /> : null}
         <WorkspaceField
           value={String(value.workspace ?? "")}
           onChange={(workspace) => onChange({ ...value, workspace })}

@@ -53,6 +53,7 @@ from guildbotics.integrations.branvil.api import (
     health,
     segment,
 )
+from guildbotics.integrations.branvil.owner_git import git_config
 from guildbotics.integrations.provider import (
     MemberAccount,
     Operation,
@@ -162,6 +163,9 @@ class Connection(BaseModel):
     owner: str = ""
     #: Why it is not connected.
     message: str = ""
+    #: What the owner adds to their git configuration, while connected, for
+    #: their own git to authenticate to Branvil.
+    git_config: str = ""
 
 
 @dataclass
@@ -233,7 +237,10 @@ class Consents:
         try:
             async with Admin(url) as admin:
                 return Connection(
-                    status="connected", base_url=url, owner=await admin.owner()
+                    status="connected",
+                    base_url=url,
+                    owner=await admin.owner(),
+                    git_config=git_config(url),
                 )
         except ServiceError as exc:
             return Connection(status="disconnected", base_url=url, message=str(exc))

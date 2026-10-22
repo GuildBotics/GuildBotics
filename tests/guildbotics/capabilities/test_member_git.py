@@ -252,7 +252,10 @@ async def test_local_git_needs_no_authentication():
 
     assert credential is None
     with member_git._git_auth_environment(credential) as env:
-        assert env == {}
+        assert "GIT_ASKPASS" not in env
+        # The user's own helper, scoped to the code host, is not asked either.
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
 
 
 @dataclass

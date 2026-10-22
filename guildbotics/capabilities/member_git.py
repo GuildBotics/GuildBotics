@@ -975,9 +975,19 @@ def _check_out(
 
 @contextmanager
 def _git_auth_environment(credential: GitCredential | None) -> Iterator[dict[str, str]]:
-    """What git authenticates to the code host with, as the member."""
+    """What git authenticates to the code host with, as the member: never
+    what the user's own git would. Helpers from system, global, and
+    repository configuration (the user's own, scoped to the code host) are
+    reset, preserving any other command-scope settings."""
+    index = int(os.getenv("GIT_CONFIG_COUNT", "0"))
+    reset = {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": str(index + 1),
+        f"GIT_CONFIG_KEY_{index}": "credential.helper",
+        f"GIT_CONFIG_VALUE_{index}": "",
+    }
     if credential is None:
-        yield {}
+        yield reset
         return
     with host_temporary_directory("guildbotics-git-askpass-") as tmp:
         askpass_path = Path(tmp) / "askpass.sh"
@@ -991,15 +1001,9 @@ def _git_auth_environment(credential: GitCredential | None) -> Iterator[dict[str
             encoding="utf-8",
         )
         askpass_path.chmod(0o700)
-        # Reset helpers from system, global, and repository configuration,
-        # preserving any other command-scope settings.
-        index = int(os.getenv("GIT_CONFIG_COUNT", "0"))
         yield {
+            **reset,
             "GIT_ASKPASS": str(askpass_path),
-            "GIT_TERMINAL_PROMPT": "0",
             "GIT_USERNAME": credential.username,
             "GIT_PASSWORD": credential.password,
-            "GIT_CONFIG_COUNT": str(index + 1),
-            f"GIT_CONFIG_KEY_{index}": "credential.helper",
-            f"GIT_CONFIG_VALUE_{index}": "",
         }

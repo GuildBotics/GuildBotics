@@ -178,6 +178,50 @@ answers, that this machine holds GuildBotics' connection and Branvil takes it fo
 owner (the human member), that each AI member's token is accepted as that member's own,
 and that the workspace can be read.
 
+## Use Branvil from your own checkouts
+
+You, the human member, are Branvil's owner, and you can make Branvil the `origin` of your own
+checkouts on any machine where GuildBotics runs. Branvil's git asks for a member's name and
+token. GuildBotics hands git yours, so git never asks for a name or a password:
+
+1. Under **Setup → Integrations → Branvil**, while connected, **Your own git on this machine**
+   shows the lines to add. Copy them.
+2. Open your global git configuration with `git config --global --edit` and paste the lines
+   **at the end**:
+
+   ```ini
+   [credential "http://127.0.0.1:7878"]
+   	helper =
+   	helper = "!'/Users/you/.guildbotics/bin/guildbotics' git-credential"
+   ```
+
+   The empty `helper =` stops git from asking the helpers configured before it (the OS
+   keychain, Git Credential Manager) for Branvil. A helper configured after these lines would
+   be asked to store the token, so keep them last. On Windows the helper is
+   `!guildbotics git-credential`, since the installer puts the CLI on `PATH`.
+3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
+
+On its first request on a machine, GuildBotics issues the owner a token for that machine with
+its connection. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
+and kept in that machine's OS keychain only. It is never written to a URL, a git configuration, your shell
+history, or anything the Hub shares. Each machine has its own token, and you can revoke one
+machine's token under Branvil's **Settings → Members → owner → Tokens**. Once Branvil no
+longer accepts a machine's token, the next request issues that machine a new one in its place
+and revokes the machine's other tokens (such as one labelled with its name before a rename).
+
+The token is a full owner token, the same trust as the connection the machine already holds.
+Revoking a machine's token does not lock that machine out, because GuildBotics there issues
+another. To cut a machine off, remove it from the Hub, revoke the `app:GuildBotics` token and
+connect again (the other machines fetch the new connection from the Hub), then revoke that
+machine's `git:` token.
+
+When the helper cannot hand a token (Branvil does not answer, the connection's token is not on
+that machine, or the keychain cannot be used), git stops and prints why, without asking for a
+password. When GuildBotics on that machine is not connected to the Branvil of the remote at all,
+the helper says so, and git falls back to asking for a name and a password: connect, or fetch the
+connection from the Hub, instead of answering. The members' own git never uses this helper. GuildBotics hands member git the agent's
+token and drops every configured helper.
+
 ## How members work with it
 
 The ticket workflow and the pull request patrol behave as they do with GitHub:

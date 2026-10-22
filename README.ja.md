@@ -97,7 +97,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 
 - **GitHub**: 初期設定を完了するには、有効な GitHub Project の URL が必須です。先に [GitHub プロジェクトを作成する](#github-プロジェクトを作成する)（Todo / In Progress / Done のステータスを用意）と [AI エージェント用の GitHub アカウントを用意する](#ai-エージェント用の-github-アカウントを用意する)（アカウント種別の選択とトークン発行）を済ませてください。メンバーに GitHub アカウントを割り当てる場合は、そのメンバーのユーザー名・git メールアドレス・認証情報も必須になります
 - **Slack**: メンバーが Slack で依頼を受けるには、Socket Mode の Slack App と bot / app トークンが必要です。準備する内容は [Slack で作業を依頼する](#slack-で作業を依頼する)を参照してください
-- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。GuildBotics はオーナーの同意で一度だけ Branvil に接続し、メンバーごとの Branvil のエージェントとトークンは GuildBotics が用意します。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
+- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。GuildBotics はオーナーの同意で一度だけ Branvil に接続し、メンバーごとの Branvil のエージェントとトークンは GuildBotics が用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
 
 GuildBotics では、プロジェクトの設定と状態を置くフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 
@@ -590,6 +590,7 @@ publisher が heartbeat を止め、状態が失効すると消えます。完�
 
 - `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。すべてのワークスペースで 1 つです。ホストがメンバーの用意と Branvil の GUI を開くのに使います
 - `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行し、すべてのワークスペースで使います（Branvil での名前はメンバーの `identity.yml` の `account_info.branvil_username`）
+- 自分の git の Branvil トークン: マシンごとに 1 つのオーナーのトークン。自分の git が `guildbotics git-credential` に最初に求めたときに発行し、そのマシンの OS キーチェーンにだけ保存して共有しません（→ [自分のチェックアウトで Branvil を使う](docs/branvil_integration.ja.md#自分のチェックアウトで-branvil-を使う)）
 
 OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
 

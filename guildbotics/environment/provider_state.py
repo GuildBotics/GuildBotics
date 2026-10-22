@@ -32,8 +32,6 @@ import base64
 import json
 import math
 import secrets
-import shlex
-import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -80,6 +78,7 @@ from guildbotics.utils.fileio import (
     get_machine_state_path,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.managed_cli import managed_cli_command
 from guildbotics.utils.safe_paths import (
     inspect_host_path,
     read_host_file,
@@ -148,21 +147,8 @@ def has_credentials(tool: CliAgentInfo) -> bool:
 
 
 def login_command(name: str, *, platform: str | None = None) -> str:
-    """The terminal login instruction shared by status, alerts, and Desktop.
-
-    Windows installers put the CLI on PATH. Unix Desktop installs it under
-    home; quote its absolute path so spaces and shell metacharacters survive.
-    """
-    if (platform or sys.platform) == "win32":
-        return f"guildbotics environment login {name}"
-    return shlex.join(
-        [
-            str(Path.home() / ".guildbotics/bin/guildbotics"),
-            "environment",
-            "login",
-            name,
-        ]
-    )
+    """The terminal login instruction shared by status, alerts, and Desktop."""
+    return managed_cli_command("environment", "login", name, platform=platform)
 
 
 def sealed_login_path(tool: CliAgentInfo) -> Path:

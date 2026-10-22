@@ -19,6 +19,7 @@ from guildbotics.integrations.branvil.api import (
     username,
 )
 from guildbotics.integrations.branvil.code_hosting import BranvilCodeHostingService
+from guildbotics.integrations.branvil.owner_git import owner_git_credential
 from guildbotics.integrations.branvil.setup import SETUP
 from guildbotics.integrations.branvil.tickets import BranvilTicketService
 from guildbotics.integrations.provider import (
@@ -279,4 +280,5 @@ BRANVIL = Provider(
     setup=SETUP,
     hub_port=_hub_port,
     load_ci_image=_load_ci_image,
+    human_git_credential=owner_git_credential,
 )

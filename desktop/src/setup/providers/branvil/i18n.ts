@@ -24,6 +24,12 @@ export const branvil = {
           pending: "Answer Branvil's consent screen in the browser…",
           hint: "Branvil asks its owner once, in the browser of the machine where Branvil runs, to let GuildBotics manage it. Other machines receive the connection from the Hub.",
         },
+        git: {
+          title: "Your own git on this machine",
+          hint: "To use Branvil as the origin of your own checkouts, add these lines at the end of your global git configuration (git config --global --edit opens it). Git then gets this machine's Branvil token from GuildBotics instead of asking for a name and a password.",
+          copy: "Copy",
+          copied: "Copied",
+        },
         member: {
           label: "Branvil member",
           new: "Create a new agent ({{name}})",
@@ -106,6 +112,12 @@ export const branvil = {
           open: "Branvil を開く",
           pending: "ブラウザで Branvil の同意画面に答えてください…",
           hint: "Branvil は、Branvil が動いているマシンのブラウザで一度だけ、GuildBotics に管理を許可するかをオーナーに尋ねます。ほかのマシンには Hub から接続が届きます。",
+        },
+        git: {
+          title: "このマシンのあなたの git",
+          hint: "自分のチェックアウトで Branvil を origin にするときは、グローバルな git の設定（git config --global --edit で開けます）の最後にこの行を追加してください。git はユーザー名とパスワードを聞く代わりに、このマシンの Branvil のトークンを GuildBotics から受け取ります。",
+          copy: "コピー",
+          copied: "コピーしました",
         },
         member: {
           label: "Branvil のメンバー",

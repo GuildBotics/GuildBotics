@@ -1,4 +1,4 @@
-import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
+import { Button, Code, CopyButton, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -115,6 +115,39 @@ export function BranvilConnection() {
           ? t("setup.branvil.connection.pending")
           : error || (connected ? "" : connection?.message || t("setup.branvil.connection.hint"))}
       </Text>
+    </Stack>
+  );
+}
+
+/** The git configuration that lets the owner's own checkouts on this machine
+ * reach Branvil: git asks GuildBotics for this machine's token instead of a
+ * name and a password. Shown while connected. */
+export function BranvilGitConfig() {
+  const { t } = useTranslation();
+  const config = useConnection().data?.git_config;
+  if (!config) {
+    return null;
+  }
+  return (
+    <Stack gap={4}>
+      <Text size="sm" fw={500}>
+        {t("setup.branvil.git.title")}
+      </Text>
+      <Text size="xs" c="dimmed">
+        {t("setup.branvil.git.hint")}
+      </Text>
+      <Code block aria-label={t("setup.branvil.git.title")}>
+        {config}
+      </Code>
+      <Group>
+        <CopyButton value={config}>
+          {({ copied, copy }) => (
+            <Button size="compact-sm" variant="light" onClick={copy}>
+              {t(copied ? "setup.branvil.git.copied" : "setup.branvil.git.copy")}
+            </Button>
+          )}
+        </CopyButton>
+      </Group>
     </Stack>
   );
 }

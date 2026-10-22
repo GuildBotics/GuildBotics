@@ -32,6 +32,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
+| [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
 | [`guildbotics hub identity`](#guildbotics-hub-identity) | Manage the repository of the members' identities, which every workspace shares. |
@@ -140,6 +141,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | --- | --- |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
+| [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
@@ -390,6 +392,24 @@ guildbotics environment status [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics git-credential`
+
+Hand git the human member's credential for a remote of a service
+GuildBotics is connected to on this machine (ACTION is git's: get,
+store, or erase).
+
+Git runs this as a credential helper: add it, scoped to the service's
+URL, at the end of the global git configuration. Setup shows the lines to
+add.
+
+```text
+guildbotics git-credential [OPTIONS] ACTION
+```
+
+| Option | Description |
+| --- | --- |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics hub`

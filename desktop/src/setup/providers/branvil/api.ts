@@ -16,6 +16,9 @@ export type Connection = {
   owner: string;
   /** Why it is not connected. */
   message: string;
+  /** What the owner adds to their git configuration, while connected, for
+   * their own git to authenticate to Branvil. */
+  git_config: string;
 };
 
 export type ConsentStarted = { state: string; url: string };
