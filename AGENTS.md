@@ -450,8 +450,7 @@ member 向けエージェント指示（SKILL / workflow プロンプト）は�
 
 ## 開発時の基本コマンド（CI 準拠）
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) と Branvil の
-[`test` ジョブ](.branvil/ci.toml)で使われている手順:
+Branvil の CI の [`test` ジョブ](.branvil/ci.toml)で使われている手順:
 
 ```bash
 uv sync --extra test --extra dev
@@ -471,10 +470,14 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加え
 ジョブの環境には CI メタデータしか無いため、uv/npm のキャッシュは
 `/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
 `.venv`・`node_modules`・Rust の `target` はキャッシュしない。
-`test` は GitHub Actions と同じく `UV_LOCKED=1` を指定する。
-ジョブは GitHub Actions と同じく、履歴とタグを持つ Git のチェックアウトで、root でない
+`test` は `UV_LOCKED=1` を指定する。
+ジョブは履歴とタグを持つ Git のチェックアウトで、root でない
 ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
 権限エラーのテストに CI 用の手当ては要らない。
+
+GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テスト
+（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）と、下記の Desktop E2E。
+Branvil の CI で実行できる検査は `.branvil/ci.toml` に置き、GitHub Actions へ足さない。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
 host の OS 境界の契約テストだけを実行する。同期の競合ルール・状態遷移、validator、
@@ -555,7 +558,7 @@ Markdown だけを検査する。PowerShell では実行後に `$LASTEXITCODE` �
 uv sync --extra dev
 ```
 
-メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.12・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。Tauri の依存で入るので最後に binary を消している）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。CI のバージョンを上げたら Dockerfile の `ARG` も合わせる
+メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.12・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる（bubblewrap は入れない。Codex が同梱の bwrap より image のものを優先し、Debian の 0.8.0 ではセッションを開始できない。Tauri の依存で入るので最後に binary を消している）。image の `cargo` は `docker/agent-environment/cargo-wrapper.sh` で、コマンドが使うワークスペースと `target`（コマンドの `--manifest-path` / `--target-dir` / `--config` を渡して Cargo に尋ねる）について、`rustc -vV` とワークスペースの `Cargo.toml` の `[profile.*]` を印として `target` に残し、印が違えば（または無ければ）`cargo clean` してから本物の cargo に渡す（条件が変わるたびに古い成果物が clone に積み上がるため）。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 同じ分をワークスペースのコードホストの CI ランナーへ `guildbotics environment image load-ci`（Branvil。CI のジョブも同じ image をタグだけで指すので、どの版で動くかはランナーのキャッシュで決まる。アーカイブはランナーのマシンのファイルとして読まれるので、ランナーのマシンで実行する）→ 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、`agent_environment.yml` の workspace 共通 `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`api.github.com`、`raw.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。Branvil の CI はこの image で動くので、その版（Python・Rust・lychee など）はこの Dockerfile の `ARG` が決める。GitHub Actions の workflow が指定する版（Python・Node.js）を上げたら `ARG` も合わせる
 
 desktop frontend (`desktop/`) の品質確認:
 
