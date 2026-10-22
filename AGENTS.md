@@ -465,11 +465,11 @@ uv run --no-sync python -m pytest tests/ -n auto --durations=30
 
 Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加えて
 `markdown-links`（下記の lychee）と `desktop-quality`（`desktop` で `npm ci` →
-`npm run quality`）をジョブごとの microVM で実行する。image は
+`npm run quality`）と `branvil-integration`（下記）をジョブごとの microVM で実行する。image は
 `guildbotics/agent-environment:dev` のタグだけを書き、版・CPU・メモリはランナーの設定で決まる。
 ジョブの環境には CI メタデータしか無いため、uv/npm のキャッシュは
 `/work/.ci/uv`・`/work/.ci/npm` に置き、`uv.lock`・`desktop/package-lock.json` をキーに保存する。
-`.venv`・`node_modules`・Rust の `target` はキャッシュしない。
+`.venv`・`node_modules` はキャッシュしない。Rust の `target` をキャッシュするのは、Branvil を build する `branvil-integration` だけ。
 `test` は `UV_LOCKED=1` を指定する。
 ジョブは履歴とタグを持つ Git のチェックアウトで、root でない
 ユーザーとして動くので、`git ls-files` を使う境界テスト・hatch-vcs の版・`chmod(0)` の
@@ -478,6 +478,15 @@ Branvil の [`.branvil/ci.toml`](.branvil/ci.toml) は、この `test` に加え
 GitHub Actions は Branvil の CI で実行できないものだけを実行する: Windows の契約テスト
 （[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）と、下記の Desktop E2E。
 Branvil の CI で実行できる検査は `.branvil/ci.toml` に置き、GitHub Actions へ足さない。
+
+`branvil-integration` は、本番の `branvil` provider を実際の `branvil serve` に対して動かす
+Branvil の `scripts/guildbotics-smoke.sh`（Branvil の README の「Checking with GuildBotics」）を、
+GitHub から clone した Branvil の main とこのコミットで実行する（CI のジョブは公開ネットワークに
+しか届かない）。確かめるのはチケットと関係、push・PR・マージ、チェックによる readiness の
+3 経路だけで、それ以外は契約テストが受け持つ。必須チェックではない。`integrations/branvil/` を
+変えたら、手元でも Branvil のチェックアウトから `scripts/guildbotics-smoke.sh <このリポジトリ>` を
+実行する（`uv sync --extra test --extra dev` 済みで、Rust の toolchain があること）。失敗したら、ログが両リポジトリの
+コミットを示すので、壊したのがこのコミットか Branvil の main かを見て、壊した側で直す。
 
 全 pytest は Linux で実行する。Windows CI は `@pytest.mark.windows` を付けた
 host の OS 境界の契約テストだけを実行する。同期の競合ルール・状態遷移、validator、
