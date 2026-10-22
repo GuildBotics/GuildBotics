@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from guildbotics.entities import Person, Service, Team
 from guildbotics.integrations.event_listener import EventListener
 from guildbotics.runtime.chat_service import ChatService
-from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
@@ -58,6 +58,10 @@ def configured_check(
 
 async def _no_diagnosis(context: Context, members: list[Person]) -> list[ProviderCheck]:
     return []
+
+
+async def _no_git_credential(origin: str) -> GitCredential | None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -339,3 +343,10 @@ class Provider:
     #: and answers the references it loaded; ``None`` when GuildBotics loads no
     #: image into its CI. Raises ``ServiceError`` when the load fails.
     load_ci_image: Callable[[Path], Coroutine[Any, Any, list[str]]] | None = None
+    #: The credential the human member's own git authenticates with on this
+    #: machine, for a remote at ``origin`` (``scheme://host[:port]``); ``None``
+    #: for a remote it does not serve. Raises ``ServiceError`` when it serves
+    #: the remote but cannot hand one.
+    human_git_credential: Callable[[str], Awaitable[GitCredential | None]] = (
+        _no_git_credential
+    )

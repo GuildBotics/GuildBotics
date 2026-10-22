@@ -13,8 +13,6 @@ service's upkeep -- so every place lists and refuses the same images.
 from __future__ import annotations
 
 import platform
-import shlex
-import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -22,6 +20,7 @@ from guildbotics.environment import runtime
 from guildbotics.environment.runtime import ImageInfo
 from guildbotics.environment.toolchain import ToolchainDeclaration
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.managed_cli import managed_cli_command
 
 #: The base image unless the declaration names one: Debian with Node.js,
 #: npm, and git, the tools the provider CLIs are installed and run with.
@@ -209,21 +208,8 @@ def short_digest(digest: str) -> str:
 
 
 def image_load_command(*, platform: str | None = None) -> str:
-    """The terminal instruction that loads an image archive on this device.
-
-    Spelled like the login command: Windows installers put the CLI on PATH,
-    Unix Desktop installs it under home.
-    """
-    if (platform or sys.platform) == "win32":
-        return "guildbotics environment image load <archive.tar>"
+    """The terminal instruction that loads an image archive on this device."""
     return (
-        shlex.join(
-            [
-                str(Path.home() / ".guildbotics/bin/guildbotics"),
-                "environment",
-                "image",
-                "load",
-            ]
-        )
+        managed_cli_command("environment", "image", "load", platform=platform)
         + " <archive.tar>"
     )

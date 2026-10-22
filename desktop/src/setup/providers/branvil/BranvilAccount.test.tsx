@@ -25,6 +25,8 @@ vi.mock("../../../api/client", async (importOriginal) => {
 vi.mock("../../../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
 
 const t = i18n.getFixedT("en");
+const GIT_CONFIG =
+  '[credential "http://127.0.0.1:7878"]\n\thelper =\n\thelper = "!guildbotics git-credential"\n';
 const SERVICES: ProjectServices = {
   code_hosting_service: { name: "branvil", workspace: "acme" },
   ticket_service: { name: "branvil", workspace: "acme" },
@@ -40,6 +42,7 @@ function branvil({ connected = true } = {}) {
     base_url: owner ? BRANVIL_BASE_URL : "",
     owner,
     message: owner ? "" : "Not connected.",
+    git_config: owner ? GIT_CONFIG : "",
   });
   vi.mocked(providerOperation).mockImplementation(async (_provider, operation, body) => {
     const request = body as Record<string, string>;
@@ -47,7 +50,8 @@ function branvil({ connected = true } = {}) {
       case "connection":
         if (request.state) {
           polls += 1;
-          if (polls < 2) return { status: "pending", base_url: "", owner: "", message: "" };
+          if (polls < 2)
+            return { status: "pending", base_url: "", owner: "", message: "", git_config: "" };
           connected = true;
         }
         return connection(connected ? "otota" : "");
@@ -241,6 +245,27 @@ describe("Branvil service fields", () => {
       name: "beta",
     });
     expect(sent().code_hosting_service.workspace).toBe("acme");
+  });
+
+  it("show the configuration of the owner's own git once, to copy", async () => {
+    branvil();
+    const user = userEvent.setup();
+    renderWithProviders(<Services />);
+
+    const [config] = await screen.findAllByLabelText(t("setup.branvil.git.title"));
+    expect(config).toHaveTextContent('[credential "http://127.0.0.1:7878"]');
+    expect(screen.getAllByLabelText(t("setup.branvil.git.title"))).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: t("setup.branvil.git.copy") }));
+
+    expect(await navigator.clipboard.readText()).toBe(GIT_CONFIG);
+  });
+
+  it("show no git configuration before GuildBotics is connected", async () => {
+    branvil({ connected: false });
+    renderWithProviders(<Services />);
+
+    expect(await screen.findByText("Not connected.")).toBeVisible();
+    expect(screen.queryByText(t("setup.branvil.git.title"))).not.toBeInTheDocument();
   });
 
   it("refuse what names no workspace", () => {

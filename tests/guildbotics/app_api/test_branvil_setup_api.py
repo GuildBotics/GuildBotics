@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api import api
 from guildbotics.integrations.branvil import setup as branvil_setup
+from guildbotics.integrations.branvil.owner_git import git_config
 from guildbotics.setup import setup_service
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.i18n_tool import t
@@ -109,6 +110,7 @@ def test_connecting_keeps_the_admin_token_branvil_issues_on_consent(
         "base_url": "",
         "owner": "",
         "message": "",
+        "git_config": "",
     }
 
     redirect = double.authorize(started["url"])
@@ -132,6 +134,7 @@ def test_connecting_keeps_the_admin_token_branvil_issues_on_consent(
         "base_url": BASE,
         "owner": OWNER,
         "message": "",
+        "git_config": git_config(BASE),
     }
 
 
@@ -192,6 +195,7 @@ def test_a_denied_consent_connects_nothing(
         "base_url": "",
         "owner": "",
         "message": t("integrations.branvil.setup.denied"),
+        "git_config": "",
     }
 
 
@@ -232,6 +236,7 @@ def test_a_machine_without_the_connection_is_not_connected(client: TestClient):
         "base_url": "",
         "owner": "",
         "message": "",
+        "git_config": "",
     }
 
 
@@ -244,6 +249,7 @@ def test_a_connection_without_its_admin_token_is_not_connected(client: TestClien
         "base_url": BASE,
         "owner": "",
         "message": t("integrations.branvil.api.not_connected"),
+        "git_config": "",
     }
 
 

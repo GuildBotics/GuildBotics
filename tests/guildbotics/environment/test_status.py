@@ -498,13 +498,13 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
 ):
     import shlex
 
-    from guildbotics.environment import provider_state
     from guildbotics.environment.status import ToolStatus
+    from guildbotics.utils import managed_cli
     from guildbotics.utils.i18n_tool import set_language
 
     home = tmp_path / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    fake_platform(provider_state, platform)
+    fake_platform(managed_cli, platform)
     set_language(language)
     command = login_command("codex")
     if platform == "win32":

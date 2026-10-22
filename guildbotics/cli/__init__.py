@@ -40,6 +40,7 @@ def _configure_windows_standard_streams() -> None:
     lazy_commands={
         "diagnostics": "guildbotics.cli.diagnostics:diagnostics",
         "environment": "guildbotics.cli.environment:environment",
+        "git-credential": "guildbotics.cli.git_credential:git_credential",
         "hub": "guildbotics.cli.hub:hub",
         "kill": "guildbotics.cli.service:kill",
         "member": "guildbotics.cli.member:member",

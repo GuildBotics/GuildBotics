@@ -15,7 +15,7 @@ from guildbotics.integrations.provider import Chat, Provider
 from guildbotics.integrations.slack.provider import SLACK
 from guildbotics.runtime import IntegrationFactory
 from guildbotics.runtime.chat_service import ChatService
-from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.port import ServiceError
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
@@ -50,6 +50,21 @@ def ci_image_loader(
     name = team.project.get_service_name(Service.CODE_HOSTING_SERVICE)
     provider = PROVIDERS.get(name)
     return provider.load_ci_image if provider else None
+
+
+async def human_git_credential(origin: str) -> GitCredential | None:
+    """The credential the human member's own git authenticates with on this
+    machine, for a remote at ``origin``, from the provider that serves it;
+    ``None`` when none does. No workspace is asked: a connection that serves
+    git is the identities', the same in every workspace.
+
+    Raises:
+        ServiceError: If the provider that serves the remote cannot hand one.
+    """
+    for provider in PROVIDERS.values():
+        if (credential := await provider.human_git_credential(origin)) is not None:
+            return credential
+    return None
 
 
 def chat_provider_name(team: Team) -> str:
