@@ -2,8 +2,9 @@
 #
 # GuildBotics' default base image (Debian with Node.js, npm, git and uv) lets an
 # agent run the AI CLI tools but not this repository's own build and tests.
-# This image adds everything the CI workflows use, so a member turn inside the
-# isolated environment can run the same checks as `.github/workflows/*.yml`:
+# This image adds everything the Linux CI uses, so a member turn inside the
+# isolated environment can run the same checks as `.branvil/ci.toml`, whose
+# jobs run in this image:
 #
 #   - Python (uv-managed; the version `requires-python` allows) for `uv sync`,
 #     ruff, mypy, pylint and pytest
@@ -90,7 +91,7 @@ RUN curl -fsSL https://sh.rustup.rs \
 COPY --chmod=0755 cargo-wrapper.sh /usr/local/bin/cargo
 RUN cargo --version
 
-# lychee, at the version the CI's markdown-links job pins. The static musl
+# lychee, for the CI's markdown-links job. The static musl
 # build: the x86_64 glibc build wants a newer glibc than bookworm has.
 RUN arch="$(uname -m)" \
     && archive="lychee-${arch}-unknown-linux-musl" \

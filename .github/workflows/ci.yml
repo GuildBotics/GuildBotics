@@ -1,5 +1,9 @@
 name: CI
 
+# Branvil's CI (.branvil/ci.toml) runs the full test suite, the Markdown links,
+# and the Desktop frontend checks. This workflow runs only what it cannot: the
+# Windows contracts.
+
 on:
   push:
     branches:
@@ -7,68 +11,6 @@ on:
   pull_request:
 
 jobs:
-  markdown-links:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Check internal Markdown links
-        uses: lycheeverse/lychee-action@v2
-        with:
-          lycheeVersion: v0.24.2
-          args: >-
-            --no-progress
-            --scheme file
-            --include-fragments
-            --extensions md
-            './*.md'
-            docs desktop skills
-          fail: true
-
-  test:
-    runs-on: ubuntu-latest
-    env:
-      UV_LOCKED: "1"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v9.0.0
-        with:
-          enable-cache: true
-          python-version: "3.12"
-
-      - name: Sync dependencies
-        run: uv sync --extra test --extra dev
-
-      - name: Check generated CLI reference
-        run: uv run --no-sync python scripts/generate-cli-reference.py --check
-
-      - name: Run Ruff format
-        run: uv run --no-sync ruff format --check guildbotics tests
-
-      - name: Run Ruff
-        run: uv run --no-sync ruff check --output-format=github guildbotics
-
-      - name: Run Mypy
-        run: uv run --no-sync mypy guildbotics
-
-      - name: Run Pylint duplicate-code
-        run: uv run --no-sync pylint guildbotics
-
-      - name: Check the package map
-        run: uv run --no-sync lint-imports
-
-      - name: Run tests
-        run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
-
   test-windows:
     # Linux runs the full suite. Windows checks the host OS boundaries: native
     # paths and locks, process lifecycle, and Git for Windows integration.
