@@ -39,3 +39,19 @@ commands = [
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["desktop/package-lock.json"] }
+
+# The `branvil` provider against a real Branvil (Branvil's README, "Checking
+# with GuildBotics"): Branvil's main cloned from GitHub, as a job reaches only
+# public networks, and its scripts/guildbotics-smoke.sh run with this commit.
+[[jobs]]
+name = "branvil-integration"
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+git clone --quiet --depth 1 https://github.com/GuildBotics/Branvil.git /tmp/branvil
+UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 uv sync --extra test --extra dev
+CARGO_HOME=/work/.ci/cargo-home CARGO_TARGET_DIR=/work/.ci/branvil-target CARGO_INCREMENTAL=0 \
+  /tmp/branvil/scripts/guildbotics-smoke.sh /work
+''']
+timeout_secs = 1800
+cache = { paths = [".ci/uv", ".ci/cargo-home/registry", ".ci/branvil-target"], key_files = ["uv.lock"] }
