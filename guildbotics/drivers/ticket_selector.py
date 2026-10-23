@@ -6,7 +6,9 @@ manual run -- selects its ticket here and runs the workflow through
 ``ChatSelector``. The selector owns what surrounds the AI CLI turn: moving the
 ticket to the working lane, the run id and completion budget the turn is driven
 with, and the status comment a failed or rate-limited run leaves on the ticket.
-The workflow only runs the turn with the input selected here.
+The workflow only runs the turn with the input selected here. When the work
+the run leaves waits for a person, the selector has the member announce it in
+chat.
 """
 
 from __future__ import annotations
@@ -18,6 +20,11 @@ from dataclasses import replace
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.work_stops import (
+    WorkStop,
+    completed_stop,
+    notify_work_stop,
+)
 from guildbotics.capabilities.workflow_rate_limits import (
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
@@ -110,7 +117,15 @@ class TicketSelector:
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
         record. A run the patrol resumed for its PR's checks ends their wait
-        unless it awaits them again (:func:`_settle_checks`).
+        unless it awaits them again (:func:`_settle_checks`). A run of autonomous
+        work that ends asking or blocked, or fails and says so on its item,
+        waits for a person: the member announces it in chat, once, since the
+        member's comment keeps the work out of selection until someone
+        answers. That holds while the comment is all the item waits on: on the
+        member's own PR, any thread whose last word is someone else's keeps it
+        selected (:func:`~guildbotics.integrations.pull_request_patrol.pull_request_work`),
+        so a run that asks in a conversation comment and leaves such a thread
+        unanswered is taken up, and announced, again on every patrol.
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
@@ -142,11 +157,15 @@ class TicketSelector:
             except Exception as exc:
                 if failure_status(exc, self._source) == "deferred":
                     raise
-                notice = await self._settle_failure(context, invocation, run_id, exc)
+                notice = await self._settle_failure(
+                    context, task, invocation, run_id, exc
+                )
                 if notice is None:
                     raise
                 return notice
             await _settle_checks(context, task, run_id)
+            if self._source != "manual" and (stop := completed_stop(task, run_id)):
+                await notify_work_stop(context, stop)
             return result
         finally:
             await context.aclose()
@@ -154,11 +173,13 @@ class TicketSelector:
     async def _settle_failure(
         self,
         context: Context,
+        task: Task,
         invocation: WorkflowInvocation,
         run_id: str,
         exc: Exception,
     ) -> str | None:
-        """Report a failed run on its ticket.
+        """Report a failed run on its ticket, and announce in chat that the
+        work waits for a person once that report landed.
 
         Returns:
             The notice of a settled rate limit; ``None`` for a failure the
@@ -184,13 +205,18 @@ class TicketSelector:
             )
         # The status is said where the work came from: a pull request on the
         # code host, a ticket on the ticket service.
+        written = None
         with suppress(Exception):
-            await (
+            written = await (
                 context.get_code_hosting_service()
                 if invocation.payload["pull_request_url"]
                 else context.get_ticket_service()
             ).comment(ticket_url, body, status=status)
         if rate_limit is None:
+            if written is not None and self._source != "manual":
+                await notify_work_stop(
+                    context, WorkStop.of(task, "failed", run_id, written.url or "")
+                )
             return None
         record_workflow_rate_limited(
             person_id=person_id,

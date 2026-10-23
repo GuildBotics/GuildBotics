@@ -5,6 +5,7 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunStore
 from guildbotics.entities.task_run import TaskRunRecord
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 
 
@@ -114,20 +115,6 @@ def test_task_run_accepts_pr_update_evidence(tmp_path):
     )
 
     assert status.evidence_types == ["pr_update"]
-
-
-def test_task_run_asking_requires_comment_evidence(tmp_path):
-    store = TaskRunStore(tmp_path)
-    store.append_evidence("run-1", "git_publish", {"commit_sha": "abc"})
-
-    with pytest.raises(TaskRunError, match="write evidence"):
-        store.complete(
-            "run-1",
-            "asking",
-            "summary",
-            "https://github.com/owner/repo/issues/1",
-            "aiko",
-        )
 
 
 def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
@@ -320,6 +307,52 @@ def test_chat_run_blocked_requires_summary_but_no_evidence(tmp_path):
 
     assert status.status == "blocked"
     assert status.evidence_types == []
+
+
+@pytest.mark.parametrize("status", ["asking", "blocked"])
+def test_ticket_run_waiting_for_a_person_requires_a_comment_on_the_item(
+    tmp_path, status
+):
+    """The member's comment is its last word on the item, which keeps the work
+    out of the patrol until a person answers there: a run that waits for one
+    without saying so would be taken up, and announced, again on every
+    patrol. The refusal names the comment it lacks."""
+    store = RunStore(tmp_path)
+    url = "local://tickets/acme/team/demo-tickets/T-1"
+    store.append_evidence("run-1", "pr_create", {"url": "local://code/pulls/2"})
+
+    with pytest.raises(TaskRunError) as refused:
+        store.complete("run-1", status, "Needs a decision.", url, "aiko")
+
+    assert str(refused.value) == t(
+        "capabilities.task_runs.comment_required", run_id="run-1", status=status
+    )
+    store.append_evidence("run-1", "issue_comment", {"url": f"{url}#comment-1"})
+    if status == "blocked":
+        # A blocked run still says why in its summary.
+        with pytest.raises(TaskRunError, match="write evidence"):
+            store.complete("run-1", status, " ", url, "aiko")
+
+    assert store.complete("run-1", status, "Needs a decision.", url, "aiko").status == (
+        status
+    )
+
+
+@pytest.mark.parametrize("boundary_status", ["failed", "succeeded", "cancelled"])
+def test_a_run_its_boundary_finished_recorded_no_completion(tmp_path, boundary_status):
+    """However the execution boundary finished a run, its member recorded no
+    completion: nothing reads that run as one, whatever it wrote."""
+    store = RunStore(tmp_path)
+    store.start_record(
+        "run-1", work_kind="chat", execution_mode="autonomous", member_id="aiko"
+    )
+    store.append_evidence("run-1", "issue_comment", {"url": "local://tickets/T-1#c"})
+    store.finish_record(
+        "run-1", status=boundary_status, safe_summary="Execution failed."
+    )
+
+    with pytest.raises(TaskRunError, match="recorded no completion"):
+        store.status("run-1")
 
 
 def test_start_record_reopens_a_run_that_left_its_work_undone(tmp_path):

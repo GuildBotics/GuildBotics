@@ -358,6 +358,8 @@ If you already have a Slack App, choose **Use a registered app** and start from 
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
+When the member's ticket or pull request work from the patrol or a scheduled run stops to wait for a person — it asked a question, is blocked, or failed and said so on the item — the member posts one notice in each of its watched channels, linking the item and the comment it left there.
+
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
 For the manual Slack App setup steps (including the list of required scopes), sharing one connection across members, the details of thread participation policies, and scheduled post examples, see the [Slack Integration Guide](docs/slack_integration.en.md).

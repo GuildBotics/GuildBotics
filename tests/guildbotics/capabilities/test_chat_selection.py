@@ -1860,6 +1860,80 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wrote_on_an_item", [False, True])
+async def test_dispatcher_retries_a_crashed_run_with_the_agent(
+    monkeypatch, tmp_path, wrote_on_an_item
+):
+    """A run the execution boundary finished as failed recorded no completion,
+    so the next attempt runs the agent again instead of reading the failure
+    as the member's ``blocked``, whatever the crashed attempt wrote."""
+    from guildbotics.drivers.execution import TaskRunCoordinator
+    from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
+
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=["alice"])]
+    store.upsert_pending_event("local", "alice", "C1", events[0])
+    service = SnapshotChatService(events)
+    contexts: list[FakeInvokeContext] = []
+
+    class Parent:
+        logger = StubLogger()
+        action = "crash"
+
+        def clone_for(self, person):
+            ctx = FakeInvokeContext(self.action)
+            ctx.get_chat_service = lambda: service
+            contexts.append(ctx)
+
+            async def close():
+                pass
+
+            ctx.aclose = close
+            return ctx
+
+    class Runner:
+        access = CommandAccess()
+
+        def __init__(self, context, _command, _args, cwd):
+            self.cwd = cwd
+            self.context = context
+
+        async def run(self):
+            await chat_conversation_workflow.main(self.context)
+
+    runs_as(monkeypatch, Runner)
+    parent = Parent()
+    dispatcher = PendingChatDispatcher(
+        parent, state_store=store, execution_coordinator=TaskRunCoordinator()
+    )
+    person = Person(person_id="alice", name="Alice", is_active=True)
+
+    await dispatcher.process_person(person)
+
+    [pending] = store.load_pending_events("local", "alice", "C1")
+    [record] = RunStore().records()
+    assert (record.run_id, record.status, record.result) == (
+        pending.run_id,
+        "failed",
+        None,
+    )
+    if wrote_on_an_item:
+        RunStore().append_evidence(
+            pending.run_id, "issue_comment", {"url": "local://tickets/T-1#c-1"}
+        )
+    pending.next_attempt_at = None
+    store.save_pending_event("local", "alice", "C1", pending)
+    parent.action = "reply"
+    crashed = len(contexts)
+
+    await dispatcher.process_person(person)
+
+    assert [len(_agent_invocations(ctx)) for ctx in contexts[crashed:]] == [0, 1]
+    assert RunStore().status(pending.run_id).summary == "Posted a reply."
+    assert store.load_pending_events("local", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
 async def test_batch_includes_members_own_reply_without_using_it_as_reaction_target(
     tmp_path,
 ):

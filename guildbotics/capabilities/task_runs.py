@@ -25,6 +25,7 @@ from guildbotics.entities.task_run import (
 from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.correlation import current_trace
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
@@ -437,6 +438,14 @@ class RunStore:
             current = self._read_record_if_exists(run_id)
             evidence = _evidence_records(current)
             evidence_types = _evidence_types(evidence)
+            if self._waits_without_comment(status, subject_type, evidence_types):
+                raise TaskRunError(
+                    t(
+                        "capabilities.task_runs.comment_required",
+                        run_id=run_id,
+                        status=status,
+                    )
+                )
             if not self._has_required_evidence(
                 status, subject_type, summary, evidence_types, evidence
             ):
@@ -517,7 +526,7 @@ class RunStore:
         for record in self._readable_records():
             if not record.finished_at:
                 continue
-            result = _result_subject(record)
+            result = record.result
             yield _RunCompletion(
                 run_id=record.run_id,
                 subject_id=result.subject_id if result is not None else "",
@@ -527,18 +536,25 @@ class RunStore:
             )
 
     def status(self, run_id: str) -> RunStatus:
+        """The completion the run's member recorded.
+
+        Raises:
+            TaskRunError: If the run is still running, or ended without its
+                member recording a completion: an execution boundary that
+                finished it (failed, cancelled) recorded no result, and such a
+                run is no completion to recover.
+        """
         record = self._read_record(run_id)
         if not record.finished_at or record.status == "running":
             raise TaskRunError(f"Task run '{run_id}' is not completed.")
-        result = _result_subject(record)
-        status = result.status if result is not None else _public_status(record.status)
-        if status not in TASK_RUN_COMPLETIONS:
-            raise TaskRunError(f"Task run '{run_id}' has invalid status '{status}'.")
-        subject_type = result.subject_type if result is not None else "ticket"
+        result = record.result
+        if result is None:
+            raise TaskRunError(f"Task run '{run_id}' recorded no completion.")
+        status = result.status
         evidence = self.evidence(run_id)
         evidence_types = _evidence_types(evidence)
         if not self._has_required_evidence(
-            status, subject_type, record.safe_summary, evidence_types, evidence
+            status, result.subject_type, record.safe_summary, evidence_types, evidence
         ):
             raise TaskRunError(f"Task run '{run_id}' is missing required evidence.")
         return RunStatus(
@@ -546,9 +562,9 @@ class RunStore:
             completed=True,
             status=status,
             summary=record.safe_summary,
-            subject_type=subject_type,
-            subject_id=result.subject_id if result is not None else "",
-            subject_url=result.subject_url if result is not None else "",
+            subject_type=result.subject_type,
+            subject_id=result.subject_id,
+            subject_url=result.subject_url,
             person_id=record.member_id,
             evidence_count=len(evidence_types),
             evidence_types=evidence_types,
@@ -639,9 +655,11 @@ class RunStore:
         records: list[dict[str, Any]],
     ) -> bool:
         present = set(evidence_types)
-        if status == "blocked":
-            return bool(summary.strip())
+        if status == "blocked" and not summary.strip():
+            return False
         if subject_type == "chat":
+            if status == "blocked":
+                return True
             if status == "asking":
                 return bool(present & self.CHAT_ASKING_EVIDENCE_TYPES)
             return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
@@ -649,13 +667,25 @@ class RunStore:
             # The notice on each PR the run awaits, which their readiness
             # admitted.
             return self.CHECKS_AWAITED_EVIDENCE in present
+        if status in {"asking", "blocked"}:
+            return not self._waits_without_comment(status, subject_type, evidence_types)
         if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
             return False
-        if status == "asking":
-            return bool(present & self.TICKET_COMMENT_EVIDENCE_TYPES)
         if status == "done" and _has_code_publish(records):
             return "pr_create" in present
         return True
+
+    def _waits_without_comment(
+        self, status: str, subject_type: str, evidence_types: list[str]
+    ) -> bool:
+        """Whether a ticket or PR run waits for a person without having said so
+        on an item: the member's comment is its last word there, which keeps
+        the work out of the patrol until a person answers."""
+        return (
+            subject_type != "chat"
+            and status in {"asking", "blocked"}
+            and not set(evidence_types) & self.TICKET_COMMENT_EVIDENCE_TYPES
+        )
 
 
 def current_task_run_id() -> str | None:
@@ -705,14 +735,6 @@ def _result_status(status: str) -> TaskRunCompletion:
     if status not in TASK_RUN_COMPLETIONS:
         raise TaskRunError(f"Task run has invalid status '{status}'.")
     return cast(TaskRunCompletion, status)
-
-
-def _result_subject(record: TaskRunRecord) -> TaskRunResult | None:
-    return record.result
-
-
-def _public_status(status: str) -> str:
-    return {"succeeded": "done", "failed": "blocked"}.get(status, status)
 
 
 def _evidence_records(record: TaskRunRecord) -> list[dict[str, Any]]:
