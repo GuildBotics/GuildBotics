@@ -160,7 +160,7 @@ async def test_pull_request_work_reports_its_target(member):
     results = [
         await member_repository.pr_update(member, url, title="Renamed"),
         await member_repository.pr_comment(member, url, "Hi"),
-        await member_repository.pr_review(member, url, "LGTM", "approve", head),
+        await member_repository.pr_review(member, url, "LGTM", "comment", head),
         inline := await member_repository.pr_review_comment(
             member, url, "Hmm", head, "a.py", 2, "RIGHT", None, None
         ),
@@ -177,7 +177,7 @@ async def test_pull_request_work_reports_its_target(member):
     assert {result["target"]["url"] for result in results} == {url}
     pr = item(url)
     assert pr["title"] == "Renamed"
-    assert [(r["verdict"], r["commit"]) for r in pr["reviews"]] == [("approve", head)]
+    assert [(r["verdict"], r["commit"]) for r in pr["reviews"]] == [("comment", head)]
     assert [c["in_reply_to"] for c in pr["review_comments"]] == [None, inline["id"]]
 
 
