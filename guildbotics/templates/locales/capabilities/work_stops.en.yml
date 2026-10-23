@@ -1,0 +1,5 @@
+en:
+  asking: "%{name} asked a question on %{item} and is waiting for an answer there: %{url}"
+  blocked: "%{name} cannot go on with %{item} and is waiting for someone to respond there: %{url}"
+  failed: "%{name} stopped working on %{item} after an error and is waiting for someone to respond there: %{url}"
+  comment: "The member's comment: %{url}"

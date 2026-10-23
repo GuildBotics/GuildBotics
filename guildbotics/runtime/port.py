@@ -42,7 +42,13 @@ SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
 )
 
 WorkflowStatusReason = Literal[
-    "failed", "rate_limited", "review_limit", "awaiting_checks", "checks_settled"
+    "failed",
+    "rate_limited",
+    "review_limit",
+    "awaiting_checks",
+    "checks_settled",
+    "asking",
+    "blocked",
 ]
 #: What a status's payload names itself, and how it asks to be routed: what
 #: carries a status is never work.
@@ -52,7 +58,8 @@ _STATUS_ROUTING = "suppress"
 
 class WorkflowStatus(BaseModel):
     """Why a member's run stopped, carried by the comment or the message that
-    says so where its work came from.
+    says so where its work came from, or by the chat message that announces
+    that the work waits for a person.
 
     The service keeps it with the comment or message, in its own form, and
     gives it back on reading; whatever carries a status is not something to
@@ -96,7 +103,9 @@ class WorkflowStatus(BaseModel):
         """Whether the work stays out of selection: a failure until someone
         speaks again, a rate limit until its reset (or for good when the reset
         is not known). A wait for checks, and its end, hold nothing: what the
-        run awaits resumes it (:mod:`guildbotics.integrations.pull_request_patrol`)."""
+        run awaits resumes it (:mod:`guildbotics.integrations.pull_request_patrol`).
+        Nor does the announcement of a run that ended asking or blocked: the
+        member's own comment on the item is what holds it."""
         if self.reason == "failed":
             return True
         if self.reason != "rate_limited":

@@ -639,9 +639,11 @@ class RunStore:
         records: list[dict[str, Any]],
     ) -> bool:
         present = set(evidence_types)
-        if status == "blocked":
-            return bool(summary.strip())
+        if status == "blocked" and not summary.strip():
+            return False
         if subject_type == "chat":
+            if status == "blocked":
+                return True
             if status == "asking":
                 return bool(present & self.CHAT_ASKING_EVIDENCE_TYPES)
             return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
@@ -651,7 +653,9 @@ class RunStore:
             return self.CHECKS_AWAITED_EVIDENCE in present
         if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
             return False
-        if status == "asking":
+        if status in {"asking", "blocked"}:
+            # The member's comment is its last word on the item, which keeps
+            # the work out of the patrol until a person answers there.
             return bool(present & self.TICKET_COMMENT_EVIDENCE_TYPES)
         if status == "done" and _has_code_publish(records):
             return "pr_create" in present

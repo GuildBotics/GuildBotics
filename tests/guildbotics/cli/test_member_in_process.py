@@ -312,6 +312,12 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
     )
     monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
+    if kind == "ticket":
+        # A ticket run ends blocked only after saying so on its item.
+        RunStore().append_evidence(
+            "run-1", "issue_comment", {"url": f"{_TICKET.identity}#comment-1"}
+        )
+    before = list(RunStore().records())
 
     exit_code, stdout, stderr = _run(
         arguments,
@@ -334,7 +340,7 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in " ".join(stderr.split())
-        assert list(RunStore().records()) == []
+        assert list(RunStore().records()) == before
 
 
 @pytest.mark.parametrize(
