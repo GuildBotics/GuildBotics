@@ -847,3 +847,39 @@ async def test_each_stop_is_announced_by_its_own_notice():
         _notice("asking", "trace-x", url, label, f"{url}#c"),
         _notice("blocked", "trace-y", url, label, f"{url}#c"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", ["asking", "blocked"])
+async def test_a_run_that_fails_after_its_completion_is_announced_as_failed(
+    monkeypatch, recorded
+):
+    """A run that raised after its member recorded a completion (its result
+    failed validation, say) is settled as the failure it is: one notice, of
+    the failure, posted once the failure comment is on the item."""
+    context = _Context()
+    invocation, url, label = _work("ticket")
+    complete = _completing_on(recorded, url, f"{url}#comment-1")
+    post = context.chat.post_message
+    comments_when_posted: list[list[str]] = []
+
+    async def recorded_post(*args, **kwargs):
+        comments_when_posted.append([status.reason for status in _statuses(url)])
+        return await post(*args, **kwargs)
+
+    monkeypatch.setattr(context.chat, "post_message", recorded_post)
+
+    async def run_workflow(invocation: WorkflowInvocation) -> str:
+        await complete(invocation)
+        raise RuntimeError("the result is invalid")
+
+    with (
+        trace_scope("routine", trace_id="trace-c", person_id="aiko"),
+        pytest.raises(RuntimeError, match="invalid"),
+    ):
+        await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, run_workflow
+        )
+
+    assert _notices() == [_notice("failed", "trace-c", url, label, "")]
+    assert comments_when_posted == [["failed"]]

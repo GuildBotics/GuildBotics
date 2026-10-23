@@ -93,8 +93,8 @@ def comment_url_of(evidence: list[dict[str, Any]], url: str) -> str:
         if isinstance(payload.get("target"), dict)
         and payload["target"].get("url") == url
     ]
-    latest = (on_item or comments)[-1:]
-    return str(latest[0]["url"]) if latest else ""
+    chosen = on_item or comments
+    return str(chosen[-1]["url"]) if chosen else ""
 
 
 async def notify_work_stop(context: Context, stop: WorkStop) -> None:

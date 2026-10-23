@@ -121,7 +121,11 @@ class TicketSelector:
         work that ends asking or blocked, or fails and says so on its item,
         waits for a person: the member announces it in chat, once, since the
         member's comment keeps the work out of selection until someone
-        answers.
+        answers. That holds while the comment is all the item waits on: on the
+        member's own PR, any thread whose last word is someone else's keeps it
+        selected (:func:`~guildbotics.integrations.pull_request_patrol.pull_request_work`),
+        so a run that asks in a conversation comment and leaves such a thread
+        unanswered is taken up, and announced, again on every patrol.
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
