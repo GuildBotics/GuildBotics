@@ -16,7 +16,7 @@
 #   - lychee, for the Markdown link check
 #
 # It keeps what GuildBotics' build recipe expects of a base image: Node.js with
-# npm, curl and tar, and no bubblewrap (see the last step).
+# npm, curl and tar, gcc, g++ and make, and no bubblewrap (see the last step).
 # GuildBotics installs the AI CLI tools on top when it builds the environment
 # snapshot.
 #
@@ -34,8 +34,8 @@
 # environment passes to every process it starts.
 FROM node:24.21.0-bookworm
 
-ARG UV_VERSION=0.12.10
-ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.13.5
+ARG PYTHON_VERSION=3.15
 ARG RUST_VERSION=1.96.0
 ARG LYCHEE_VERSION=0.24.2
 # Keep in step with `@playwright/test` in desktop/package-lock.json; a newer
@@ -60,7 +60,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # uv, at the version GuildBotics' recipe installs, and a managed Python kept
-# outside any home directory. `python3.12` on PATH is how `uv sync` finds it
+# outside any home directory. `python3.15` on PATH is how `uv sync` finds it
 # even without the ENV; Debian's own python3 (3.11) is left alone.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN arch="$(uname -m)" \

@@ -797,7 +797,7 @@ def _usage(raw: dict[str, Any]) -> dict[str, int]:
             try:
                 output[target] = int(raw[key])
                 break
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
     return output
 

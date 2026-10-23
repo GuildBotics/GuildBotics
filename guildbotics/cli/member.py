@@ -2233,7 +2233,7 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
         return None
     try:
         _context, member_person = _resolve(person)
-    except (click.ClickException, FileNotFoundError):
+    except click.ClickException, FileNotFoundError:
         return None
     return InteractiveTraceStore().start_or_touch(
         person_id=member_person.person_id,

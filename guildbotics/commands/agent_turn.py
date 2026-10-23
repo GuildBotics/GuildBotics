@@ -152,7 +152,7 @@ def _continuation_input(ledger: RunLedger, context: Mapping[str, Any]) -> str:
 def _positive_int(value: Any, default: int) -> int:
     try:
         return max(1, int(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 

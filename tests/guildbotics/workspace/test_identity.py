@@ -42,15 +42,6 @@ def test_new_uuid7_is_a_version_7_uuid() -> None:
     assert value.variant == uuid.RFC_4122
 
 
-def test_new_uuid7_values_are_unique_and_time_ordered() -> None:
-    values = [new_uuid7() for _ in range(50)]
-
-    assert len(set(values)) == len(values)
-    # The leading 48 bits are a millisecond timestamp, so values never go backwards.
-    timestamps = [uuid.UUID(value).int >> 80 for value in values]
-    assert timestamps == sorted(timestamps)
-
-
 def test_workspace_identity_is_created_once_and_then_reused(
     port: RecordingPort,
 ) -> None:

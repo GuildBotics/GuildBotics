@@ -210,7 +210,7 @@ def _completed_activity_weeks() -> set[tuple[str, str]]:
             for item in payload.get("completed", [])
             if len(item) == ACTIVITY_SYNC_PERIOD_PARTS
         }
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         return set()
 
 

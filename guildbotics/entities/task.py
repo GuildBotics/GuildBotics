@@ -82,7 +82,7 @@ class Task(BaseModel):
             attributes["target.url"] = url
         return attributes
 
-    def __lt__(self, other: "Task") -> bool:
+    def __lt__(self, other: Task) -> bool:
         """
         Compare two tasks based on creation date, oldest first.
 

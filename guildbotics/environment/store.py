@@ -77,7 +77,7 @@ class ConversationStore:
         path = self._path(key)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return None
         if payload.get("version") != _STORE_VERSION:
             return None
@@ -91,7 +91,7 @@ class ConversationStore:
                 work_kind=str(raw_key["work_kind"]),
                 work_identity=str(raw_key["work_identity"]),
             )
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             return None
         if stored_key != key:
             return None
@@ -186,7 +186,7 @@ def _text(value: Any) -> str:
 def _integer(value: Any) -> int:
     try:
         return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
 
 

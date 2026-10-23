@@ -100,7 +100,7 @@ def _agent_execution_context(kwargs: dict[str, Any]) -> dict[str, Any]:
 def _attempt(context: dict[str, Any]) -> int:
     try:
         return max(1, int(context.get("attempt") or 1))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 1
 
 

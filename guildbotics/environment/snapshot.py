@@ -64,12 +64,12 @@ from guildbotics.utils.i18n_tool import t
 
 #: uv, available to agents as the default image's Python toolchain; installed
 #: from its release archive because that image has no Python of its own.
-UV_VERSION = "0.12.10"
+UV_VERSION = "0.13.5"
 #: The Python GuildBotics' own code runs with inside the microVM, and where
 #: its environment is. uv keeps the interpreters it installs under
 #: ``/opt/uv/python`` (not the home, which turns bind over); an image that
 #: already has this version on its PATH is used as it is.
-PYTHON_VERSION = "3.12"
+PYTHON_VERSION = "3.15"
 VENV = "/opt/guildbotics/venv"
 #: Where every microVM has the running process's own ``guildbotics`` package
 #: (the checkout run from, or this build's own bundle), read-only. Only

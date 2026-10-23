@@ -868,7 +868,7 @@ def _rg_line_snippet(data: dict[str, Any]) -> str:
 def _positive_int(value: Any, default: int) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return parsed if parsed > 0 else default
 

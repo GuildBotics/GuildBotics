@@ -34,6 +34,10 @@ export default defineConfig({
     setupFiles: "./src/test/setup.ts",
     // Reset implementations and unused one-shot responses before every test.
     mockReset: true,
+    // CI runs the suite beside other jobs on the same CPUs. Longer than the
+    // findBy* wait in src/test/setup.ts, so a slow render fails naming the
+    // element it waited for rather than as a bare timeout.
+    testTimeout: 20_000,
     // Vitest owns the `src/**` unit/component tests only. The Playwright
     // real-browser journeys under `e2e/**` must never be collected by Vitest.
     exclude: ["node_modules", "dist", ".idea", ".git", ".cache", "e2e/**"],

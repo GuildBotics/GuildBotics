@@ -112,7 +112,7 @@ def read_transcript_settings() -> dict[str, Any]:
     detail = str(data.get("detail") or DEFAULT_TRANSCRIPT_DETAIL)
     try:
         retention = int(data.get("retention_days") or DEFAULT_TRANSCRIPT_RETENTION_DAYS)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         retention = DEFAULT_TRANSCRIPT_RETENTION_DAYS
     return {
         "detail": "full"

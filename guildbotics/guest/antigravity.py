@@ -553,7 +553,7 @@ def _usage(value: Any) -> dict[str, int]:
             continue
         try:
             output[target] = max(0, int(raw[source]))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     return output
 

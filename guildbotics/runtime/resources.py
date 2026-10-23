@@ -385,5 +385,5 @@ def read_conditions(
         if bool(conditions["node"]) != (resource == "review_thread_comments"):
             raise ValueError
         return conditions
-    except (ValueError, ValidationError):
+    except ValueError, ValidationError:
         raise ServiceError(t("integrations.resources.parameters")) from None

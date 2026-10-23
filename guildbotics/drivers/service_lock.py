@@ -58,7 +58,7 @@ class ServiceLockMetadata:
             owner = value["owner"]
             workspace = str(value["workspace"])
             started_at = str(value["started_at"])
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             return None
         if pid <= 0 or not service_instance_id or owner not in {"cli", "desktop"}:
             return None
@@ -296,5 +296,5 @@ def _signature(path: Path) -> tuple[int, int, int]:
 def _read_metadata(handle: IO[str]) -> ServiceLockMetadata | None:
     try:
         return ServiceLockMetadata.from_dict(json.loads(_read_lock_data(handle)))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None

@@ -50,7 +50,7 @@ def _macos_ui_language_tag() -> str | None:
             text=True,
             timeout=2,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return None
     if completed.returncode != 0:
         return None
@@ -69,7 +69,7 @@ def _windows_ui_language_tag() -> str | None:
         get_language = windll.kernel32.GetUserDefaultUILanguage
         get_language.restype = ctypes.c_ushort
         return locale.windows_locale.get(int(get_language()))
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         return None
 
 

@@ -4,14 +4,16 @@
 # The runner supplies the image version, CPUs, memory and network access.
 # Commands start in /work, a Git checkout of the commit with its history and
 # tags, as a user that is not root, with CI metadata only; each array entry has
-# its own shell. Keep dependency caches here, rather than relying on HOME.
+# its own shell. Keep dependency caches here, rather than relying on HOME, and
+# point CARGO_HOME here too: the image's is not writable to the job, and
+# `uv sync` builds dependencies without a wheel for this Python with Cargo.
 
 [[jobs]]
 name = "test"
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
-export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home
 uv sync --extra test --extra dev
 uv run --no-sync python scripts/generate-cli-reference.py --check
 uv run --no-sync ruff format --check guildbotics tests
@@ -49,8 +51,9 @@ image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
 git clone --quiet --depth 1 https://github.com/GuildBotics/Branvil.git /tmp/branvil
+export CARGO_HOME=/work/.ci/cargo-home
 UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 uv sync --extra test --extra dev
-CARGO_HOME=/work/.ci/cargo-home CARGO_TARGET_DIR=/work/.ci/branvil-target CARGO_INCREMENTAL=0 \
+CARGO_TARGET_DIR=/work/.ci/branvil-target CARGO_INCREMENTAL=0 \
   /tmp/branvil/scripts/guildbotics-smoke.sh /work
 ''']
 timeout_secs = 1800

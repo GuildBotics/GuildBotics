@@ -265,7 +265,7 @@ def _expired(value: str, now: datetime, expire_after: float) -> bool:
         timestamp = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except KeyError, TypeError, ValueError, json.JSONDecodeError:
         return False
     return (now - timestamp.astimezone(UTC)).total_seconds() > expire_after
 
@@ -276,7 +276,7 @@ def _expired_event(workspace_id: str, key: str, value: str) -> str | None:
         return None
     try:
         observed_at = str(json.loads(value)["observed_at"])
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except KeyError, TypeError, ValueError, json.JSONDecodeError:
         return None
     return dump_shared_json(
         {

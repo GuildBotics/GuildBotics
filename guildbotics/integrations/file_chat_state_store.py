@@ -689,7 +689,7 @@ def _to_non_negative_int(value: object) -> int:
         return 0
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
     return max(0, parsed)
 

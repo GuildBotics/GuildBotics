@@ -54,7 +54,7 @@ class _Context:
         self.logger = _Logger()
         self.shared_state: dict[str, object] = {}
 
-    def clone_for(self, person: object) -> "_Context":
+    def clone_for(self, person: object) -> _Context:
         return self
 
     async def aclose(self) -> None:

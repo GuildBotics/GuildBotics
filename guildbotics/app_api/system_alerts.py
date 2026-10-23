@@ -155,7 +155,7 @@ class SystemAlertService:
                 self._dismissed = {str(item) for item in dismissed}
             if version != _STATE_VERSION:
                 self._save_state()
-        except (OSError, ValueError, TypeError):
+        except OSError, ValueError, TypeError:
             self._cursor = None
             self._alerts = {}
             self._dismissed = set()

@@ -51,7 +51,7 @@ class _Context:
         self.team = self.member.team
         self.closed = 0
 
-    def clone_for(self, person: object) -> "_Context":
+    def clone_for(self, person: object) -> _Context:
         return self
 
     def get_ticket_service(self):
@@ -78,7 +78,7 @@ def _statuses(url: str = ISSUE_URL) -> list[WorkflowStatus]:
     ]
 
 
-def _moves(monkeypatch, context: "_Context") -> list[tuple[str, str]]:
+def _moves(monkeypatch, context: _Context) -> list[tuple[str, str]]:
     """The moves the selector makes on the board, each made."""
     moves: list[tuple[str, str]] = []
     move = context.member.tickets.move

@@ -1267,7 +1267,7 @@ def create_app(
             raise AppApiError(
                 "avatar_invalid", reason=str(exc), status_code=400
             ) from exc
-        except (AppApiError, SharedWriteBusyError):
+        except AppApiError, SharedWriteBusyError:
             # Both already say what happened, and the catch-all below would
             # bury them under a generic 500.
             raise
@@ -1298,7 +1298,7 @@ def create_app(
         try:
             avatar_url = await setup.avatar_url(person, team)
             dest_path = await _store_downloaded_avatar(person_id, avatar_url)
-        except (AppApiError, SetupError, SharedWriteBusyError):
+        except AppApiError, SetupError, SharedWriteBusyError:
             raise
         except Exception as exc:
             logger.exception(

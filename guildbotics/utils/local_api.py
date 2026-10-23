@@ -51,7 +51,7 @@ def endpoint_path() -> Path:
 def read_endpoint() -> LocalApiEndpoint | None:
     try:
         return LocalApiEndpoint.model_validate_json(endpoint_path().read_bytes())
-    except (OSError, ValidationError):
+    except OSError, ValidationError:
         return None
 
 
@@ -104,7 +104,7 @@ def _proves_token(client: httpx.Client, endpoint: LocalApiEndpoint) -> bool:
             PROOF_PATH, json={"nonce": nonce}, timeout=_PROOF_TIMEOUT_SECONDS
         )
         proof = response.raise_for_status().json().get("proof")
-    except (httpx.HTTPError, ValueError, AttributeError):
+    except httpx.HTTPError, ValueError, AttributeError:
         return False
     return isinstance(proof, str) and hmac.compare_digest(
         proof.encode(), expected.encode()

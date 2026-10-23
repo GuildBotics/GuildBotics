@@ -97,7 +97,7 @@ loaded, an unbuilt snapshot, no login) is shown in the same words in the
 alert band at the top of the screen.
 
 GuildBotics' own Python environment is what GuildBotics' code runs with inside
-the environment. `/opt/guildbotics/venv` holds Python 3.12 (the image's own
+the environment. `/opt/guildbotics/venv` holds Python 3.15 (the image's own
 when it has one, otherwise installed by uv under `/opt/uv/python`) and the
 pinned dependencies, and `apt-get` installs WeasyPrint's native libraries
 (Pango) for `to_pdf` with fonts for Latin and Japanese text
@@ -122,7 +122,7 @@ With the default base image (`node:22.23.2-bookworm`, arm64), the snapshot
 build takes about 35 s on macOS (base image already pulled). A snapshot holds
 only what the build adds on top of the base image (the writable layer
 `upper.ext4`), which uses about 1.8 GB; the whole environment is that plus the
-base image. An image that already has what the build installs (Python 3.12,
+base image. An image that already has what the build installs (Python 3.15,
 say) therefore gives a smaller snapshot even when the whole environment is
 larger.
 
@@ -148,7 +148,8 @@ snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
 build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
-`tar`) and git, which [member git](#member-git-and-the-members-clones) runs
+`tar`, and `gcc`, `g++` and `make` for the Python dependencies that have no
+wheel for GuildBotics' Python) and git, which [member git](#member-git-and-the-members-clones) runs
 the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy

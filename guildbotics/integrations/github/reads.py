@@ -109,7 +109,7 @@ def reading(resource: str) -> Iterator[None]:
                 f"{error} {t('integrations.github.response.alerts_disabled')}"
             ) from None
         raise error from None
-    except (AttributeError, TypeError, ValueError, LookupError):
+    except AttributeError, TypeError, ValueError, LookupError:
         raise ServiceError(t("integrations.github.response.response")) from None
 
 
@@ -436,7 +436,7 @@ def _cursor(continuation: str, request: dict[str, Any]) -> str:
         ):
             raise ValueError
         return value["after"]
-    except (ValueError, binascii.Error, UnicodeError):
+    except ValueError, binascii.Error, UnicodeError:
         raise ServiceError(t("integrations.resources.continuation")) from None
 
 
@@ -458,6 +458,6 @@ def _alerts_continuation(
         cursors = httpx.URL(link["url"]).params.get_list("after")
         if len(cursors) != 1 or not 0 < len(cursors[0]) <= _CURSOR_LIMIT:
             raise ValueError
-    except (KeyError, ValueError, httpx.InvalidURL):
+    except KeyError, ValueError, httpx.InvalidURL:
         raise ServiceError(t("integrations.resources.continuation")) from None
     return _encode(cursors[0], request)

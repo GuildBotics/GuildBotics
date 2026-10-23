@@ -77,7 +77,7 @@ microVM起動時に適用します。imageのビルド中と環境が使えな�
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
 GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコードを動かすためのものです。
-`/opt/guildbotics/venv`にPython 3.12（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
+`/opt/guildbotics/venv`にPython 3.15（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
 入れます）と固定した依存を入れ、`to_pdf`が使うWeasyPrintのネイティブライブラリ（Pango）と、欧文・
 日本語のフォント（`fonts-dejavu-core`、`fonts-noto-cjk`）を`apt-get`で入れます。依存の一覧は
 `guildbotics/environment/requirements.txt`で、`uv.lock`からhostでしか使わない
@@ -96,7 +96,7 @@ GuildBoticsのコードは`PYTHONPATH`を使わず`python -B`で動かすので�
 既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルドは、macOSで約35秒
 （ベースイメージ取得済み）です。snapshotが持つのはベースイメージに書き足した分（書き込み層
 `upper.ext4`）だけで、その使用量は約1.8 GBです。環境全体の大きさはこれにベースイメージを足したもの
-です。そのため、ビルドが入れるもの（Python 3.12など）を最初から持つimageでは、環境全体が大きくても
+です。そのため、ビルドが入れるもの（Python 3.15など）を最初から持つimageでは、環境全体が大きくても
 snapshotは小さくなります。
 
 ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
@@ -113,7 +113,8 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`）と、
+するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`、GuildBoticsのPythonに
+wheelが無いPythonの依存をビルドする`gcc`・`g++`・`make`）と、
 [member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
 備えていれば何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
