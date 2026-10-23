@@ -215,6 +215,21 @@ async def test_an_inline_comment_lands_only_on_a_file_the_pull_request_changes(
 
 
 @pytest.mark.asyncio
+async def test_the_authors_own_review_is_only_a_comment(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    before = len(double.writes)
+
+    for verdict in ("approve", "request_changes"):
+        with pytest.raises(ServiceError, match="only comment"):
+            await code.review(url, "Looks good.", verdict, "feature-sha")
+
+    assert double.writes[before:] == []
+    submitted = await code.review(url, "Note.", "comment", "feature-sha")
+    assert submitted.verdict == "comment"
+
+
+@pytest.mark.asyncio
 async def test_a_resolved_thread_waits_on_no_one(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code)

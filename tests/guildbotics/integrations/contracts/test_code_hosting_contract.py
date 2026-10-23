@@ -72,6 +72,13 @@ async def _pull_request(host: Harness, branch: str = "feature", **fields):
     )
 
 
+async def _their_pull_request(host: Harness):
+    """A pull request someone else opened, for the member to give a verdict on."""
+    created = await _pull_request(host)
+    host.make_theirs(created.target.url)
+    return created
+
+
 async def _ticket(host: Harness, title: str = "Fix login") -> str:
     created = await host.tickets.create_ticket(host.tracker, title, "", [])
     return created.target.url
@@ -146,7 +153,7 @@ async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
 @pytest.mark.asyncio
 async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harness):
     code = host.code
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     head = await _head(host, url)
 
@@ -177,7 +184,7 @@ async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harne
 async def test_a_verdict_lands_only_on_the_head_the_member_read(host: Harness):
     """A head that moved since the member read it has commits the member has
     not read: neither a verdict nor an inline comment is written on it."""
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     read = await _head(host, url)
     host.advance("feature")
@@ -200,7 +207,7 @@ async def test_a_verdict_lands_only_on_the_head_the_member_read(host: Harness):
 
 @pytest.mark.asyncio
 async def test_request_changes_is_given_or_refused_as_unsupported(host: Harness):
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     head = await _head(host, url)
 
@@ -257,7 +264,7 @@ async def test_a_reaction_reaches_only_what_the_item_it_names_holds(
             )
         ).id
     else:
-        await code.review(first, "Looks good.", "approve", head)
+        await code.review(first, "Looks good.", "comment", head)
         target_id = (await code.read("pull_request_reviews", first)).items[0]["id"]
     before = len(host.writes)
 

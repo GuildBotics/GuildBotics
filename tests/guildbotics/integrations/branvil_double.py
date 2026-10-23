@@ -18,14 +18,14 @@ the lane it names, ``new`` if none, and a lane that is not one (``null``
 included) is refused (``400 invalid``). A ticket keeps
 its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
 shown from both sides. It does not hold writes to the member's scope -- the
-provider refuses those before any request. As Branvil does, it records an author's
-approval of its own pull request (which counts toward no merge); a verdict
-or a new inline comment consumes its author's review request, a reply does
-not; marking a pull request ready for review (or opening it as one) sets
-``ready_at``; a merge closes the tickets the pull request ``closes`` and
-moves them to ``done``; a workspace board's closed items are the closed
-tickets and pull requests of the workspace's repositories; and a gone
-branch's commit is ``""`` with no ``behind_by``.
+provider refuses those before any request. The author's own review is only
+a ``comment`` (``400 invalid`` otherwise); a verdict or a new inline comment
+consumes its author's review request, a reply does not; marking a pull
+request ready for review (or opening it as one) sets ``ready_at``; a merge
+closes the tickets the pull request ``closes`` and moves them to ``done``; a
+workspace board's closed items are the closed tickets and pull requests of the
+workspace's repositories; and a gone branch's commit is ``""`` with no
+``behind_by``.
 
 Its administration answers as Branvil's public admin API does: a token is
 its member's, the owner's (the admin token GuildBotics holds, labelled
@@ -228,6 +228,10 @@ class BranvilDouble:
     def ready(self, url: str) -> None:
         """A human marks the pull request ready for review."""
         self.pulls[url].update(draft=False, ready_at=self.now())
+
+    def make_theirs(self, url: str) -> None:
+        """Someone else is the pull request's author."""
+        self.pulls[url]["author"] = "them"
 
     def merge(self, url: str) -> None:
         """A human merges the pull request; the tickets it closes are done."""
@@ -516,6 +520,13 @@ class BranvilDouble:
                     url, MEMBER, body["body"], **body.get("meta") or {}
                 )
             case "POST", ["reviews"]:
+                if body["verdict"] != "comment" and pull["author"].casefold() == MEMBER:
+                    raise Refusal(
+                        400,
+                        "invalid",
+                        "The author cannot approve or request changes on their"
+                        " own pull request; only comment.",
+                    )
                 self._at_head(pull, body["commit"])
                 fields = {key: body[key] for key in ("verdict", "commit")}
                 self._consume(pull, MEMBER)

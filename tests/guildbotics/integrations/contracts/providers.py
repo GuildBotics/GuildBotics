@@ -2,8 +2,8 @@
 
 A provider's harness gives the code host and the tickets of one member, and
 what a contract cannot do through the ports: a branch on the remote, a new
-commit on it, an artifact of a commit, an assignment on the board, a human's
-merge. The
+commit on it, an artifact of a commit, an assignment on the board, someone
+else's pull request, a human's merge. The
 harness speaks as the ports do -- items by their URLs, comments and reviews by
 the ids their reads give -- and names its repository, its tracker, and a
 repository outside the member's scope by the paths its provider spells.
@@ -77,6 +77,9 @@ class Harness:
     assign: Callable[[str], None]
     #: Keep the CI artifact ``name`` of the commit ``sha``.
     artifact: Callable[[str, str, bytes], None]
+    #: Make someone else the author of the pull request ``url``, as if they had
+    #: opened it: a code host takes no verdict of the author's own.
+    make_theirs: Callable[[str], None]
     #: A human merges the pull request ``url`` into its base, which closes the
     #: tickets the code host links to be closed by it.
     merge: Callable[[str], None]
@@ -173,6 +176,10 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 
+    def make_theirs(url: str) -> None:
+        ref = store.locate(url, "pull_request")
+        write(ref, {**store.load(ref), "author": "them"})
+
     def merge(url: str) -> None:
         ref = store.locate(url, "pull_request")
         pull = store.load(ref)
@@ -237,6 +244,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         delete_branch,
         assign,
         artifact,
+        make_theirs,
         merge,
         Task(
             id=theirs_ref.url,
@@ -289,6 +297,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.make_theirs,
         double.merge,
         Task(
             id=double.their_ticket,
@@ -334,6 +343,7 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.make_theirs,
         double.merge,
         Task(
             id=_THEIR_NODE,
@@ -425,6 +435,10 @@ class GitHubDouble:
             "workflow_run": {"id": 7, "head_sha": sha},
             "content": content,
         }
+
+    def make_theirs(self, url: str) -> None:
+        """Someone else is the pull request's author."""
+        self.items[int(url.rsplit("/", 1)[1])]["user"] = {"login": "them"}
 
     def merge(self, url: str) -> None:
         """A human merges the pull request into the default branch: GitHub
