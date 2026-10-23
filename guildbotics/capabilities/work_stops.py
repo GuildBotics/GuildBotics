@@ -111,14 +111,7 @@ async def notify_work_stop(context: Context, stop: WorkStop) -> None:
     if not subscriptions:
         return
     item = " ".join(part for part in (stop.label, stop.title) if part)
-    lines = [
-        t(
-            f"capabilities.work_stops.{stop.reason}",
-            name=person.name,
-            item=item,
-            url=stop.url,
-        )
-    ]
+    lines = [_headline(stop.reason, name=person.name, item=item, url=stop.url)]
     if stop.comment_url:
         lines.append(t("capabilities.work_stops.comment", url=stop.comment_url))
     status = WorkflowStatus(
@@ -154,3 +147,14 @@ async def notify_work_stop(context: Context, stop: WorkStop) -> None:
                     "error": error,
                 },
             )
+
+
+def _headline(reason: StopReason, **values: str) -> str:
+    """The notice's first line, which says why the work waits."""
+    match reason:
+        case "asking":
+            return t("capabilities.work_stops.asking", **values)
+        case "blocked":
+            return t("capabilities.work_stops.blocked", **values)
+        case "failed":
+            return t("capabilities.work_stops.failed", **values)
