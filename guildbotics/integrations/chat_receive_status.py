@@ -51,7 +51,7 @@ class ChatReceiveStatus:
                 "unavailable",
             }:
                 return state
-        except (OSError, ValueError, KeyError, TypeError):
+        except OSError, ValueError, KeyError, TypeError:
             pass
         return "unavailable"
 

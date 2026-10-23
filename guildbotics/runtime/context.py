@@ -63,7 +63,7 @@ class Context:
     def language_name(self) -> str:
         return self.team.project.get_language_name()
 
-    def clone_for(self, person: Person) -> "Context":
+    def clone_for(self, person: Person) -> Context:
         """
         Create a new context for a specific person.
         Args:

@@ -65,11 +65,22 @@ def _certificate(
         .not_valid_before(now - dt.timedelta(minutes=5))
         .not_valid_after(now + dt.timedelta(hours=6))
     )
+    # Key identifiers too, which the default TLS context of Python 3.13 and
+    # later requires of a chain.
     builder = (
-        builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+        builder.add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), True
+        ).add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False
+        )
         if signer is None
         else builder.add_extension(
             x509.SubjectAlternativeName([x509.DNSName(name)]), False
+        ).add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                signing_key.public_key()
+            ),
+            False,
         )
     )
     return key, builder.sign(signing_key, hashes.SHA256())
@@ -182,7 +193,7 @@ class Recorder:
                     recorder._handler(tls=True)(
                         tunnel, self.client_address, self.server
                     )
-                except (OSError, ssl.SSLError):
+                except OSError, ssl.SSLError:
                     pass  # The client did not trust the run's CA, or went away.
                 self.close_connection = True
 

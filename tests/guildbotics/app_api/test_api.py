@@ -131,7 +131,7 @@ def _chat_context(members: list[Any]) -> Any:
     return type("ContextStub", (), {"team": team})()
 
 
-def _client(runtime: "RuntimeStub") -> TestClient:
+def _client(runtime: RuntimeStub) -> TestClient:
     """Build a TestClient bound to a stubbed runtime with a fixed token."""
     return TestClient(create_app(session_token="secret", runtime=runtime))
 
@@ -2127,7 +2127,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(
     release = threading.Event()
 
     class BlockingScheduler:
-        instances: ClassVar[list["BlockingScheduler"]] = []
+        instances: ClassVar[list[BlockingScheduler]] = []
 
         def __init__(
             self,
@@ -2263,7 +2263,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
         return object()
 
     class RunningEventListener:
-        instances: ClassVar[list["RunningEventListener"]] = []
+        instances: ClassVar[list[RunningEventListener]] = []
 
         def __init__(
             self,
@@ -2292,7 +2292,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
     scheduler_release = threading.Event()
 
     class RunningScheduler:
-        instances: ClassVar[list["RunningScheduler"]] = []
+        instances: ClassVar[list[RunningScheduler]] = []
 
         def __init__(
             self,
@@ -2399,7 +2399,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(
         return object()
 
     class StuckEventListener:
-        instances: ClassVar[list["StuckEventListener"]] = []
+        instances: ClassVar[list[StuckEventListener]] = []
 
         def __init__(
             self,

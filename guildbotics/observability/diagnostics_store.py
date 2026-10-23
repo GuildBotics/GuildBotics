@@ -74,7 +74,7 @@ class DiagnosticsCursor:
                 inode=int(value["inode"]),
                 anchor=str(value["anchor"]),
             )
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             return None
 
 
@@ -420,7 +420,7 @@ class DiagnosticsStore:
                     offset = handle.tell()
                     try:
                         item = json.loads(line)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                    except json.JSONDecodeError, UnicodeDecodeError:
                         continue
                     if isinstance(item, dict) and includes(item):
                         records.append(item)

@@ -103,7 +103,7 @@ A command and all of its subcommands (Markdown, YAML, Python, shell scripts, and
 - A command writes its working directory directly only when a read/write grant (such as the exchange folder) contains it. Anywhere else it works on a copy whose `.git` is read-only, and when it ends well, the regular files that changed are written back to the working directory (in a repository, ignored untracked files are not copied and ignored new files are not written back; links and anything inside `.git` are not written back; see [Native agent runtime](native_agent_runtime.en.md)).
 - Files outside the working directory are reached only through the directories granted to the environment. The exchange folder `~/Documents/GuildBotics` is always granted, read/write unless the command declares `read_only` ([3.1](#31-declaring-a-command-read-only)).
 - The network is reached only as the workspace-wide `network:` block of `intelligences/agent_environment.yml` allows, and it denies everything when omitted. A command that talks to the network (a web API, a feed) needs its destinations allowed there before it runs.
-- Python commands run with GuildBotics' own Python environment (Python 3.12 with GuildBotics and its dependencies), and shell scripts with the tools of the environment's base image.
+- Python commands run with GuildBotics' own Python environment (Python 3.15 with GuildBotics and its dependencies), and shell scripts with the tools of the environment's base image.
 
 For grants and `network:`, see [Isolated agent environment: access permissions](native_agent_runtime.en.md#isolated-agent-environment-access-permissions).
 

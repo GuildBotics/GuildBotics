@@ -742,7 +742,7 @@ class EventListenerRunner:
 def _positive_int(value: Any, default: int) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return max(0, parsed)
 
@@ -750,6 +750,6 @@ def _positive_int(value: Any, default: int) -> int:
 def _positive_float(value: Any, default: float) -> float:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return max(0.0, parsed)

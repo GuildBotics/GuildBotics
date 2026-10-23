@@ -316,7 +316,7 @@ def _structured_error(raw: dict[str, Any]) -> AgentRuntimeError | None:
     if category == "rate_limit":
         try:
             delay = max(0, int(raw.get("retry_delay_ms", 0) or 0))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             delay = 0
         details["retry_after_seconds"] = delay / 1000
         return AgentRuntimeError(
@@ -380,7 +380,7 @@ def _epoch_to_iso(raw: Any) -> str:
         if epoch <= 0:
             return ""
         return datetime.fromtimestamp(epoch, UTC).isoformat()
-    except (TypeError, ValueError, OverflowError, OSError):
+    except TypeError, ValueError, OverflowError, OSError:
         return ""
 
 
@@ -552,6 +552,6 @@ def _usage(value: Any) -> dict[str, int]:
             continue
         try:
             output[key] = max(0, int(raw.get(key, 0) or 0))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     return output

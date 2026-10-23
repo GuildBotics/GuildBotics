@@ -408,7 +408,7 @@ def _read_member_form(path: Path) -> dict[str, Any]:
     member may be missing one of its two files, and still be repaired."""
     try:
         return _config_mapping(load_yaml_file(path))
-    except (YAMLError, FileNotFoundError):
+    except YAMLError, FileNotFoundError:
         return {}
 
 

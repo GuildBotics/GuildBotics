@@ -84,7 +84,7 @@ def _store(workspace_id: str, entry: secret_stream.SecretEntry) -> dict[str, Any
         )
     except secret_host.HubSecretConflictError:
         return {"key": entry.key, "status": "conflict"}
-    except (InvalidSecretKeyError, UnicodeDecodeError):
+    except InvalidSecretKeyError, UnicodeDecodeError:
         return {"key": entry.key, "status": "invalid"}
     except SecretStoreError as exc:
         return {"key": entry.key, "status": _store_error(exc)}

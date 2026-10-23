@@ -39,7 +39,7 @@ a service running old code can rebuild its own snapshot and remove yours.
 Saved logins are device-wide, so a separate workspace still uses the device's
 logins. Do not log in, reset, or replace them as part of verification.
 
-After build approval, run from the target PR checkout with Python 3.12 and
+After build approval, run from the target PR checkout with Python 3.15 and
 its dependencies. This creates a disposable workspace outside the repository:
 
 ```bash

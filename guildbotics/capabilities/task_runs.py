@@ -394,7 +394,7 @@ class RunStore:
                 yield TaskRunRecord.model_validate_json(
                     path.read_text(encoding="utf-8")
                 )
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 continue
 
     def find_by_work_identity(

@@ -255,7 +255,7 @@ def iter_json_objects(directory: Path, pattern: str) -> Iterator[dict[str, Any]]
     for path in sorted(directory.glob(pattern)):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
             yield payload
@@ -584,6 +584,6 @@ def load_yaml_dict(path: Path) -> dict[str, Any]:
         return {}
     try:
         data = load_yaml_file(path)
-    except (OSError, yaml.YAMLError):
+    except OSError, yaml.YAMLError:
         return {}
     return data if isinstance(data, dict) else {}

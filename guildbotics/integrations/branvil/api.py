@@ -180,7 +180,7 @@ def _failure(response: httpx.Response) -> ServiceError:
     try:
         error = response.json()["error"]
         code, message = str(error["code"]), str(error["message"])[:_MESSAGE_LIMIT]
-    except (ValueError, KeyError, TypeError):
+    except ValueError, KeyError, TypeError:
         code, message = "", ""
     status = response.status_code
     if status == httpx.codes.NOT_FOUND:

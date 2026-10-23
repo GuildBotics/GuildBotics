@@ -137,7 +137,7 @@ or weaken the credential boundary to make a bump pass.
 
 - `docs/native_agent_runtime.ja.md` and `.en.md` carry most of the hits above;
   keep ja and en in step, then run `lychee` as `AGENTS.md` says.
-- Use Python 3.12 and the repository's existing dependencies. Run these checks:
+- Use Python 3.15 and the repository's existing dependencies. Run these checks:
 
 ```bash
 uv run --no-sync ruff format --check guildbotics tests

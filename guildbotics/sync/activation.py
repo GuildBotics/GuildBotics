@@ -331,7 +331,7 @@ def _connected_repository(workspace_root: Path | None) -> LocalSyncRepository | 
             return None
         repository.verify_boundary()
         return repository if repository.has_remote() else None
-    except (WorkspaceNotConfiguredError, SyncRepositoryError, OSError):
+    except WorkspaceNotConfiguredError, SyncRepositoryError, OSError:
         return None
 
 

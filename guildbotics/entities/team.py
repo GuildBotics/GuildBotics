@@ -189,7 +189,7 @@ class Role(BaseModel):
     summary: str = Field(..., description="A brief summary of the role.")
     description: str = Field(..., description="A brief description of the role.")
 
-    def update_by(self, other: "Role") -> "Role":
+    def update_by(self, other: Role) -> Role:
         """
         Update the role with another role's attributes.
 

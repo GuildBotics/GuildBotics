@@ -369,7 +369,7 @@ def load_command_file_metadata(path: Path) -> dict[str, Any]:
             if "description" not in metadata:
                 metadata["description"] = first_line(description or "")
             return metadata
-    except (CommandError, OSError, SyntaxError, ValueError, yaml.YAMLError):
+    except CommandError, OSError, SyntaxError, ValueError, yaml.YAMLError:
         return {}
     return {}
 
@@ -447,5 +447,5 @@ def _localized_metadata_value(value: Any, language_code: str) -> Any:
 def _safe_read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         return ""

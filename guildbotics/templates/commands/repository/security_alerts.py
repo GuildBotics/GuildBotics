@@ -35,7 +35,7 @@ async def main(
         raise CommandError(t("commands.repository.security_alerts.output"))
     try:
         size = int(page_size)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         raise CommandError(t("commands.repository.security_alerts.page_size")) from None
     try:
         page = await context.get_code_hosting_service().read(

@@ -193,7 +193,7 @@ def _result(response: httpx.Response) -> Any:
         return response.json()["result"]
     try:
         error = response.json()["error"]
-    except (ValueError, KeyError, TypeError):
+    except ValueError, KeyError, TypeError:
         raise HostCallError(
             "refused", f"The host refused the call ({response.status_code})."
         ) from None
