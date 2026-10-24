@@ -85,7 +85,7 @@ def test_reference_includes_standard_work_procedure():
     assert "`--closes-issue` applies to all of them" in text
     assert "A child ticket can therefore be closed by a PR" in text
     assert "`--issue-url <child> --closes-issue`" in text
-    assert "refer to the parent ticket on a standalone line" in text
+    assert "refer to the parent ticket in ordinary body prose" in text
     assert "feature branch to the default branch closes the parent ticket" in text
     assert "tickets that the merge does not complete" in text
     assert (

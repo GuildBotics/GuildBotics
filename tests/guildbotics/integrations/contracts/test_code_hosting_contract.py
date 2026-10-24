@@ -426,6 +426,34 @@ async def test_a_merge_closes_only_a_ticket_the_code_host_can_close(host: Harnes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("update", [False, True])
+async def test_a_closing_child_link_keeps_parent_context_without_closing_it(
+    host: Harness, update: bool
+):
+    """The documented create/update recipe leaves an unfinished parent open."""
+    parent, child = [await _ticket(host, title) for title in ("Parent", "Child")]
+    body = f"Parent ticket: {parent}"
+    url = (
+        await _pull_request(
+            host, body=body, tickets=[TicketLink(child, closes=not update)]
+        )
+    ).target.url
+    if update:
+        await host.code.update_pull_request(
+            url, body=body, title=None, tickets=[TicketLink(child, closes=True)]
+        )
+
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert body in pull["body"]
+    host.merge(url)
+    states = [
+        (await host.tickets.read("tickets", ticket)).items[0]["state"]
+        for ticket in (parent, child)
+    ]
+    assert states == ["open", "closed"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("closes", [False, True])
 async def test_ticket_links_can_switch_between_reference_and_closing(
     host: Harness, closes: bool
