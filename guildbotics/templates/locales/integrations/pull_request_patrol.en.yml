@@ -2,4 +2,4 @@ en:
   review_limit_reached: "I have reviewed this pull request %{count} times, the limit for automatic re-review, so I converted it to a draft. While it is a draft, neither its author nor its reviewers act on new commits, thread replies, conversation comments, or review bodies in the patrol. To go on as it is, mark it Ready for review (the count starts over). To change how it proceeds, give instructions through the chat or an interactive session, and mark it Ready for review once that is settled."
   review_limit_draft_failed: "I have reviewed this pull request %{count} times, the limit for automatic re-review, but could not convert it to a draft, so I have stopped reviewing it. After a comment, a review, or a thread reply on this PR, the next patrol tries the conversion again."
   awaiting_checks: "I am waiting for the CI checks of this pull request to finish. I will pick the work up again when they finish or when new commits land on it."
-  checks_settled: "The CI checks I was waiting for have finished, so I picked the work up again and ended this wait."
+  checks_settled: "I picked the work up again, so this wait for the CI checks is over."

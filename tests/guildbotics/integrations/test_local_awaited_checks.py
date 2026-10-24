@@ -7,7 +7,9 @@ import subprocess
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
+from guildbotics.entities.task import AwaitedRun
 from guildbotics.integrations import pull_request_patrol
 from guildbotics.integrations.local import store
 from guildbotics.runtime.port import ServiceError, WorkflowStatus
@@ -36,7 +38,8 @@ def _head() -> str:
 
 
 async def _awaiting(member, url: str, subject: str) -> None:
-    """The member's run stops to await the checks of the head it pushed."""
+    """The member's run on the ticket ``subject`` stops to await the checks of
+    the head it pushed."""
     await member.code.comment(
         url,
         "Waiting for CI.",
@@ -46,6 +49,8 @@ async def _awaiting(member, url: str, subject: str) -> None:
             run_id="run-1",
             subject=subject,
             head=_head(),
+            work_kind="ticket",
+            work_identity=subject,
         ),
     )
 
@@ -203,4 +208,42 @@ async def test_a_resumed_run_stopped_by_a_rate_limit_is_resumed_after_the_reset(
 
     assert await _woken(member) == (
         [(url, url, "pull_request_checks")] if resumed else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_whatever_the_pr_asks_while_its_checks_are_awaited_resumes_that_work(
+    member, awaited
+):
+    """Feedback that arrives during the wait is taken up in the awaited work,
+    so it reports where that work came from and a new wait stays that work's;
+    once the checks settle, the checks role resumes the same work."""
+    url, ticket_url = awaited
+    resumes = AwaitedRun(run_id="run-1", work_kind="ticket", work_identity=ticket_url)
+    write(
+        store.locate(url, "pull_request"),
+        {**item(url), "comments": [*item(url)["comments"], comment("them", "hi")]},
+    )
+    [feedback] = await member.code.pull_request_candidates()
+    assert (feedback.trigger_reason, feedback.resumes) == (
+        "pull_request_feedback",
+        resumes,
+    )
+
+    await member.code.comment(url, "Thanks!")
+    store.finish_checks(REPOSITORY, _head(), "success")
+    [checks] = await member.code.pull_request_candidates()
+
+    assert (checks.trigger_reason, checks.resumes) == ("pull_request_checks", resumes)
+
+
+def test_a_wait_names_the_work_it_resumes():
+    """A wait that names no work resumes nothing: it is no status at all."""
+    with pytest.raises(ValidationError):
+        WorkflowStatus(reason="awaiting_checks", person_id=ME, run_id="run-1")
+    assert (
+        WorkflowStatus.from_payload(
+            {"kind": "workflow_error", "reason": "awaiting_checks", "person_id": ME}
+        )
+        is None
     )

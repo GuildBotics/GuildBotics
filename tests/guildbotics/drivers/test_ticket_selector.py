@@ -8,24 +8,27 @@ from dataclasses import replace
 
 import pytest
 
-from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.capabilities.task_runs import RunStore, TaskRunStore
+from guildbotics.drivers.ticket_selector import TicketSelector
+from guildbotics.entities.task import AwaitedRun, Task
 from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person
+from guildbotics.integrations.local import store
 from guildbotics.integrations.local.chat import LocalChatService, channel_path
-from guildbotics.drivers.ticket_selector import TicketSelector
-from guildbotics.entities.task import Task
-from guildbotics.runtime.member_invocation import Work
+from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.port import ServiceError, ServiceUnavailable, WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import current_trace, trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 from tests.guildbotics.local_chat import lines
 from tests.guildbotics.local_code_host import (
+    REPOSITORY,
     TRACKER,
     comment,
     item,
     local_member,
     pull_request,
+    remote_with,
     ticket,
 )
 
@@ -496,6 +499,57 @@ async def test_candidates_are_the_pull_requests_and_then_the_board_and_refresh_b
     ]
 
 
+@pytest.mark.asyncio
+async def test_a_pr_whose_checks_settled_resumes_the_awaited_work():
+    """The patrol resumes the work the wait names -- here a chat thread's --
+    in its conversation, with what the awaiting run said of it as far as this
+    device has it: a record that has not arrived holds nothing up."""
+    context = _Context()
+    remote_with("feature")
+    pull = pull_request(2, "feature", author="aiko")
+    thread = ChatSubject("local", "C1", "T1", "E1", "aiko")
+    work = Work.of_chat(thread)
+    await context.member.code.comment(
+        pull,
+        "Waiting for CI.",
+        status=WorkflowStatus(
+            reason="awaiting_checks",
+            person_id="aiko",
+            run_id="run-0",
+            subject=thread.subject_id,
+            head=store.branch_tip(REPOSITORY, "feature"),
+            work_kind=work.kind,
+            work_identity=work.identity,
+        ),
+    )
+    store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "feature"), "success")
+    selector = TicketSelector(context)  # type: ignore[arg-type]
+    [candidate] = await selector.candidates(context.person)  # type: ignore[arg-type]
+
+    unread = await selector.refresh(context.person, candidate)  # type: ignore[arg-type]
+    assert unread is not None
+    assert (unread.work, unread.payload["awaited_summary"]) == (
+        Work("chat", work.identity),
+        "",
+    )
+
+    runs = RunStore()
+    runs.append_evidence("run-0", "checks_awaited", {"target": {"url": pull}})
+    runs.complete("run-0", "awaiting_checks", "Report in the thread.", work, "aiko")
+    invocation = await selector.refresh(context.person, candidate)  # type: ignore[arg-type]
+
+    assert invocation is not None
+    assert invocation.work == Work("chat", work.identity)
+    assert {
+        key: invocation.payload[key]
+        for key in ("trigger_reason", "awaited_run_id", "awaited_summary")
+    } == {
+        "trigger_reason": "pull_request_checks",
+        "awaited_run_id": "run-0",
+        "awaited_summary": "Report in the thread.",
+    }
+
+
 def test_ticket_trace_attributes_for_ticket_and_pull_request():
     ticket_task = Task(id="1", title="T", description="D", url=ISSUE_URL)
     assert ticket_task.trace_attributes() == {
@@ -517,7 +571,15 @@ def test_ticket_trace_attributes_for_ticket_and_pull_request():
     }
 
 
-def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
+#: The run that awaited a PR's checks, in a chat thread's work.
+_AWAITED = AwaitedRun(
+    run_id="run-0", work_kind="chat", work_identity="local:aiko:C1:T1"
+)
+
+
+def _checks_invocation(
+    pull: str, trigger: str, resumes: AwaitedRun | None = None
+) -> WorkflowInvocation:
     task = Task(
         id=pull,
         url=pull,
@@ -526,6 +588,7 @@ def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
         status=Task.IN_PROGRESS,
         pull_request_url=pull,
         trigger_reason=trigger,
+        resumes=resumes,
     )
     return WorkflowInvocation(
         command="workflows/ticket_driven_workflow",
@@ -554,7 +617,11 @@ def _completing(status: str, awaited: tuple[str, ...] = ()):
                 invocation.run_id, "checks_awaited", {"target": {"url": url}}
             )
         store.complete(
-            invocation.run_id, status, "summary", invocation.work.identity, "aiko"
+            invocation.run_id,
+            status,
+            "summary",
+            Work.of_ticket(invocation.work.identity),
+            "aiko",
         )
         return status
 
@@ -563,22 +630,32 @@ def _completing(status: str, awaited: tuple[str, ...] = ()):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("trigger", "status", "awaits", "settled"),
+    ("trigger", "resumes", "status", "awaits", "settled"),
     [
-        ("pull_request_checks", "done", (), True),
-        ("pull_request_checks", "asking", (), True),
-        ("pull_request_checks", "awaiting_checks", ("resumed",), False),
-        ("pull_request_checks", "awaiting_checks", ("resumed", "other"), False),
+        ("pull_request_checks", _AWAITED, "done", (), True),
+        ("pull_request_checks", _AWAITED, "asking", (), True),
+        ("pull_request_checks", _AWAITED, "awaiting_checks", ("resumed",), False),
+        (
+            "pull_request_checks",
+            _AWAITED,
+            "awaiting_checks",
+            ("resumed", "other"),
+            False,
+        ),
         # The run awaits another PR only: the resumed PR's wait is over.
-        ("pull_request_checks", "awaiting_checks", ("other",), True),
-        ("pull_request_feedback", "done", (), False),
+        ("pull_request_checks", _AWAITED, "awaiting_checks", ("other",), True),
+        # Feedback on a PR whose checks are awaited resumes the awaited work,
+        # and ends the wait like any run that resumes it.
+        ("pull_request_feedback", _AWAITED, "done", (), True),
+        ("pull_request_feedback", None, "done", (), False),
     ],
 )
 async def test_a_run_resumed_for_checks_ends_their_wait(
-    trigger, status, awaits, settled
+    trigger, resumes, status, awaits, settled
 ):
     """Whatever the resumed run wrote on the PR, the host ends the wait with
-    a notice of its own, unless the run awaits that PR's checks again."""
+    a notice of its own, unless the run awaits that PR's checks again. The
+    run answers for the PR, whatever work it resumes."""
     context = _Context()
     pull = pull_request(2, "feature", author="aiko")
     other = pull_request(3, "other", author="aiko")
@@ -588,11 +665,20 @@ async def test_a_run_resumed_for_checks_ends_their_wait(
     with trace_scope("routine", trace_id="trace-5", person_id="aiko"):
         result = await selector.run(  # type: ignore[arg-type]
             context.person,
-            _checks_invocation(pull, trigger),
+            _checks_invocation(pull, trigger, resumes),
             _completing(status, awaited),
         )
 
     assert result == status
+    assert (pull in RunStore().awaited_pull_requests("trace-5")) == (
+        "resumed" in awaits
+    )
+    resumed_for = [
+        item["payload"]["target"]["url"]
+        for item in RunStore().evidence("trace-5")
+        if item["evidence_type"] == "checks_resumed"
+    ]
+    assert resumed_for == ([pull] if resumes else [])
     assert _statuses(pull) == (
         [
             WorkflowStatus(
@@ -668,7 +754,11 @@ def _completing_on(status: str, url: str, comment_url: str):
                 invocation.run_id, "checks_awaited", {"target": {"url": url}}
             )
         store.complete(
-            invocation.run_id, status, "summary", invocation.work.identity, "aiko"
+            invocation.run_id,
+            status,
+            "summary",
+            Work.of_ticket(invocation.work.identity),
+            "aiko",
         )
         return status
 

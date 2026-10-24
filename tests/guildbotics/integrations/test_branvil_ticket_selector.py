@@ -1,10 +1,12 @@
 """Host ticket selection and settlement survive connection refusals, without
 the deadline that brokered member commands carry."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from guildbotics.drivers.ticket_selector import TicketSelector
-from guildbotics.entities.task import Task
+from guildbotics.entities.task import AwaitedRun, Task
 from guildbotics.integrations import pull_request_patrol
 from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.correlation import trace_scope
@@ -73,8 +75,20 @@ async def test_host_ticket_calls_wait_for_recovery_without_a_member_deadline(
         status=Task.READY if kind == "ticket" else Task.IN_PROGRESS,
         pull_request_url=pull_url if kind == "pull" else None,
         trigger_reason=pull_request_patrol.CHECKS if phase == "checks" else None,
+        resumes=(
+            AwaitedRun(run_id="run-0", work_kind="ticket", work_identity=ticket_url)
+            if phase == "checks"
+            else None
+        ),
     )
-    invocation = selector._invocation(context.person, task)
+    with monkeypatch.context() as awaited:
+        # The awaiting run's completion has reached this device.
+        awaited.setattr(
+            "guildbotics.drivers.ticket_selector.RunStore.status",
+            lambda *_args: SimpleNamespace(summary="Awaiting CI."),
+        )
+        invocation = selector._invocation(context.person, task)
+    assert invocation is not None
     clock = refuse(double, monkeypatch, times=200, method=method, path=path)
     assert current_member_invocation().deadline is None
     turns = []

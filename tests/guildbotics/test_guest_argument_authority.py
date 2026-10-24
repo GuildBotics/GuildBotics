@@ -65,6 +65,7 @@ _CONTENT_COMMANDS = frozenset(
         "chat reply",
         "chat noop",
         "chat complete",
+        "checks await",
         "git commit",
         "git publish",
         "ticket comment",

@@ -13,6 +13,7 @@ from guildbotics.capabilities.chat_updates import (
     ensure_chat_current,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.integrations import chat_receive_status
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -263,7 +264,7 @@ def test_heartbeat_throttles_idle_writes_but_publishes_transitions(monkeypatch):
     assert not status.available("slack", "aiko", "C1")
 
 
-@pytest.mark.parametrize("status", ["done", "asking", "blocked"])
+@pytest.mark.parametrize("status", TASK_RUN_COMPLETIONS)
 @pytest.mark.parametrize(
     "action",
     [

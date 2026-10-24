@@ -20,6 +20,7 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.integrations.local import store
+from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from tests.guildbotics.local_code_host import (
     REPOSITORY,
@@ -332,7 +333,7 @@ async def test_task_completion_revalidates_what_the_run_answers_for(member):
 
     results = await member_repository.task_completion_readiness(
         member,
-        ticket_url,
+        Work.of_ticket(ticket_url),
         [
             {"payload": {"pull_requests": [{"url": touched}]}},
             {"payload": {"target": {"kind": "pull_request", "url": reviewed}}},
@@ -353,7 +354,7 @@ async def test_task_completion_takes_the_pull_requests_the_run_wrote_to(member):
 
     results = await member_repository.task_completion_readiness(
         member,
-        ticket_url,
+        Work.of_ticket(ticket_url),
         [
             {"payload": {"target": {"kind": "pull_request", "url": touched}}},
             {"payload": {"target": {"kind": "ticket", "url": ticket_url}}},
@@ -370,7 +371,9 @@ async def test_task_completion_of_a_pull_request_revalidates_it(member):
     remote_with("mine")
     url = pull_request(2, "mine", author="aiko")
 
-    results = await member_repository.task_completion_readiness(member, url, [])
+    results = await member_repository.task_completion_readiness(
+        member, Work.of_ticket(url), []
+    )
 
     assert [result["target"]["url"] for result in results] == [url]
 
@@ -382,7 +385,9 @@ async def test_task_completion_of_another_services_ticket_has_no_pull_requests(
     """The code host cannot tell which of its pull requests refer to a
     ticket kept elsewhere: that is none, not a failure."""
     assert (
-        await member_repository.task_completion_readiness(member, FOREIGN_TICKET, [])
+        await member_repository.task_completion_readiness(
+            member, Work.of_ticket(FOREIGN_TICKET), []
+        )
         == []
     )
 
@@ -394,7 +399,9 @@ async def test_task_completion_refuses_a_blocked_pull_request():
     url = pull_request(2, "mine", author="aiko")
 
     with pytest.raises(MemberCapabilityError, match=re.escape("CI checks are failing")):
-        await member_repository.task_completion_readiness(failing, url, [])
+        await member_repository.task_completion_readiness(
+            failing, Work.of_ticket(url), []
+        )
 
 
 def _run(*evidence: dict) -> TaskRunStore:
@@ -420,7 +427,9 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
     store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "ready"), "success")
 
     runs = _run()
-    results = await member_repository.await_checks(pending, ticket_url, "run-1", runs)
+    results = await member_repository.await_checks(
+        pending, Work.of_ticket(ticket_url), "run-1", runs
+    )
 
     assert [(r["target"]["url"], r["readiness"]) for r in results] == [
         (waiting, "blocked"),
@@ -435,10 +444,74 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
         "run_id": "run-1",
         "subject": ticket_url,
         "head": store.branch_tip(REPOSITORY, "mine"),
+        "work_kind": "ticket",
+        "work_identity": ticket_url,
     }
     assert item(ready)["comments"] == []
     # What the run awaits is what the PRs were told, one by one.
     assert runs.awaited_pull_requests("run-1") == {waiting}
+
+
+_THREAD = ChatSubject("local", "C1", "T1", "E1", "aiko")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("work", "evidence_type", "subject"),
+    [
+        # A chat thread's run, on the event it answers.
+        (Work.of_chat(_THREAD), "pr_create", _THREAD.subject_id),
+        # A command's run.
+        (Work("manual", "run-1"), "pr_create", "run-1"),
+        # A run the patrol resumed in a chat thread's work for the PR.
+        (Work("chat", "local:aiko:C1:T1"), "checks_resumed", "local:aiko:C1:T1"),
+    ],
+)
+async def test_a_run_of_any_work_awaits_its_pull_requests_for_that_work(
+    work, evidence_type, subject
+):
+    """Not only a ticket's run ends to await checks: whatever the work, the
+    run answers for the PRs its evidence names, and the notice names the work
+    the patrol resumes from it."""
+    remote_with("mine")
+    url = pull_request(2, "mine", author="aiko")
+    runs = TaskRunStore()
+    runs.append_evidence(
+        "run-1", evidence_type, {"target": {"kind": "pull_request", "url": url}}
+    )
+
+    await member_repository.await_checks(
+        local_member(checks="pending"), work, "run-1", runs
+    )
+
+    [notice] = item(url)["comments"]
+    assert notice["status"] == {
+        "kind": "workflow_error",
+        "routing": "suppress",
+        "reason": "awaiting_checks",
+        "person_id": "aiko",
+        "run_id": "run-1",
+        "subject": subject,
+        "head": store.branch_tip(REPOSITORY, "mine"),
+        "work_kind": work.kind,
+        "work_identity": work.identity,
+    }
+    assert runs.awaited_pull_requests("run-1") == {url}
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_names_no_pull_request_has_none_to_await():
+    """Only a ticket's work names PRs of its own: a command's run whose
+    evidence names none has nothing to await, even when the member has a PR
+    whose checks are pending."""
+    remote_with("mine")
+    url = pull_request(2, "mine", author="aiko")
+
+    with pytest.raises(MemberCapabilityError, match="No PR of the member's own"):
+        await member_repository.await_checks(
+            local_member(checks="pending"), Work("manual", "run-1"), "run-1", _run()
+        )
+    assert item(url)["comments"] == []
 
 
 @pytest.mark.asyncio
@@ -472,7 +545,7 @@ async def test_a_run_awaits_checks_only_when_nothing_else_blocks(
     runs = _run()
     with pytest.raises(MemberCapabilityError, match=re.escape(match)):
         await member_repository.await_checks(
-            local_member(checks=checks), url, "run-1", runs
+            local_member(checks=checks), Work.of_ticket(url), "run-1", runs
         )
     assert item(url)["comments"] == []
     assert runs.awaited_pull_requests("run-1") == set()
@@ -488,11 +561,13 @@ async def test_a_reviewer_neither_awaits_nor_waits_for_the_checks_it_reviewed():
     runs = _run({"kind": "pull_request", "url": url})
 
     with pytest.raises(MemberCapabilityError, match="No PR of the member's own"):
-        await member_repository.await_checks(pending, url, "run-1", runs)
+        await member_repository.await_checks(
+            pending, Work.of_ticket(url), "run-1", runs
+        )
     assert item(url)["comments"] == []
     assert (
         await member_repository.task_completion_readiness(
-            pending, url, runs.evidence("run-1")
+            pending, Work.of_ticket(url), runs.evidence("run-1")
         )
         == []
     )

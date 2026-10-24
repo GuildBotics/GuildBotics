@@ -127,16 +127,22 @@ class Work:
         its whole thread."""
         return cls(
             "chat",
-            ":".join(
-                (
-                    subject.service,
-                    subject.self_user_id,
-                    subject.channel_id,
-                    subject.thread_id,
-                )
-            ),
+            ":".join(getattr(subject, name) for name in _CHAT_IDENTITY),
             subject,
         )
+
+    def chat_thread(self) -> tuple[str, str]:
+        """The channel and thread a chat thread's work is in, as
+        :meth:`of_chat` keyed them; empty for any other work."""
+        values = self.identity.split(":", len(_CHAT_IDENTITY) - 1)
+        if self.kind != "chat" or len(values) != len(_CHAT_IDENTITY):
+            return "", ""
+        fields = dict(zip(_CHAT_IDENTITY, values, strict=True))
+        return fields["channel_id"], fields["thread_id"]
+
+
+#: What a chat thread's work is identified by, in order.
+_CHAT_IDENTITY = ("service", "self_user_id", "channel_id", "thread_id")
 
 
 @dataclass(frozen=True, slots=True)

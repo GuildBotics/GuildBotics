@@ -309,12 +309,19 @@ purpose:
   ticket, and the status comment of a failed or rate-limited run. The patrol selects
   outside any trace and dispatches each candidate in turn; a scheduled or manual run,
   or a routine that names the workflow with arguments, takes the ticket the patrol
-  would take next. The workflow only runs the turn. A turn does not wait for CI: when
-  pending checks are all that blocks completion, the member ends the run with
-  `member task complete --status awaiting_checks`, which leaves an `awaiting_checks`
-  status on each such PR; the patrol starts a `pull_request_checks` run once the checks
-  settle or the head moves, and `TicketSelector.run` ends that wait with a
-  `checks_settled` status unless the resumed run awaits the checks again.
+  would take next. The workflow only runs the turn. No run waits for CI in its turn,
+  whatever its work (a ticket, a chat thread, a command): when pending checks are all
+  that blocks its own PRs, the member ends the run with `member checks await`, which
+  leaves an `awaiting_checks` status on each such PR naming the run and its work
+  (`Work`'s kind and identity, from the run's grant), and records the run's completion.
+  The patrol starts a `pull_request_checks` run once the checks settle or the head
+  moves; while the wait lasts, any task the PR asks for (feedback that arrives
+  meanwhile too) runs in the work the status names (`Task.resumes`), so the run
+  continues that work's conversation and reports where the work came from, with the
+  awaiting run's summary as far as this device has it. `TicketSelector.run` ends the
+  wait with a `checks_settled` status unless the resumed run awaits the checks again.
+  Behavior that belongs to a run answering a chat event keys on that event, not on
+  the work's kind, since a resumed run in a chat thread's work answers none.
 - **Manual runs**: a command a person starts runs inside one boundary, whether the
   Desktop runs it (`AppRuntime._execute_command`) or a local `guildbotics run` does
   (`cli/run.py`): a `manual` trace, `TaskRunCoordinator.track_work(source="manual")`
