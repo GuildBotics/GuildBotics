@@ -17,7 +17,6 @@ ja:
   not_ticket: "%{url} は Branvil のチケットの URL ではありません。"
   not_pull_request: "%{url} は Branvil の pull request の URL ではありません。"
   not_path: "'%{path}' は Branvil のリポジトリのパスではありません。"
-  alerts: "Branvil は依存関係のアラートを持ちません。"
   foreign_ticket: "Branvil が知っているのは自分のチケットの pull request だけで、%{url} のものは知りません。"
   closes_foreign: "%{repository} へのマージで閉じられるのはこの Branvil のチケットだけで、%{url} は閉じられません。"
   no_head: "%{url} に head のコミットがありません。"

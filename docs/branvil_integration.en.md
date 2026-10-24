@@ -268,3 +268,9 @@ things:
   marks its pull request merged, so the patrol moves the ticket to **Done** as usual.
 - A ticket can name the GitHub issue it stands for; the published pull request then
   closes that issue.
+- GitHub's Dependabot alerts of the upstream are read through Branvil
+  (`member repo-info read --resource dependency_alerts`,
+  `repository/security_alerts`): Branvil reads them with the account that reads GitHub
+  for it, which then needs **Dependabot alerts: Read-only** and access to the
+  repository (a GitHub App's added permission approved on its installation). A
+  repository without an upstream has no alerts and refuses the read as unsupported.

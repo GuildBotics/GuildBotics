@@ -17,7 +17,6 @@ en:
   not_ticket: "%{url} is not a Branvil ticket URL."
   not_pull_request: "%{url} is not a Branvil pull request URL."
   not_path: "'%{path}' is not a Branvil repository path."
-  alerts: "Branvil keeps no dependency alerts."
   foreign_ticket: "Branvil knows the pull requests of its own tickets, not of %{url}."
   closes_foreign: "A merge into %{repository} closes only a ticket of this Branvil, not %{url}."
   no_head: "%{url} has no head commit."
