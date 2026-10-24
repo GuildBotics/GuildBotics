@@ -168,12 +168,14 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr update --person <person> --url <pr_url> "
-                "[--content-file <file>] [--title <title>] [--drop-issue-links]",
-                "Change a PR's body or title. Body replacement preserves the ticket "
-                "links the existing body carries as the code host reads them; new "
-                "links to the same ticket take precedence. Empty content keeps only "
-                "the links. --drop-issue-links requires content and disables "
-                "preservation.",
+                "[--content-file <file>] [--title <title>] "
+                "[--issue-url <url> ... [--closes-issue|--refs-issue] | --drop-issue-links]",
+                "Change a PR's body, title, or ticket links. --issue-url replaces all "
+                "links with those tickets; --closes-issue closes all of them on merge "
+                "and --refs-issue only refers (the default). --drop-issue-links removes "
+                "all links without requiring a body. Without either option, body "
+                "replacement preserves existing ticket links and ignores new "
+                "managed link lines in the body.",
             ),
             (
                 "guildbotics member pr comment --person <person> --url <pr_url> --content-file <file>",
@@ -408,6 +410,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "branch closes no ticket automatically, so after a human merges a child "
     "PR into a feature branch, follow the manual-close rule below. A closing link "
     "only states intent and does not by itself authorize closing the ticket.",
+    "When a PR's completion conditions are met after its creation, replace its "
+    "ticket links with `member pr update --issue-url <url> --closes-issue` "
+    "(repeat --issue-url for every ticket to keep). Use --refs-issue for a "
+    "reference and --drop-issue-links to remove all links.",
     "When creating new PR inline feedback, first inspect the PR with "
     "`repository/pr_inspect include_diff=true`, then use `member pr "
     "review-comment --head <head_sha>` with explicit diff coordinates from "

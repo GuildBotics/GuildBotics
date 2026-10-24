@@ -202,20 +202,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         repository = self.repository(repository)
-        links = []
-        for ticket in tickets:
-            url = ticket.url
-            if self.serves(url):
-                url = self.url(self.item(url, "ticket"))
-            elif ticket.closes:
-                raise ServiceUnsupported(
-                    t(
-                        "integrations.branvil.api.closes_foreign",
-                        repository=repository,
-                        url=url,
-                    )
-                )
-            links.append({"url": url, "closes": ticket.closes})
+        links = await self._ticket_links(repository, tickets)
         answer = await self.call(
             "POST",
             f"/repos/{segment(repository)}/pulls",
@@ -237,23 +224,47 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             target=self.target(_pull_item(pull), pull),
         )
 
+    async def _ticket_links(
+        self, repository: str, tickets: Sequence[TicketLink]
+    ) -> list[dict[str, Any]]:
+        """Validate every link before creating or updating a pull request."""
+        links = []
+        for ticket in tickets:
+            url = ticket.url
+            item = self.item(url, "ticket") if self.serves(url) else None
+            linked = await self.get(item.api) if item is not None else None
+            if ticket.closes and (
+                linked is None
+                or str(linked["repository"]).casefold() != repository.casefold()
+            ):
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.branvil.api.closes_foreign",
+                        repository=repository,
+                        url=url,
+                    )
+                )
+            if item is not None:
+                url = self.url(item)
+            links.append({"url": url, "closes": ticket.closes})
+        return links
+
     async def update_pull_request(
         self,
         url: str,
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         item = self.item(url, "pull_request")
-        changes = {"body": body, "title": title}
+        changes: dict[str, Any] = {"body": body, "title": title}
+        if tickets is not None:
+            changes["tickets"] = await self._ticket_links(item.place, tickets)
         data = await self.call(
             "PATCH",
             item.api,
-            {
-                **{key: value for key, value in changes.items() if value is not None},
-                "drop_ticket_links": drop_ticket_links,
-            },
+            {key: value for key, value in changes.items() if value is not None},
         )
         return PullRequestUpdated(
             body=str(data.get("body") or ""), target=self.target(item, data)

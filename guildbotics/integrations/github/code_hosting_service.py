@@ -17,8 +17,10 @@ from guildbotics.integrations.github.github_utils import (
     normalize_login,
 )
 from guildbotics.integrations.github.issue_links import (
+    append_external_issue_link,
     append_issue_link,
     preserve_issue_links,
+    remove_issue_links,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
     PULL_REQUEST_QUERY,
@@ -217,7 +219,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             raise ServiceUnsupported(
                 f"A merge into {repository} closes only an issue of it, not {url}."
             )
-        return f"{body.rstrip()}\n\nRefs {url}".lstrip()
+        return append_external_issue_link(body, url)
 
     async def update_pull_request(
         self,
@@ -225,14 +227,21 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         item = self.item(url, "pull_request")
         payload: dict[str, Any] = {}
-        if body is not None:
-            if not drop_ticket_links:
+        if tickets is not None:
+            if body is None:
                 previous = await self.fetch(item)
-                body = preserve_issue_links(body, previous.get("body") or "")
+                body = previous.get("body") or ""
+            body = remove_issue_links(body)
+            for ticket in tickets:
+                body = await self._linked(item.repository, body, ticket)
+        elif body is not None:
+            previous = await self.fetch(item)
+            body = preserve_issue_links(body, previous.get("body") or "")
+        if body is not None:
             payload["body"] = body
         if title is not None:
             payload["title"] = title

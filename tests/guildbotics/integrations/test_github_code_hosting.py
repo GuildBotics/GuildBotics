@@ -20,8 +20,10 @@ from guildbotics.integrations.github.code_hosting_service import (
     GitHubCodeHostingService,
 )
 from guildbotics.integrations.github.issue_links import (
+    append_external_issue_link,
     append_issue_link,
     preserve_issue_links,
+    remove_issue_links,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
@@ -1866,8 +1868,8 @@ async def test_pr_update_replaces_the_title_without_touching_the_body(monkeypatc
     [
         ("Updated body", "Updated body\n\nCloses #42\n\nRefs #43"),
         ("", "Closes #42\n\nRefs #43"),
-        ("Refs #42", "Refs #42\n\nRefs #43"),
-        ("Closes #43", "Closes #43\n\nCloses #42"),
+        ("Refs #42", "Closes #42\n\nRefs #43"),
+        ("Closes #43", "Closes #42\n\nRefs #43"),
     ],
 )
 @pytest.mark.asyncio
@@ -1896,23 +1898,23 @@ async def test_pr_update_preserves_existing_issue_links(monkeypatch, body, expec
 
 @pytest.mark.parametrize("body", ["", "New\n\nRefs #43"])
 @pytest.mark.asyncio
-async def test_pr_update_drop_ticket_links_replaces_body_verbatim(monkeypatch, body):
+async def test_pr_update_empty_ticket_links_removes_body_links(monkeypatch, body):
     github = _github().on(
         "PATCH", f"/repos/{REPO}/pulls/7", lambda r: _pull(**json.loads(r.content))
     )
     service = _service(github, monkeypatch)
 
-    result = await member_repository.pr_update(
-        _member(service), PULL, body, drop_ticket_links=True
-    )
+    result = await member_repository.pr_update(_member(service), PULL, body, tickets=[])
 
-    assert result["body"] == body
+    assert result["body"] == body.split("\n\nRefs")[0]
     assert github.sent == [f"PATCH /repos/{REPO}/pulls/7"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", [{"body": "New"}, {"tickets": []}])
 async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
     monkeypatch,
+    change,
 ):
     github = ScriptedGitHub().on(
         "GET", f"/repos/{REPO}/pulls/7", httpx.Response(502, text="down")
@@ -1920,7 +1922,7 @@ async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
     service = _service(github, monkeypatch)
 
     with pytest.raises(ServiceError, match="HTTP 502"):
-        await member_repository.pr_update(_member(service), PULL, "New")
+        await member_repository.pr_update(_member(service), PULL, **change)
 
     assert github.writes == []
 
@@ -1929,8 +1931,7 @@ async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"title": "New", "drop_ticket_links": True}, "requires a body"),
-        ({}, "pr update needs a body or a title."),
+        ({}, "pr update needs a body, a title, or ticket links."),
     ],
 )
 async def test_pr_update_needs_what_it_changes(monkeypatch, change, message):
@@ -1963,9 +1964,7 @@ async def test_pr_update_reports_what_github_refused(monkeypatch):
     service = _service(github, monkeypatch)
 
     with pytest.raises(ServiceError) as raised:
-        await member_repository.pr_update(
-            _member(service), PULL, "Body", drop_ticket_links=True
-        )
+        await member_repository.pr_update(_member(service), PULL, "Body", tickets=[])
 
     assert str(raised.value) == t("integrations.github.response.http", status=400)
 
@@ -2024,25 +2023,25 @@ def test_preserve_issue_links_keeps_keyword_variants(keyword):
 @pytest.mark.parametrize(
     ("body", "previous", "expected"),
     [
-        ("Refs #42", "Closes #42", "Refs #42"),
-        ("Fixes #42", "Refs #42", "Fixes #42"),
-        ("Closes #42", "Fixes #42", "Closes #42"),
+        ("Refs #42", "Closes #42", "Closes #42"),
+        ("Fixes #42", "Refs #42", "Refs #42"),
+        ("Closes #42", "Fixes #42", "Fixes #42"),
         ("", "Old\nCloses #42\nRefs #43", "Closes #42\n\nRefs #43"),
         ("New", "Refs #42\nRefs #42", "New\n\nRefs #42"),
         ("New", "Refs #42\nCloses #42", "New\n\nRefs #42\n\nCloses #42"),
         ("New\n", "Old without links", "New\n"),
         ("New", "See #42; prefixedRefs #43; Closes #44suffix", "New"),
-        ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
+        ("Refs #420", "Closes #42", "Closes #42"),
         ("See #42", "Closes #42", "See #42\n\nCloses #42"),
-        ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
-        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\nRefs #42"),
+        ("Refs #43", "Closes #42\nRefs #43", "Closes #42\n\nRefs #43"),
+        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\n\nCloses #42"),
         ("New", "Use `tool`.\nCloses #42", "New\n\nCloses #42"),
         ("New", "Text\r\rCloses #99\n```\nCloses #42\n```", "New\n\nCloses #99"),
         ("New", "Text\r\rCloses #42\rRefs #43", "New\n\nCloses #42\n\nRefs #43"),
         ("New", "  Closes #42  \r\nRefs\t#43", "New\n\nCloses #42\n\nRefs\t#43"),
     ],
 )
-def test_preserve_issue_links_prefers_replacement_and_deduplicates(
+def test_preserve_issue_links_keeps_previous_links_and_deduplicates(
     body, previous, expected
 ):
     assert preserve_issue_links(body, previous) == expected
@@ -2084,7 +2083,10 @@ def test_create_upgrades_only_the_real_reference_link():
 
 def test_nested_image_code_does_not_mask_an_adjacent_link():
     body = "Refs #42\n![`x`](https://example.com)"
-    assert preserve_issue_links(body, "Closes #42") == body
+    assert (
+        preserve_issue_links(body, "Closes #42")
+        == "![`x`](https://example.com)\n\nCloses #42"
+    )
     assert preserve_issue_links("New", body) == "New\n\nRefs #42"
 
 
@@ -2094,15 +2096,40 @@ def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
         preserve_issue_links(body, "Closes #42")
     with pytest.raises(ServiceError, match="Close the open code or HTML"):
         append_issue_link(body, 42, closes=True)
+    with pytest.raises(ServiceError, match="Close the open code or HTML"):
+        append_external_issue_link(body, "https://tickets.example.com/T-1")
+
+
+@pytest.mark.parametrize("target", ["#42", "https://tickets.example.com/T-1"])
+@pytest.mark.parametrize(
+    "example",
+    [
+        "`Refs {target}`",
+        "> Refs {target}",
+        "```\nRefs {target}\n```",
+        "<!--\nRefs {target}\n-->",
+        "<pre>\nRefs {target}\n</pre>",
+    ],
+)
+def test_replacing_links_retains_examples_and_removes_real_link_lines(target, example):
+    example = example.format(target=target)
+    body = f"Context\n\n{example}\n\n- Refs {target}\n\nCloses #43"
+    assert remove_issue_links(body) == f"Context\n\n{example}"
+    assert (
+        preserve_issue_links("New", f"{example}\n\nRefs {target}")
+        == f"New\n\nRefs {target}"
+    )
 
 
 @pytest.mark.parametrize(
     "prefix", ["- ", "+ ", "* ", "1. ", "1) ", "- - ", "- item\n  "]
 )
-def test_list_links_are_preserved_and_replacement_links_take_precedence(prefix):
+def test_list_links_are_preserved_and_only_explicit_updates_change_links(prefix):
     body = f"{prefix}Refs #42\r\n"
     assert preserve_issue_links("New", body) == "New\n\nRefs #42"
-    assert preserve_issue_links(body, "Closes #42") == body
+    assert preserve_issue_links(body, "Closes #42") == (
+        "- item\n\nCloses #42" if prefix.startswith("- item") else "Closes #42"
+    )
     assert append_issue_link(body, 42, closes=False) == body
     assert append_issue_link(body, 42, closes=True) == f"{prefix}Closes #42\r\n"
 

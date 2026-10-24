@@ -531,6 +531,12 @@ class GitHubDouble:
                 return None
             if method == "PATCH":
                 item.update(body)
+                if "head" in item and "body" in body:
+                    number = int(match.group(2))
+                    for linked in self.timeline.values():
+                        linked[:] = [pull for pull in linked if pull != number]
+                    for linked in _ISSUE_LINK.findall(body.get("body") or ""):
+                        self.timeline.setdefault(int(linked), []).append(number)
                 if body.get("state") == "closed":
                     item["closed_at"] = _CLOSED_AT
             return item

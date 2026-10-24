@@ -550,8 +550,6 @@ class BranvilDouble:
                 for key in ("title", "body", "draft", "tickets"):
                     if key in body:
                         pull[key] = body[key]
-                if body.get("drop_ticket_links"):
-                    pull["tickets"] = []
                 if body.get("draft") is False:
                     self.ready(url)
                 return 200, self._pull(pull)

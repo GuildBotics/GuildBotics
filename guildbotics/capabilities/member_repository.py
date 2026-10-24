@@ -188,14 +188,12 @@ async def pr_update(
     body: str | None = None,
     title: str | None = None,
     *,
-    drop_ticket_links: bool = False,
+    tickets: Sequence[TicketLink] | None = None,
 ) -> dict[str, Any]:
-    if drop_ticket_links and body is None:
-        raise MemberCapabilityError("--drop-issue-links requires a body.")
-    if body is None and title is None:
-        raise MemberCapabilityError("pr update needs a body or a title.")
+    if body is None and title is None and tickets is None:
+        raise MemberCapabilityError("pr update needs a body, a title, or ticket links.")
     updated = await _code(context).update_pull_request(
-        url, body=body, title=title, drop_ticket_links=drop_ticket_links
+        url, body=body, title=title, tickets=tickets
     )
     return updated.model_dump()
 

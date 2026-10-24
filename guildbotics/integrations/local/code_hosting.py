@@ -281,12 +281,12 @@ class LocalCodeHostingService(CodeHostingService):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         ref = store.locate(url, "pull_request")
         item = store.load(ref)
-        if drop_ticket_links:
-            item["tickets"] = []
+        if tickets is not None:
+            item["tickets"] = [_linked(ticket, ref.place) for ticket in tickets]
         for key, value in (("body", body), ("title", title)):
             if value is not None:
                 item[key] = value

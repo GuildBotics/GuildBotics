@@ -176,10 +176,14 @@ class CodeHostingService(ABC):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
-        """Change a pull request; a new body keeps the ticket links of the old
-        one unless ``drop_ticket_links``."""
+        """Change a pull request and optionally replace its ticket links.
+
+        ``tickets=None`` keeps existing links; a sequence replaces all links
+        (an empty sequence removes them). A link the host cannot close on
+        merge raises ``ServiceUnsupported`` before anything is written.
+        """
         raise NotImplementedError
 
     async def review(
