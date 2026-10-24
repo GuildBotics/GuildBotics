@@ -308,7 +308,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         ),
         double.their_comment,
         f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
-        frozenset({"request_changes", "artifacts"}),
+        frozenset({"request_changes", "artifacts", "dependency_alerts"}),
         double.writes,
     )
 
