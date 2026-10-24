@@ -177,7 +177,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         ),
         _SCOPE,
     ),
-    "issue_urls": (SERVICE, frozenset({"pr create"}), _SCOPE),
+    "issue_urls": (SERVICE, frozenset({"pr create", "pr update"}), _SCOPE),
     "pr_url": (
         SERVICE,
         frozenset(
@@ -240,7 +240,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "parent": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "add_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "remove_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
-    "closes_issue": (CONTENT, frozenset({"pr create"}), ""),
+    "closes_issue": (CONTENT, frozenset({"pr create", "pr update"}), ""),
     "draft": (CONTENT, frozenset({"pr create"}), ""),
     "drop_issue_links": (CONTENT, frozenset({"pr update"}), ""),
     "event": (CONTENT, frozenset({"pr review"}), ""),
