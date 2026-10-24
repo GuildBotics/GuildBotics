@@ -50,6 +50,42 @@ async def _reasons(tickets) -> list[tuple[str | None, str | None]]:
 
 
 @pytest.mark.asyncio
+async def test_comment_edits_and_deletions_are_read_again_before_dispatch(monkeypatch):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, lane="in_progress")
+    original = double.comment(url, "otota", "Original")
+    [task] = await tickets.candidates()
+    assert [c.content for c in task.comments] == ["Original"]
+
+    # The GUI's edit replaces only the body; it is not a new comment.
+    original["body"] = "Edited"
+    [comment] = (await tickets.read("ticket_comments", url)).items
+    assert (comment["id"], comment["body"], comment["created_at"]) == (
+        original["id"],
+        "Edited",
+        original["created_at"],
+    )
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert [c.content for c in refreshed.comments] == ["Edited"]
+
+    # A deleted member status stops holding the ticket, including on refresh.
+    double.comment(url, MEMBER, "Failed", **_status("failed"))
+    assert await tickets.refresh(task) is None
+    double.entries[url]["comments"].pop()
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert [c.content for c in refreshed.comments] == ["Edited"]
+    double.entries[url]["comments"].clear()
+    assert (await tickets.read("ticket_comments", url)).items == []
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert refreshed.comments == []
+    [candidate] = await tickets.candidates()
+    assert candidate.comments == []
+
+
+@pytest.mark.asyncio
 async def test_a_ready_ticket_waits_after_the_members_word_until_someone_speaks(
     monkeypatch,
 ):
