@@ -708,7 +708,7 @@ desktop TypeScript 開発時の品質確認:
 - i18n 文言を変更・追加した場合は、既存テストに合わせて翻訳キー経由で検証する（文言直書き前提のテストにしない）
 - `Context.pipe` / `shared_state` の更新順序はワークフロー互換性に直結するため、変更時は特に注意する
 - コマンド解決順 (`get_person_config_path`, `get_config_path`) を壊さない
-- AI CLI ツールの固定版（`guildbotics/intelligences/cli_agents.py` の `CliAgentProvision`）と、それが動く Node.js の固定版（`guildbotics/environment/image.py` の `IMAGE` と `docker/agent-environment/Dockerfile` の `FROM`）を上げるときは、`.agents/skills/update-ai-cli-tools/SKILL.md`（`.claude/skills/update-ai-cli-tools/SKILL.md` は同じ正本を指す）に従う
+- AI CLI ツールの固定版（`guildbotics/intelligences/cli_agents.py` の `CliAgentProvision`）と、それが動く Node.js の固定版（`guildbotics/environment/snapshot.py` の `NODE_VERSION` と `NODE_SHA256`）を上げるときは、`.agents/skills/update-ai-cli-tools/SKILL.md`（`.claude/skills/update-ai-cli-tools/SKILL.md` は同じ正本を指す）に従う
 
 ## 参照優先度（このリポジトリでの推奨）
 

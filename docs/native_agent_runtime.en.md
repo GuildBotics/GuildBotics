@@ -79,7 +79,7 @@ path appears with its drive letter as the top-level directory (`C:\work`
 is `/c/work`); the working directory is bound under the same convention.
 
 What the environment holds -- the base image, the provider CLIs GuildBotics
-installs at pinned versions, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
+installs at pinned versions with the Node.js they run on, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
 when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
 **Agent execution environment** screen in the Desktop shows the runtime, the
@@ -126,8 +126,8 @@ base image. An image that already has what the build installs (Python 3.15,
 say) therefore gives a smaller snapshot even when the whole environment is
 larger.
 
-The base image is GuildBotics' own by default (Debian + Node.js + npm + git
-+ uv). A workspace that needs another toolchain -- a Python interpreter,
+The base image is a Debian image GuildBotics pins by default (with git and
+build tools). A workspace that needs another toolchain -- a Python interpreter,
 Rust, a browser -- declares an image it built itself. The image's content is
 not shared: load its `docker save` archive on each device with `guildbotics
 environment image load`, then pick it from the images loaded on this device under **LLM / AI
@@ -147,12 +147,12 @@ band, and in `environment status` that says how to fall in line. The
 snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
-build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
+build steps what they use (Debian's `apt-get`, `curl` and
 `tar`, and `gcc`, `g++` and `make` for the Python dependencies that have no
 wheel for GuildBotics' Python) and git, which [member git](#member-git-and-the-members-clones) runs
 the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
-`libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
+`libwebkit2gtk` pull it in as a dependency; remove the binary then). The build replaces the image's Node.js with the version GuildBotics pins. A loaded image is used without asking a registry (pull policy
 `never`). When the CI jobs of the workspace's code host run on the same image
 (Branvil), load the archive into its CI runner too with `guildbotics environment
 image load-ci <archive>`, on the machine the runner runs on: a pipeline names the
