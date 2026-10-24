@@ -68,9 +68,9 @@ For an open update PR, continue its branch, first merging the current remote
 default branch into it, so that what it compares and changes starts from
 today's default branch (a fix merged there since makes an alert nothing to do
 instead of a conflict); if no open PR exists, base the new update on the
-current remote default branch. A retained branch from a
-closed PR may be recreated only after confirming it has no unpublished or
-unrelated work. Keep a checkout served by Desktop or `guildbotics start`
+current remote default branch. A branch left by a closed PR is continued the
+same way when it holds only earlier runs of this workflow; otherwise stop and
+report it (the member cannot force-push to replace it). Keep a checkout served by Desktop or `guildbotics start`
 unchanged: those processes can rebuild snapshots from its pins after restart.
 
 | Tool | Latest | Pin in `cli_agents.py` |
@@ -186,10 +186,11 @@ Each alert names the lock in `manifest_path`, the `package`, and the
 `patched_version`; for several alerts of one package in one lock, use the
 highest `patched_version` among them. First compare that version with the
 lock on the update branch: when the lock already has it, there is nothing to
-do. The code host has not re-evaluated it yet, or, for a repository that
-follows an upstream host, the fix has not reached the upstream's default
-branch yet; report it as awaiting re-evaluation. Otherwise raise the package
-to exactly the patched version:
+do, and the report says where the fix is. When only the open update PR's
+commits have it, the alert awaits that PR's merge (and, for a repository that
+follows an upstream host, its publishing there); when the default branch has
+it, the code host has not re-evaluated it yet. Otherwise raise the package to
+exactly the patched version:
 
 | `manifest_path` | Raise it with |
 | --- | --- |
@@ -289,7 +290,8 @@ host is unavailable, keep the local changes and report the specific blocker.
 
 The body lists each tool's old, latest and adopted version with official
 sources; each alert resolved (number, package, old and new version, lock),
-awaiting re-evaluation, or left open with its reason; the non-device checks
+awaiting this PR's merge or the code host's re-evaluation, or left open with
+its reason; the non-device checks
 and their results; held pins and their reasons; historical observations left
 unchanged; and release-note changes needing attention. When a tool's pin
 changed, explicitly state: **Real-device validation and snapshot build were
@@ -305,6 +307,6 @@ code, and `guildbotics environment build` rebuilds it by hand. The code host
 re-evaluates the alerts on the merged locks; the next run reads what is still
 open.
 
-Report the version comparison, the alerts resolved and left open, check
+Report the version comparison, the alerts resolved, awaiting, and left open, check
 results, held tools, and PR link. When nothing needs updating or attention, do
 not send a notification if the runner supports silent completion.
