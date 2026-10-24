@@ -373,7 +373,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # access token has expired whenever it first needs it; listing the
         # models needs it, and makes no turn.
         provision=CliAgentProvision(
-            package="@openai/codex@0.162.1",
+            package="@openai/codex@0.164.0",
             state_root=".codex",
             state_root_env="CODEX_HOME",
             auth="auth.json",
@@ -450,7 +450,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # ANTHROPIC_BASE_URL, while `/usage` and the refresh talk to the
         # account endpoints directly and so run where the login is.
         provision=CliAgentProvision(
-            package="@anthropic-ai/claude-code@2.1.296",
+            package="@anthropic-ai/claude-code@2.1.310",
             state_root=".claude",
             state_root_env="CLAUDE_CONFIG_DIR",
             auth=".credentials.json",
@@ -503,7 +503,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             install=(
                 "curl -fsSL https://x.ai/cli/install.sh"
-                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.50\n"
+                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.70\n"
                 "cp -L /usr/local/bin/grok /usr/local/bin/grok.bin\n"
                 "mv -f /usr/local/bin/grok.bin /usr/local/bin/grok\n"
                 "rm -f /usr/local/bin/agent\n"
@@ -559,7 +559,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # the hosted GitHub MCP server (read-only, as the user) and the
         # repository's custom agents. The telemetry stays closed.
         provision=CliAgentProvision(
-            package="@github/copilot@1.0.95",
+            package="@github/copilot@1.0.103",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
             auth="config.json",
@@ -606,13 +606,13 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             install=(
                 'case "$(uname -m)" in\n'
                 "  x86_64) platform=linux-x64 archive=cli_linux_x64"
-                " sha512=abe3ddf5cf30d3adaa586acf505221aa19702f5ca71af3c8b1f9b1a5976bd8e5c151c41ea33b39c41675d25843462a3e8c382c054f580e9d7e1688919d3b5110 ;;\n"
+                " sha512=4e1244b8b8c1280552f59c1b24b76a9245db9c80032aec6db28fb86033d6088abc30a90dad432d2b246c28fdd87d82abb48727d5ff88ba1d5d4ec76b33348e7d ;;\n"
                 "  aarch64) platform=linux-arm archive=cli_linux_arm64"
-                " sha512=1bfd3503576219a102176c13579665a2f39e84ac86a904b117d3b33f3dd751f194a862496bad6ffe914ad46d2c877ba12b6c07e6db07128b706d238262fe430c ;;\n"
+                " sha512=0daa84244922bd648f940d44dfc33ace8c26217cd710ff116902eb8708829a0cfe70640f0d6b480243442881c9aeb4a905a9aa7887dd8a70159aa0f1a4f98a8f ;;\n"
                 '  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;\n'
                 "esac\n"
                 'curl -fsSL "https://storage.googleapis.com/antigravity-public'
-                '/antigravity-cli/1.3.3-5524738307653632/$platform/$archive.tar.gz"'
+                '/antigravity-cli/1.4.6-4884751325200384/$platform/$archive.tar.gz"'
                 " -o /tmp/agy.tar.gz\n"
                 'echo "$sha512  /tmp/agy.tar.gz" | sha512sum -c -\n'
                 "tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\n"

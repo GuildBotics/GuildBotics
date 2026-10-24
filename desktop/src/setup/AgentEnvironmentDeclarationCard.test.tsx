@@ -47,7 +47,7 @@ function Harness({
       <QueryClientProvider client={client}>
         <AgentEnvironmentDeclarationCard
           value={value}
-          defaultImage="node:22.23.2-bookworm"
+          defaultImage="node:24.22.1-bookworm"
           onChange={(next) => {
             setValue(next);
             onChange?.(next);
@@ -139,7 +139,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
     expect(select).toHaveValue(
       t("setup.intelligence.environment.declaration.imageDefault", {
-        reference: "node:22.23.2-bookworm",
+        reference: "node:24.22.1-bookworm",
       }),
     );
 

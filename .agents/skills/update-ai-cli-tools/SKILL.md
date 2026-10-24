@@ -1,29 +1,35 @@
 ---
 name: update-ai-cli-tools
-description: Update GuildBotics' pinned AI CLI tools to the latest stable releases and create a PR unattended, without real-device validation.
+description: Update GuildBotics' pinned AI CLI tools and the Node.js they run on to the latest stable releases and create a PR unattended, without real-device validation.
 ---
 
-# Updating the pinned AI CLI tools
+# Updating the pinned AI CLI tools and their Node.js
 
 Invoke with `$update-ai-cli-tools` or "AI CLIツールを更新して".
 Check the official releases, update the pins, run the non-device quality
-checks, and create a Draft PR without asking for confirmation. Invoking this
+checks, and create a PR without asking for confirmation. Invoking this
 update workflow includes committing and pushing its branch and creating or
-updating its PR. Do not merge it.
+updating its PR. Do not merge it; real-device checks, if any, happen after the
+merge.
 
 GuildBotics pins its provisioned tools in `CliAgentProvision` in
-`guildbotics/intelligences/cli_agents.py`. This workflow updates those pins;
-it does not establish that the new releases work on a real device.
+`guildbotics/intelligences/cli_agents.py`, and the Node.js that Codex, Claude
+Code and Copilot run on in two base images: the default one (`IMAGE` in
+`guildbotics/environment/image.py`) and this repository's development image
+(`FROM` in `docker/agent-environment/Dockerfile`). This workflow updates those
+pins; it does not establish that the new releases work on a real device.
 
 ## Scope
 
-- **By default, raise every tool to its latest release.** Raise only some of
-  them when the user names the tools. "Latest" is what the tool's own default
-  install gives: the npm `latest` dist-tag, Grok Build's `stable` channel, the
-  Antigravity manifest. Never a prerelease, alpha, or `next` tag.
+- **By default, raise every tool and Node.js to its latest release.** Raise
+  only some of them when the user names them. "Latest" is what the tool's own
+  default install gives: the npm `latest` dist-tag, Grok Build's `stable`
+  channel, the Antigravity manifest. Never a prerelease, alpha, or `next` tag.
+  For Node.js it is the newest release of the pinned major that the official
+  image builds; moving to another major is a human decision.
 - Fetch current versions on every run. If there are no newer releases, finish
   without file changes or a PR.
-- One Draft PR for the whole bump, separate from any other change. Use the
+- One PR for the whole bump, separate from any other change. Use the
   fixed head branch `codex/update-ai-cli-tools` and the remote default branch
   as base. Reuse an open PR with that head and base, preserving human
   verification commits and others' changes. Do not infer ownership from titles
@@ -37,9 +43,10 @@ it does not establish that the new releases work on a real device.
 - If a human later requests real-device checks on the update PR, use the
   [verify-ai-cli-tools skill](../verify-ai-cli-tools/SKILL.md); do not invoke
   it as part of this unattended workflow.
-- Not touched: `uv.lock`, `desktop/package-lock.json`, `desktop/src`. The tools
-  are installed inside the snapshot by npm or an install script, never through
-  the repository's dependency management.
+- Not touched: `uv.lock`, `desktop/package-lock.json`, and `desktop/src` apart
+  from test data that names the default base image. The tools are installed
+  inside the snapshot by npm or an install script, never through the
+  repository's dependency management.
 
 ## 1. Isolate the update and find the latest versions
 
@@ -57,6 +64,16 @@ unchanged: those processes can rebuild snapshots from its pins after restart.
 | GitHub Copilot | `npm view @github/copilot dist-tags.latest` | `package="@github/copilot@<v>"` |
 | Grok Build | `curl -fsSL https://x.ai/cli/stable` | `bash -s <v>` in `install` |
 | Antigravity | the two manifests below | versioned URL and both `sha512` in `install` |
+| Node.js | the official image's version, below | `node:<v>-bookworm` in `image.py` and the Dockerfile |
+
+The official Node.js image names the version it builds for each major in its
+repository. For the major `<m>` the pins use:
+
+```bash
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' \
+  "https://api.github.com/repos/nodejs/docker-node/contents/<m>/bookworm/Dockerfile" \
+  | sed -n 's/^ENV NODE_VERSION=//p'
+```
 
 Grok Build's installer (`https://x.ai/cli/install.sh`) reads the same
 `stable` pointer when no version is given.
@@ -92,9 +109,14 @@ git grep -nIE '(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)|_[0-9]+_[0-9]+_[0-9]
      'docs/native_agent_runtime.*.md' | grep -v 'node:'
 ```
 
-`test_snapshot.py` uses `9.9.9` as a made-up pin, the `node:` lines name the
-base image, and this skill quotes versions as examples; nothing else they print
-is noise.
+`test_snapshot.py` uses `9.9.9` as a made-up pin, the `node:` lines are the
+Node.js pins (searched below), and this skill quotes versions as examples;
+nothing else they print is noise.
+
+For Node.js, `git grep -nE 'node:[0-9]+\.[0-9]+\.[0-9]+' -- ':!desktop/package-lock.json'`
+lists both pins and the test data (`tests/`, `desktop/src`) that names the
+default base image; give them the new tag. A document's measurement on an
+image is an observation and keeps that image.
 
 Treat each hit by what it claims:
 
@@ -147,6 +169,14 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_device'
 ```
 
+When the Node.js pins changed, also run the base image's tests and the
+changed desktop test files:
+
+```bash
+uv run --no-sync python -m pytest tests/guildbotics/environment tests/guildbotics/cli/test_environment_command.py -m 'not real_device'
+cd desktop && npm ci && npx prettier --check <changed files> && npx vitest run <changed files>
+```
+
 Do not enable real-device opt-ins. The marker expression excludes every
 real-device test. Add non-device regression tests for any adapter behavior
 changed in this bump.
@@ -156,11 +186,11 @@ associated changes, then rerun the affected checks on the final patch. Follow
 AGENTS.md when diagnosing pre-existing failures: put its complete Issue draft
 in the PR or final report, without publishing an Issue or waiting for a reply.
 If checks cannot run in the available environment, preserve the patch and
-record the exact unperformed checks and reason in the Draft PR.
+record the exact unperformed checks and reason in the PR.
 
 ## 4. Create the PR and report
 
-Commit and push only this update's changes and create or update its Draft PR.
+Commit and push only this update's changes and create or update its PR.
 Do not stop at a local diff or ask permission to push or create the PR. If no
 tool can be raised, finish with the reasons and no empty PR. If GitHub access
 is unavailable, keep the local changes and report the specific blocker.
@@ -177,7 +207,11 @@ verification during review, request `$verify-ai-cli-tools` on this PR.**
 
 After the merge, each device's snapshot turns `stale`: a running service
 rebuilds it once it runs the new code, and `guildbotics environment build`
-rebuilds it by hand.
+rebuilds it by hand. When the Dockerfile changed, the body also asks for the
+development image to be rebuilt after the merge: `scripts/build-agent-environment-image.sh`
+on the machine that runs the code host's CI runner builds it, loads it there and
+into the runner, and declares it. The workspace's snapshot follows the new
+declaration, so rebuild the image before the snapshot to build it once.
 
 Report the version comparison, check results, held tools, and PR link. When
 nothing needs updating or attention, do not send a notification if the runner

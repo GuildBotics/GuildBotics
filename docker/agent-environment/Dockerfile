@@ -32,7 +32,7 @@
 # nothing below lives under /root: interpreters and toolchains sit under /opt
 # and are reached through /usr/local/bin and the ENV settings, which the
 # environment passes to every process it starts.
-FROM node:24.21.0-bookworm
+FROM node:24.22.1-bookworm
 
 ARG UV_VERSION=0.13.5
 ARG PYTHON_VERSION=3.15

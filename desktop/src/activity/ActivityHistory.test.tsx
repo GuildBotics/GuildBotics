@@ -264,7 +264,7 @@ beforeEach(() => {
     resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
-      default: "node:22.23.2-bookworm",
+      default: "node:24.22.1-bookworm",
       architecture: "arm64",
       reference: "",
       digest: "",
