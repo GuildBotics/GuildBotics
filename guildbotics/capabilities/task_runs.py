@@ -22,7 +22,7 @@ from guildbotics.entities.task_run import (
     TaskRunRecord,
     TaskRunResult,
 )
-from guildbotics.runtime.member_invocation import current_member_invocation
+from guildbotics.runtime.member_invocation import Work, current_member_invocation
 from guildbotics.utils.correlation import current_trace
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.i18n_tool import t
@@ -148,6 +148,8 @@ class RunStore:
     }
     #: A PR whose checks the run awaits, recorded with the notice on it.
     CHECKS_AWAITED_EVIDENCE: ClassVar[str] = "checks_awaited"
+    #: The PR whose settled checks the patrol resumed the run's work for.
+    CHECKS_RESUMED_EVIDENCE: ClassVar[str] = "checks_resumed"
     TICKET_COMMENT_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
@@ -407,15 +409,18 @@ class RunStore:
         ]
 
     def complete(
-        self, run_id: str, status: str, summary: str, ticket_url: str, person_id: str
+        self, run_id: str, status: str, summary: str, work: Work, person_id: str
     ) -> RunStatus:
+        """Record how the member says the run doing ``work`` ended, about the
+        subject the work names (:func:`work_subject`)."""
+        subject_type, subject_id, subject_url = work_subject(work)
         return self.complete_run(
             run_id,
             status,
             summary,
-            subject_type="ticket",
-            subject_id=ticket_url,
-            subject_url=ticket_url,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            subject_url=subject_url,
             person_id=person_id,
         )
 
@@ -496,6 +501,14 @@ class RunStore:
             for item in records
             if isinstance(item, dict) and item.get("type")
         ]
+
+    def summary(self, run_id: str) -> str:
+        """The summary the run's member recorded; empty while there is none
+        to read, such as before the run's record reached this device."""
+        try:
+            return self._read_record(run_id).safe_summary
+        except TaskRunError:
+            return ""
 
     def awaited_pull_requests(self, run_id: str) -> set[str]:
         """The PRs whose checks the run awaits."""
@@ -657,16 +670,16 @@ class RunStore:
         present = set(evidence_types)
         if status == "blocked" and not summary.strip():
             return False
+        if status == "awaiting_checks":
+            # The notice on each PR the run awaits, which their readiness
+            # admitted, whatever work the run does.
+            return self.CHECKS_AWAITED_EVIDENCE in present
         if subject_type == "chat":
             if status == "blocked":
                 return True
             if status == "asking":
                 return bool(present & self.CHAT_ASKING_EVIDENCE_TYPES)
             return bool(present & self.CHAT_WRITE_EVIDENCE_TYPES)
-        if status == "awaiting_checks":
-            # The notice on each PR the run awaits, which their readiness
-            # admitted.
-            return self.CHECKS_AWAITED_EVIDENCE in present
         if status in {"asking", "blocked"}:
             return not self._waits_without_comment(status, subject_type, evidence_types)
         if not present & self.TICKET_WRITE_EVIDENCE_TYPES:
@@ -686,6 +699,21 @@ class RunStore:
             and status in {"asking", "blocked"}
             and not set(evidence_types) & self.TICKET_COMMENT_EVIDENCE_TYPES
         )
+
+
+def work_subject(work: Work) -> tuple[str, str, str]:
+    """The type, id, and URL of what a run doing ``work`` answers.
+
+    A chat event's run answers the event, under the chat rules of evidence.
+    Any other run answers its work as an item, under the rules of an item: a
+    ticket by its URL; a chat thread's work, which a run resumed for its PR's
+    checks continues without answering an event, as ``chat_thread``.
+    """
+    if work.chat is not None:
+        return "chat", work.chat.subject_id, ""
+    if work.kind == "chat":
+        return "chat_thread", work.identity, ""
+    return work.kind, work.identity, work.identity if work.kind == "ticket" else ""
 
 
 def current_task_run_id() -> str | None:

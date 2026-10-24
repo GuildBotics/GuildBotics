@@ -80,6 +80,9 @@ def _can_bind_localhost() -> bool:
     [
         (Work.of_ticket("https://example.test/1"), "", "run-1"),
         (Work.of_chat(ChatSubject("slack", "C1", "1.0", "C1:1.1", "U1")), "run-1", ""),
+        # A run resumed in a chat thread's work answers no chat event.
+        (Work("chat", "slack:U1:C1:1.0"), "", "run-1"),
+        (Work("manual", "run-1"), "", "run-1"),
     ],
 )
 async def test_execute_runs_the_member_command_in_this_process_for_the_turn(

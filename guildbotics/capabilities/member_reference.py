@@ -328,7 +328,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "Run completion — workflow runs only",
+        "Run completion — workflow and command runs only",
         [
             (
                 "guildbotics member chat noop --person <person> --content-file <file>",
@@ -341,14 +341,20 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member task complete --person <person> "
-                "--status done|asking|blocked|awaiting_checks --content-file <file>",
-                "Finish the ticket workflow run on its ticket with evidence, "
-                "revalidating affected PR readiness before accepting done, or end "
-                "it to await the PRs' pending checks, which resume it.",
+                "--status done|asking|blocked --content-file <file>",
+                "Finish a run other than a chat event's with evidence, revalidating "
+                "affected PR readiness before accepting done.",
             ),
             (
                 "guildbotics member task status --person <person>",
-                "Inspect the ticket run's recorded evidence.",
+                "Inspect the run's recorded evidence.",
+            ),
+            (
+                "guildbotics member checks await --person <person> "
+                "--content-file <file>",
+                "End any run -- a ticket's, a chat thread's, or a command's -- "
+                "to await its own PRs' pending checks: a notice on each PR, from "
+                "which the patrol resumes the run's work once they settle.",
             ),
         ],
     ),
@@ -428,14 +434,17 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "repository whose base also has no checks; if the base has checks, an empty head is "
     "treated as registration pending. If an unrelated failure or an unavailable "
     "check blocks completion, follow the failure-handling rule above and report that blocker. "
-    "In a ticket workflow run, do not wait for CI in the turn: when pending checks "
-    "(`checks_pending`) are the only blocker left, finish the run with `member task "
-    "complete --status awaiting_checks`, and the patrol resumes the work once the "
-    "checks finish or the head moves.",
+    "In any workflow or command run -- a ticket's, a chat thread's, or a command's -- "
+    "do not wait for CI in the turn: when pending checks (`checks_pending`) are the "
+    "only blocker left, "
+    "end the run with `member checks await`, whose summary says where the outcome is "
+    "to be reported, and the patrol resumes the run's work once the checks finish or "
+    "the head moves.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating ticket or PR for ticket-driven work, the review thread or PR "
-    "conversation for PR review work, the chat thread for chat-driven work. "
+    "conversation for PR review work, the chat thread for chat-driven work, the "
+    "destination the command names for command-driven work. "
     "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
 ]

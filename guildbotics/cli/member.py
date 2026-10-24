@@ -65,7 +65,6 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.drivers.context import resolve_member_context
-from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.factory import chat_provider_name
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -80,6 +79,7 @@ from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
+    Work,
     current_member_invocation,
     member_invocation_scope,
 )
@@ -1818,7 +1818,7 @@ def pr_reaction_add(
 
 @member.group()
 def task() -> None:
-    """Workflow task-run completion records."""
+    """Completion records of runs other than a chat event's."""
 
 
 @task.command(name="complete")
@@ -1826,40 +1826,32 @@ def task() -> None:
 @click.option(
     "--status",
     required=True,
-    type=click.Choice(TASK_RUN_COMPLETIONS),
-    help=(
-        "Run outcome. awaiting_checks ends the run to await its PRs' pending "
-        "checks; the patrol resumes the work once they settle."
-    ),
+    type=click.Choice(["done", "asking", "blocked"]),
+    help="Run outcome.",
 )
 @_required_content_stdin_option
 @_json_format_option
 def task_complete(person: str, status: str, output_format: str) -> _CommandWork:
-    run_id, ticket_url = _ticket_run()
+    run_id, work = _task_run()
     summary = _read_stdin("run summary")
-    return _task_complete(person, run_id, ticket_url, status, summary)
+    return _task_complete(person, run_id, work, status, summary)
 
 
 async def _task_complete(
-    person: str, run_id: str, ticket_url: str, status: str, summary: str
+    person: str, run_id: str, work: Work, status: str, summary: str
 ) -> dict[str, Any]:
     context, _ = _resolve(person)
     store = TaskRunStore()
     readiness: list[dict[str, Any]] = []
-    if status in {"done", "awaiting_checks"}:
+    if status == "done":
         try:
-            if status == "done":
-                readiness = await member_repository.task_completion_readiness(
-                    context, ticket_url, store.evidence(run_id)
-                )
-            else:
-                readiness = await member_repository.await_checks(
-                    context, ticket_url, run_id, store
-                )
+            readiness = await member_repository.task_completion_readiness(
+                context, work, store.evidence(run_id)
+            )
         finally:
             await context.aclose()
-    payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
-    if status in {"done", "awaiting_checks"}:
+    payload = store.complete(run_id, status, summary, work, person).to_dict()
+    if status == "done":
         payload["pr_readiness"] = readiness
     return payload
 
@@ -1873,12 +1865,41 @@ async def _task_complete(
 )
 @_json_format_option
 def task_status(person: str, output_format: str) -> _CommandWork:
-    run_id, _ticket_url = _ticket_run()
+    run_id, _work = _task_run()
     return _task_status(run_id)
 
 
 async def _task_status(run_id: str) -> dict[str, Any]:
     return TaskRunStore().status(run_id).to_dict()
+
+
+@member.group()
+def checks() -> None:
+    """End a run to await the CI checks of its pull requests."""
+
+
+@checks.command(name="await")
+@_person_option
+@_required_content_stdin_option
+@_json_format_option
+def checks_await(person: str, output_format: str) -> _CommandWork:
+    run_id, work = _invoking_run()
+    summary = _read_stdin("run summary")
+    return _checks_await(person, run_id, work, summary)
+
+
+async def _checks_await(
+    person: str, run_id: str, work: Work, summary: str
+) -> dict[str, Any]:
+    context, _ = _resolve(person)
+    store = TaskRunStore()
+    try:
+        readiness = await member_repository.await_checks(context, work, run_id, store)
+    finally:
+        await context.aclose()
+    payload = store.complete(run_id, "awaiting_checks", summary, work, person).to_dict()
+    payload["pr_readiness"] = readiness
+    return payload
 
 
 def _resolve(person: str):
@@ -1893,15 +1914,27 @@ def _resolve(person: str):
         raise click.ClickException(message) from exc
 
 
-def _ticket_run() -> tuple[str, str]:
-    """The ticket run that invoked the command, and the URL of its ticket: the
-    only run and subject the command may act on, as the host settled them; a
-    call outside one is refused."""
+def _task_run() -> tuple[str, Work]:
+    """The run that invoked the command, other than a chat event's, and the
+    work it does: the only run and subject the command may act on, as the
+    host settled them; a call outside one is refused."""
     invocation = current_member_invocation()
     work = invocation.work
-    if not invocation.task_run_id or work is None or work.kind != "ticket":
-        raise click.ClickException(t("cli.member.run.required", kind="ticket"))
-    return invocation.task_run_id, work.identity
+    if work is not None and work.chat is not None:
+        raise click.ClickException(t("cli.member.run.chat_event"))
+    if not invocation.task_run_id or work is None:
+        raise click.ClickException(t("cli.member.run.required_any"))
+    return invocation.task_run_id, work
+
+
+def _invoking_run() -> tuple[str, Work]:
+    """The run that invoked the command, whatever its work, and that work, as
+    the host settled them; a call outside one is refused."""
+    run_id = current_run_id()
+    work = current_member_invocation().work
+    if not run_id or work is None:
+        raise click.ClickException(t("cli.member.run.required_any"))
+    return run_id, work
 
 
 def _chat_run() -> tuple[str, ChatSubject]:

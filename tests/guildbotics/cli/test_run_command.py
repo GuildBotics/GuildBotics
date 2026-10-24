@@ -789,6 +789,7 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
         tmp_path / "commands/functions/answer.py",
         """
         from guildbotics.capabilities.task_runs import RunStore
+        from guildbotics.runtime.member_invocation import Work
 
         async def main(context, agent_execution_context):
             attempt = agent_execution_context["attempt"]
@@ -798,7 +799,11 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
                     "run-1", "issue_comment", {"url": "https://example.test/1"}
                 )
                 store.complete(
-                    "run-1", "done", "done", "https://example.test/1", "alice"
+                    "run-1",
+                    "done",
+                    "done",
+                    Work.of_ticket("https://example.test/1"),
+                    "alice",
                 )
             return f"attempt-{attempt}"
         """,
@@ -816,35 +821,6 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
     outcome = await run_main_command(command, source="manual")
 
     assert outcome.text_output == "attempt-2"
-
-
-@pytest.mark.asyncio
-async def test_a_command_of_no_workflow_run_drives_no_completion(tmp_path, monkeypatch):
-    """A manual command does its own run's manual work, which no completion
-    record finishes, so it cannot drive a completion-managed turn."""
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    _write(
-        tmp_path / "commands/driver.py",
-        """
-        from guildbotics.runtime import Context
-
-        async def main(context: Context):
-            return await context.invoke(
-                "functions/answer",
-                agent_execution_context={"max_completion_attempts": 3},
-            )
-        """,
-    )
-    _write(
-        tmp_path / "commands/functions/answer.py",
-        """
-        def main():
-            raise AssertionError("no turn runs")
-        """,
-    )
-
-    with pytest.raises(click.ClickException, match="work_kind"):
-        await _run_locally(monkeypatch, _get_context(), "driver", tmp_path)
 
 
 @pytest.mark.asyncio

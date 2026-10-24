@@ -355,18 +355,21 @@ def test_a_run_command_acts_only_on_its_invocations_run_and_work(
     tmp_path, arguments, kind
 ) -> None:
     """The run and its subject are the invocation's, never ones the command
-    names, so a call whose invocation carries no run doing the command's kind
-    of work is refused."""
+    names, so a call whose invocation carries no run of the command's kind is
+    refused: a chat event's run for a chat command, any other run -- whatever
+    its work, such as a command's or a resumed run's -- for a task command."""
     other = "ticket" if kind == "chat" else "chat"
     run = _RUNS[kind]
-
-    for invocation in (
+    refused = [
         MemberInvocation(),
         _RUNS[other],
         replace(run, work=None),
         replace(run, work=_RUNS[other].work),
-        replace(run, work=Work("manual", "run-1")),
-    ):
+    ]
+    if kind == "chat":
+        refused.append(replace(run, work=Work("chat", _CHAT.identity)))
+
+    for invocation in refused:
         exit_code, stdout, stderr = _run(
             arguments,
             invocation,
@@ -374,8 +377,15 @@ def test_a_run_command_acts_only_on_its_invocations_run_and_work(
             stdin="Nothing to do.",
         )
 
+        if kind == "chat":
+            message = t("cli.member.run.required", kind="chat")
+        elif invocation.work is not None and invocation.work.chat is not None:
+            # A chat event's run is told what completes it instead.
+            message = t("cli.member.run.chat_event")
+        else:
+            message = t("cli.member.run.required_any")
         assert (exit_code, stdout) == (1, "")
-        assert t("cli.member.run.required", kind=kind) in " ".join(stderr.split())
+        assert message in " ".join(stderr.split())
     assert list(RunStore().records()) == []
 
 

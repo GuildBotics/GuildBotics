@@ -837,6 +837,49 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
 
 
 @pytest.mark.asyncio
+async def test_a_run_resumed_in_a_chat_threads_work_continues_its_session(
+    monkeypatch,
+    tmp_path,
+    native_aiko,
+    in_a_command,
+    doing,
+) -> None:
+    """A run the patrol resumed for its PR's checks in a chat thread's work
+    feeds the session no thread: it continues the thread's conversation with
+    its own input, and leaves the thread's cursor for the next chat event."""
+    adapter = _Adapter()
+
+    def get_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
+    key = _seed_chat_record(
+        tmp_path, cursor=position(100.1), last_run_id="run-A", last_event_id="EA"
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    doing("chat", _CHAT_IDENTITY, "run-C")
+
+    result = await brain.run_with_execution_details(
+        "checks-turn",
+        cwd=tmp_path,
+        session_state={
+            "agent_execution_context": {"resume_policy": "auto", "attempt": 1}
+        },
+    )
+
+    assert result.returncode == 0
+    assert "checks-turn" in adapter.prompts[0]
+    assert "guildbotics_thread_context" not in adapter.prompts[0]
+    assert not any(
+        event.name == "continuation_rejected" for event in in_a_command.events()
+    )
+    persisted = ConversationStore(tmp_path).load(key)
+    assert persisted is not None
+    assert (persisted.generation, persisted.context_cursor) == (0, position(100.1))
+    assert persisted.last_run_id == "run-C"
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_legacy_record_without_identity_rotates_to_full_context(
     monkeypatch,
