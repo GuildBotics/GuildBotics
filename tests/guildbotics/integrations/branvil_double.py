@@ -24,8 +24,10 @@ consumes its author's review request, a reply does not; marking a pull
 request ready for review (or opening it as one) sets ``ready_at``; a merge
 closes the tickets the pull request ``closes`` and moves them to ``done``; a
 workspace board's closed items are the closed tickets and pull requests of the
-workspace's repositories; and a gone branch's commit is ``""`` with no
-``behind_by``.
+workspace's repositories; a gone branch's commit is ``""`` with no
+``behind_by``; and the dependency alerts of a repository's upstream are read
+only for a repository that has one (``422 unsupported`` otherwise), by
+``state`` and by ``id``.
 
 Its administration answers as Branvil's public admin API does: a token is
 its member's, the owner's (the admin token GuildBotics holds, labelled
@@ -116,6 +118,10 @@ class BranvilDouble:
         #: Whether making a pull request a draft is refused.
         self.refuse_draft = False
         self.artifacts: dict[tuple[str, str], bytes] = {}
+        #: The repositories with an upstream, and the dependency alerts its
+        #: host reports for ``REPO``.
+        self.upstreams = {REPO}
+        self.alerts: list[dict[str, Any]] = []
         self._ticks = count()
         self._ids = count(1)
         self._revisions = count(1)
@@ -196,6 +202,29 @@ class BranvilDouble:
         if content[:4] not in (b"PK\x03\x04", b"PK\x05\x06"):
             raise ValueError("Branvil keeps only zip archives as artifacts.")
         self.artifacts[sha, name] = content
+
+    def alert(self, state: str = "open", patched: str | None = "4.17.21") -> str:
+        """A dependency alert the upstream host reports for ``REPO``; its id."""
+        number = str(len(self.alerts) + 1)
+        self.alerts.append(
+            {
+                "id": number,
+                "state": state,
+                "url": f"https://github.com/acme/demo/security/dependabot/{number}",
+                "package": "lodash",
+                "ecosystem": "npm",
+                "manifest_path": "package-lock.json",
+                "severity": "high",
+                "identifiers": [{"type": "GHSA", "value": f"GHSA-{number}"}],
+                "summary": "Command Injection in lodash",
+                "description": "...",
+                "affected_versions": "< 4.17.21",
+                "patched_version": patched,
+                "created_at": self.now(),
+                "updated_at": self.now(),
+            }
+        )
+        return number
 
     def now(self) -> str:
         moment = _START + timedelta(seconds=next(self._ticks))
@@ -485,12 +514,27 @@ class BranvilDouble:
                 log = self.logs[attempt][-int(params["tail_bytes"]) :]
                 truncated = len(log) < len(self.logs[attempt])
                 return 200, {"log": log, "log_bytes": len(log), "truncated": truncated}
+            case "GET", ["upstream", "dependency-alerts", *alert]:
+                return 200, self._alerts(repo, alert, params)
             case "GET", ["commits", sha, "artifacts", name] if (
                 sha,
                 name,
             ) in self.artifacts:
                 return 200, self.artifacts[sha, name]
         raise _missing("/".join(rest))
+
+    def _alerts(self, repo: str, alert: list[str], params: dict) -> Any:
+        if repo not in self.upstreams:
+            raise Refusal(422, "unsupported", f"{repo} has no upstream.")
+        if alert:
+            for found in self.alerts:
+                if [found["id"]] == alert:
+                    return found
+            raise _missing(f"Alert {alert[0]}")
+        state = params.get("state", "open")
+        if state not in ("open", "resolved", "dismissed"):
+            raise Refusal(400, "invalid", "state is open, resolved, or dismissed.")
+        return self._page([a for a in self.alerts if a["state"] == state], params)
 
     def _pull_request(
         self, method: str, url: str, rest: list[str], body: dict, params: dict

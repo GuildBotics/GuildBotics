@@ -86,7 +86,20 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         if resource in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
         if resource == "dependency_alerts":
-            raise ServiceUnsupported(t("integrations.branvil.api.alerts"))
+            alerts = (
+                f"/repos/{segment(self.repository(subject))}/upstream/dependency-alerts"
+            )
+            if conditions["id"]:
+                alert = await self.get(f"{alerts}/{segment(conditions['id'])}")
+                return ReadPage.of(resource, [alert])
+            return await self.page(
+                resource,
+                alerts,
+                conditions,
+                continuation,
+                dict,
+                state=conditions["state"],
+            )
         if resource == "ticket_pull_requests":
             if not self.serves(subject):
                 raise ServiceUnsupported(

@@ -511,11 +511,14 @@ class BranvilApi(Calls):
         conditions: dict[str, Any],
         continuation: str,
         translate: Callable[[dict[str, Any]], ReadModel | dict[str, Any]],
+        **params: Any,
     ) -> ReadPage:
         """The page of the collection at ``path`` that ``continuation`` (a
-        cursor Branvil gave, bound to the collection) asks for."""
+        cursor Branvil gave, bound to the collection and ``params``) asks
+        for."""
         page = await self.get(
             path,
+            **params,
             limit=conditions["page_size"],
             **({"cursor": continuation} if continuation else {}),
         )

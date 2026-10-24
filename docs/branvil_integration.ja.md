@@ -257,3 +257,9 @@ Branvil のリポジトリは、GitHub のリポジトリに追従できます�
   マージ済みにするので、巡回はいつもどおりチケットを **完了** に移します。
 - チケットには、それに当たる GitHub の Issue を記録できます。出した pull request はその Issue を
   閉じます。
+- 上流の GitHub の Dependabot アラートは Branvil 経由で読めます
+  （`member repo-info read --resource dependency_alerts`、`repository/security_alerts`）。
+  Branvil は GitHub の読み取りに使うアカウントで読むので、そのアカウントに
+  **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です（GitHub App では、追加した
+  権限をインストール先で承認します）。上流の無いリポジトリにはアラートが無く、読み取りは未対応として
+  拒否されます。
