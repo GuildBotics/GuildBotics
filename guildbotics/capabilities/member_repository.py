@@ -312,6 +312,8 @@ async def await_checks(
         MemberCapabilityError: Unless pending checks are all that blocks the
             completion of the PRs the run answers for, none of them a draft:
             the patrol resumes nobody for a draft.
+        ChatUpdatesRequired: When the run answers a chat whose new input it
+            has not read; nothing is said or recorded then.
     """
     answered = await _answered(context, work, store.evidence(run_id))
     awaited = [(pr, result) for pr, result in answered if result.readiness != "ready"]
@@ -328,9 +330,10 @@ async def await_checks(
                 or "No PR of the member's own is blocked."
             )
         )
+    code = _code(context)
     for _, result in awaited:
         await pull_request_patrol.await_checks(
-            context.get_code_hosting_service(),
+            code,
             result.target.url,
             person_id=context.person.person_id,
             run_id=run_id,
