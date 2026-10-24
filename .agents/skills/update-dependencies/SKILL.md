@@ -33,8 +33,11 @@ real device.
   `latest` dist-tag, Grok Build's `stable` channel, the Antigravity manifest.
   Never a prerelease, alpha, or `next` tag. For Node.js it is the newest
   release of the pinned major; moving to another major is a human decision.
-- Fetch current versions and alerts on every run. If there are no newer
-  releases and no alert to resolve, finish without file changes or a PR.
+- Fetch current versions and alerts on every run. Decide what is needed
+  against the remote default branch, which is what ships: a pin or a fix that
+  only the update branch has still needs this run's PR. Finish without file
+  changes or a PR only when the default branch already has the latest
+  releases and every fix that can be made.
 - One PR for the whole update, separate from any other change. Use the
   fixed head branch `codex/update-dependencies` and the remote default branch
   as base. Reuse an open PR with that head and base, preserving human
@@ -68,9 +71,10 @@ For an open update PR, continue its branch, first merging the current remote
 default branch into it, so that what it compares and changes starts from
 today's default branch (a fix merged there since makes an alert nothing to do
 instead of a conflict); if no open PR exists, base the new update on the
-current remote default branch. A retained branch from a
-closed PR may be recreated only after confirming it has no unpublished or
-unrelated work. Keep a checkout served by Desktop or `guildbotics start`
+current remote default branch. A branch left by a PR closed without a merge is
+continued the same way when it holds only earlier runs of this workflow; a new
+PR then carries its changes (section 5). When it holds anything else, stop and
+report it (the member cannot force-push to replace it). Keep a checkout served by Desktop or `guildbotics start`
 unchanged: those processes can rebuild snapshots from its pins after restart.
 
 | Tool | Latest | Pin in `cli_agents.py` |
@@ -182,20 +186,27 @@ A failed read is a failure, never zero alerts: report it, leave the locks
 alone, and go on with the tools. Dismissed alerts are a human decision and are
 not touched.
 
-Each alert names the lock in `manifest_path`, the `package`, and the
-`patched_version`; for several alerts of one package in one lock, use the
-highest `patched_version` among them. First compare that version with the
-lock on the update branch: when the lock already has it, there is nothing to
-do. The code host has not re-evaluated it yet, or, for a repository that
-follows an upstream host, the fix has not reached the upstream's default
-branch yet; report it as awaiting re-evaluation. Otherwise raise the package
-to exactly the patched version:
+Each alert names the lock in `manifest_path`, the `package`, the
+`affected_versions` range, and the `patched_version`. A lock can hold several
+versions of one package, so work per locked version: match each alert to the
+versions of its package the lock holds within its `affected_versions`, and
+give each such locked version the highest `patched_version` among the alerts
+that match it as its target. A locked version that no alert matches is left
+alone.
+
+First look at the remote default branch's lock: an alert none of whose
+versions there is within its `affected_versions` is fixed where it ships; the
+code host has not re-evaluated it yet. Otherwise look at the update branch:
+when it already holds every target (an earlier run), this run's PR carries the
+fix, and the report says it awaits that PR's merge (and, for a repository that
+follows an upstream host, its publishing there). Otherwise raise each locked
+version to exactly its target:
 
 | `manifest_path` | Raise it with |
 | --- | --- |
-| `uv.lock`, `guildbotics/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<patched_version>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the patched version, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
-| `desktop/package-lock.json` | In `desktop`: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<patched_version>`, which also raises its range in `package.json`. npm cannot pick the patched version of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
-| `desktop/src-tauri/Cargo.lock` | In `desktop/src-tauri`: `cargo update -p <package>@<locked_version> --precise <patched_version>` (the locked version tells two versions of the package apart). When cargo cannot write its registry, point `CARGO_HOME` at a writable directory |
+| `uv.lock`, `guildbotics/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<target>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the target, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
+| `desktop/package-lock.json` | In `desktop`: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<target>`, which also raises its range in `package.json`. npm cannot pick the target of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
+| `desktop/src-tauri/Cargo.lock` | In `desktop/src-tauri`: `cargo update -p <package>@<locked_version> --precise <target>` (the locked version tells two versions of the package apart). When cargo cannot write its registry, point `CARGO_HOME` at a writable directory |
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
@@ -207,20 +218,21 @@ This is the export `tests/guildbotics/environment/test_requirements.py` checks.
 
 Then read every version of the package the lock now holds (`uv tree --frozen
 --universal --package <package>`, `npm ls <package> --all`, or the lock
-entries) and compare each with the one it replaced. The alert is resolved only
-when each is at or above `patched_version` and in the same major as before
+entries) and compare each with the one it replaced. An alert is resolved only
+when each locked version it matched is now at or above that version's target
+and in the same major as before
 (for a `0.x` version, the same minor): moving to another major is a human
 decision, whichever version the tool picked. A command that ran is not a fix:
 uv and npm succeed without changing anything when what requires the package
-does not admit the patched version, and `npm update` succeeds when it moves
+does not admit the target, and `npm update` succeeds when it moves
 past the major. Decide on the final lock, after every alert of that lock has
 been raised.
 
 Leave an alert open and report why when:
 
 - it has no `patched_version`;
-- its final locked version is not resolved as above: the patched version is
-  in another major, the packages that require it do not admit it, a direct
+- its final locked version is not resolved as above: the target is in
+  another major, the packages that require it do not admit it, a direct
   dependency's range in `pyproject.toml` or `package.json` has an upper bound
   that excludes it, or the tool picked a version in another major;
 - reaching it needs changes beyond the manifests and locks, or the non-device
@@ -283,13 +295,18 @@ record the exact unperformed checks and reason in the PR.
 ## 5. Create the PR and report
 
 Commit and push only this update's changes and create or update its PR.
-Do not stop at a local diff or ask permission to push or create the PR. If
-nothing can be updated, finish with the reasons and no empty PR. If the code
-host is unavailable, keep the local changes and report the specific blocker.
+Do not stop at a local diff or ask permission to push or create the PR. An
+update branch that holds pins or fixes the default branch lacks always ends
+with an open PR, also when this run committed nothing: `member pr create`
+returns the open PR of that head and base, or opens one (after a PR closed
+without a merge, say so in the body). If the default branch already has
+everything, finish with the reasons and no PR. If the code host is
+unavailable, keep the local changes and report the specific blocker.
 
 The body lists each tool's old, latest and adopted version with official
 sources; each alert resolved (number, package, old and new version, lock),
-awaiting re-evaluation, or left open with its reason; the non-device checks
+awaiting this PR's merge or the code host's re-evaluation, or left open with
+its reason; the non-device checks
 and their results; held pins and their reasons; historical observations left
 unchanged; and release-note changes needing attention. When a tool's pin
 changed, explicitly state: **Real-device validation and snapshot build were
@@ -305,6 +322,6 @@ code, and `guildbotics environment build` rebuilds it by hand. The code host
 re-evaluates the alerts on the merged locks; the next run reads what is still
 open.
 
-Report the version comparison, the alerts resolved and left open, check
+Report the version comparison, the alerts resolved, awaiting, and left open, check
 results, held tools, and PR link. When nothing needs updating or attention, do
 not send a notification if the runner supports silent completion.
