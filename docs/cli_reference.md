@@ -67,6 +67,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
 | [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel) | Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name. |
 | [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
+| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
+| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
@@ -96,9 +98,9 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
-| [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
+| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
 | [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
@@ -720,13 +722,14 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
+| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
-| [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
+| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
 | [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
 
 ## `guildbotics member chat`
@@ -954,6 +957,38 @@ guildbotics member chat updates [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member checks`
+
+End a run to await the CI checks of its pull requests.
+
+```text
+guildbotics member checks [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
+
+## `guildbotics member checks await`
+
+End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+
+```text
+guildbotics member checks await [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1513,7 +1548,7 @@ guildbotics member repo-info read [OPTIONS]
 
 ## `guildbotics member task`
 
-Workflow task-run completion records.
+Completion records of runs other than a chat event's.
 
 ```text
 guildbotics member task [OPTIONS] COMMAND [ARGS]...
@@ -1525,12 +1560,12 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
 
 ## `guildbotics member task complete`
 
-Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it.
+Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1539,7 +1574,7 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--status [done\|asking\|blocked\|awaiting_checks]` | Run outcome. awaiting_checks ends the run to await its PRs' pending checks; the patrol resumes the work once they settle. [required] |
+| `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1547,7 +1582,7 @@ guildbotics member task complete [OPTIONS]
 
 ## `guildbotics member task status`
 
-Inspect the ticket run's recorded evidence.
+Inspect the run's recorded evidence.
 
 ```text
 guildbotics member task status [OPTIONS]

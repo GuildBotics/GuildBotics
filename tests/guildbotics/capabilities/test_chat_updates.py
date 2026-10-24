@@ -1,7 +1,9 @@
 """New input must reach the agent before its source-thread work is published."""
 
+import ast
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +15,7 @@ from guildbotics.capabilities.chat_updates import (
     ensure_chat_current,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.integrations import chat_receive_status
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -25,7 +28,13 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.runtime.port import WorkflowStatus
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
 from tests.guildbotics.local_chat import at, chat_event, lines, say
-from tests.guildbotics.local_code_host import item, local_member, pull_request, ticket
+from tests.guildbotics.local_code_host import (
+    item,
+    local_member,
+    pull_request,
+    remote_with,
+    ticket,
+)
 
 _SOURCE = ChatSubject(
     service="slack",
@@ -210,6 +219,69 @@ async def test_a_comment_checks_original_chat(chat_run, make, write):
     assert [c["body"] for c in item(url)["comments"]] == ["comment"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unread", ["not_checked", "new_message", "unavailable"])
+async def test_awaiting_checks_checks_original_chat(chat_run, unread):
+    """A chat run that ends to await its PR's checks says so on the PR only
+    once its thread is current, like any other write: until then it leaves
+    neither the notice nor the record that it awaits them."""
+    remote_with("feature")
+    url = pull_request(1, "feature", author="aiko")
+    runs = RunStore()
+    runs.append_evidence(
+        "chat-run", "pr_create", {"target": {"kind": "pull_request", "url": url}}
+    )
+    member = local_member(checks="pending")
+    if unread != "not_checked":
+        check_chat_updates("aiko")
+    if unread == "new_message":
+        queue(chat_run, event(3))
+    if unread == "unavailable":
+        ChatReceiveStatus().save("slack", "aiko", "C1", state="unavailable")
+
+    async def await_checks():
+        await member_repository.await_checks(
+            member, Work.of_chat(_SOURCE), "chat-run", runs
+        )
+
+    with pytest.raises(ChatUpdatesRequired):
+        await await_checks()
+    assert item(url)["comments"] == []
+    assert runs.awaited_pull_requests("chat-run") == set()
+    ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+    check_chat_updates("aiko")
+    await await_checks()
+    assert runs.awaited_pull_requests("chat-run") == {url}
+
+
+def test_the_member_writes_to_a_service_only_through_the_chat_check():
+    """Every member write to the code host or the ticket service goes through
+    ``_code`` / ``_tickets``, which check the chat the run answers first;
+    anywhere else in the module, a service is taken only to read it."""
+    tree = ast.parse(Path(member_repository.__file__).read_text(encoding="utf-8"))
+    direct = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr in {"get_code_hosting_service", "get_ticket_service"}
+            for call in ast.walk(node)
+        )
+    }
+
+    assert direct == {
+        # The check itself.
+        "_code",
+        "_tickets",
+        # Reads.
+        "read_resource",
+        "artifact_download",
+        "_answered",
+    }
+
+
 def test_interactive_and_ticket_runs_have_no_chat_precondition():
     ensure_chat_current("aiko")
     with member_invocation_scope(MemberInvocation(task_run_id="ticket-run")):
@@ -263,7 +335,7 @@ def test_heartbeat_throttles_idle_writes_but_publishes_transitions(monkeypatch):
     assert not status.available("slack", "aiko", "C1")
 
 
-@pytest.mark.parametrize("status", ["done", "asking", "blocked"])
+@pytest.mark.parametrize("status", TASK_RUN_COMPLETIONS)
 @pytest.mark.parametrize(
     "action",
     [

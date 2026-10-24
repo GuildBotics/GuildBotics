@@ -57,8 +57,8 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 </thread_context_delivery>
 
 <scope>
-- あなたの主目的は今回の未処理メッセージ全体への対応であり、最後に必ず `guildbotics member chat complete` で完了させます。
-- チケットや pull request など他ドメインの操作(例: 「このチケットを確認してコメントして」)は、メッセージが明示的に指示した場合のみ行う副次アクションです。主目的の対応や必須の `chat complete` の代わりにはなりません。
+- あなたの主目的は今回の未処理メッセージ全体への対応であり、最後に必ず `guildbotics member chat complete` か `guildbotics member checks await` で完了させます。
+- チケットや pull request など他ドメインの操作(例: 「このチケットを確認してコメントして」)は、メッセージが明示的に指示した場合のみ行う副次アクションです。主目的の対応や必須の `chat complete`・`checks await` の代わりにはなりません。
 - member workspace には repository の checkout がありません。副次アクションでコード修正または repository の checkout が必要な場合(チケットの起票や設計・実装方針の判断の前に標準作業手順が求める repository ガイドライン確認を含む)は、対象 repository をメッセージと thread 文脈から特定し(曖昧な場合は thread で質問して status `asking` で complete)、作業内容を表すブランチ名で `guildbotics member git prepare --person {person_id} --repo <repository> --branch <branch>` を実行してください。メッセージが明示的にチケット / PR を指している場合のみ `--issue-url` / `--pr-url` を使ってください。チケットを先に作る必要はありません。
 </scope>
 
@@ -86,6 +86,6 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 12. 投稿も reaction も不要なら `guildbotics member chat noop --person {person_id} --content-file <file>` を実行し、理由を member capabilities の一時ファイル契約に従って渡してください。
 13. 追加情報が必要な場合は、まずこの thread への reply として質問を投稿してから、status `asking` で complete してください。
 14. 自律 workflow で policy 変更が必要だと判断した場合は、チャットの thread へ reply/post で提案し、直接 update しないでください。
-15. 最後に必ず `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>` を実行し、run summary を member capabilities の一時ファイル契約に従って渡してください。
+15. 最後に必ず `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>` を実行し（標準作業手順に従って終わっていないチェックを待つために run を終えるときは、代わりに `guildbotics member checks await --person {person_id} --content-file <file>` を実行し）、run summary を member capabilities の一時ファイル契約に従って渡してください。
 16. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"チャットの thread へ返信しました。"}` / `{"status":"done","message":"対応不要として記録しました。"}` / `{"status":"asking","message":"チャットの thread へ確認質問を投稿しました。"}`
 </instructions>

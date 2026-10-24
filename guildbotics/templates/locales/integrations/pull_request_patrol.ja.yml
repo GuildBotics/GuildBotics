@@ -2,4 +2,4 @@ ja:
   review_limit_reached: "この pull request の自動再レビューが上限の %{count} 回に達したため、Draft にしました。Draft の間は、新しいコミット・thread への返信・会話コメント・review の本文のどれがあっても、作成者もレビュワーも巡回では動きません。このまま続けてよければ Ready for review に戻してください（回数は数え直しになります）。進め方を見直すなら、チャットまたは対話セッションで指示し、区切りがついたら Ready for review に戻してください。"
   review_limit_draft_failed: "この pull request の自動再レビューが上限の %{count} 回に達しましたが、Draft に変換できなかったため、レビューを止めています。この PR でコメント・review・thread への返信のどれかがあると、次の巡回で Draft への変換をやり直します。"
   awaiting_checks: "この pull request の CI のチェックが終わるのを待っています。チェックが終わるか、新しいコミットが積まれたら、作業を再開します。"
-  checks_settled: "待っていた CI のチェックが終わったので、作業を再開し、この待ちを終えました。"
+  checks_settled: "作業を再開したので、この CI のチェックの待ちを終えました。"

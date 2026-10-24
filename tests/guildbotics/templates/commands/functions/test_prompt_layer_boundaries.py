@@ -425,11 +425,20 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         assert "head SHA" in body, language
         assert "--status done" in body, language
         # Pending checks end the run instead of a wait in the turn, and the
-        # run the patrol resumes for them reports its outcome on the PR.
-        assert "done|asking|blocked|awaiting_checks" in body, language
+        # run the patrol resumes for them continues its work and reports its
+        # outcome on the PR and where the work came from.
+        assert "--status done|asking|blocked --content-file" in body, language
+        assert "guildbotics member checks await --person" in body, language
+        assert "awaiting_checks" not in body, language
         assert "`checks_pending`" in body, language
         assert "`pull_request_checks`" in body, language
         assert "`pr comment`" in body, language
+        assert "<awaited_summary>{awaited_summary}</awaited_summary>" in body
+        # Whether the run resumes one is told by the awaited run, which is
+        # always there, not by its summary, which may not have arrived.
+        assert body.count("{awaited_run_id}") == 1, language
+        assert "`chat reply`" in body, language
+        assert "{chat_channel_id}" in body and "{chat_thread_id}" in body
 
 
 def test_issue_comment_contract_not_in_chat_prompt():

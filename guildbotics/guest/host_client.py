@@ -116,7 +116,6 @@ class ClientRunLedger:
     def __init__(self, client: HostClient, facts: CommandFacts) -> None:
         self._client = client
         self.run_id = facts.run_id
-        self.work_kind = facts.work_kind
 
     def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""

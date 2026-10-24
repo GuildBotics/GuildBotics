@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 
 class ServiceError(RuntimeError):
@@ -81,6 +81,20 @@ class WorkflowStatus(BaseModel):
     retry_after_text: str = ""
     #: The pull request head whose checks a run that awaits them stopped at.
     head: str = ""
+    #: The work a run that awaits checks does, which the patrol resumes
+    #: (:class:`~guildbotics.runtime.member_invocation.Work`'s kind and
+    #: identity).
+    work_kind: str = ""
+    work_identity: str = ""
+
+    @model_validator(mode="after")
+    def _awaiting_names_its_work(self) -> WorkflowStatus:
+        """A wait for checks names the work the patrol resumes from it."""
+        if self.reason == "awaiting_checks" and not (
+            self.work_kind and self.work_identity
+        ):
+            raise ValueError("A wait for checks names the work it resumes.")
+        return self
 
     def payload(self) -> dict[str, str]:
         """The status as its carriers write it: the fields it has, marked as a

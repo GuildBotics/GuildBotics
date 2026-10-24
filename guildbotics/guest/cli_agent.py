@@ -179,7 +179,7 @@ def _continuation_rejection(
     if not conversation.provider_session_id:
         return None
     identity_ok = _continuation_identity_matches(context, conversation)
-    if context.conversation_key.work_kind != "chat":
+    if not _feeds_chat_thread(context):
         if context.attempt > 1 and not identity_ok:
             return _rejection_details("identity_mismatch", context, conversation)
         return None
@@ -191,6 +191,13 @@ def _continuation_rejection(
     if relation == "equal" and not identity_ok:
         return _rejection_details("identity_mismatch", context, conversation)
     return None
+
+
+def _feeds_chat_thread(context: AgentExecutionContext) -> bool:
+    """Whether the turn feeds the session its chat thread up to a cursor, as a
+    chat event's does; a run resumed in a chat thread's work feeds none and
+    continues the session as any other work does."""
+    return bool(context.context_cursor)
 
 
 def _rejection_details(
@@ -220,7 +227,7 @@ def _native_turn_input(
     retried attempt (non-chat) is a legitimate same-run/event continuation.
     """
     if conversation.provider_session_id:
-        if context.conversation_key.work_kind != "chat":
+        if not _feeds_chat_thread(context):
             if context.attempt > 1:
                 return _continuation_input(input, configured)
             return input
@@ -235,7 +242,7 @@ def _native_turn_input(
             mode="incremental",
             after_cursor=conversation.context_cursor,
         )
-    if context.conversation_key.work_kind == "chat":
+    if _feeds_chat_thread(context):
         mode = "full" if context.rebuild_context_complete else "inspect_required"
         return _thread_context_input(input, configured, mode=mode)
     return input

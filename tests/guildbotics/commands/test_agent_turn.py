@@ -15,6 +15,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionResult,
 )
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.utils.i18n_tool import t
 
 
 def _store(tmp_path) -> RunStore:
@@ -40,7 +41,7 @@ def _ticket_completion(store: RunStore, run_id: str, status: str = "done") -> No
         run_id,
         status,
         "completed",
-        "https://example.test/1",
+        Work.of_ticket("https://example.test/1"),
         "aiko",
     )
 
@@ -354,3 +355,33 @@ async def test_a_run_that_awaits_its_checks_is_complete(tmp_path, monkeypatch):
 
     assert calls == 1
     assert recorded == [{"run_id": "run-1", "attempt": 1, "status": "awaiting_checks"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "work",
+    [Work("chat", "slack:U_BOT:C1:100.1"), Work("manual", "run-0")],
+)
+async def test_a_turn_answering_no_chat_event_is_driven_as_any_work(tmp_path, work):
+    """A run the patrol resumed in a chat thread's or a command's work answers
+    no chat event: it is driven to completion like a ticket's run, with no
+    chat parameters and the generic continuation."""
+    store = _store(tmp_path)
+    seen: list[tuple[dict[str, Any], dict[str, str]]] = []
+
+    async def invoke(context: dict[str, Any], parameters: dict[str, str]) -> str:
+        seen.append((context, parameters))
+        if len(seen) == 2:
+            _ticket_completion(store, "run-1")
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        ledger=HostRunLedger("run-1", work),
+        execution_context={"max_completion_attempts": 2},
+    )
+
+    assert [parameters for _, parameters in seen] == [{}, {}]
+    assert seen[1][0]["continuation_input"] == t(
+        "commands.workflows.common.agent_continuation", run_id="run-1"
+    )

@@ -117,7 +117,9 @@ class TicketSelector:
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
         record. A run the patrol resumed for its PR's checks ends their wait
-        unless it awaits them again (:func:`_settle_checks`). A run of autonomous
+        unless it awaits them again (:func:`_settle_checks`); it runs in the
+        work the awaiting run did, and answers for the PR whatever that work
+        is. A run of autonomous
         work that ends asking or blocked, or fails and says so on its item,
         waits for a person: the member announces it in chat, once, since the
         member's comment keeps the work out of selection until someone
@@ -144,6 +146,18 @@ class TicketSelector:
             try:
                 if task.status == Task.READY and task.id is not None:
                     await context.get_ticket_service().move(task, "in_progress")
+                if task.resumes is not None:
+                    # What the run answers for, whatever work it resumes.
+                    RunStore().append_evidence(
+                        run_id,
+                        RunStore.CHECKS_RESUMED_EVIDENCE,
+                        {
+                            "target": {
+                                "kind": "pull_request",
+                                "url": task.url,
+                            }
+                        },
+                    )
                 result = await run_workflow(
                     replace(
                         invocation,
@@ -229,13 +243,30 @@ class TicketSelector:
         return body
 
     def _invocation(self, person: Person, task: Task) -> WorkflowInvocation:
+        """The run of ``task``, in the work it is: a ticket's, or -- for a PR
+        whose checks the member awaits -- the work the awaiting run did, whose
+        conversation it continues, with that run's summary of where the work
+        came from as far as this device has it: a run whose record has not
+        arrived, or which never recorded a summary, gives none, and the work
+        is resumed all the same rather than held by a record that may never
+        come."""
         assert task.url
         ticket_url = task.url
+        resumes = task.resumes
+        work = (
+            Work(resumes.work_kind, resumes.work_identity)
+            if resumes is not None
+            else Work.of_ticket(ticket_url)
+        )
         payload = {
             "task": task.model_dump(),
             "ticket_url": ticket_url,
             "pull_request_url": task.pull_request_url or "",
             "trigger_reason": task.trigger_reason or "",
+            "awaited_run_id": resumes.run_id if resumes is not None else "",
+            "awaited_summary": (
+                RunStore().summary(resumes.run_id) if resumes is not None else ""
+            ),
         }
         return WorkflowInvocation(
             command=TICKET_WORKFLOW_COMMAND,
@@ -243,7 +274,7 @@ class TicketSelector:
             source=self._source,
             trigger_type="ticket",
             payload=payload,
-            work=Work.of_ticket(ticket_url),
+            work=work,
         )
 
 
@@ -252,7 +283,7 @@ async def _settle_checks(context: Context, task: Task, run_id: str) -> None:
     that PR's checks again: the wait is the member's latest status notice on
     the PR, and whatever the run itself wrote there, or awaited elsewhere, it
     would resume the member on every patrol."""
-    if task.trigger_reason != pull_request_patrol.CHECKS or not task.pull_request_url:
+    if task.resumes is None or not task.pull_request_url:
         return
     # Like a failure's notice, this one cannot fail the run that ended: the
     # wait it leaves resumes the member on the next patrol instead.

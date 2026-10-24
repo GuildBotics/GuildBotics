@@ -15,7 +15,7 @@ from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
-from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.member_invocation import MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -36,7 +36,13 @@ class _Person:
 class _Context:
     """Holds the host's invocation; it has no ticket service to reach for."""
 
-    def __init__(self, pull_request_url: str = "", trigger_reason: str = "") -> None:
+    def __init__(
+        self,
+        pull_request_url: str = "",
+        trigger_reason: str = "",
+        resumed: dict[str, str] | None = None,
+        work: Work | None = None,
+    ) -> None:
         self.person = _Person()
         self.language_name = "English"
         self.invocations: list[tuple[str, dict]] = []
@@ -51,8 +57,12 @@ class _Context:
                     "ticket_url": pull_request_url or ISSUE_URL,
                     "pull_request_url": pull_request_url,
                     "trigger_reason": trigger_reason,
+                    "awaited_run_id": "",
+                    "awaited_summary": "",
+                    **(resumed or {}),
                     "max_completion_attempts": 3,
                 },
+                work=work or Work.of_ticket(pull_request_url or ISSUE_URL),
             )
         }
         self.response = AgentResponse(status=AgentResponse.DONE, message="done")
@@ -100,6 +110,55 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
     # The shared workflow envelope is injected from the single i18n source.
     assert "guildbotics_execution_mode=workflow" in kwargs["workflow_contract"]
     assert "guildbotics member context --person aiko" in kwargs["workflow_contract"]
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_run_continues_the_awaited_work_and_its_session():
+    """A run the patrol resumed for its PR's checks runs in the work the
+    awaiting run did, continues that conversation, and is told what that run
+    said of where the work came from."""
+    resumed = {
+        "awaited_run_id": "run-1",
+        "awaited_summary": "Opened the PR for the thread; report there.",
+    }
+    work = Work("chat", "slack:U1:C1:T1")
+    context = _Context(PR_URL, "pull_request_checks", resumed, work)
+
+    await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
+
+    kwargs = context.invocations[0][1]
+    assert kwargs["work_type"] == "pull_request_checks"
+    assert kwargs["agent_execution_context"]["resume_policy"] == "auto"
+    assert {
+        key: kwargs[key]
+        for key in (
+            *resumed,
+            "work_kind",
+            "work_identity",
+            "chat_channel_id",
+            "chat_thread_id",
+        )
+    } == {
+        **resumed,
+        "work_kind": "chat",
+        "work_identity": "slack:U1:C1:T1",
+        "chat_channel_id": "C1",
+        "chat_thread_id": "T1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_resumes_no_wait_starts_its_own_session():
+    """A run that resumes no earlier run starts fresh, and says so: the step
+    for a resumed run keys on that, not on a summary that may not have
+    arrived."""
+    context = _Context(PR_URL, "pull_request_feedback")
+
+    await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
+
+    kwargs = context.invocations[0][1]
+    assert kwargs["agent_execution_context"]["resume_policy"] == "fresh"
+    assert (kwargs["awaited_run_id"], kwargs["work_kind"]) == ("", "ticket")
 
 
 @pytest.mark.asyncio

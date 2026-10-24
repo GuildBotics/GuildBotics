@@ -21,6 +21,7 @@ from guildbotics.entities.task import Task
 from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.local.chat import LocalChatService, channel_path
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import (
     ServiceError,
     WorkflowStatus,
@@ -358,7 +359,7 @@ def test_a_completion_is_a_stop_only_when_it_waits_for_a_person(status):
         "run-1", "issue_comment", {"url": COMMENT, "target": {"url": TICKET}}
     )
     store.append_evidence("run-1", "checks_awaited", {"target": {"url": TICKET}})
-    store.complete("run-1", status, "summary", TICKET, "aiko")
+    store.complete("run-1", status, "summary", Work.of_ticket(TICKET), "aiko")
     task = Task(id=TICKET, url=TICKET, title="Fix login", label="T-1", description="")
 
     assert work_stops.completed_stop(task, "run-1") == (
