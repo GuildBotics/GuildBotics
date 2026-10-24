@@ -3,6 +3,10 @@ the board of the workspace ``project.services.ticket_service.workspace`` names.
 
 The selection's rules (:mod:`~guildbotics.integrations.ticket_selection`) are
 applied here to the cards Branvil answers.
+
+Ticket comments are mutable in Branvil's GUI: reads and candidate refreshes
+use the current bodies and remaining comments, in their original creation
+order. Edits keep the comment's author, creation time and workflow metadata.
 """
 
 from __future__ import annotations
