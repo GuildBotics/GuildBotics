@@ -31,6 +31,7 @@ from guildbotics.runtime.member_invocation import (
     Work,
     member_invocation_scope,
 )
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.port import ServiceError
 from guildbotics.sync.local_repository import LocalSyncRepository
@@ -2533,10 +2534,24 @@ def test_member_pr_update_rejects_update_without_any_change():
     )
 
     assert result.exit_code != 0
-    assert "pr update needs --content-stdin/--content-file or --title." in result.output
+    assert (
+        "pr update needs --content-stdin/--content-file, --title, --issue-url, or --drop-issue-links."
+        in result.output
+    )
 
 
-def test_member_pr_update_drop_issue_links_requires_content():
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (["--issue-url", ""], "--issue-url must not be empty."),
+        (["--closes-issue"], "--closes-issue requires --issue-url."),
+        (
+            ["--issue-url", "https://tickets.test/A", "--drop-issue-links"],
+            "cannot be combined",
+        ),
+    ],
+)
+def test_member_pr_update_refuses_ambiguous_or_invalid_links(options, message):
     result = CliRunner().invoke(
         member_module.member,
         [
@@ -2546,21 +2561,46 @@ def test_member_pr_update_drop_issue_links_requires_content():
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
-            "--title",
-            "New",
-            "--drop-issue-links",
+            *options,
         ],
     )
-
-    assert result.exit_code != 0
-    assert (
-        "--drop-issue-links requires --content-stdin/--content-file." in result.output
-    )
+    assert result.exit_code != 0 and message in result.output
 
 
-@pytest.mark.parametrize("drop_issue_links", [False, True])
+@pytest.mark.parametrize(
+    ("options", "links", "content"),
+    [
+        ([], None, True),
+        (["--drop-issue-links"], [], True),
+        (["--drop-issue-links"], [], False),
+        (
+            ["--issue-url", "https://tickets.test/A"],
+            [TicketLink("https://tickets.test/A", False)],
+            False,
+        ),
+        (
+            ["--issue-url", "https://tickets.test/A", "--refs-issue"],
+            [TicketLink("https://tickets.test/A", False)],
+            True,
+        ),
+        (
+            [
+                "--issue-url",
+                "https://tickets.test/A",
+                "--issue-url",
+                "https://tickets.test/B",
+                "--closes-issue",
+            ],
+            [
+                TicketLink("https://tickets.test/A", True),
+                TicketLink("https://tickets.test/B", True),
+            ],
+            False,
+        ),
+    ],
+)
 def test_member_pr_update_reads_entire_stdin_and_closes_service(
-    monkeypatch, drop_issue_links
+    monkeypatch, options, links, content
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
@@ -2573,13 +2613,13 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
+        async def pr_update(self, pr_url, body, title, *, tickets):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_ticket_links": drop_ticket_links,
+                    "tickets": tickets,
                 }
             )
             return {"body": body, "target": _pr_target(pr_url)}
@@ -2601,8 +2641,8 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
-            "--content-stdin",
-            *(["--drop-issue-links"] if drop_issue_links else []),
+            *(["--content-stdin"] if content else []),
+            *options,
         ],
         input="## Summary\n\nUpdated body\n",
     )
@@ -2610,9 +2650,9 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
     assert result.exit_code == 0
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
-        "body": "## Summary\n\nUpdated body\n",
+        "body": "## Summary\n\nUpdated body\n" if content else None,
         "title": None,
-        "drop_ticket_links": drop_issue_links,
+        "tickets": links,
         "closed": True,
     }
 
@@ -2633,13 +2673,13 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
+        async def pr_update(self, pr_url, body, title, *, tickets):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_ticket_links": drop_ticket_links,
+                    "tickets": tickets,
                 }
             )
             return {"body": body, "target": _pr_target(pr_url)}
@@ -2672,7 +2712,7 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "",
         "title": None,
-        "drop_ticket_links": False,
+        "tickets": None,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""

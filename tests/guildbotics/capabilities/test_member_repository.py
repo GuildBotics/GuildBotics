@@ -150,7 +150,9 @@ async def test_pull_request_work_reports_its_target(member):
     url = created["target"]["url"]
     head = store.branch_tip(REPOSITORY, "feature")
 
-    with pytest.raises(MemberCapabilityError, match="needs a body or a title"):
+    with pytest.raises(
+        MemberCapabilityError, match="needs a body, a title, or ticket links"
+    ):
         await member_repository.pr_update(member, url)
     with pytest.raises(MemberCapabilityError, match="Review verdict must be one of"):
         await member_repository.pr_review(member, url, "x", "lgtm", head)  # type: ignore[arg-type]

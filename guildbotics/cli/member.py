@@ -75,6 +75,7 @@ from guildbotics.observability.interactive_sessions import (
     interactive_host,
     interactive_thread_key,
 )
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
@@ -1543,15 +1544,21 @@ def pr_create(
 @_optional_content_stdin_option
 @click.option("--title", default=None, help="Replace the pull request title.")
 @click.option(
+    "--issue-url",
+    "issue_urls",
+    multiple=True,
+    help="Replace all PR ticket links with these URLs. May be repeated.",
+)
+@click.option(
+    "--closes-issue/--refs-issue",
+    "closes_issue",
+    default=False,
+    help="Close every --issue-url ticket on merge, or only refer to it (default).",
+)
+@click.option(
     "--drop-issue-links",
     is_flag=True,
-    help=(
-        "Do not carry the ticket links of the existing body into the"
-        " replacement body. Requires --content-stdin/--content-file. By default,"
-        " they are preserved, even with empty content; new links to the same"
-        " ticket take precedence. See member help for what the code host"
-        " counts as a link."
-    ),
+    help=("Remove all PR ticket links. Cannot be combined with --issue-url."),
 )
 @_json_format_option
 def pr_update(
@@ -1559,16 +1566,23 @@ def pr_update(
     pr_url: str,
     content_stdin: bool,
     title: str | None,
+    issue_urls: tuple[str, ...],
+    closes_issue: bool,
     drop_issue_links: bool,
     output_format: str,
 ) -> _CommandWork:
-    if drop_issue_links and not content_stdin:
+    if not all(url.strip() for url in issue_urls):
+        raise click.UsageError("--issue-url must not be empty.")
+    if drop_issue_links and issue_urls:
         raise click.UsageError(
-            "--drop-issue-links requires --content-stdin/--content-file."
+            "--drop-issue-links cannot be combined with --issue-url."
         )
-    if not (content_stdin or title is not None):
+    if closes_issue and not issue_urls:
+        raise click.UsageError("--closes-issue requires --issue-url.")
+    if not (content_stdin or title is not None or issue_urls or drop_issue_links):
         raise click.UsageError(
-            "pr update needs --content-stdin/--content-file or --title."
+            "pr update needs --content-stdin/--content-file, --title, "
+            "--issue-url, or --drop-issue-links."
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
@@ -1579,7 +1593,11 @@ def pr_update(
             pr_url,
             body=body,
             title=new_title,
-            drop_ticket_links=drop_issue_links,
+            tickets=(
+                [TicketLink(url, closes_issue) for url in issue_urls]
+                if issue_urls or drop_issue_links
+                else None
+            ),
         ),
         evidence="pr_update",
     )

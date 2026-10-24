@@ -95,7 +95,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
 | [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
@@ -1305,7 +1305,7 @@ guildbotics member pr [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
 
 ## `guildbotics member pr artifact`
 
@@ -1493,7 +1493,7 @@ guildbotics member pr review-comment [OPTIONS]
 
 ## `guildbotics member pr update`
 
-Change a PR's body or title. Body replacement preserves the ticket links the existing body carries as the code host reads them; new links to the same ticket take precedence. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
+Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
 
 ```text
 guildbotics member pr update [OPTIONS]
@@ -1506,7 +1506,9 @@ guildbotics member pr update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the pull request title. |
-| `--drop-issue-links` | Do not carry the ticket links of the existing body into the replacement body. Requires --content-stdin/--content-file. By default, they are preserved, even with empty content; new links to the same ticket take precedence. See member help for what the code host counts as a link. |
+| `--issue-url TEXT` | Replace all PR ticket links with these URLs. May be repeated. |
+| `--closes-issue / --refs-issue` | Close every --issue-url ticket on merge, or only refer to it (default). [default: refs-issue] |
+| `--drop-issue-links` | Remove all PR ticket links. Cannot be combined with --issue-url. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

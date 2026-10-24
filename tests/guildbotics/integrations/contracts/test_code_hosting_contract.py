@@ -426,6 +426,112 @@ async def test_a_merge_closes_only_a_ticket_the_code_host_can_close(host: Harnes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("update", [False, True])
+async def test_a_closing_child_link_keeps_parent_context_without_closing_it(
+    host: Harness, update: bool
+):
+    """The documented create/update recipe leaves an unfinished parent open."""
+    parent, child = [await _ticket(host, title) for title in ("Parent", "Child")]
+    body = f"Parent ticket: {parent}"
+    url = (
+        await _pull_request(
+            host, body=body, tickets=[TicketLink(child, closes=not update)]
+        )
+    ).target.url
+    if update:
+        await host.code.update_pull_request(
+            url, body=body, title=None, tickets=[TicketLink(child, closes=True)]
+        )
+
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert body in pull["body"]
+    host.merge(url)
+    states = [
+        (await host.tickets.read("tickets", ticket)).items[0]["state"]
+        for ticket in (parent, child)
+    ]
+    assert states == ["open", "closed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closes", [False, True])
+async def test_ticket_links_can_switch_between_reference_and_closing(
+    host: Harness, closes: bool
+):
+    ticket = await _ticket(host)
+    unlinked = await _ticket(host, "Not part of the PR")
+    url = (
+        await _pull_request(host, tickets=[TicketLink(ticket, not closes)])
+    ).target.url
+
+    await host.code.update_pull_request(
+        url, body=None, title="Finished", tickets=[TicketLink(ticket, closes)]
+    )
+    await host.code.update_pull_request(
+        url,
+        body=f"Verified\n\nRefs {ticket}\n\nCloses {unlinked}",
+        title=None,
+        tickets=None,
+    )
+    assert (await host.code.read("ticket_pull_requests", unlinked)).items == []
+    host.merge(url)
+
+    assert (await host.tickets.read("tickets", ticket)).items[0]["state"] == (
+        "closed" if closes else "open"
+    )
+    assert (await host.tickets.read("tickets", unlinked)).items[0]["state"] == "open"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove_all", [False, True])
+async def test_replacing_links_removes_old_links_and_their_closing_effect(
+    host: Harness, remove_all: bool
+):
+    first, second = [await _ticket(host, title) for title in "AB"]
+    url = (
+        await _pull_request(
+            host,
+            body="Context",
+            tickets=[TicketLink(first, True), TicketLink(FOREIGN_TICKET, False)],
+        )
+    ).target.url
+    await host.code.update_pull_request(
+        url,
+        body=None,
+        title=None,
+        tickets=[] if remove_all else [TicketLink(second, True)],
+    )
+
+    assert (await host.code.read("ticket_pull_requests", first)).items == []
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert "Context" in pull["body"] and FOREIGN_TICKET not in pull["body"]
+    host.merge(url)
+    states = [
+        (await host.tickets.read("tickets", ticket)).items[0]["state"]
+        for ticket in (first, second)
+    ]
+    assert states == ["open", "open" if remove_all else "closed"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_link_replacement_writes_nothing(host: Harness):
+    own = TicketLink(await _ticket(host), True)
+    url = (await _pull_request(host, body="Original", tickets=[own])).target.url
+    before = len(host.writes)
+    for foreign in (FOREIGN_TICKET, host.theirs.url):
+        with pytest.raises(ServiceUnsupported):
+            await host.code.update_pull_request(
+                url,
+                body="Changed",
+                title="Changed",
+                tickets=[own, TicketLink(foreign, True)],
+            )
+    assert host.writes[before:] == []
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert "Original" in pull["body"] and pull["title"] == "feature"
+
+
+@pytest.mark.asyncio
 async def test_an_artifact_is_only_the_current_heads(host: Harness):
     created = await _pull_request(host)
     url = created.target.url

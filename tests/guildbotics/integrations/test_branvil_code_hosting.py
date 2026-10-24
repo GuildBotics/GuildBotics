@@ -280,14 +280,42 @@ async def test_a_body_change_keeps_the_ticket_links_unless_they_are_dropped(
         page = await code.read("ticket_pull_requests", ticket)
         return [pull["url"] for pull in page.items]
 
-    await code.update_pull_request(url, body="New", title=None, drop_ticket_links=False)
+    await code.update_pull_request(url, body="New", title=None, tickets=None)
     assert await linked() == [url]
 
-    await code.update_pull_request(
-        url, body="Newer", title=None, drop_ticket_links=True
-    )
+    await code.update_pull_request(url, body="Newer", title=None, tickets=[])
     assert await linked() == []
     assert double.pulls[url]["body"] == "Newer"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_closing_links_never_reach_a_patch(monkeypatch):
+    double, code, tickets = services(monkeypatch)
+    own = (await tickets.create_ticket(REPO, "Own", "", [])).target.url
+    other = double.their_ticket
+    double.branch("feature")
+    url = (
+        await code.create_pull_request(
+            REPO, "feature", "", "Title", "Body", draft=False, tickets=[]
+        )
+    ).target.url
+    call = code.call
+    attempts = []
+
+    async def checked_call(method, path, data):
+        attempts.append(method)
+        return await call(method, path, data)
+
+    monkeypatch.setattr(code, "call", checked_call)
+    for foreign in (other, "https://tickets.example.com/T-1"):
+        with pytest.raises(ServiceUnsupported):
+            await code.update_pull_request(
+                url,
+                body="Changed",
+                title="Changed",
+                tickets=[TicketLink(own, True), TicketLink(foreign, True)],
+            )
+    assert attempts == []
 
 
 def _past_the_review_limit(double: BranvilDouble, url: str) -> None:
