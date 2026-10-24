@@ -194,7 +194,7 @@ to exactly the patched version:
 | `manifest_path` | Raise it with |
 | --- | --- |
 | `uv.lock`, `guildbotics/environment/requirements.txt` | `uv lock --upgrade-package '<package>==<patched_version>'` (without the version, uv may raise it past the fix, across a major). See who requires it with `uv tree --frozen --universal --invert --package <package>` (without `--universal` it shows only this machine's platform, and misses a package such as `brotlicffi` that only another Python implementation installs). For a direct dependency, also raise its lower bound in `pyproject.toml` to the patched version, so that the manifest states the fix. Then export the snapshot's list again (both manifests are one fix) |
-| `desktop/package-lock.json` | In `desktop`: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<patched_version>`, which also raises its range in `package.json` |
+| `desktop/package-lock.json` | In `desktop`: a transitive dependency with `npm update <package>` (`npm install <package>` would add it to `package.json` as a direct dependency); a direct one with `npm install <package>@^<patched_version>`, which also raises its range in `package.json`. npm cannot pick the patched version of a transitive dependency: `npm update` takes the newest version the requirers' ranges admit, which can be a later major (a `*` or `>=1 <3` range), so the check below decides |
 | `desktop/src-tauri/Cargo.lock` | In `desktop/src-tauri`: `cargo update -p <package>@<locked_version> --precise <patched_version>` (the locked version tells two versions of the package apart). When cargo cannot write its registry, point `CARGO_HOME` at a writable directory |
 
 ```bash
@@ -205,19 +205,24 @@ uv export --frozen --no-dev --no-emit-project --no-header --no-annotate \
 
 This is the export `tests/guildbotics/environment/test_requirements.py` checks.
 
-Then read the version the lock now holds (`uv tree --frozen --universal
---package <package>`, `npm ls <package> --all`, or the lock entry). uv and npm
-succeed without changing anything when what requires the package does not
-admit the patched version, so a command that ran is not a fix; only a locked
-version at or above `patched_version` is.
+Then read every version of the package the lock now holds (`uv tree --frozen
+--universal --package <package>`, `npm ls <package> --all`, or the lock
+entries) and compare each with the one it replaced. The alert is resolved only
+when each is at or above `patched_version` and in the same major as before
+(for a `0.x` version, the same minor): moving to another major is a human
+decision, whichever version the tool picked. A command that ran is not a fix:
+uv and npm succeed without changing anything when what requires the package
+does not admit the patched version, and `npm update` succeeds when it moves
+past the major. Decide on the final lock, after every alert of that lock has
+been raised.
 
 Leave an alert open and report why when:
 
 - it has no `patched_version`;
-- the patched version is a new major (for a `0.x` package, a new minor), the
-  packages that require it do not admit it, or a direct dependency's range in
-  `pyproject.toml` or `package.json` has an upper bound that excludes it:
-  moving across that boundary is a human decision;
+- its final locked version is not resolved as above: the patched version is
+  in another major, the packages that require it do not admit it, a direct
+  dependency's range in `pyproject.toml` or `package.json` has an upper bound
+  that excludes it, or the tool picked a version in another major;
 - reaching it needs changes beyond the manifests and locks, or the non-device
   checks fail with it;
 - its `manifest_path` is not one of the above.
