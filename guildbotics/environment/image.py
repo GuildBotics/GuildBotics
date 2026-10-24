@@ -30,7 +30,7 @@ from guildbotics.utils.managed_cli import managed_cli_command
 #: which build the Python dependencies that have no wheel for
 #: :data:`.snapshot.PYTHON_VERSION`; and git, which member git runs a member's
 #: clones with.
-IMAGE = "node:22.23.2-bookworm"
+IMAGE = "node:24.22.1-bookworm"
 #: How much of a digest a person is shown: enough to tell two apart.
 _SHORT_DIGEST = len("sha256:") + 12
 #: The runtime's own name for what it pulled, beside the tag it was asked
