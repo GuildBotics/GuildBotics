@@ -836,7 +836,7 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
 `agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.4.6
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.4.7
 を固定しており、構造化payloadは1.2.13で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
 既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /

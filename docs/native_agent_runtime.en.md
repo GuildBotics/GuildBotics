@@ -1001,7 +1001,7 @@ turn-count, and token-total limits do. This is the same situation as Grok.
 Account quotas are a separate path from those per-turn counters. From Antigravity
 CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
 slash command without starting an agent turn, spending quota, or leaving a
-conversation. GuildBotics pins Antigravity CLI 1.4.6 in the isolated environment
+conversation. GuildBotics pins Antigravity CLI 1.4.7 in the isolated environment
 and verified the structured payload on 1.2.13: `command.data.groups[].buckets[]`
 carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
 `reset_time`. Those buckets become the same usage meters the Activity view already
