@@ -5,9 +5,9 @@ directory. Its name is a digest of everything that went into it -- the base
 image (the recipe's pinned tag, or the digest of the image this device holds
 under the declared reference, which is what the build starts from) and every
 build step's script, which carry the provider CLIs at the versions GuildBotics
-pins and the Python dependencies pinned in :data:`REQUIREMENTS` -- so a
-snapshot built from an older recipe or image is recognised by its name alone
-and rebuilt.
+pins, the Node.js :data:`NODE_VERSION` they run on, and the Python
+dependencies pinned in :data:`REQUIREMENTS` -- so a snapshot built from an
+older recipe or image is recognised by its name alone and rebuilt.
 
 Beside the provider CLIs, the build puts in what GuildBotics' own code runs
 with inside the microVM: CPython :data:`PYTHON_VERSION` in :data:`VENV` with
@@ -65,6 +65,17 @@ from guildbotics.utils.i18n_tool import t
 #: uv, available to agents as the default image's Python toolchain; installed
 #: from its release archive because that image has no Python of its own.
 UV_VERSION = "0.13.5"
+#: The Node.js the provider CLIs from npm are installed and run with,
+#: installed from its release archive over whatever Node.js the base image
+#: has, so a Node.js release is a recipe change and not a new base image.
+#: The digests are those ``SHASUMS256.txt`` gives each archive, by the
+#: architecture ``uname -m`` names.
+NODE_VERSION = "24.22.1"
+NODE_SHA256 = {
+    "x86_64": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+    "aarch64": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+}
+_NODE_PLATFORMS = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
 #: The Python GuildBotics' own code runs with inside the microVM, and where
 #: its environment is. uv keeps the interpreters it installs under
 #: ``/opt/uv/python`` (not the home, which turns bind over); an image that
@@ -199,6 +210,28 @@ def build_steps() -> tuple[BuildStep, ...]:
             f"echo {CODE_ROOT}"
             f" > {VENV}/lib/python{PYTHON_VERSION}/site-packages/guildbotics.pth\n"
             f"{VENV}/bin/python -c 'import weasyprint'",
+        )
+    )
+    node = f"node-v{NODE_VERSION}-$platform"
+    steps.append(
+        BuildStep(
+            "node",
+            'case "$(uname -m)" in\n'
+            + "".join(
+                f"  {machine}) platform={_NODE_PLATFORMS[machine]} sha256={digest} ;;\n"
+                for machine, digest in NODE_SHA256.items()
+            )
+            + '  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;\n'
+            "esac\n"
+            f'curl -fsSL "https://nodejs.org/dist/v{NODE_VERSION}/{node}.tar.gz"'
+            " -o /tmp/node.tar.gz\n"
+            'echo "$sha256  /tmp/node.tar.gz" | sha256sum -c -\n'
+            # The image's own npm would keep files the new one no longer has.
+            "rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack\n"
+            "tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1"
+            f' --no-same-owner "{node}/bin" "{node}/include" "{node}/lib" "{node}/share"\n'
+            "rm -f /tmp/node.tar.gz\n"
+            "node --version",
         )
     )
     steps.append(

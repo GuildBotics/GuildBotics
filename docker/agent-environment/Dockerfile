@@ -1,6 +1,6 @@
 # The base image of the agent environment for developing GuildBotics itself.
 #
-# GuildBotics' default base image (Debian with Node.js, npm, git and uv) lets an
+# GuildBotics' default base image (Debian with curl, the compilers and git) lets an
 # agent run the AI CLI tools but not this repository's own build and tests.
 # This image adds everything the Linux CI uses, so a member turn inside the
 # isolated environment can run the same checks as `.branvil/ci.toml`, whose
@@ -8,16 +8,18 @@
 #
 #   - Python (uv-managed; the version `requires-python` allows) for `uv sync`,
 #     ruff, mypy, pylint and pytest
-#   - Node.js 24, as the Desktop workflows run it, for the frontend checks
+#   - Node.js 24, as the Desktop workflows run it, for the frontend checks of
+#     the CI jobs (in the environment snapshot, the build's own Node.js, at the
+#     version GuildBotics pins, replaces it)
 #   - the Rust toolchain and the Tauri system libraries for `cargo check` /
 #     `scripts/desktop-test-rust.sh`; `cargo` is cargo-wrapper.sh, which first
 #     cleans a target directory built under other build conditions
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
-# It keeps what GuildBotics' build recipe expects of a base image: Node.js with
-# npm, curl and tar, gcc, g++ and make, and no bubblewrap (see the last step).
-# GuildBotics installs the AI CLI tools on top when it builds the environment
+# It keeps what GuildBotics' build recipe expects of a base image: curl and
+# tar, gcc, g++ and make, and no bubblewrap (see the last step). GuildBotics
+# installs Node.js and the AI CLI tools on top when it builds the environment
 # snapshot.
 #
 # `scripts/build-agent-environment-image.sh` builds it for every architecture

@@ -65,8 +65,8 @@ runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出
 ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
 bindします）。
 
-環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIと、GuildBotics自身の
-Python環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
+環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIとそれが動くNode.jsと、
+GuildBotics自身のPython環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
 ベースイメージに入れます。Desktopの **エージェント実行環境** 画面がruntime、ベースイメージ、
 snapshotの状態（ビルドボタンつき）、
 割り当てリソース、network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
@@ -99,7 +99,7 @@ GuildBoticsのコードは`PYTHONPATH`を使わず`python -B`で動かすので�
 です。そのため、ビルドが入れるもの（Python 3.15など）を最初から持つimageでは、環境全体が大きくても
 snapshotは小さくなります。
 
-ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
+ベースイメージは既定でGuildBoticsが固定したDebianのimage（gitとビルドの道具を含む）です。別の
 ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
 ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
 アーカイブを各端末で`guildbotics environment image load`で読み込み、**エージェント実行環境**
@@ -113,10 +113,10 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`、GuildBoticsのPythonに
+するか、buildの手順が使うもの（Debianの`apt-get`、`curl`と`tar`、GuildBoticsのPythonに
 wheelが無いPythonの依存をビルドする`gcc`・`g++`・`make`）と、
 [member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
-備えていれば何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
+備えていれば何でもかまいません。imageのNode.jsは、buildがGuildBoticsの固定した版で置き換えます。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。ワークスペースのコードホストのCIのジョブが同じimageで動く場合（Branvil）は、CIランナーが動くマシンで`guildbotics environment image load-ci <アーカイブ>`を実行し、CIランナーにも読み込みます（パイプラインはimageをタグだけで指すので、ジョブがどの版で動くかはランナーのキャッシュで決まります）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuild、この端末とCIランナーへの読み込み、宣言）が実例です。
 

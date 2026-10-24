@@ -55,6 +55,7 @@ def _labels() -> list[str]:
         "uv",
         "pdf",
         "python",
+        "node",
         "npm",
         *snapshot.provisioned_installs(),
         "git",
@@ -198,6 +199,45 @@ def test_the_name_changes_with_the_python_and_its_native_libraries(
 
     monkeypatch.setattr(snapshot, "PDF_PACKAGES", ("libpango-1.0-0",))
     assert snapshot_name(ImageStatus()) != changed
+
+
+def test_the_name_changes_with_the_pinned_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Node.js release reaches the provider CLIs by a rebuild of the
+    snapshot alone, whatever Node.js the base image has."""
+    before = snapshot_name(ImageStatus())
+    monkeypatch.setattr(snapshot, "NODE_VERSION", "24.0.0")
+    changed = snapshot_name(ImageStatus())
+    assert changed != before
+
+    monkeypatch.setattr(
+        snapshot, "NODE_SHA256", {**snapshot.NODE_SHA256, "x86_64": "0" * 64}
+    )
+    assert snapshot_name(ImageStatus()) != changed
+
+
+def test_the_pinned_node_replaces_the_images_before_the_npm_tools() -> None:
+    scripts = {step.label: step.script for step in build_steps()}
+    node = scripts["node"]
+    version = snapshot.NODE_VERSION
+
+    for machine, platform in (("x86_64", "linux-x64"), ("aarch64", "linux-arm64")):
+        assert (
+            f"  {machine}) platform={platform}"
+            f" sha256={snapshot.NODE_SHA256[machine]} ;;"
+        ) in node
+    assert (
+        f'"https://nodejs.org/dist/v{version}/node-v{version}-$platform.tar.gz"' in node
+    )
+    # The archive is checked before anything of it is unpacked.
+    assert node.index("sha256sum -c -") < node.index("tar -xzf")
+    # The image's own npm goes first, so none of its files outlive it.
+    assert node.index("rm -rf /usr/local/lib/node_modules/npm") < node.index("tar -xzf")
+    assert "-C /usr/local --strip-components=1" in node
+    assert node.endswith("node --version")
+    labels = [step.label for step in build_steps()]
+    assert labels.index("node") < labels.index("npm")
 
 
 # --- recipe ----------------------------------------------------------------------
