@@ -414,11 +414,10 @@ async def test_failed_checks_block_and_bring_their_primary_logs(monkeypatch):
             "still pending",
         ),
         ([], True, 0, ["checks_pending"], "not been registered"),
-        ([], False, 2, ["base_out_of_date"], "2 commit(s) behind"),
     ],
-    ids=["pending", "not_registered", "behind"],
+    ids=["pending", "not_registered"],
 )
-async def test_readiness_waits_for_ci_and_the_base(
+async def test_readiness_waits_for_ci(
     monkeypatch, checks, expected, behind_by, codes, message
 ):
     double, code, _ = services(monkeypatch)
@@ -431,6 +430,41 @@ async def test_readiness_waits_for_ci_and_the_base(
     assert [b.code for b in readiness.completion_blockers] == codes
     assert message in readiness.completion_blockers[0].message
     assert readiness.checks_expected is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "conclusion", "status", "expected"),
+    [
+        ("gate/test", "failure", "completed", "checks_failed"),
+        ("gate/test", None, "running", "checks_pending"),
+        ("gate", "failure", "completed", "checks_failed"),
+    ],
+)
+async def test_gate_checks_block_without_requiring_base_integration(
+    monkeypatch, name, conclusion, status, expected
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    details = "Conflicts: src/one.py, src/two.py"
+    double.behind_by = 2
+    double.checks["feature-sha"] = [
+        {**_check(name, conclusion, status), "details": details, "attempt_id": None}
+    ]
+
+    page = await code.read(
+        "pull_request_readiness", url, parameters={"failed_logs": True}
+    )
+
+    [result] = page.items
+    assert (result["behind_by"], result["out_of_date"], result["readiness"]) == (
+        2,
+        True,
+        "blocked",
+    )
+    assert [b["code"] for b in result["completion_blockers"]] == [expected]
+    assert result["checks"][0]["details"] == details
+    assert result["failed_logs"] == []
 
 
 @pytest.mark.asyncio

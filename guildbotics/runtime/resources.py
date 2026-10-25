@@ -196,6 +196,7 @@ class Check(ReadModel):
     status: str
     conclusion: str | None
     details_url: str
+    details: str | None = Field(default=None, exclude_if=_absent)
 
 
 class CompletionBlocker(ReadModel):

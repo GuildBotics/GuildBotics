@@ -180,9 +180,13 @@ Trust rules that follow from this shape:
   member only for its own PRs), then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
-  remains pending, the head does not contain the current base, or the head/base changes
-  during the check. `rollup=no_checks` stays non-blocking when the current base also
-  has no checks, while checks on the base make an empty head a registration-pending blocker.
+  remains pending, the host requires an up-to-date head and the head is behind its base,
+  or the head/base changes during the check. `behind_by` and `out_of_date` report the
+  measured lag even when it does not block completion; `completion_blockers` names what
+  must be resolved. Check `details` preserve the host's explanation, including merge
+  conflicts without a failed job log. `rollup=no_checks` stays non-blocking when the
+  current base also has no checks, while checks on the base make an empty head a
+  registration-pending blocker.
   Interactive push/publish results expose compact readiness and blockers for matching open
   PRs; readiness lookup failure, including an HTTP transport failure, does not turn a
   successful push into a failed command.

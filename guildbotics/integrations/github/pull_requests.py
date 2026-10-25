@@ -105,8 +105,18 @@ class GitHubPullRequests(GitHubApi):
                 )
             current = await self.fetch(item)
             if current.get("state") == "open":
+                # "behind" means branch protection requires an up-to-date head:
+                # https://github.com/cli/cli/discussions/3660
+                # "unknown" is still being calculated; it cannot establish readiness.
+                if current.get("mergeable_state") == "unknown":
+                    raise ServiceError(
+                        t("integrations.github.response.mergeability_pending")
+                    )
                 freshness = Freshness(
-                    base_sha, behind_by, await self._base_sha(item, current)
+                    base_sha,
+                    behind_by,
+                    await self._base_sha(item, current),
+                    requires_up_to_date=current.get("mergeable_state") == "behind",
                 )
         return readiness_of(
             target=self.target(item, current),

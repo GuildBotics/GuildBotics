@@ -11,3 +11,4 @@ ja:
   http: "GitHub への要求が失敗しました（HTTP %{status}）。"
   transport: "GitHub への要求を完了できませんでした。接続を確認して再試行してください。"
   created_off_board: "%{url} は作成しましたが、ボードに載せられませんでした: %{message}"
+  mergeability_pending: "GitHub がマージ可否を計算しています。少し待ってから PR のチェックを再取得してください。"

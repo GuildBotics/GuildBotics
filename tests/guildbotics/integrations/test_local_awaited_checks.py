@@ -167,6 +167,7 @@ async def test_a_wait_whose_checks_cannot_be_read_waits_on(
     other PRs and asks again next time."""
     url, _ = awaited
     other = pull_request(2, BRANCH, author=ME, comments=[comment("reviewer", "hi")])
+    readiness = member.code.readiness
 
     async def unreadable(_url, **_conditions):
         raise ServiceError("the code host is down")
@@ -175,6 +176,10 @@ async def test_a_wait_whose_checks_cannot_be_read_waits_on(
 
     assert await _woken(member) == [(other, other, "pull_request_feedback")]
     assert f"Could not read the checks of {url}" in caplog.text
+
+    monkeypatch.setattr(member.code, "readiness", readiness)
+    store.finish_checks(REPOSITORY, _head(), "success")
+    assert (url, url, "pull_request_checks") in await _woken(member)
 
 
 @pytest.mark.asyncio

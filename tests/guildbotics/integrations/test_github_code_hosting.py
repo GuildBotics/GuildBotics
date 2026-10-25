@@ -98,6 +98,7 @@ def _pull(number: int = 7, **fields: Any) -> dict[str, Any]:
         "user": {"login": "human"},
         "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": REPO}},
         "base": {"ref": "main"},
+        "mergeable_state": "clean",
         **fields,
     }
 
@@ -1086,6 +1087,47 @@ async def test_readiness_is_ready_after_true_base_integration_and_successful_ci(
     )
     assert result.readiness == "ready"
     assert result.completion_blockers == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["behind", "clean", "unstable", "blocked", "dirty"])
+async def test_readiness_requires_base_integration_only_for_the_hosts_behind_state(
+    monkeypatch, state
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on("GET", f"/repos/{REPO}/pulls/7", _pull(mergeable_state=state))
+    github.on("GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": 2})
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert (result.behind_by, result.out_of_date) == (2, True)
+    assert result.readiness == ("blocked" if state == "behind" else "ready")
+    assert [b.code for b in result.completion_blockers] == (
+        ["base_out_of_date"] if state == "behind" else []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_readiness_can_be_retried_after_mergeability_is_calculated(
+    monkeypatch, language
+):
+    set_language(language)
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(
+            _pull(mergeable_state="unknown"), _pull(mergeable_state="unknown"), _pull()
+        ),
+    )
+    service = _service(github, monkeypatch)
+
+    with pytest.raises(ServiceError) as raised:
+        await service.readiness(PULL)
+    assert str(raised.value) == t("integrations.github.response.mergeability_pending")
+    assert (await service.readiness(PULL)).readiness == "ready"
 
 
 @pytest.mark.asyncio

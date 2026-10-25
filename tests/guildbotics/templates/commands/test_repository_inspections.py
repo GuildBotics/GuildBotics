@@ -219,6 +219,7 @@ async def test_checks_displays_host_result_verbatim(readiness):
         "checks_expected": True,
         "rollup": "no_checks",
         "head_sha": "head",
+        "checks": [{"name": "gate", "details": "Conflicts: src/one.py"}],
         "failed_logs": [{"log": "failure", "truncated": True}],
     }
     service = Pages({"pull_request_readiness": [page(result)]})
