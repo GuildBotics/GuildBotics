@@ -11,4 +11,3 @@ en:
   http: "The GitHub request failed (HTTP %{status})."
   transport: "Could not complete the GitHub request. Check connectivity and retry."
   created_off_board: "%{url} was created, but it could not be put on the board: %{message}"
-  mergeability_pending: "GitHub is still calculating mergeability. Read the PR checks again shortly."

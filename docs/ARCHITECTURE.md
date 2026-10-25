@@ -190,6 +190,12 @@ Trust rules that follow from this shape:
   Interactive push/publish results expose compact readiness and blockers for matching open
   PRs; readiness lookup failure, including an HTTP transport failure, does not turn a
   successful push into a failed command.
+  The GitHub provider ignores measured lag only when the final PR read reports
+  `mergeable_state` as `clean`, `unstable`, or `has_hooks`. These states explicitly
+  describe a mergeable PR in GitHub's [merge state definitions](https://docs.github.com/en/graphql/reference/pulls#mergestatestatus).
+  Other states, including `blocked`, `unknown`, and missing or unrecognized values,
+  conservatively require an up-to-date head. They still return checks and failed logs;
+  a head with no measured lag is unaffected by merge state uncertainty.
 - Credentials are resolved by the member CLI itself from the active workspace (config +
   secret store), never inherited from the agent's environment — AI CLI tools strip or
   isolate `*TOKEN*`-like variables from subprocess environments, so inheritance cannot

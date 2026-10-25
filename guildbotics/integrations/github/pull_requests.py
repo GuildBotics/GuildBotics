@@ -105,18 +105,15 @@ class GitHubPullRequests(GitHubApi):
                 )
             current = await self.fetch(item)
             if current.get("state") == "open":
-                # "behind" means branch protection requires an up-to-date head:
-                # https://github.com/cli/cli/discussions/3660
-                # "unknown" is still being calculated; it cannot establish readiness.
-                if current.get("mergeable_state") == "unknown":
-                    raise ServiceError(
-                        t("integrations.github.response.mergeability_pending")
-                    )
+                # Only explicitly mergeable states establish that lag is allowed.
+                # Blocked or undetermined states may hide strict branch protection.
+                # https://docs.github.com/en/graphql/reference/pulls#mergestatestatus
                 freshness = Freshness(
                     base_sha,
                     behind_by,
                     await self._base_sha(item, current),
-                    requires_up_to_date=current.get("mergeable_state") == "behind",
+                    requires_up_to_date=current.get("mergeable_state")
+                    not in ("clean", "unstable", "has_hooks"),
                 )
         return readiness_of(
             target=self.target(item, current),
