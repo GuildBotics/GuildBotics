@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import git
@@ -269,6 +269,8 @@ class _Member:
     service: MemberGitWorkspaceService
     guest: _LocalGuest
     remotes: dict[str, Path]
+    work: Work = field(default_factory=lambda: Work.of_ticket(_ISSUE))
+    paths: dict[str, Path] = field(default_factory=dict)
 
     def pull_request(self, number: int, head: str, head_repository: str = "") -> str:
         """Open ``!<number>`` of ``REPOSITORY`` from ``head`` (of
@@ -276,8 +278,8 @@ class _Member:
         return pull_request(number, head, head_repository=head_repository or REPOSITORY)
 
     def clone_of(self, repository: str) -> Path:
-        """Where the member's clone of ``repository`` is: its whole path."""
-        return self.service.workspace_root.joinpath(*repository.split("/"))
+        """The last checkout prepared here, or the seeded ticket's checkout."""
+        return self.paths.get(repository, self.service.workspace_root / "seeded")
 
     @property
     def clone(self) -> Path:
@@ -295,14 +297,18 @@ class _Member:
 
     def run(self, operation: Callable[[MemberGitWorkspaceService], object]):
         async def invoke():
-            with member_invocation_scope(MemberInvocation(guest=self.guest)):
+            with member_invocation_scope(
+                MemberInvocation(guest=self.guest, work=self.work)
+            ):
                 return await operation(self.service)  # type: ignore[misc]
 
         return invoke()
 
     async def prepare(self, **anchor: str) -> dict:
         anchor = anchor or {"issue_url": _ISSUE}
-        return await self.run(lambda service: service.prepare(**anchor))
+        result = await self.run(lambda service: service.prepare(**anchor))
+        self.paths[result["repository"]] = Path(result["repo_path"])
+        return result
 
     def repo(self, repository: str = REPOSITORY) -> git.Repo:
         return git.Repo(self.clone_of(repository))
@@ -838,18 +844,129 @@ async def test_prepare_updates_a_clean_checkout_to_the_new_remote_head(
 
 
 @pytest.mark.asyncio
-async def test_prepare_refuses_to_move_unfinished_work_to_another_branch(member):
-    from guildbotics.utils.i18n_tool import t
+@pytest.mark.windows
+@pytest.mark.parametrize("other", ["ticket", "same_key", "pr", "branch", "chat"])
+async def test_unfinished_work_survives_other_work_in_the_same_repository(
+    member, other
+):
+    """Other anchors and even the same branch have their own HEAD and index."""
+    first_work = member.work
+    first = await member.prepare()
+    first_path = Path(first["repo_path"])
+    repo = member.stage(content="committed A\n")
+    before = repo.index.commit("local A").hexsha
+    member.stage(name="staged.txt", content="staged A\n")
+    index = repo.index.write_tree().hexsha
+    (first_path / "README.md").write_bytes(b"unstaged A\x00\xff")
+    (first_path / "untracked.txt").write_bytes(b"untracked A\x00\xff")
 
-    await member.prepare()
-    (member.clone / "unfinished.txt").write_text("keep me\n", encoding="utf-8")
-    before = member.repo().head.commit.hexsha
-    with pytest.raises(MemberCapabilityError) as raised:
-        await member.prepare(repo=REPOSITORY, branch="another-task")
-    assert str(raised.value) == t("capabilities.member_git.unfinished_branch")
-    assert member.repo().active_branch.name == _TICKET_BRANCH
+    if other in {"ticket", "same_key"}:
+        if other == "same_key":
+            place = "acme/team/other-tickets"
+            tracker(place, repository=REPOSITORY)
+            url = ticket(1, place=place)
+        else:
+            url = ticket(2)
+        member.work = Work.of_ticket(url)
+        anchor = {"issue_url": url}
+    elif other == "pr":
+        member.remote().git.branch(_TICKET_BRANCH, "main")
+        url = member.pull_request(7, _TICKET_BRANCH)
+        member.work = Work.of_ticket(url)
+        anchor = {"pr_url": url}
+    else:
+        if other == "chat":
+            member.work = Work("chat", "local:aiko:C1:T2")
+        anchor = {
+            "repo": REPOSITORY,
+            "branch": _TICKET_BRANCH if other == "chat" else "other",
+        }
+
+    second = await member.prepare(**anchor)
+    second_path = Path(second["repo_path"])
+    assert second_path != first_path
+    assert Path(member.repo().git_dir) != Path(repo.git_dir)
+    assert member.repo().head.commit.hexsha != before
+    assert not (second_path / "staged.txt").exists()
+    assert not (second_path / "untracked.txt").exists()
+    member.stage(content="B\n")
+    await member.run(lambda service: service.publish(second_path, "work B"))
+
+    member.work = first_work
+    resumed = await member.prepare()
+    assert resumed["repo_path"] == str(first_path)
     assert member.repo().head.commit.hexsha == before
-    assert (member.clone / "unfinished.txt").read_text() == "keep me\n"
+    assert member.repo().index.write_tree().hexsha == index
+    assert (first_path / "README.md").read_bytes() == b"unstaged A\x00\xff"
+    assert (first_path / "untracked.txt").read_bytes() == b"untracked A\x00\xff"
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+async def test_preparing_again_keeps_a_dirty_branch_the_agent_created(member):
+    first = await member.prepare()
+    member.repo().git.checkout("-b", "agent/chosen")
+    member.stage(content="unfinished work\n")
+
+    resumed = await member.prepare()
+
+    assert resumed["repo_path"] == first["repo_path"]
+    assert resumed["branch"] == "agent/chosen"
+    published = await member.run(
+        lambda s: s.publish(member.clone, "finish chosen branch")
+    )
+    assert member.remote().commit("agent/chosen").hexsha == published.commit_sha
+    assert _TICKET_BRANCH not in [head.name for head in member.remote().heads]
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_resumed_for_its_prs_checks_reuses_its_checkout(member):
+    first = await member.prepare()
+    member.remote().git.branch(_TICKET_BRANCH, "main")
+    url = member.pull_request(7, _TICKET_BRANCH)
+    member.stage(content="unfinished ticket work\n")
+
+    resumed = await member.prepare(pr_url=url)
+
+    assert resumed["repo_path"] == first["repo_path"]
+    assert (member.clone / "README.md").read_text() == "unfinished ticket work\n"
+
+
+def test_checkout_ids_keep_work_repository_and_branch_names_distinct():
+    cases = [
+        (Work("ticket", "one"), REPOSITORY, "topic/a"),
+        (Work("chat", "one"), REPOSITORY, "topic/a"),
+        (Work("ticket", "two"), REPOSITORY, "topic/a"),
+        (Work("ticket", "one"), FORK, "topic/a"),
+        *(
+            (Work("ticket", "one"), REPOSITORY, branch)
+            for branch in ["topic_a", "Topic/a", "é", "e\u0301", "CON", "x" * 1000]
+        ),
+    ]
+    ids = [member_git._checkout_id(*case) for case in cases]
+    assert len(set(ids)) == len(cases)
+    assert all(
+        len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+        for value in ids
+    )
+    assert [member_git._checkout_id(*case) for case in cases] == ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_prepare_requires_the_hosts_work_context(member, language):
+    from guildbotics.utils.i18n_tool import get_language, set_language, t
+
+    previous = get_language()
+    set_language(language)
+    try:
+        with member_invocation_scope(MemberInvocation(guest=member.guest)):
+            with pytest.raises(MemberCapabilityError) as raised:
+                await member.service.prepare(issue_url=_ISSUE)
+        assert str(raised.value) == t("capabilities.member_git.work_required")
+        assert "capabilities.member_git.work_required" not in str(raised.value)
+    finally:
+        set_language(previous)
 
 
 @pytest.mark.asyncio
@@ -864,10 +981,10 @@ async def test_prepare_refuses_to_reset_divergent_local_commits(member, tmp_path
 
 @pytest.mark.asyncio
 async def test_preparing_another_branch_keeps_unpushed_default_branch_commits(member):
-    await member.prepare(repo=REPOSITORY, branch="main")
+    first = await member.prepare(repo=REPOSITORY, branch="main")
     local_sha = member.stage().index.commit("unpushed default branch work").hexsha
     await member.prepare(repo=REPOSITORY, branch="another-task")
-    assert member.repo().commit("main").hexsha == local_sha
+    assert git.Repo(first["repo_path"]).commit("main").hexsha == local_sha
 
 
 @pytest.mark.asyncio

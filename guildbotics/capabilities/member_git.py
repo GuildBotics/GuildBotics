@@ -20,6 +20,8 @@ run).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -29,7 +31,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
-from urllib.parse import quote
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
@@ -41,6 +42,7 @@ from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
     GuestResult,
+    Work,
     current_member_invocation,
 )
 from guildbotics.runtime.port import ServiceError
@@ -380,6 +382,9 @@ class MemberGitWorkspaceService:
         # work with no ticket). Ticket anchoring is a ticket-workflow contract,
         # not a capability requirement.
         guest = self._guest()
+        work = current_member_invocation().work
+        if work is None:
+            raise MemberCapabilityError(t("capabilities.member_git.work_required"))
         if pr_url:
             mode = "pull_request_review"
             head = await self.code.pull_request_head(pr_url)
@@ -413,11 +418,12 @@ class MemberGitWorkspaceService:
             self._branch_name(guest.remaining, default_branch)
             origin = await self._origin(self.host_root, repository, guest.remaining)
             origin.fetch(credential)
-            # The clone's place is the repository's whole path, so repositories
-            # of one name in two namespaces have one each.
-            repo_path = self.workspace_root.joinpath(*repository.split("/"))
+            # Separate working trees and git directories keep unfinished work
+            # out of another work's index, even when both name the same branch.
+            checkout = _checkout_id(work, repository, branch)
+            repo_path = self.workspace_root / checkout
             _GuestGit(guest, guest.path(self.workspace_root))(
-                "init", "-q", "--", repository
+                "init", "-q", "--", checkout
             )
             clone = _GuestGit(guest, guest.path(repo_path))
             git_user, git_email = self._git_identity()
@@ -433,10 +439,11 @@ class MemberGitWorkspaceService:
             # What the host pushes the clone to is its own record of what the
             # clone was prepared from.
             (self.host_root / "checkouts").mkdir(parents=True, exist_ok=True)
-            _checkout_record(self.host_root, repository).write_text(
+            _check_out(clone, branch, default_branch, refs)
+            branch = _current_branch(clone)
+            _checkout_record(self.host_root, checkout).write_text(
                 repository, encoding="utf-8"
             )
-            _check_out(clone, branch, default_branch, refs)
         return {
             "repository": repository,
             "repo_path": str(repo_path),
@@ -682,13 +689,8 @@ class MemberGitWorkspaceService:
         )
         root = PurePosixPath(clone.guest.path(self.workspace_root))
         place = common.parent
-        repository = (
-            "/".join(place.relative_to(root).parts)
-            if place.is_relative_to(root)
-            else ""
-        )
-        record = _checkout_record(self.host_root, repository)
-        if common.name != ".git" or not valid_path(repository) or not record.is_file():
+        record = _checkout_record(self.host_root, place.name)
+        if common.name != ".git" or place.parent != root or not record.is_file():
             raise MemberCapabilityError(
                 "This repository was not checked out with `member git prepare`;"
                 " only a prepared clone can be pushed."
@@ -810,9 +812,15 @@ class MemberGitWorkspaceService:
         return True, commits
 
 
-def _checkout_record(root: Path, repository: str) -> Path:
-    """Where the host records what the clone of ``repository`` pushes to."""
-    return root / "checkouts" / quote(repository, safe="")
+def _checkout_id(work: Work, repository: str, branch: str) -> str:
+    """A bounded, case-sensitive identity for a work's requested checkout."""
+    key = json.dumps([work.kind, work.identity, repository, branch])
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _checkout_record(root: Path, checkout: str) -> Path:
+    """Where the host records which repository a prepared checkout pushes to."""
+    return root / "checkouts" / checkout
 
 
 def _refs(git: _Git, *prefixes: str) -> dict[str, str]:
@@ -944,8 +952,6 @@ def _check_out(
     """Keep unfinished work on its branch; update a clean checkout safely."""
     remote = f"refs/remotes/origin/{branch}"
     if clone("status", "--porcelain", "--untracked-files=all").stdout:
-        if _current_branch(clone) != branch:
-            raise MemberCapabilityError(t("capabilities.member_git.unfinished_branch"))
         return
     local = clone("rev-parse", "-q", "--verify", f"refs/heads/{branch}", ok=(0, 1))
     if local.returncode == 0:

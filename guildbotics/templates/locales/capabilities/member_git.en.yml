@@ -1,2 +1,2 @@
 en:
-  unfinished_branch: "The checkout has uncommitted changes on another branch. Finish or preserve that work before preparing this branch."
+  work_required: "Preparing a member checkout requires the running command's work context."

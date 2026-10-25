@@ -1050,7 +1050,7 @@ guildbotics member git commit [OPTIONS]
 
 ## `guildbotics member git prepare`
 
-Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Checkouts are separate per work, repository, and requested branch. Use the returned repo_path and branch: unfinished work keeps its current branch, including one the agent created. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
 
 ```text
 guildbotics member git prepare [OPTIONS]

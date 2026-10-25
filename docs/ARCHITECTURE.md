@@ -427,8 +427,13 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   work's healthy provider session and supplies its new instructions, including
   its own completion requirement. Session IDs learned during an unfinished turn
   are saved on timeout; the session store's normal rotation limits still apply.
-  `member git prepare` keeps a dirty checkout on the requested branch, including
-  staged and untracked files. It refuses to switch away from unfinished work.
+  `member git prepare` returns a separate clone for each host-owned work identity,
+  repository, and requested branch. A full SHA-256 of those identifiers names the
+  directory directly under the member's clone root; each clone has its own git
+  directory and index. Another ticket, PR, or chat thread can prepare the same
+  repository and branch without taking over unfinished changes. A dirty checkout
+  keeps its HEAD, index, tracked and untracked files, including a branch the agent
+  created; the result's `repo_path` and `branch` name the checkout to continue.
   Clean checkouts follow the remote by fast-forward; divergent local commits
   require an explicit resolution instead of a reset. These files and provider
   sessions live on the device that ran the turn, so resumption uses that device.

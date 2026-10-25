@@ -872,6 +872,55 @@ async def test_a_timeout_posts_one_explanation_and_one_failed_notice(kind, langu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [False, True])
+@pytest.mark.parametrize("outcome", ["member voice", "", "failure"])
+async def test_failure_comments_share_member_voice_and_fallback(
+    monkeypatch, timeout, outcome
+):
+    from guildbotics.intelligences.agent_runtime.models import (
+        TURN_TIMEOUT_SECONDS,
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    spoken = []
+
+    async def talk(context, text, role, attachments):
+        spoken.append((text, role, attachments))
+        if outcome == "failure":
+            raise RuntimeError("inference unavailable")
+        return outcome
+
+    monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", talk)
+    context = _Context()
+    invocation, url, _ = _work("ticket")
+    error = (
+        CliAgentExecutionError(
+            cli_agent="claude",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="timeout", returncode=1, error_category="timeout"
+            ),
+        )
+        if timeout
+        else RuntimeError("failed")
+    )
+    with trace_scope("routine", trace_id="voice-run", person_id="aiko"):
+        with pytest.raises(type(error)):
+            await TicketSelector(context).run(
+                context.person, invocation, _failing(error)
+            )
+    original = (
+        t("drivers.task_scheduler.turn_timeout", hours=TURN_TIMEOUT_SECONDS // 3600)
+        if timeout
+        else t("drivers.task_scheduler.task_error")
+    )
+    assert spoken == [(original, "Ticket", [])]
+    assert item(url)["comments"][0]["body"] == (
+        "member voice" if outcome == "member voice" else original
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_failure_comment_without_an_address_is_announced_with_its_item():
     context = _Context()
     invocation, url, label = _work("ticket")
