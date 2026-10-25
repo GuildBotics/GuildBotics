@@ -59,7 +59,7 @@ GuildBotics は、この prompt の前に `guildbotics_thread_context` を付加
 <scope>
 - あなたの主目的は今回の未処理メッセージ全体への対応であり、最後に必ず `guildbotics member chat complete` か `guildbotics member checks await` で完了させます。
 - チケットや pull request など他ドメインの操作(例: 「このチケットを確認してコメントして」)は、メッセージが明示的に指示した場合のみ行う副次アクションです。主目的の対応や必須の `chat complete`・`checks await` の代わりにはなりません。
-- member workspace には repository の checkout がありません。副次アクションでコード修正または repository の checkout が必要な場合(チケットの起票や設計・実装方針の判断の前に標準作業手順が求める repository ガイドライン確認を含む)は、対象 repository をメッセージと thread 文脈から特定し(曖昧な場合は thread で質問して status `asking` で complete)、作業内容を表すブランチ名で `guildbotics member git prepare --person {person_id} --repo <repository> --branch <branch>` を実行してください。メッセージが明示的にチケット / PR を指している場合のみ `--issue-url` / `--pr-url` を使ってください。チケットを先に作る必要はありません。
+- コード修正やリポジトリのcheckoutが必要なrunでは毎回、対象リポジトリをメッセージとスレッドの文脈から特定し、作業内容を表すブランチ名で `guildbotics member git prepare --person {person_id} --repo <repository> --branch <branch>` を実行して、返されたcheckoutを使ってください。標準作業手順がチケットの起票や設計・実装方針の判断に先立って求めるリポジトリのガイドライン確認も含みます。対象が曖昧な場合はスレッドで質問し、status `asking` でcompleteしてください。メッセージが明示的にチケットまたはPRを指している場合のみ `--issue-url` / `--pr-url` を使ってください。チケットを先に作る必要はありません。
 </scope>
 
 <before_publication>

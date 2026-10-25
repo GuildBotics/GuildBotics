@@ -518,15 +518,17 @@ def test_chat_judgment_owns_repository_work_criteria():
 
 
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
-    """The chat workspace has no checkout, so the prompt must route guideline
-    checks (issue #381) through `git prepare` — while the contract itself
+    """Each run must route guideline checks through its current prepared
+    checkout (issue #381), while the contract itself
     (origin default branch is canonical) stays in the member reference."""
     english = _prompt_body("handle_chat_event", "en")
     japanese = _prompt_body("handle_chat_event", "ja")
     assert "repository guideline check" in english
     assert "standard work procedure" in english
-    assert "repository ガイドライン確認" in japanese
+    assert "リポジトリのガイドライン確認" in japanese
     assert "標準作業手順" in japanese
+    assert "In each run" in english
+    assert "毎回" in japanese
 
 
 def test_agent_facing_layers_do_not_name_a_provider():
