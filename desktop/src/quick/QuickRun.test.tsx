@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkCommandInputPaths,
@@ -54,11 +54,11 @@ const pollClipboardMock = vi.fn();
 const clipboardImageFileMock = vi.fn();
 const releaseClipboardImageMock = vi.fn();
 const watchSupportedMock = vi.fn(async () => true);
-// Shorten the idle auto-run pause and the clipboard poll; three real seconds
-// per case, or 300ms per observed copy, is not worth it.
+// Clipboard integration tests wait for polling; edited-input tests below keep
+// the production idle deadline and advance a stopped clock explicitly.
 vi.mock("./quickRunState", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./quickRunState")>();
-  return { ...actual, IDLE_RUN_MS: 200, CLIPBOARD_POLL_MS: 20 };
+  return { ...actual, CLIPBOARD_POLL_MS: 20 };
 });
 vi.mock("../hotkeys/hotkeyRuntime", () => ({
   hideQuickWindow: () => hideQuickWindowMock(),
@@ -200,6 +200,26 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ options: [option(), option({ command: "review", label: "Review" })] });
 });
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+// Render and resolve the catalog on real timers first. Once the controls are
+// ready, only explicit clock advances may cause an idle run;
+// time spent typing, rendering or querying must not count as an input pause.
+async function advanceClock(ms: number) {
+  await act(() => vi.advanceTimersByTimeAsync(ms));
+}
+
+async function openOnStoppedClock(trigger: QuickRunTrigger) {
+  renderWindow();
+  await fire(trigger);
+  const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
+  vi.useFakeTimers();
+  return field;
+}
 
 /**
  * Put text on the clipboard, mirroring the host command: the contents come back
@@ -748,89 +768,8 @@ describe("QuickRun", () => {
     );
   });
 
-  it("runs an edited input once the field is left", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-
-    await fire({ command: null, text: "" });
-    const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
-    await user.click(await screen.findByRole("checkbox", { name: t("quickRun.autoRun") }));
-
-    await user.click(field);
-    await user.type(field, "typed by hand");
-    expect(runCommand).not.toHaveBeenCalled();
-
-    await user.tab();
-
-    await waitFor(() =>
-      expect(runCommand).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "typed by hand" }),
-      ),
-    );
-  });
-
-  it("does not run the same request twice on a second blur", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-
-    await fire({ command: null, text: "" });
-    const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
-    await user.click(await screen.findByRole("checkbox", { name: t("quickRun.autoRun") }));
-
-    await user.click(field);
-    await user.type(field, "typed by hand");
-    await user.tab();
-    await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
-
-    await user.click(field);
-    await user.tab();
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves an edited input alone while auto-run is off", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-
-    await fire({ command: null, text: "" });
-    const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
-
-    await user.click(field);
-    await user.type(field, "typed by hand");
-    await user.tab();
-
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it("does not run the text left behind when the window is dismissed", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-
-    await fire({ command: "review", text: "" });
-    const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
-    await user.click(field);
-    await user.type(field, "abandoned");
-
-    await user.keyboard("{Escape}");
-    field.blur();
-
-    expect(hideQuickWindowMock).toHaveBeenCalled();
-    // The activation itself may have run the empty request; what must not
-    // happen is the abandoned edit being sent.
-    expect(runCommand).not.toHaveBeenCalledWith(expect.objectContaining({ message: "abandoned" }));
-  });
-
-  describe("idle auto-run", () => {
-    // Typing carries no "I am done" signal, so the run hangs off a pause. The
-    // module mock above shortens that pause so the wait stays real (fake timers
-    // stall the promises react-query and user-event await).
-    function pause(ms: number) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-
-    async function openWith(command: string | null) {
-      // A required message keeps the activation itself from running, so every
-      // run in these cases comes from the typing pause.
+  describe("edited input on a stopped clock", () => {
+    async function openWith(command: string | null = null) {
       vi.mocked(getCommandOptions).mockResolvedValue({
         options: [
           option({
@@ -840,66 +779,124 @@ describe("QuickRun", () => {
           }),
         ],
       });
-      renderWindow();
-      await fire({ command, text: "" });
-      return screen.findByRole("textbox", { name: t("quickRun.message") });
+      return openOnStoppedClock({ command, text: "" });
     }
 
-    it("runs once typing has been quiet long enough", async () => {
-      const user = userEvent.setup();
-      const field = await openWith("review");
-
-      await user.type(field, "typed by hand");
-
-      await waitFor(() =>
-        expect(runCommand).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "typed by hand" }),
-        ),
-      );
-    });
-
-    it("keeps waiting while the typing continues", async () => {
-      const user = userEvent.setup({ delay: null });
-      const field = await openWith("review");
-
-      await user.type(field, "first");
-      await pause(IDLE_RUN_MS / 2);
+    it("runs an edited input immediately when the field is left", async () => {
+      const field = await openWith();
+      fireEvent.click(screen.getByRole("checkbox", { name: t("quickRun.autoRun") }));
+      fireEvent.change(field, { target: { value: "typed by hand" } });
       expect(runCommand).not.toHaveBeenCalled();
 
-      // Typing again pushes the pause back rather than adding a second run.
-      await user.type(field, " second");
-      await pause(IDLE_RUN_MS / 2);
-      expect(runCommand).not.toHaveBeenCalled();
-
-      await waitFor(() =>
-        expect(runCommand).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "first second" }),
-        ),
+      fireEvent.blur(field);
+      await advanceClock(0);
+      expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "typed by hand" }),
       );
+      await advanceClock(IDLE_RUN_MS);
       expect(runCommand).toHaveBeenCalledTimes(1);
     });
 
-    it("leaves settled typing alone while auto-run is off", async () => {
-      const user = userEvent.setup();
-      const field = await openWith(null);
+    it("does not run the same text twice on a second blur", async () => {
+      const field = await openWith();
+      fireEvent.click(screen.getByRole("checkbox", { name: t("quickRun.autoRun") }));
+      fireEvent.change(field, { target: { value: "typed by hand" } });
+      fireEvent.blur(field);
+      await advanceClock(0);
+      expect(runCommand).toHaveBeenCalledTimes(1);
 
-      await user.type(field, "typed by hand");
-      await pause(IDLE_RUN_MS * 3);
+      fireEvent.focus(field);
+      fireEvent.blur(field);
+      await advanceClock(IDLE_RUN_MS);
+      expect(runCommand).toHaveBeenCalledTimes(1);
+    });
 
+    it("leaves an edited input alone while auto-run is off", async () => {
+      const field = await openWith();
+      fireEvent.change(field, { target: { value: "typed by hand" } });
+      fireEvent.blur(field);
+      await advanceClock(IDLE_RUN_MS * 3);
       expect(runCommand).not.toHaveBeenCalled();
     });
 
-    it("drops the pending run when the window is dismissed", async () => {
-      const user = userEvent.setup();
+    it.each(["escape", "close button"])(
+      "drops the pending edit when dismissed by %s",
+      async (way) => {
+        const field = await openWith("review");
+        fireEvent.change(field, { target: { value: "abandoned" } });
+        if (way === "escape") {
+          fireEvent.keyDown(window, { key: "Escape" });
+        } else {
+          const close = screen.getByRole("button", { name: t("quickRun.close") });
+          fireEvent.mouseDown(close);
+          fireEvent.blur(field);
+          fireEvent.click(close);
+        }
+        fireEvent.blur(field);
+        await advanceClock(IDLE_RUN_MS * 3);
+        expect(hideQuickWindowMock).toHaveBeenCalledTimes(1);
+        expect(runCommand).not.toHaveBeenCalled();
+      },
+    );
+
+    it("runs once typing has been quiet long enough", async () => {
       const field = await openWith("review");
+      fireEvent.change(field, { target: { value: "typed by hand" } });
 
-      await user.type(field, "abandoned");
-      await user.keyboard("{Escape}");
-      await pause(IDLE_RUN_MS * 3);
-
-      expect(runCommand).not.toHaveBeenCalledWith(
-        expect.objectContaining({ message: "abandoned" }),
+      await advanceClock(IDLE_RUN_MS - 1);
+      expect(runCommand).not.toHaveBeenCalled();
+      await advanceClock(1);
+      expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "typed by hand" }),
       );
+      await advanceClock(IDLE_RUN_MS);
+      expect(runCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps waiting while the typing continues", async () => {
+      const field = await openWith("review");
+      fireEvent.change(field, { target: { value: "first" } });
+      await advanceClock(IDLE_RUN_MS - 1);
+      expect(runCommand).not.toHaveBeenCalled();
+
+      fireEvent.change(field, { target: { value: "first second" } });
+      await advanceClock(IDLE_RUN_MS - 1);
+      expect(runCommand).not.toHaveBeenCalled();
+      await advanceClock(1);
+      expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "first second" }),
+      );
+    });
+
+    it("ignores repeated blurs after an idle run and runs changed text on blur", async () => {
+      const field = await openWith("review");
+      fireEvent.change(field, { target: { value: "first" } });
+      await advanceClock(IDLE_RUN_MS);
+      expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "first" }),
+      );
+
+      fireEvent.blur(field);
+      fireEvent.focus(field);
+      fireEvent.blur(field);
+      expect(runCommand).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(field, { target: { value: "first second" } });
+      fireEvent.blur(field);
+      await advanceClock(0);
+      expect(vi.mocked(runCommand).mock.calls.map(([request]) => request.message)).toEqual([
+        "first",
+        "first second",
+      ]);
+      await advanceClock(IDLE_RUN_MS);
+      expect(runCommand).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves settled typing alone while auto-run is off", async () => {
+      const field = await openWith();
+      fireEvent.change(field, { target: { value: "typed by hand" } });
+      await advanceClock(IDLE_RUN_MS * 3);
+      expect(runCommand).not.toHaveBeenCalled();
     });
   });
 
@@ -1009,21 +1006,6 @@ describe("QuickRun", () => {
     await user.click(await screen.findByRole("button", { name: t("quickRun.close") }));
 
     expect(hideQuickWindowMock).toHaveBeenCalled();
-  });
-
-  it("does not run the text left behind when closed from the button", async () => {
-    const user = userEvent.setup();
-    renderWindow();
-
-    await fire({ command: "review", text: "" });
-    const field = await screen.findByRole("textbox", { name: t("quickRun.message") });
-    await user.click(field);
-    await user.type(field, "abandoned");
-
-    await user.click(screen.getByRole("button", { name: t("quickRun.close") }));
-    field.blur();
-
-    expect(runCommand).not.toHaveBeenCalledWith(expect.objectContaining({ message: "abandoned" }));
   });
 
   it("labels the copy control instead of showing a translation key", async () => {
