@@ -440,10 +440,11 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   be allocated again until cleanup finishes.
   Publication is established from host-fetched references and successful pushes,
   with their objects retained on the host after squash merges and ref deletion.
-  Guest remote-tracking references do not establish publication. A reassigned
-  checkout starts at the requested remote branch or current default; the same
-  unfinished work keeps its HEAD, index and files. Host-only atomic slot records
-  name the repository and current work assignment. Every run calls prepare and
+  Guest remote-tracking references do not establish publication. Every idle
+  checkout starts at the requested remote branch or current default, including
+  after a force-push or branch deletion, and tracks that remote branch explicitly.
+  The same unfinished work keeps its HEAD, index and files. Host-only atomic slot
+  records name the repository and current work assignment. Every run calls prepare and
   uses the returned `repo_path` and `branch` rather than a remembered path, which
   may since have been reassigned. Member commit/push reject a registered slot
   owned by another work. An empty `branch` denotes retained detached HEAD.

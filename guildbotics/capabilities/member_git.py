@@ -479,16 +479,13 @@ class MemberGitWorkspaceService:
                     clone("config", "--replace-all", key, value)
             _send(origin, clone, refs)
             if not initialized or checkout in reusable:
-                if previous != assignment:
-                    remote = f"refs/remotes/origin/{branch}"
-                    start = (
-                        remote
-                        if remote in refs
-                        else f"refs/remotes/origin/{default_branch}"
-                    )
-                    clone("checkout", "-q", "-B", branch, start, "--")
-                else:
-                    _check_out(clone, branch, default_branch, refs)
+                remote = f"refs/remotes/origin/{branch}"
+                start = (
+                    remote
+                    if remote in refs
+                    else f"refs/remotes/origin/{default_branch}"
+                )
+                clone("checkout", "-q", "--track=direct", "-B", branch, start, "--")
             branch = _branch(clone)
             _save_checkout(self.host_root, checkout, assignment)
             self._prune_checkouts(root, checkout, reusable, repository)
@@ -1163,25 +1160,6 @@ def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:
         # branch is taken, never the tags git would otherwise follow.
         origin.git("fetch", "-q", "--no-tags", "--", str(bundle), f"+{ref}:{ref}")
     return origin.head(branch)
-
-
-def _check_out(
-    clone: _GuestGit, branch: str, default_branch: str, refs: Mapping[str, str]
-) -> None:
-    """Keep unfinished work on its branch; update a clean checkout safely."""
-    remote = f"refs/remotes/origin/{branch}"
-    if clone("status", "--porcelain", "--untracked-files=all").stdout:
-        return
-    local = clone("rev-parse", "-q", "--verify", f"refs/heads/{branch}", ok=(0, 1))
-    if local.returncode == 0:
-        clone("checkout", "-q", branch, "--")
-        if remote in refs:
-            clone("merge", "-q", "--ff-only", remote)
-    else:
-        start = remote if remote in refs else f"refs/remotes/origin/{default_branch}"
-        clone("checkout", "-q", "-b", branch, start, "--")
-    if remote in refs:
-        clone("branch", "-q", f"--set-upstream-to={remote}", branch)
 
 
 @contextmanager

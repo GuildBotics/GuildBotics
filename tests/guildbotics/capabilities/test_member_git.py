@@ -844,6 +844,50 @@ async def test_prepare_updates_a_clean_checkout_to_the_new_remote_head(
     assert member.repo().head.commit.hexsha == remote_sha
 
 
+@pytest.mark.asyncio
+@pytest.mark.windows
+@pytest.mark.parametrize("same_work", [True, False])
+@pytest.mark.parametrize("remote_change", ["rewrite", "delete"])
+async def test_idle_checkout_follows_remote_changes(
+    member, tmp_path, same_work, remote_change
+):
+    other_path = tmp_path / "rewriter"
+    other = git.Repo.clone_from(str(member.remotes["owner"]), other_path, branch="main")
+    with other.config_writer() as writer:
+        writer.set_value("user", "name", "Other")
+        writer.set_value("user", "email", "other@example.com")
+    other.git.checkout("-b", "feature")
+    _commit_readme(other, other_path, "before rewrite\n", "feature")
+    other.git.push("origin", "feature")
+    first = await member.prepare(repo=REPOSITORY, branch="feature")
+    cache = _warm_cache(member.repo())
+    member.repo().git.config("branch.autoSetupMerge", "false")
+    if remote_change == "rewrite":
+        (other_path / "README.md").write_text("rewritten\n", encoding="utf-8")
+        other.git.add("README.md")
+        other.git.commit("--amend", "-m", "rewritten")
+        other.git.push("--force", "origin", "feature")
+        expected = other.head.commit.hexsha
+    else:
+        other.git.push("origin", "--delete", "feature")
+        expected = _advance(member.remotes["owner"], tmp_path, "new default\n")
+    if not same_work:
+        member.work = Work("manual", "next-work")
+
+    prepared = await member.prepare(repo=REPOSITORY, branch="feature")
+
+    assert prepared["repo_path"] == first["repo_path"]
+    assert prepared["branch"] == "feature"
+    assert member.repo().head.commit.hexsha == expected
+    tracked = "feature" if remote_change == "rewrite" else "main"
+    assert (
+        member.repo().active_branch.tracking_branch().path
+        == f"refs/remotes/origin/{tracked}"
+    )
+    assert cache.read_text() == "warm"
+    assert _clone_count(member) == 1
+
+
 def _warm_cache(repo: git.Repo, value: str = "warm") -> Path:
     (Path(repo.git_dir) / "info" / "exclude").write_text("target/\n", encoding="utf-8")
     cache = Path(repo.working_tree_dir) / "target" / "cache"
