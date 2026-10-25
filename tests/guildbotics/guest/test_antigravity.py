@@ -607,18 +607,23 @@ async def test_terminal_result_survives_a_nonzero_exit(monkeypatch, tmp_path) ->
 @pytest.mark.asyncio
 async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> None:
     hanging = _HangingProcess()
+    hanging.stdout.feed_data(b'{"event":"init","conversation_id":"unfinished"}\n')
     _install(monkeypatch, hanging)
     monkeypatch.setattr(
         "guildbotics.guest.antigravity._TIMEOUT_GRACE_SECONDS",
         0.01,
     )
     adapter = AntigravityStreamJsonAdapter(timeout=0.01)
+    context = _context(tmp_path)
+    conversation = ConversationRecord(key=context.conversation_key)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
-        await _run(adapter, _context(tmp_path), [])
+        await adapter.run_turn("go", context, conversation, lambda _: None)
 
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
+    assert excinfo.value.category is AgentRuntimeErrorCategory.TIMEOUT
+    assert excinfo.value.rotate_session is False
     assert hanging.killed
+    assert conversation.provider_session_id == "unfinished"
 
 
 @pytest.mark.asyncio

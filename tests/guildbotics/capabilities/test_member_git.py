@@ -801,13 +801,13 @@ async def test_prepare_branch_mode_checks_out_ad_hoc_branch(member):
 
 
 @pytest.mark.asyncio
-async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
-    member, tmp_path
-):
-    """What is not committed is dropped; commits the remote lacks survive a
-    branch it can fast-forward, and a diverged branch is reset to it."""
+async def test_prepare_preserves_uncommitted_work_on_the_same_branch(member, tmp_path):
+    """A continued run retains its HEAD, index, tracked and untracked edits."""
     await member.prepare(repo=REPOSITORY, branch="main")
     local_sha = member.stage().index.commit("unpushed").hexsha
+    (member.clone / "staged.txt").write_text("staged\n", encoding="utf-8")
+    member.repo().git.add("staged.txt")
+    index_tree = member.repo().index.write_tree().hexsha
     (member.clone / "untracked.txt").write_text("x", encoding="utf-8")
     (member.clone / "README.md").write_text("dirty\n", encoding="utf-8")
 
@@ -815,14 +815,59 @@ async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
 
     repo = member.repo()
     assert repo.head.commit.hexsha == local_sha
-    assert not (member.clone / "untracked.txt").exists()
-    assert not repo.is_dirty()
+    assert (member.clone / "untracked.txt").read_text() == "x"
+    assert (member.clone / "README.md").read_text() == "dirty\n"
+    assert repo.is_dirty()
+    assert repo.index.write_tree().hexsha == index_tree
 
     remote_sha = _advance(member.remotes["owner"], tmp_path, "remote\n")
     await member.prepare(repo=REPOSITORY, branch="main")
 
-    assert member.repo().head.commit.hexsha == remote_sha
+    assert member.repo().head.commit.hexsha == local_sha
     assert member.repo().commit("refs/remotes/origin/main").hexsha == remote_sha
+
+
+@pytest.mark.asyncio
+async def test_prepare_updates_a_clean_checkout_to_the_new_remote_head(
+    member, tmp_path
+):
+    await member.prepare(repo=REPOSITORY, branch="main")
+    remote_sha = _advance(member.remotes["owner"], tmp_path, "new head\n")
+    await member.prepare(repo=REPOSITORY, branch="main")
+    assert member.repo().head.commit.hexsha == remote_sha
+
+
+@pytest.mark.asyncio
+async def test_prepare_refuses_to_move_unfinished_work_to_another_branch(member):
+    from guildbotics.utils.i18n_tool import t
+
+    await member.prepare()
+    (member.clone / "unfinished.txt").write_text("keep me\n", encoding="utf-8")
+    before = member.repo().head.commit.hexsha
+    with pytest.raises(MemberCapabilityError) as raised:
+        await member.prepare(repo=REPOSITORY, branch="another-task")
+    assert str(raised.value) == t("capabilities.member_git.unfinished_branch")
+    assert member.repo().active_branch.name == _TICKET_BRANCH
+    assert member.repo().head.commit.hexsha == before
+    assert (member.clone / "unfinished.txt").read_text() == "keep me\n"
+
+
+@pytest.mark.asyncio
+async def test_prepare_refuses_to_reset_divergent_local_commits(member, tmp_path):
+    await member.prepare(repo=REPOSITORY, branch="main")
+    local_sha = member.stage().index.commit("local work").hexsha
+    _advance(member.remotes["owner"], tmp_path, "remote work\n")
+    with pytest.raises(MemberCapabilityError):
+        await member.prepare(repo=REPOSITORY, branch="main")
+    assert member.repo().head.commit.hexsha == local_sha
+
+
+@pytest.mark.asyncio
+async def test_preparing_another_branch_keeps_unpushed_default_branch_commits(member):
+    await member.prepare(repo=REPOSITORY, branch="main")
+    local_sha = member.stage().index.commit("unpushed default branch work").hexsha
+    await member.prepare(repo=REPOSITORY, branch="another-task")
+    assert member.repo().commit("main").hexsha == local_sha
 
 
 @pytest.mark.asyncio

@@ -418,6 +418,20 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   last worked on. A newer batch is delivered as new input; cursor regression,
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
+- An AI CLI turn stops after three hours (`TURN_TIMEOUT_SECONDS` in
+  `intelligences/agent_runtime/models.py`), with the same deadline for every
+  adapter. A `timeout` failure ends the run's completion attempts immediately.
+  The ticket selector leaves one explanation on the originating ticket or PR,
+  and autonomous runs announce the stop in chat. A later reply makes the work
+  selectable again through the usual patrol rules. The next run reuses the
+  work's healthy provider session and supplies its new instructions, including
+  its own completion requirement. Session IDs learned during an unfinished turn
+  are saved on timeout; the session store's normal rotation limits still apply.
+  `member git prepare` keeps a dirty checkout on the requested branch, including
+  staged and untracked files. It refuses to switch away from unfinished work.
+  Clean checkouts follow the remote by fast-forward; divergent local commits
+  require an explicit resolution instead of a reset. These files and provider
+  sessions live on the device that ran the turn, so resumption uses that device.
 - Rate limits from AI CLI tools are detected in the isolated environment
   (`guest/cli_agent.py`), never amplified by in-process retries
   (`commands/agent_turn.py` raises them as they are), and recorded on the host by the

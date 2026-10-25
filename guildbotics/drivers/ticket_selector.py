@@ -34,6 +34,8 @@ from guildbotics.drivers.execution import failure_status
 from guildbotics.entities import Person, Task
 from guildbotics.entities.team import Service
 from guildbotics.integrations import pull_request_patrol
+from guildbotics.intelligences.agent_runtime.models import TURN_TIMEOUT_SECONDS
+from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import WorkflowStatus
@@ -203,7 +205,14 @@ class TicketSelector:
         person_id = context.person.person_id
         ticket_url = str(invocation.payload["ticket_url"])
         if rate_limit is None:
-            body = await _task_error_message(context)
+            body = (
+                t(
+                    "drivers.task_scheduler.turn_timeout",
+                    hours=TURN_TIMEOUT_SECONDS // 3600,
+                )
+                if find_cli_agent_execution_error(exc, category="timeout") is not None
+                else await _task_error_message(context)
+            )
             status = WorkflowStatus(
                 reason="failed", person_id=person_id, run_id=run_id, subject=ticket_url
             )

@@ -16,10 +16,26 @@ from guildbotics.guest.factory import (
 from guildbotics.guest.grok import GrokAcpAdapter
 from guildbotics.guest.turn import start_turn
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentExecutionContext,
     ConversationKey,
     ConversationRecord,
 )
+
+
+def test_all_adapters_share_the_three_hour_turn_limit() -> None:
+    from guildbotics.guest.acp import AcpAdapterBase
+
+    assert TURN_TIMEOUT_SECONDS == 10800
+    adapters = [create_native_adapter(name) for name in set(NATIVE_ADAPTERS.values())]
+    classes = {type(adapter) for adapter in adapters} | {AcpAdapterBase}
+    for adapter in adapters:
+        assert adapter._timeout == TURN_TIMEOUT_SECONDS
+    for cls in classes:
+        assert (
+            inspect.signature(cls).parameters["timeout"].default == TURN_TIMEOUT_SECONDS
+        )
+        assert "timeout: float = TURN_TIMEOUT_SECONDS" in inspect.getsource(cls)
 
 
 @pytest.mark.parametrize(

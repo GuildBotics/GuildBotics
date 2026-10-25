@@ -51,6 +51,7 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
     host_temporary_directory,
 )
+from guildbotics.utils.i18n_tool import t
 
 #: The most a bundle a member's clone sends the host may be; more is refused.
 MAX_GIT_BUNDLE_BYTES = 1 << 30
@@ -940,37 +941,22 @@ def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:
 def _check_out(
     clone: _GuestGit, branch: str, default_branch: str, refs: Mapping[str, str]
 ) -> None:
-    """Check ``branch`` out afresh, as ``prepare`` does every time.
-
-    What is not committed is dropped. A branch on the remote follows it,
-    keeping local commits it only lacks; one that diverged is reset to it.
-    A new branch starts from the default branch, which is brought up to date.
-    """
+    """Keep unfinished work on its branch; update a clean checkout safely."""
     remote = f"refs/remotes/origin/{branch}"
-    clone("clean", "-fdq")
+    if clone("status", "--porcelain", "--untracked-files=all").stdout:
+        if _current_branch(clone) != branch:
+            raise MemberCapabilityError(t("capabilities.member_git.unfinished_branch"))
+        return
     local = clone("rev-parse", "-q", "--verify", f"refs/heads/{branch}", ok=(0, 1))
     if local.returncode == 0:
-        clone("checkout", "-q", "-f", branch, "--")
-        if (
-            remote in refs
-            and clone("merge", "-q", "--ff-only", remote, ok=range(256)).returncode
-        ):
-            clone("reset", "-q", "--hard", remote)
+        clone("checkout", "-q", branch, "--")
+        if remote in refs:
+            clone("merge", "-q", "--ff-only", remote)
     else:
         start = remote if remote in refs else f"refs/remotes/origin/{default_branch}"
-        clone("checkout", "-q", "-f", "-b", branch, start, "--")
+        clone("checkout", "-q", "-b", branch, start, "--")
     if remote in refs:
         clone("branch", "-q", f"--set-upstream-to={remote}", branch)
-    if default_branch != branch:
-        # Best effort: a worktree of the clone may have it checked out.
-        clone(
-            "branch",
-            "-q",
-            "-f",
-            default_branch,
-            f"refs/remotes/origin/{default_branch}",
-            ok=range(256),
-        )
 
 
 @contextmanager

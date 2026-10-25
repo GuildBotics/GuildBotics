@@ -30,6 +30,7 @@ from tests.guildbotics.local_code_host import (
     pull_request,
     remote_with,
     ticket,
+    write,
 )
 
 ISSUE_URL = f"local://tickets/{TRACKER}/T-1"
@@ -817,6 +818,57 @@ async def test_a_failed_run_is_announced_with_its_failure_comment(monkeypatch, k
     assert raised.value is error
     assert [status.reason for status in _statuses(url)] == ["failed"]
     assert _notices() == [_notice("failed", "trace-8", url, label, f"{url}#comment-9")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["ticket", "pull_request"])
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_a_timeout_posts_one_explanation_and_one_failed_notice(kind, language):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.agent_runtime.models import (
+        TURN_TIMEOUT_SECONDS,
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    set_language(language)
+    context = _Context()
+    invocation, url, _ = _work(kind)
+    error = CliAgentExecutionError(
+        cli_agent="claude",
+        result=CliAgentExecutionResult(
+            stdout="", stderr="timeout", returncode=1, error_category="timeout"
+        ),
+    )
+
+    async def timed_out(invocation):
+        raise CommandError("wrapped") from error
+
+    with trace_scope("routine", trace_id="timeout-run", person_id="aiko"):
+        with pytest.raises(CommandError):
+            await TicketSelector(context).run(context.person, invocation, timed_out)
+
+    comments = item(url)["comments"]
+    assert len(comments) == 1
+    assert comments[0]["body"] == t(
+        "drivers.task_scheduler.turn_timeout", hours=TURN_TIMEOUT_SECONDS // 3600
+    )
+    assert [status.reason for status in _statuses(url)] == ["failed"]
+    assert len(_notices()) == 1
+    assert _notices()[0][0].reason == "failed"
+    selector = TicketSelector(context)
+    assert await selector.candidates(context.person) == []
+    resumed_item = item(url)
+    resumed_item["comments"].append(
+        comment("human", "Please continue.", created_at="2099-01-01T00:00:00+00:00")
+    )
+    write(store.locate(url, kind), resumed_item)
+    [candidate] = await selector.candidates(context.person)
+    resumed = await selector.refresh(context.person, candidate)
+    assert resumed is not None
+    assert resumed.work == invocation.work
+    assert len(item(url)["comments"]) == 2
+    assert len(_notices()) == 1
 
 
 @pytest.mark.asyncio

@@ -86,8 +86,8 @@ async def main(context: Context) -> Any:
         member_workspace=str(member_workspace),
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
-            # A resumed run continues its work's session.
-            "resume_policy": "auto" if turn["awaited_run_id"] else "fresh",
+            # A new run feeds its instructions into the work's existing session.
+            "resume_policy": "auto",
             "attempt": 1,
             "max_completion_attempts": turn["max_completion_attempts"],
         },

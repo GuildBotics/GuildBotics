@@ -96,7 +96,7 @@ async def run_agent_turn(
         try:
             response = await invoke(turn_context, _turn_parameters(ledger, context))
         except Exception as exc:
-            _raise_rate_limit(exc)
+            _raise_terminal_failure(exc)
             if retry_invoke_exceptions:
                 last_error = exc
                 continue
@@ -105,7 +105,7 @@ async def run_agent_turn(
         try:
             ledger.require_completion()
         except Exception as exc:
-            _raise_rate_limit(exc)
+            _raise_terminal_failure(exc)
             ledger.record_completion_missing(dispatch_attempt, attempts, str(exc))
             last_error = exc
             continue
@@ -152,7 +152,9 @@ def _positive_int(value: Any, default: int) -> int:
         return default
 
 
-def _raise_rate_limit(exc: Exception) -> None:
-    found = find_cli_agent_execution_error(exc, category="rate_limited")
-    if found is not None:
-        raise found from exc
+def _raise_terminal_failure(exc: Exception) -> None:
+    for category in ("rate_limited", "timeout"):
+        if (
+            found := find_cli_agent_execution_error(exc, category=category)
+        ) is not None:
+            raise found from exc

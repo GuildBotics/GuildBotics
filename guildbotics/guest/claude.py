@@ -22,6 +22,7 @@ from guildbotics.guest.turn import (
     start_turn,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -66,7 +67,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
         self,
         *,
         executable: str = "claude",
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
 
@@ -144,6 +145,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             async with turn_deadline(_LABEL, self._timeout, self.interrupt):
                 while (raw := await output.next_event()) is not None:
                     session_id = str(raw.get("session_id", "") or session_id)
+                    conversation.provider_session_id = session_id
                     reported_model = _reported_model(raw) or reported_model
                     error = _structured_error(raw) or _rate_limit_event_error(raw)
                     if error is not None:

@@ -635,7 +635,7 @@ async def test_codex_terminal_error_notification_uses_structured_category(
 
 
 @pytest.mark.asyncio
-async def test_codex_timeout_interrupts_and_rotates_session(
+async def test_codex_timeout_interrupts_and_keeps_the_resumable_session(
     monkeypatch, tmp_path
 ) -> None:
     process = _Process(complete_turn=False)
@@ -656,18 +656,20 @@ async def test_codex_timeout_interrupts_and_rotates_session(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(adapter, "interrupt", interrupt)
+    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await adapter.run_turn(
             "hello",
             _context(tmp_path),
-            ConversationRecord(key=_context(tmp_path).conversation_key),
+            conversation,
             lambda _event: None,
         )
 
     assert interrupted is True
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert excinfo.value.rotate_session is True
+    assert excinfo.value.category is AgentRuntimeErrorCategory.TIMEOUT
+    assert excinfo.value.rotate_session is False
+    assert conversation.provider_session_id == "thread-1"
 
 
 @pytest.mark.asyncio

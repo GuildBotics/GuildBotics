@@ -130,35 +130,36 @@ async def test_turn_exhausts_the_configured_attempt_budget(tmp_path):
     assert excinfo.value.attempts == 2
 
 
+@pytest.mark.parametrize("category", ["rate_limited", "timeout"])
 @pytest.mark.parametrize("failure_stage", ["invoke", "completion"])
 @pytest.mark.asyncio
-async def test_turn_reraises_rate_limits_without_retrying(
-    tmp_path, monkeypatch, failure_stage
+async def test_turn_reraises_terminal_failures_without_retrying(
+    tmp_path, monkeypatch, failure_stage, category
 ):
     calls = 0
-    rate_limited = CliAgentExecutionError(
+    terminal_failure = CliAgentExecutionError(
         cli_agent="codex",
         result=CliAgentExecutionResult(
             stdout="",
-            stderr="rate limit",
+            stderr=category,
             returncode=75,
-            error_category="rate_limited",
+            error_category=category,
             error_details={"retry_after_text": "11:44 AM"},
         ),
     )
 
-    def raise_wrapped_rate_limit(*args, **kwargs):
-        raise CommandError("wrapped") from rate_limited
+    def raise_wrapped_failure(*args, **kwargs):
+        raise CommandError("wrapped") from terminal_failure
 
     async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
         if failure_stage == "invoke":
-            raise_wrapped_rate_limit()
+            raise_wrapped_failure()
         return "response"
 
     if failure_stage == "completion":
-        monkeypatch.setattr(RunStore, "status", raise_wrapped_rate_limit)
+        monkeypatch.setattr(RunStore, "status", raise_wrapped_failure)
 
     with pytest.raises(CliAgentExecutionError) as excinfo:
         await run_agent_turn(
@@ -170,7 +171,31 @@ async def test_turn_reraises_rate_limits_without_retrying(
         )
 
     assert calls == 1
-    assert excinfo.value is rate_limited
+    assert excinfo.value is terminal_failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["process", "protocol", "session_unavailable"])
+async def test_other_cli_failures_still_use_the_full_attempt_budget(tmp_path, category):
+    attempts = []
+    error = CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="", stderr="failed", returncode=1, error_category=category
+        ),
+    )
+
+    async def invoke(context, parameters):
+        attempts.append(context["attempt"])
+        raise CommandError("wrapped") from error
+
+    with pytest.raises(CompletionRetryExhausted):
+        await run_agent_turn(
+            invoke=invoke,
+            ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
+            execution_context={"max_completion_attempts": 3},
+        )
+    assert attempts == [1, 2, 3]
 
 
 @pytest.mark.asyncio

@@ -55,17 +55,20 @@ async def turn_deadline(
     forgets once the turn has left this block.
 
     Raises:
-        AgentRuntimeError: ``process`` when the deadline passes.
+        AgentRuntimeError: ``timeout`` when the deadline passes.
     """
+    deadline = asyncio.timeout(timeout)
     try:
-        async with asyncio.timeout(timeout):
+        async with deadline:
             yield
     except TimeoutError as exc:
+        if not deadline.expired():
+            raise
         await interrupt()
         raise AgentRuntimeError(
-            AgentRuntimeErrorCategory.PROCESS,
+            AgentRuntimeErrorCategory.TIMEOUT,
             f"{label} turn timed out.",
-            rotate_session=True,
+            details={"timeout_seconds": timeout},
         ) from exc
     except asyncio.CancelledError:
         await interrupt()
