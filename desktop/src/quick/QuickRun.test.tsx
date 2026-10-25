@@ -811,7 +811,7 @@ describe("QuickRun", () => {
       expect(runCommand).toHaveBeenCalledTimes(1);
     });
 
-    it("leaves an edited input alone while auto-run is off", async () => {
+    it("leaves an edited input alone on blur while auto-run is off", async () => {
       const field = await openWith();
       fireEvent.change(field, { target: { value: "typed by hand" } });
       fireEvent.blur(field);
@@ -892,7 +892,7 @@ describe("QuickRun", () => {
       expect(runCommand).toHaveBeenCalledTimes(2);
     });
 
-    it("leaves settled typing alone while auto-run is off", async () => {
+    it("leaves an edited input alone past the idle deadline while auto-run is off", async () => {
       const field = await openWith();
       fireEvent.change(field, { target: { value: "typed by hand" } });
       await advanceClock(IDLE_RUN_MS * 3);

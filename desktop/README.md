@@ -109,10 +109,12 @@ npm run test:watch    # ウォッチ
 npm run quality       # format:check + lint + typecheck + duplicates + test（E2E は含まない）
 ```
 
-QuickRunの入力・blur・idle自動実行のテストは、カタログの取得と画面の表示を待ってから
-仮想時計を止めます。`fireEvent.change`などで入力とフォーカスのイベントを送り、
-`act`内の`vi.advanceTimersByTimeAsync`で本番の`IDLE_RUN_MS`の直前と期限を検証します。
-入力操作に掛かった実時間をidle時間として数えないためです。
+入力停止から一定時間後の処理（idle自動実行など）を検証するテストは、
+必要なデータの取得と画面の表示を待ってから仮想時計を止めます。
+`fireEvent`で入力やフォーカスのイベントを送り、`act`内の`vi.advanceTimersByTimeAsync`で
+本番の期限の直前と到達時点まで時計を進めます。入力操作に掛かった実時間が待ち時間に含まれると、
+遅い環境で入力途中の値が先に処理されるためです。
+実装例は[`QuickRun.test.tsx`](src/quick/QuickRun.test.tsx)を参照してください。
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
