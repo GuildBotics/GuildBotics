@@ -71,6 +71,10 @@ class Harness:
     branch: Callable[[str], None]
     #: Put one more commit on ``branch``.
     advance: Callable[[str], None]
+    #: Advance the current base independently of an already opened PR head.
+    advance_base: Callable[[], None]
+    #: Set a configurable host's freshness requirement; return its actual value.
+    require_up_to_date: Callable[[bool], bool]
     #: Delete ``branch`` of the repository's remote.
     delete_branch: Callable[[str], None]
     #: Put the ticket in the board's ready lane, assigned to the member.
@@ -241,6 +245,8 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         their_tracker,
         lambda name: commit(name, "main"),
         lambda name: commit(name, None),
+        lambda: commit("main", None),
+        lambda required: True,
         delete_branch,
         assign,
         artifact,
@@ -284,6 +290,11 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
     branvil_double.serve(double, monkeypatch)
     monkeypatch.setenv(f"{MEMBER.upper()}_BRANVIL_TOKEN", branvil_double.TOKEN)
     code, tickets = _services("branvil", branvil_double.SCOPE, key="workspace")
+
+    def advance_base() -> None:
+        double.advance("main")
+        double.behind_by += 1
+
     return Harness(
         "branvil",
         code,
@@ -294,6 +305,8 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         branvil_double.THEIR_REPO,
         double.branch,
         double.advance,
+        advance_base,
+        lambda required: False,
         double.branches.pop,
         double.assign,
         double.add_artifact,
@@ -330,6 +343,15 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         url=f"https://github.com/orgs/{OWNER}/projects/1",
     )
     theirs = f"https://github.com/{THEIRS}/issues/1"
+
+    def advance_base() -> None:
+        double.advance("main")
+        double.behind_by += 1
+
+    def require_up_to_date(required: bool) -> bool:
+        double.requires_up_to_date = required
+        return required
+
     return Harness(
         "github",
         code,
@@ -340,6 +362,8 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         THEIRS,
         double.branch,
         double.advance,
+        advance_base,
+        require_up_to_date,
         double.branches.pop,
         double.assign,
         double.add_artifact,
@@ -400,6 +424,8 @@ class GitHubDouble:
         self.review_comments: dict[int, dict[str, Any]] = {}
         self.reviews: dict[int, dict[str, Any]] = {}
         self.branches: dict[str, str] = {"main": "base-sha"}
+        self.behind_by = 0
+        self.requires_up_to_date = False
         self.artifacts: dict[int, dict[str, Any]] = {}
         #: The Project's items: issue number -> Status option name.
         self.board: dict[int, str] = {}
@@ -529,6 +555,10 @@ class GitHubDouble:
             item = self.items.get(int(match.group(2)))
             if item is None or (match.group(1) == "pulls" and "head" not in item):
                 return None
+            if match.group(1) == "pulls":
+                item["mergeable_state"] = (
+                    "behind" if self.requires_up_to_date and self.behind_by else "clean"
+                )
             if method == "PATCH":
                 item.update(body)
                 if "head" in item and "body" in body:
@@ -618,7 +648,7 @@ class GitHubDouble:
             sha = self.branches.get(match.group(1))
             return None if sha is None else {"commit": {"sha": sha}}
         if re.fullmatch(r"/compare/.+", route):
-            return {"behind_by": 0}
+            return {"behind_by": self.behind_by}
         if re.fullmatch(r"/commits/[^/]+/check-runs", route):
             return {
                 "check_runs": [

@@ -368,6 +368,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
                 str(report["base_sha"]),
                 int(report["behind_by"]),
                 str(current["base_sha"]),
+                requires_up_to_date=False,
             )
         return readiness_of(
             target=self.target(item, current),
@@ -379,6 +380,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
                     "status": str(check["status"]),
                     "conclusion": check.get("conclusion"),
                     "details_url": str(check.get("details_url") or ""),
+                    "details": str(check.get("details") or ""),
                 }
                 for check in report["checks"]
             ],

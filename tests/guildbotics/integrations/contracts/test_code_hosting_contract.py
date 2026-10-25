@@ -138,6 +138,28 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("required", [False, True])
+async def test_base_progress_blocks_only_when_the_host_requires_up_to_date(
+    host: Harness, required: bool
+):
+    created = await _pull_request(host)
+    before = await host.code.readiness(created.target.url)
+    host.advance_base()
+    requires_up_to_date = host.require_up_to_date(required)
+
+    result = await host.code.readiness(created.target.url)
+
+    assert before.readiness == "ready"
+    assert result.base_sha != before.base_sha
+    assert result.head_sha == before.head_sha
+    assert (result.behind_by, result.out_of_date) == (1, True)
+    assert result.readiness == ("blocked" if requires_up_to_date else "ready")
+    assert [b.code for b in result.completion_blockers] == (
+        ["base_out_of_date"] if requires_up_to_date else []
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
     """Readiness answers only from a base it read: a base it cannot read is no
     base without commits ahead of the head."""

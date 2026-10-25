@@ -105,7 +105,8 @@ def test_reference_includes_standard_work_procedure():
     assert "repository/pr_checks failed_logs=true" in text
     assert "check CI again" in text
     assert "unless `readiness` is `ready`" in text
-    assert "head must not be behind the current base" in text
+    assert "resolve its `completion_blockers`" in text
+    assert "the host requires an up-to-date head" in text
     assert "checked head SHA must still be current" in text
     # CI runs outside the environment: whatever work a run does, it ends to
     # await it and the patrol resumes that work, instead of waiting in the turn.

@@ -406,7 +406,9 @@ class LocalCodeHostingService(CodeHostingService):
             behind_by = store.git(
                 ref.place, "rev-list", "--count", f"{head_sha}..{base_sha}"
             )
-            freshness = Freshness(base_sha, int(behind_by), base_sha)
+            freshness = Freshness(
+                base_sha, int(behind_by), base_sha, requires_up_to_date=True
+            )
         failed = {
             "job_id": f"{_JOB}@{_ATTEMPT}",
             "name": _JOB,

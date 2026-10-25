@@ -422,6 +422,8 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         body = _prompt_body("handle_ticket", language)
         assert "repository/pr_checks" in body, language
         assert "`readiness`" in body, language
+        assert "`completion_blockers`" in body, language
+        assert "`base_out_of_date`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language
         # Pending checks end the run instead of a wait in the turn, and the

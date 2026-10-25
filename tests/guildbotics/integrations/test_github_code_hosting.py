@@ -98,6 +98,7 @@ def _pull(number: int = 7, **fields: Any) -> dict[str, Any]:
         "user": {"login": "human"},
         "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": REPO}},
         "base": {"ref": "main"},
+        "mergeable_state": "clean",
         **fields,
     }
 
@@ -904,14 +905,16 @@ def _ci(github: ScriptedGitHub, head: str, checks: dict, base: str = "base123"):
     ("workflow_run", "job_id"),
     [({"id": 9, "run_attempt": 2}, "9/2/90"), ({"id": 9}, "9/1/90")],
 )
+@pytest.mark.parametrize("mergeable_state", ["clean", "unknown"])
 async def test_readiness_reports_rollup_and_tails_failed_job_logs(
-    monkeypatch, workflow_run, job_id
+    monkeypatch, workflow_run, job_id, mergeable_state
 ):
     github = _ci(
         _github(),
         "abc123",
         _checks(_run("failure", details_url=f"{WEB}/{REPO}/actions/runs/9")),
     )
+    github.on("GET", f"/repos/{REPO}/pulls/7", _pull(mergeable_state=mergeable_state))
     github.on("GET", f"/repos/{REPO}/actions/runs", {"workflow_runs": [workflow_run]})
     github.on(
         "GET",
@@ -1086,6 +1089,93 @@ async def test_readiness_is_ready_after_true_base_integration_and_successful_ci(
     )
     assert result.readiness == "ready"
     assert result.completion_blockers == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("behind_by", [0, 2])
+@pytest.mark.parametrize(
+    ("state", "requires_base"),
+    [
+        ("clean", False),
+        ("unstable", False),
+        ("has_hooks", False),
+        ("behind", True),
+        ("blocked", True),
+        ("dirty", True),
+        ("draft", True),
+        ("unknown", True),
+        ("new-state", True),
+        ("", True),
+        (None, True),
+        ("missing", True),
+    ],
+)
+async def test_readiness_ignores_lag_only_when_the_host_explicitly_allows_merging(
+    monkeypatch, state, requires_base, behind_by
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    pull = _pull(mergeable_state=state)
+    if state == "missing":
+        del pull["mergeable_state"]
+    github.on("GET", f"/repos/{REPO}/pulls/7", pull)
+    github.on(
+        "GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": behind_by}
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    blocked = requires_base and behind_by > 0
+    assert (result.behind_by, result.out_of_date) == (behind_by, behind_by > 0)
+    assert result.readiness == ("blocked" if blocked else "ready")
+    assert [b.code for b in result.completion_blockers] == (
+        ["base_out_of_date"] if blocked else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_readiness_can_be_retried_after_the_host_allows_merging(monkeypatch):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on("GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": 2})
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(
+            _pull(mergeable_state="unknown"), _pull(mergeable_state="unknown"), _pull()
+        ),
+    )
+    service = _service(github, monkeypatch)
+
+    blocked = await service.readiness(PULL)
+    assert [item.code for item in blocked.completion_blockers] == ["base_out_of_date"]
+    ready = await service.readiness(PULL)
+    assert ready.readiness == "ready"
+    assert (ready.behind_by, ready.out_of_date) == (2, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial", "current", "blocked"),
+    [("clean", "blocked", True), ("blocked", "clean", False)],
+)
+async def test_readiness_uses_the_final_host_merge_state(
+    monkeypatch, initial, current, blocked
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on("GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": 2})
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(_pull(mergeable_state=initial), _pull(mergeable_state=current)),
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert result.readiness == ("blocked" if blocked else "ready")
+    assert [item.code for item in result.completion_blockers] == (
+        ["base_out_of_date"] if blocked else []
+    )
 
 
 @pytest.mark.asyncio
