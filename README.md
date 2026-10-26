@@ -358,7 +358,7 @@ If you already have a Slack App, choose **Use a registered app** and start from 
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
-When the member's ticket or pull request work from the patrol or a scheduled run stops to wait for a person — it asked a question, is blocked, or failed and said so on the item — the member posts one notice in each of its watched channels, linking the item and the comment it left there.
+When the member's ticket or pull request work from the patrol or a scheduled run stops to wait for a person — it asked a question, is blocked, or failed and said so on the item — the member posts once to each channel where **Notify when work stops** is enabled in **Setup → Members → Slack** (or the project's chat provider tab), linking the item and its comment. With no channel selected, it posts nothing. Notifications are off by default, including for existing channel settings. Enable the option and save to receive notices, or turn it off and save to stop them.
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 

@@ -256,6 +256,7 @@ class PersonSetupInput(BaseModel):
     #: The member's account with each provider, by the provider's name.
     accounts: dict[str, Any] = Field(default_factory=dict)
     chat_channels: list[str] = Field(default_factory=list)
+    work_stop_notification_channels: list[str] = Field(default_factory=list)
     chat_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
@@ -272,7 +273,7 @@ class PersonSetupInput(BaseModel):
             raise ValueError("person_name is required")
         return value
 
-    @field_validator("chat_channels")
+    @field_validator("chat_channels", "work_stop_notification_channels")
     @classmethod
     def validate_chat_channels(cls, value: list[str]) -> list[str]:
         return [_channel(channel) for channel in value if _channel(channel)]
@@ -330,6 +331,7 @@ class PersonConfigSnapshot(BaseModel):
     # value's synchronization state asks for the name rather than rebuilding it.
     secret_env_keys: dict[str, str] = Field(default_factory=dict)
     chat_channels: list[str] = Field(default_factory=list)
+    work_stop_notification_channels: list[str] = Field(default_factory=list)
     chat_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
@@ -783,6 +785,7 @@ class SimplePersonSetupService:
         routine_commands = participation.get("routine_commands")
 
         channels: list[str] = []
+        notification_channels: list[str] = []
         channel_participation: dict[str, str] = {}
         raw_channels = participation.get("message_channels", [])
         if isinstance(raw_channels, list):
@@ -793,6 +796,11 @@ class SimplePersonSetupService:
                 if not channel_name:
                     continue
                 channels.append(channel_name)
+                if (
+                    _config_mapping(channel.get("chat")).get("notify_work_stops")
+                    is True
+                ):
+                    notification_channels.append(_channel(channel_name))
                 channel_participation[channel_name] = chat_participation(
                     _config_mapping(channel.get("chat")).get("participation")
                 )
@@ -826,6 +834,7 @@ class SimplePersonSetupService:
             accounts={name: view.model_dump() for name, view in accounts.items()},
             secret_env_keys=owned.keys(),
             chat_channels=channels,
+            work_stop_notification_channels=notification_channels,
             chat_channel_participation=channel_participation,
             routine_commands=[
                 str(command).strip()
@@ -971,6 +980,7 @@ def build_participation(config: PersonSetupInput, *, joining: bool) -> dict[str,
                 chat_channel(channel),
                 channel,
                 person_id=config.person_id,
+                notify_work_stops=channel in config.work_stop_notification_channels,
                 participation=chat_participation(
                     config.chat_channel_participation.get(channel)
                 ),
@@ -1104,7 +1114,12 @@ def _saved_member(person_id: str) -> SavedMember:
 
 
 def _message_channel(
-    chat: dict[str, str], name: str, *, person_id: str, participation: str
+    chat: dict[str, str],
+    name: str,
+    *,
+    person_id: str,
+    participation: str,
+    notify_work_stops: bool,
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -1113,5 +1128,10 @@ def _message_channel(
         "channel_info": (
             {"channel_id": chat["channel_id"]} if "channel_id" in chat else {}
         ),
-        "chat": {"enabled": True, "participation": participation, **chat},
+        "chat": {
+            "enabled": True,
+            "participation": participation,
+            "notify_work_stops": notify_work_stops,
+            **chat,
+        },
     }

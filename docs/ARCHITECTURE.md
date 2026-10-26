@@ -270,7 +270,7 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
 - **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
   its work came from; each provider carries it in its own form (a hidden comment marker,
   message metadata) and gives it back on reading. It also marks the notice a member posts
-  in its chat channels when its ticket or PR work stops to wait for a person, which the
+  in its explicitly selected chat channels (`chat.notify_work_stops`) when its ticket or PR work stops to wait for a person, which the
   ticket selector posts (`capabilities/work_stops.py`), so no member answers it.
 - **Write scope.** Each service's configuration names a scope (an owner on GitHub); a
   write goes only to a repository or tracker directly in it (`check_path`), a push only

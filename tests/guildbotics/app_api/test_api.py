@@ -1875,6 +1875,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 },
                 "chat_channels": ["C09999999"],
                 "chat_channel_participation": {"C09999999": "muted"},
+                "work_stop_notification_channels": ["C09999999"],
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -1911,8 +1912,14 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert member["message_channels"][0]["chat"] == {
             "enabled": True,
             "participation": "muted",
+            "notify_work_stops": True,
             "channel_id": "C09999999",
         }
+        saved = client.get(
+            "/config/members/alice",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+        assert saved.json()["work_stop_notification_channels"] == ["C09999999"]
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "token-b"
         assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-b"
         assert store.get("ALICE_SLACK_APP_TOKEN") == "xapp-b"

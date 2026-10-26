@@ -4,7 +4,7 @@ person.
 A run that ends asking or blocked, or that failed and said so on its item,
 leaves the member's comment as the last word on that item, so the patrol does
 not take the work up again until someone answers there. The member posts one
-notice in each of its chat-enabled channels so that someone learns of it. The
+notice in each of its selected chat channels so that someone learns of it. The
 notice carries the stop as its status, which keeps every member from answering
 it.
 """
@@ -98,7 +98,7 @@ def comment_url_of(evidence: list[dict[str, Any]], url: str) -> str:
 
 
 async def notify_work_stop(context: Context, stop: WorkStop) -> None:
-    """Post the notice of ``stop`` as the member in each of its chat-enabled
+    """Post the notice of ``stop`` as the member in each of its selected
     channels.
 
     It never raises: the notice cannot change how the run ended. Each channel
@@ -107,7 +107,11 @@ async def notify_work_stop(context: Context, stop: WorkStop) -> None:
     person = context.person
     if not context.team.project.is_available_service(Service.CHAT_SERVICE):
         return
-    subscriptions = get_chat_subscriptions(person)
+    subscriptions = [
+        channel
+        for channel in get_chat_subscriptions(person)
+        if channel["notify_work_stops"]
+    ]
     if not subscriptions:
         return
     item = " ".join(part for part in (stop.label, stop.title) if part)
@@ -120,6 +124,7 @@ async def notify_work_stop(context: Context, stop: WorkStop) -> None:
         run_id=stop.run_id,
         subject=stop.url,
     )
+    attempted: set[str] = set()
     for subscription in subscriptions:
         channel_id = str(subscription["channel_id"])
         error = ""
@@ -129,6 +134,9 @@ async def notify_work_stop(context: Context, stop: WorkStop) -> None:
                 await chat.resolve_channel_id(subscription["channel_name"]) or ""
             )
             if channel_id:
+                if channel_id in attempted:
+                    continue
+                attempted.add(channel_id)
                 await chat.post_message(channel_id, "\n".join(lines), status=status)
         except Exception as exc:
             error = str(exc) if isinstance(exc, ServiceError) else type(exc).__name__
