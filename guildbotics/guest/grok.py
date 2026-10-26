@@ -18,6 +18,7 @@ from guildbotics.guest.acp import AcpAdapterBase, non_negative_int
 from guildbotics.guest.jsonrpc import RpcError
 from guildbotics.guest.provider_process import as_dict
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -75,7 +76,7 @@ class GrokAcpAdapter(AcpAdapterBase):
         self,
         *,
         executable: str = "grok",
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
         self._turn_model = ""

@@ -27,6 +27,7 @@ from guildbotics.guest.turn import (
     start_turn,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -56,8 +57,8 @@ _EFFORT_VALUES = frozenset({"low", "medium", "high"})
 _WORKSPACE_FLAG = "--add-dir"
 
 _MODELS_TIMEOUT_SECONDS = 10.0
-#: Time ``agy``'s own ``--print-timeout`` is given beyond the adapter budget, so
-#: the CLI reports a structured timeout result before the outer watchdog fires.
+#: Keep the CLI's own timeout beyond the common watchdog, which classifies
+#: the deadline and preserves the session just as every other adapter does.
 _TIMEOUT_GRACE_SECONDS = 60.0
 #: The prompt travels in ``argv`` because ``--print`` requires its value there.
 #: Linux caps a single argv string at MAX_ARG_STRLEN (32 pages, 128 KiB) -- the
@@ -107,7 +108,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         self,
         *,
         executable: str = "agy",
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
         self._model_catalog: frozenset[str] = frozenset()
@@ -155,7 +156,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
             str(context.cwd),
             "--dangerously-skip-permissions",
             "--print-timeout",
-            f"{int(self._timeout)}s",
+            f"{int(self._timeout + _TIMEOUT_GRACE_SECONDS)}s",
             "--log-file",
             log_file,
         ]
@@ -198,11 +199,10 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         for event in _start_events(settings, rejected):
             await record(event)
         try:
-            async with turn_deadline(
-                _LABEL, self._timeout + _TIMEOUT_GRACE_SECONDS, self.interrupt
-            ):
+            async with turn_deadline(_LABEL, self._timeout, self.interrupt):
                 while (raw := await output.next_event()) is not None:
                     conversation_id = _conversation_id_of(raw) or conversation_id
+                    conversation.provider_session_id = conversation_id
                     for decoded in _decode_events(raw, conversation_id):
                         await record(decoded)
                     if raw.get("event") == "result":

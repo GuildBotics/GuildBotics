@@ -143,8 +143,9 @@ async def test_turn_deadline_interrupts_before_reporting_a_timeout() -> None:
             await asyncio.sleep(1)
 
     assert interrupted == [True]
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert excinfo.value.rotate_session is True
+    assert excinfo.value.category.value == "timeout"
+    assert excinfo.value.rotate_session is False
+    assert excinfo.value.details == {"timeout_seconds": 0.01}
     assert str(excinfo.value) == "Test CLI turn timed out."
 
 
@@ -177,6 +178,18 @@ async def test_turn_deadline_leaves_a_finished_turn_alone() -> None:
 
     async with turn_deadline("Test CLI", 60, interrupt):
         await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_providers_own_timeout_is_not_the_turn_deadline() -> None:
+    async def interrupt() -> None:
+        raise AssertionError("The turn deadline did not pass.")
+
+    error = TimeoutError("a provider request timed out")
+    with pytest.raises(TimeoutError) as raised:
+        async with turn_deadline("Test CLI", 60, interrupt):
+            raise error
+    assert raised.value is error
 
 
 class _Unending(HostClient):

@@ -418,6 +418,43 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   last worked on. A newer batch is delivered as new input; cursor regression,
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
+- An AI CLI turn stops after three hours (`TURN_TIMEOUT_SECONDS` in
+  `intelligences/agent_runtime/models.py`), with the same deadline for every
+  adapter. A `timeout` failure ends the run's completion attempts immediately.
+  The ticket selector leaves one explanation on the originating ticket or PR,
+  and autonomous runs announce the stop in chat. A later reply makes the work
+  selectable again through the usual patrol rules. The next run reuses the
+  work's healthy provider session and supplies its new instructions, including
+  its own completion requirement. Session IDs learned during an unfinished turn
+  are saved on timeout; the session store's normal rotation limits still apply.
+  `member git prepare` retains a checkout while its work has uncommitted changes,
+  unpublished history, a stash, an in-progress Git operation, special index flags,
+  detached HEAD, or
+  linked worktrees. Other work borrows an idle checkout of the same repository,
+  keeping ignored build caches such as `target` and `node_modules`; only when
+  none is available does it create another clone. After a successful prepare,
+  excess idle clones are removed inside the guest, keeping at most one beside
+  the retained checkouts. Before deletion, a slot's record moves to the host's
+  discarded registry. Cleanup failures are retried from that registry even when
+  the partial deletion has already removed Git metadata; those slot IDs cannot
+  be allocated again until cleanup finishes.
+  Publication is established from host-fetched references and successful pushes,
+  with their objects retained on the host after squash merges and ref deletion.
+  Guest remote-tracking references do not establish publication. Every idle
+  checkout starts at the requested remote branch or current default, including
+  after a force-push or branch deletion, and tracks that remote branch explicitly.
+  The same unfinished work keeps its HEAD, index and files. Host-only atomic slot
+  records name the repository and current work assignment. Every run calls prepare and
+  uses the returned `repo_path` and `branch` rather than a remembered path, which
+  may since have been reassigned. Member commit/push reject a registered slot
+  owned by another work. An empty `branch` denotes retained detached HEAD.
+  These files and provider sessions live on the device that ran the turn, so
+  resumption uses that device.
+
+  Older clone directories (`clones/<person>/<repository path>`, and the earlier
+  per-work hash directories) and their old plaintext checkout records are unused.
+  They may be removed manually after checking for uncommitted changes,
+  unpublished commits and other unfinished Git state that must first be kept.
 - Rate limits from AI CLI tools are detected in the isolated environment
   (`guest/cli_agent.py`), never amplified by in-process retries
   (`commands/agent_turn.py` raises them as they are), and recorded on the host by the

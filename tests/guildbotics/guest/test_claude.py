@@ -820,13 +820,16 @@ async def test_claude_nonzero_exit_is_process_failure(monkeypatch, tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_claude_timeout_interrupts_and_rotates_session(
+async def test_claude_timeout_interrupts_and_keeps_the_resumable_session(
     monkeypatch, tmp_path
 ) -> None:
     stream = _StreamProcess([])
     stream.returncode = None
     stream.stdout = asyncio.StreamReader()
     stream.stderr = asyncio.StreamReader()
+    stream.stdout.feed_data(
+        b'{"type":"system","subtype":"init","session_id":"unfinished"}\n'
+    )
 
     async def create_process(*args, **_kwargs):
         return _HelpProcess() if args[-1] == "--help" else stream
@@ -843,18 +846,20 @@ async def test_claude_timeout_interrupts_and_rotates_session(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(adapter, "interrupt", interrupt)
+    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await adapter.run_turn(
             "hello",
             _context(tmp_path),
-            ConversationRecord(key=_context(tmp_path).conversation_key),
+            conversation,
             lambda _event: None,
         )
 
     assert interrupted is True
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert excinfo.value.rotate_session is True
+    assert excinfo.value.category is AgentRuntimeErrorCategory.TIMEOUT
+    assert excinfo.value.rotate_session is False
+    assert conversation.provider_session_id == "unfinished"
 
 
 @pytest.mark.asyncio

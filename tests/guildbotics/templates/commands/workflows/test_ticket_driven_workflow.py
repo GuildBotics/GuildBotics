@@ -83,7 +83,7 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
     assert command_name == "functions/handle_ticket"
     # The run and the work are the host's: the turn takes them from its grant.
     assert kwargs["agent_execution_context"] == {
-        "resume_policy": "fresh",
+        "resume_policy": "auto",
         "attempt": 1,
         "max_completion_attempts": 3,
     }
@@ -148,16 +148,14 @@ async def test_a_resumed_run_continues_the_awaited_work_and_its_session():
 
 
 @pytest.mark.asyncio
-async def test_a_run_that_resumes_no_wait_starts_its_own_session():
-    """A run that resumes no earlier run starts fresh, and says so: the step
-    for a resumed run keys on that, not on a summary that may not have
-    arrived."""
+async def test_a_new_run_continues_its_works_session_without_a_checks_wait():
+    """A reply after a timeout reuses the session without a checks wait."""
     context = _Context(PR_URL, "pull_request_feedback")
 
     await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
 
     kwargs = context.invocations[0][1]
-    assert kwargs["agent_execution_context"]["resume_policy"] == "fresh"
+    assert kwargs["agent_execution_context"]["resume_policy"] == "auto"
     assert (kwargs["awaited_run_id"], kwargs["work_kind"]) == ("", "ticket")
 
 

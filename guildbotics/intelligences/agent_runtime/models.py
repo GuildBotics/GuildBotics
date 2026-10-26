@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
+TURN_TIMEOUT_SECONDS = 3 * 60 * 60
+
 
 class ResumePolicy(StrEnum):
     FRESH = "fresh"
@@ -39,6 +41,7 @@ class AgentRuntimeErrorCategory(StrEnum):
     RATE_LIMITED = "rate_limited"
     PROTOCOL = "protocol"
     PROCESS = "process"
+    TIMEOUT = "timeout"
     CANCELLED = "cancelled"
     SESSION_UNAVAILABLE = "session_unavailable"
     UNSUPPORTED_VERSION = "unsupported_version"

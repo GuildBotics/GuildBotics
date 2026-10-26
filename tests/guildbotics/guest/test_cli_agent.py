@@ -81,6 +81,73 @@ def _read_only_state(tmp_path) -> dict:
     return {"agent_execution_context": {"run_id": "command-run", "work_kind": "manual"}}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compacted", [False, True])
+async def test_a_new_run_resumes_the_session_saved_by_its_timed_out_first_turn(
+    tmp_path, monkeypatch, window, compacted
+):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    seen = []
+
+    async def run_turn(prompt, context, conversation, emit):
+        seen.append((prompt, conversation.provider_session_id, conversation.generation))
+        if len(seen) == 1:
+            conversation.provider_session_id = "unfinished-session"
+            if compacted:
+                await emit(
+                    agent_models.context_compaction_event("unfinished-session", {})
+                )
+            raise agent_models.AgentRuntimeError(
+                agent_models.AgentRuntimeErrorCategory.TIMEOUT, "time limit"
+            )
+        return agent_models.AgentTerminalResult(
+            output="continued", events=(), provider_session_id="unfinished-session"
+        )
+
+    monkeypatch.setattr(
+        cli_agent,
+        "create_native_adapter",
+        lambda _: SimpleNamespace(run_turn=run_turn, close=AsyncMock()),
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "agent", _test_logger())
+    key = agent_models.ConversationKey("aiko", "claude", "ticket", "T1")
+    context = agent_models.AgentExecutionContext(
+        person_id="aiko", run_id="first", cwd=tmp_path, conversation_key=key
+    )
+    first = await brain._execute_native_turn(
+        input="start",
+        configured={},
+        context=context,
+        adapter_name="claude",
+        records=cli_agent._TurnRecords(window),
+    )
+    saved = window.conversations.load(key)
+    assert first.error_category == "timeout"
+    assert saved.provider_session_id == "unfinished-session"
+    assert saved.healthy is not compacted
+    assert saved.last_run_id == "first"
+
+    second = await brain._execute_native_turn(
+        input="new run: continue and record this run's completion",
+        configured={"continuation_input": "same-run retry"},
+        context=replace(context, run_id="second"),
+        adapter_name="claude",
+        records=cli_agent._TurnRecords(window),
+    )
+    assert second.stdout == "continued"
+    assert seen == [
+        ("start", "", 0),
+        (
+            "new run: continue and record this run's completion",
+            "" if compacted else "unfinished-session",
+            int(compacted),
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
     ("mapping_value", "adapter"),
     [

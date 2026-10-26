@@ -1623,16 +1623,18 @@ async def test_the_turn_timeout_bounds_a_stalled_prompt(monkeypatch, tmp_path) -
 
     peer.kill = lambda: terminate(peer)
     adapter = GrokAcpAdapter(timeout=0.15)
+    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
-        await _run(adapter, tmp_path)
+        await _run(adapter, tmp_path, conversation)
 
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
+    assert excinfo.value.category is AgentRuntimeErrorCategory.TIMEOUT
     assert "timed out" in str(excinfo.value)
-    assert excinfo.value.rotate_session is True
+    assert excinfo.value.rotate_session is False
     # The stalled peer is stopped rather than left running.
     assert terminated == [peer]
     assert peer.sent("session/cancel")["params"]["sessionId"] == _Peer.SESSION_ID
+    assert conversation.provider_session_id == _Peer.SESSION_ID
 
 
 @pytest.mark.asyncio

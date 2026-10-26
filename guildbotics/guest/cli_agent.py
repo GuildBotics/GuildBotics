@@ -552,6 +552,12 @@ class CliAgentBrain(Brain):
                 )
 
             async def emit(event: Any) -> None:
+                if (
+                    event.kind is AgentEventKind.TURN
+                    and event.name == CONTEXT_COMPACTION
+                ):
+                    conversation.healthy = False
+                    conversation.rotation_reason = CONTEXT_COMPACTION
                 await records.add(
                     EventEntry(
                         span=current_span(),
@@ -620,6 +626,10 @@ class CliAgentBrain(Brain):
                 )
                 if exc.rotate_session:
                     store.mark_unhealthy(conversation, exc.category.value)
+                elif exc.category is AgentRuntimeErrorCategory.TIMEOUT:
+                    conversation.last_run_id = context.run_id
+                    conversation.last_event_id = context.event_id
+                    store.save(conversation)
                 details = {str(key): str(value) for key, value in exc.details.items()}
                 details["cli_agent"] = adapter_name
                 if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
@@ -667,13 +677,6 @@ class CliAgentBrain(Brain):
                     "context_used_tokens", 0
                 )
                 conversation.context_size_tokens = terminal.usage["context_size_tokens"]
-            compacted = any(
-                event.kind is AgentEventKind.TURN and event.name == CONTEXT_COMPACTION
-                for event in terminal.events
-            )
-            conversation.healthy = not compacted
-            if compacted:
-                conversation.rotation_reason = CONTEXT_COMPACTION
             store.save(conversation)
             return CliAgentExecutionResult(
                 stdout=terminal.output.strip(),
