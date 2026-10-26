@@ -311,6 +311,19 @@ purpose:
   (`TicketService.candidates()`), and each is re-read from the port it came
   from before it is dispatched; a failed or rate-limited run's status comment goes to
   that port too.
+  Unanswered mentions on open tickets outside the member's assignment are also
+  candidates, even outside the ready/working lanes. Providers resolve mentions;
+  `ticket_selection.mention_pending` considers a member's subsequent comment an
+  answer. These runs use `Work("ticket_mention", ticket_url)`: a separate conversation
+  that posts a comment and completes, without preparing a repository, publishing,
+  creating a PR, or moving the ticket. A response affecting the assignee's work
+  mentions that assignee. An external comment addressed only to other members does
+  not wake the assignee; comments without mentions keep the ordinary behavior.
+  Discovery adds a workspace mention query for Branvil, one issue Search request
+  (`is:issue is:open user:<owner> mentions:<login>`) for GitHub, and a file scan for
+  local. GitHub reads comments only for assigned or search-matched issues, and fails
+  an incomplete search or one exceeding its 100-result page rather than silently
+  dropping mentions. Assignment and unanswered mentions are rechecked before dispatch.
   Every route that runs it — the patrol, a scheduled command, a manual run
   (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the

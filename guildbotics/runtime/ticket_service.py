@@ -136,7 +136,12 @@ class TicketService(ABC):
     async def candidates(self) -> list[Task]:
         """The member's actionable tickets in patrol order. A ticket of the
         ready lane blocked by an open ticket is not one: it is not started
-        until its blockers are closed."""
+        until its blockers are closed. Open tickets outside the member's
+        assignment with an unanswered mention are also candidates, with
+        ``assignee=None`` and ``trigger_reason=issue_mention``. These answer
+        the conversation only, regardless of the lane, without moving it.
+        Each ticket occurs once; refresh re-evaluates both assignment and
+        unanswered mentions."""
 
     @abstractmethod
     async def refresh(self, task: Task) -> Task | None:

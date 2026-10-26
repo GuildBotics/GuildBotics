@@ -1,4 +1,5 @@
 en:
+  mention_search_incomplete: "GitHub returned an incomplete mention search or more than 100 mentioned tickets. Resolve older mentions or narrow the workspace scope before retrying."
   too_large: "The GitHub response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
   response: "GitHub returned an invalid response."
   rate_limit: "GitHub rate-limited the request. Wait before retrying."

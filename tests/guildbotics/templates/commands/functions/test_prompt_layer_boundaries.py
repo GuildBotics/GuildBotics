@@ -504,6 +504,22 @@ def test_ticket_work_runs_at_high_effort_by_default():
         assert _frontmatter("handle_ticket", language)["effort"] == "high"
 
 
+def test_ticket_mentions_require_a_comment_and_exempt_repository_preparation():
+    english = _prompt_body("handle_ticket", "en")
+    japanese = _prompt_body("handle_ticket", "ja")
+    assert "For work other than `ticket_mention`" in english
+    assert "`ticket_mention` 以外の作業" in japanese
+    for body in (english, japanese):
+        instruction = body.split("15. ")[1].split("</instructions>")[0]
+        assert "guildbotics member ticket comment --content-file" in instruction
+        assert "guildbotics member task complete" in instruction
+        assert "done|asking|blocked" in instruction
+    assert "Do not prepare a repository, publish, or create a PR" in english
+    assert "リポジトリの準備・publish・PR 作成は行わない" in japanese
+    assert "mention the assignee" in english
+    assert "担当者をメンション" in japanese
+
+
 def test_chat_work_states_no_frontmatter_effort():
     """Chat effort is decided per event by the assessor, not fixed up front."""
     for language in ("en", "ja"):

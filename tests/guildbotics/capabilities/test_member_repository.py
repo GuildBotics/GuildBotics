@@ -37,6 +37,25 @@ from tests.guildbotics.local_code_host import (
 FOREIGN_TICKET = "https://tickets.example.com/browse/OPS-7"
 
 
+@pytest.mark.asyncio
+async def test_mention_completion_needs_no_code_host_or_linked_pr_readiness():
+    class TicketOnly:
+        def get_code_hosting_service(self):
+            raise AssertionError("A comment response needs no code host")
+
+    result = await member_repository.task_completion_readiness(
+        TicketOnly(),
+        Work("ticket_mention", FOREIGN_TICKET),
+        [
+            {
+                "evidence_type": "ticket_comment",
+                "payload": {"target": {"kind": "ticket", "url": FOREIGN_TICKET}},
+            }
+        ],
+    )
+    assert result == []
+
+
 @pytest.fixture
 def member():
     return local_member()

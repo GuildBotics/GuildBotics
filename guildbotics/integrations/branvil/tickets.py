@@ -17,6 +17,7 @@ from logging import Logger
 from typing import Any
 
 from guildbotics.entities import Person, Service, Task, Team
+from guildbotics.entities.message import Message
 from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
@@ -29,6 +30,7 @@ from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
     select,
+    select_mention,
     since_assignment,
 )
 from guildbotics.runtime.port import (
@@ -197,6 +199,13 @@ class BranvilTicketService(BranvilApi, TicketService):
             state="open",
             comments="all",
         )
+        mentioned = await self.items(
+            f"/workspaces/{segment(self.workspace)}/tickets",
+            mentions="me",
+            state="open",
+            comments="all",
+        )
+        cards = list({card["url"]: card for card in [*cards, *mentioned]}.values())
         found = [(task, card) for card in cards if (task := self._task(card))]
         ordered = sorted(found, key=lambda pair: pair[0])
         candidates = []
@@ -268,21 +277,29 @@ class BranvilTicketService(BranvilApi, TicketService):
         )
 
     def _task(self, card: dict[str, Any]) -> Task | None:
-        """The card as a task of the member, if it is one: open, in a lane of
-        the member's work on the board, not waiting in the ready lane for a
-        ticket it is blocked by, and the member is its one assignee."""
+        """An open card in scope, for assigned work or a mention response.
+
+        Only assigned work is restricted to actionable lanes and blockers;
+        a mention response can answer without starting the assigned work.
+        """
         me = username(self.person).casefold()
+        assigned = bool(card["assignee"]) and card["assignee"]["name"].casefold() == me
         if not (
             me
             and card["state"] == "open"
             and self._on_board(card)
-            and card["lane"] in _LANES
-            and not (
-                card["lane"] == Task.READY
-                and any(entry["state"] == "open" for entry in card["blocked_by"])
+            and (
+                not assigned
+                or (
+                    card["lane"] in _LANES
+                    and not (
+                        card["lane"] == Task.READY
+                        and any(
+                            entry["state"] == "open" for entry in card["blocked_by"]
+                        )
+                    )
+                )
             )
-            and card["assignee"]
-            and card["assignee"]["name"].casefold() == me
         ):
             return None
         item = _ticket_item(card)
@@ -296,11 +313,24 @@ class BranvilTicketService(BranvilApi, TicketService):
             description=str(card.get("body") or ""),
             status=card["lane"],
             created_at=card.get("created_at"),
-            assignee=self.person.person_id,
+            assignee=self.person.person_id if assigned else None,
             comments=[self.message(comment) for comment in card["comments"]],
         )
 
     async def _select(self, task: Task, card: dict[str, Any]) -> Task | None:
+        if task.assignee is None:
+            return select_mention(
+                task,
+                pending=mention_pending(
+                    self.mentions_member(card),
+                    (
+                        (message, self.mentions_member(comment))
+                        for message, comment in zip(
+                            task.comments, card["comments"], strict=True
+                        )
+                    ),
+                ),
+            )
         since = since_assignment(task.comments, card["assignee"]["assigned_at"])
         # Keep the source metadata and stored mention flags with the same
         # filtered messages; unknown timestamps need not form a suffix.
@@ -334,6 +364,10 @@ class BranvilTicketService(BranvilApi, TicketService):
             ),
             linked_pull=linked_pull,
             done=lambda: self.move(task, "done"),
+            addressed_elsewhere=bool(comments)
+            and comments[-1][0].author_type != Message.ASSISTANT
+            and bool(comments[-1][1]["mentions"])
+            and not self.mentions_member(comments[-1][1]),
         )
 
 

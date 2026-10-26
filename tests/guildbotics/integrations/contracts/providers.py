@@ -96,6 +96,8 @@ class Harness:
     #: The optional features the provider has; it refuses the others.
     features: frozenset[str]
     #: The writes that reached the provider, as ``"<what> <where>"``.
+    human_comment: Callable[[str, str], None]
+    mention: str
     writes: list[str] = field(default_factory=list)
 
     async def aclose(self) -> None:
@@ -173,6 +175,19 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ref = store.locate(url, "ticket")
         ticket = store.load(ref)
         ticket.update(lane=Task.READY, assignees=[MEMBER])
+        write(ref, ticket)
+
+    def human_comment(url: str, body: str) -> None:
+        ref = store.locate(url, "ticket")
+        ticket = store.load(ref)
+        ticket["comments"].append(
+            {
+                "id": f"human-{len(ticket['comments'])}",
+                "author": "owner",
+                "body": body,
+                "created_at": store.now(),
+            }
+        )
         write(ref, ticket)
 
     def artifact(sha: str, name: str, content: bytes) -> None:
@@ -262,7 +277,9 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         "comment-1",
         store.ref_of("ticket", tickets_tracker, 404).url,
         frozenset({"request_changes", "artifacts", "off_board"}),
-        writes,
+        writes=writes,
+        human_comment=human_comment,
+        mention=f"@{MEMBER}",
     )
 
 
@@ -322,7 +339,11 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         double.their_comment,
         f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
         frozenset({"request_changes", "artifacts", "dependency_alerts"}),
-        double.writes,
+        writes=double.writes,
+        human_comment=lambda url, body: double._entry(
+            url, "comments", branvil_double.OWNER, body
+        ),
+        mention=f"@{MEMBER}",
     )
 
 
@@ -352,6 +373,16 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         double.requires_up_to_date = required
         return required
 
+    def human_comment(url: str, body: str) -> None:
+        number = int(url.rsplit("/", 1)[1])
+        entry = double._entry(
+            {"body": body},
+            issue=number,
+            issue_url=f"{API}/repos/{REPO}/issues/{number}",
+        )
+        entry["user"] = {"login": "owner"}
+        double.comments[entry["id"]] = entry
+
     return Harness(
         "github",
         code,
@@ -379,7 +410,9 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         "issuecomment-1",
         f"https://github.com/{REPO}/issues/404",
         frozenset({"request_changes", "artifacts", "dependency_alerts", "off_board"}),
-        double.writes,
+        writes=double.writes,
+        human_comment=human_comment,
+        mention=f"@{LOGIN}",
     )
 
 
@@ -485,6 +518,38 @@ class GitHubDouble:
             return httpx.Response(200, json={"data": self._graphql(body)})
         if path == "/rate_limit":
             return httpx.Response(200, json={"resources": {}})
+        if path == "/search/issues":
+            assert (
+                request.url.params["q"]
+                == f"is:issue is:open user:{OWNER} mentions:{LOGIN}"
+            )
+            found = [
+                item
+                for item in self.items.values()
+                if "pull_request" not in item
+                and item["state"] == "open"
+                and any(
+                    f"@{LOGIN}" in (entry["body"] or "").casefold()
+                    for entry in [
+                        item,
+                        *[
+                            comment
+                            for comment in self.comments.values()
+                            if comment["issue_url"].endswith(
+                                f"/issues/{item['number']}"
+                            )
+                        ],
+                    ]
+                )
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "items": found,
+                    "total_count": len(found),
+                    "incomplete_results": False,
+                },
+            )
         match = re.fullmatch(r"/repos/([^/]+/[^/]+)(/.*)?", path)
         if match is None:
             return httpx.Response(404, json={"message": "Not Found"})

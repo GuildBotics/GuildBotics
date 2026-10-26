@@ -72,6 +72,8 @@ async def main(context: Context) -> Any:
         work_type=(
             (trigger_reason or "pull_request_feedback")
             if pull_request_url
+            else "ticket_mention"
+            if work.kind == "ticket_mention"
             else "ticket"
         ),
         trigger_reason=trigger_reason,

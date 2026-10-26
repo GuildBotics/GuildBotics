@@ -22,7 +22,13 @@ from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.local.chat import mentions
+from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_selection import (
+    mention_pending,
+    select,
+    select_mention,
+)
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
@@ -202,13 +208,15 @@ class LocalTicketService(TicketService):
             ),
         )
         return [
-            task for ref, item in tickets if (task := self._work(ref, item)) is not None
+            task
+            for ref, item in tickets
+            if (task := await self._work(ref, item)) is not None
         ]
 
     async def refresh(self, task: Task) -> Task | None:
         assert task.url
         ref = store.locate(task.url, "ticket")
-        return self._work(ref, store.load(ref))
+        return await self._work(ref, store.load(ref))
 
     async def move(self, task: Task, lane: MoveLane) -> bool:
         assert task.url
@@ -249,26 +257,69 @@ class LocalTicketService(TicketService):
         check_path(self.scope, ref.place, provider="local")
         return ref.url
 
-    def _work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
+    async def _work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
         me = self.person.person_id
         lane = item["lane"]
-        if lane not in _LANES or me not in item["assignees"]:
+        if item["state"] != "open" or not in_scope(self.scope, ref.place):
             return None
-        if lane == Task.READY and any(
-            _relative(blocker).state == "open" for blocker in item["blocked_by"]
+        assigned = me in item["assignees"]
+        if assigned and (
+            lane not in _LANES
+            or (
+                lane == Task.READY
+                and any(
+                    _relative(blocker).state == "open" for blocker in item["blocked_by"]
+                )
+            )
         ):
             return None
         comments = item["comments"]
-        mine = bool(comments) and comments[-1]["author"] == me
-        if lane == Task.READY:
-            reason = None if mine else "ready_lane"
-        elif comments:
-            reason = None if mine else "issue_comment"
-        else:
-            reason = "working_lane"
-        if reason is None:
+        messages = [
+            Message(
+                content=comment["body"],
+                author=comment["author"],
+                author_type=Message.ASSISTANT
+                if comment["author"] == me
+                else Message.USER,
+                timestamp=comment["created_at"],
+            )
+            for comment in comments
+        ]
+        task = items.task(
+            ref,
+            item,
+            status=lane or Task.NEW,
+            assignee=me if assigned else None,
+            comments=messages,
+        )
+
+        def mentioned(text: str) -> bool:
+            return me.casefold() in mentions(text.casefold())
+
+        pending = mention_pending(
+            mentioned(task.description),
+            ((message, mentioned(message.content)) for message in messages),
+        )
+        if not assigned:
+            return select_mention(task, pending=pending)
+
+        async def no_pull() -> None:
             return None
-        return items.task(ref, item, status=lane, assignee=me, trigger_reason=reason)
+
+        return await select(
+            task,
+            messages,
+            latest_status=WorkflowStatus.from_payload(comments[-1].get("status"))
+            if comments
+            else None,
+            pending=pending,
+            linked_pull=no_pull,
+            done=lambda: self.move(task, "done"),
+            addressed_elsewhere=bool(messages)
+            and messages[-1].author_type != Message.ASSISTANT
+            and bool(mentions(messages[-1].content.casefold()))
+            and not mentioned(messages[-1].content),
+        )
 
 
 def _relative(url: str) -> TicketRelative:

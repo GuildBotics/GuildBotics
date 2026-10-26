@@ -713,7 +713,11 @@ def work_subject(work: Work) -> tuple[str, str, str]:
         return "chat", work.chat.subject_id, ""
     if work.kind == "chat":
         return "chat_thread", work.identity, ""
-    return work.kind, work.identity, work.identity if work.kind == "ticket" else ""
+    return (
+        work.kind,
+        work.identity,
+        work.identity if work.kind in {"ticket", "ticket_mention"} else "",
+    )
 
 
 def current_task_run_id() -> str | None:

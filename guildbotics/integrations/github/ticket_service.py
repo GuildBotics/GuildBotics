@@ -37,11 +37,12 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
     select,
+    select_mention,
     since_assignment,
 )
 from guildbotics.runtime.port import (
@@ -141,6 +142,7 @@ query($proj: ID!, $cursor: String) {
               url
               title
               body
+              state
               createdAt
               assignees(first: 10) { nodes { id login name } }
               timelineItems(last: 10, itemTypes: [ASSIGNED_EVENT]) {
@@ -805,7 +807,7 @@ class GitHubTicketService(GitHubApi, TicketService):
             }
             status = self._status_from_option((values.get("Status") or {}).get("name"))
             issue = it["content"]
-            if status is None or status == Task.DONE or not issue:
+            if not issue or issue.get("state") == "CLOSED":
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
             # Assignees and the Agent field are independent ways to assign this
@@ -831,7 +833,7 @@ class GitHubTicketService(GitHubApi, TicketService):
                     url=issue.get("url"),
                     title=issue["title"],
                     description=issue.get("body", "") or "",
-                    status=status,
+                    status=status or Task.NEW,
                     created_at=issue["createdAt"],
                     assignee=self.person.person_id if is_assigned else None,
                 )
@@ -848,13 +850,25 @@ class GitHubTicketService(GitHubApi, TicketService):
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
         # A ticket is not started while an issue it is blocked by is open.
-        if not metadata["assigned"] or (
-            task.status == Task.READY and metadata["blocked"]
+        if metadata["assigned"] and (
+            task.status not in (Task.READY, Task.IN_PROGRESS)
+            or (task.status == Task.READY and metadata["blocked"])
         ):
             return None
         assert task.url
         item = self.item(task.url, "ticket")
         task.comments = await self._comments(item)
+        if not metadata["assigned"]:
+            return select_mention(
+                task,
+                pending=mention_pending(
+                    self._text_mentions_me(task.description),
+                    (
+                        (comment, self._text_mentions_me(comment.content))
+                        for comment in task.comments
+                    ),
+                ),
+            )
         # The agent still receives the whole history on the task; only the
         # decision is limited to what was said after the assignment.
         since = since_assignment(task.comments, str(metadata.get("assigned_at") or ""))
@@ -873,6 +887,14 @@ class GitHubTicketService(GitHubApi, TicketService):
             ),
             linked_pull=lambda: self._related_pull_request_state(item),
             done=lambda: self.move(task, "done"),
+            addressed_elsewhere=bool(since)
+            and since[-1].author_type != Message.ASSISTANT
+            and bool(
+                re.search(
+                    r"(?<![\w@])@[A-Za-z0-9][A-Za-z0-9-]*|⚙[\w-]+", since[-1].content
+                )
+            )
+            and not self._text_mentions_me(since[-1].content),
         )
 
     async def candidates(self) -> list[Task]:
@@ -884,10 +906,55 @@ class GitHubTicketService(GitHubApi, TicketService):
         working_tasks = [task for task in tasks if task.status != Task.READY]
         for task in [*ready_tasks, *working_tasks]:
             assert task.id, "Task ID must be set"
+            if not task_metadata[task.id]["assigned"]:
+                continue
             selected = await self._select_actionable_task(task, task_metadata[task.id])
             if selected:
                 candidates.append(selected)
+        page = await self.get(
+            "/search/issues",
+            params={
+                "q": f"is:issue is:open user:{self.owner} mentions:{get_github_username(self.person, strict=True)}",
+                "per_page": 100,
+            },
+        )
+        if page["incomplete_results"] or page["total_count"] > len(page["items"]):
+            raise ServiceError(
+                t("integrations.github.response.mention_search_incomplete")
+            )
+        known = {task.url: task for task in tasks}
+        for issue in page["items"]:
+            item = self.item(issue["html_url"], "ticket")
+            if not in_scope(self.owner, item.repository):
+                continue
+            task = known.get(issue["html_url"]) or self._mention_task(issue)
+            metadata = task_metadata.get(
+                str(task.id), {"assigned": bool(task.assignee)}
+            )
+            if metadata["assigned"]:
+                continue
+            if (
+                selected := await self._select_actionable_task(task, metadata)
+            ) is not None:
+                candidates.append(selected)
         return candidates
+
+    def _mention_task(self, issue: dict[str, Any]) -> Task:
+        """An issue outside the board's work window, for conversation only."""
+        item = self.item(issue["html_url"], "ticket")
+        return Task(
+            provider="github",
+            label=item.label,
+            id=issue["node_id"],
+            url=issue["html_url"],
+            title=issue["title"],
+            description=issue.get("body") or "",
+            status=Task.NEW,
+            created_at=issue["created_at"],
+            assignee=self.person.person_id
+            if any(self._is_me(user["login"]) for user in issue["assignees"])
+            else None,
+        )
 
     async def refresh(self, candidate: Task) -> Task | None:
         """Re-read one patrol candidate and apply the canonical work test."""
@@ -898,6 +965,14 @@ class GitHubTicketService(GitHubApi, TicketService):
                 continue
             assert task.id, "Task ID must be set"
             return await self._select_actionable_task(task, task_metadata[task.id])
+        if candidate.url:
+            item = self.item(candidate.url, "ticket")
+            issue = await self.fetch(item)
+            if issue["state"] != "open" or not in_scope(self.owner, item.repository):
+                return None
+            task = self._mention_task(issue)
+            if task.assignee is None:
+                return await self._select_actionable_task(task, {"assigned": False})
         return None
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:

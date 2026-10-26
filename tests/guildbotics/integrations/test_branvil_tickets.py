@@ -50,6 +50,46 @@ async def _reasons(tickets) -> list[tuple[str | None, str | None]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 60])
+async def test_other_assignees_mentions_use_one_workspace_query_without_scanning_cards(
+    monkeypatch, count
+):
+    double = BranvilDouble()
+    url = _ticket(double, lane="new")
+    double.assign(url, lane="new", name="otota")
+    double.comment(url, "otota", "@aiko Please provide context.")
+    for _ in range(count):
+        double._ticket(REPO, "Unrelated", "", [])
+    requested = []
+    respond = double.respond
+
+    def recorded(request):
+        requested.append((request.url.path, dict(request.url.params)))
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", recorded)
+    _, _, tickets = services(monkeypatch, double)
+    [task] = await tickets.candidates()
+    assert (task.url, task.assignee, task.trigger_reason) == (
+        url,
+        None,
+        "issue_mention",
+    )
+    assert [path for path, _ in requested] == [
+        f"/api/v1/workspaces/{SCOPE}/board/cards",
+        f"/api/v1/workspaces/{SCOPE}/tickets",
+    ]
+    assert requested[1][1]["mentions"] == "me"
+    await tickets.comment(url, "Context provided.")
+    double.comment(url, "otota", "Thanks.")
+    assert await tickets.refresh(task) is None
+    assert (double.tickets[url]["assignee"]["name"], double.tickets[url]["lane"]) == (
+        "otota",
+        "new",
+    )
+
+
+@pytest.mark.asyncio
 async def test_comment_edits_and_deletions_are_read_again_before_dispatch(monkeypatch):
     double, _, tickets = services(monkeypatch)
     url = _ticket(double, lane="in_progress")

@@ -169,6 +169,18 @@ async def test_a_new_run_continues_its_works_session_without_a_checks_wait():
 
 
 @pytest.mark.asyncio
+async def test_mention_work_passes_the_response_only_work_type():
+    context = _Context(
+        trigger_reason="issue_mention", work=Work("ticket_mention", ISSUE_URL)
+    )
+    await ticket_driven_workflow.main(context)
+    kwargs = context.invocations[0][1]
+    assert kwargs["work_type"] == "ticket_mention"
+    assert kwargs["work_kind"] == "ticket_mention"
+    assert kwargs["pull_request_url"] == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("trigger_reason", "work_type"),
     [
@@ -195,8 +207,9 @@ async def test_workflow_passes_pull_request_work_type(trigger_reason, work_type)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("linked_pr", [False, True])
+@pytest.mark.parametrize("mention_only", [False, True])
 async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_board(
-    monkeypatch, tmp_path, linked_pr
+    monkeypatch, tmp_path, linked_pr, mention_only
 ):
     """One round of the ticket workflow on the local code host and board: the
     host selects the member's ready ticket and moves it to the working lane,
@@ -209,8 +222,10 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
         1,
         title="Fix login",
         lane=Task.IN_PROGRESS if linked_pr else Task.READY,
-        assignees=["aiko"],
-        comments=[
+        assignees=["yuki" if mention_only else "aiko"],
+        comments=[comment("owner", "@aiko Please provide context.")]
+        if mention_only
+        else [
             comment("aiko", "Should I add the check?"),
             comment("owner", "Yes, please add the check."),
         ]
@@ -254,9 +269,15 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
 
         async def invoke(self, command_name: str, **kwargs):
             lanes.append(item(url)["lane"])
-            assert kwargs["work_type"] == "ticket"
+            assert kwargs["work_type"] == (
+                "ticket_mention" if mention_only else "ticket"
+            )
             assert kwargs["trigger_reason"] == (
-                "issue_comment" if linked_pr else "ready_lane"
+                "issue_mention"
+                if mention_only
+                else "issue_comment"
+                if linked_pr
+                else "ready_lane"
             )
             invocation = MemberInvocation(
                 task_run_id=run.run_id,
@@ -270,7 +291,7 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
                 ),
                 (["task", "complete", "--status", "done"], "Fixed the login."),
             ]
-            if linked_pr:
+            if linked_pr and not mention_only:
                 commands.insert(
                     0,
                     (
@@ -315,20 +336,25 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
     run = None
     with trace_scope("routine", trace_id="run-1", person_id="aiko"):
         RunStore().start_record(
-            "run-1", work_kind="ticket", execution_mode="autonomous", member_id="aiko"
+            "run-1",
+            work_kind="ticket_mention" if mention_only else "ticket",
+            execution_mode="autonomous",
+            member_id="aiko",
         )
         response = await TicketSelector(_Selection()).run_next(  # type: ignore[arg-type]
             member.person, run_workflow
         )
 
     assert response.status == AgentResponse.DONE
-    assert lanes == [Task.IN_PROGRESS]
+    assert lanes == [Task.READY if mention_only and not linked_pr else Task.IN_PROGRESS]
+    assert item(url)["assignees"] == ["yuki" if mention_only else "aiko"]
     assert run.payload["ticket_url"] == url
     assert item(url)["comments"][-1]["body"] == "Done."
     if linked_pr:
-        assert len(item(url)["comments"]) == 3
+        assert len(item(url)["comments"]) == (2 if mention_only else 3)
         linked = await member.code.read("ticket_pull_requests", url)
         assert [p["url"] for p in linked.items] == [pr_url]
     assert RunStore().status("run-1").to_dict()["status"] == "done"
+    assert RunStore().status("run-1").to_dict()["subject_url"] == url
     # Answered by the member, the ticket waits for someone else.
     assert await member.tickets.candidates() == []

@@ -213,6 +213,42 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lane", [Task.NEW, Task.READY, Task.IN_PROGRESS, Task.DONE])
+async def test_mention_work_keeps_the_assignee_and_lane_and_has_its_own_session(
+    monkeypatch, lane
+):
+    context = _Context()
+    url = ticket(
+        1,
+        title="Context",
+        lane=lane,
+        assignees=["yuki"],
+        comments=[comment("owner", "@aiko Please provide context.")],
+    )
+    moves = _moves(monkeypatch, context)
+    selector = TicketSelector(context)
+    [candidate] = await selector.candidates(context.person)
+    invocation = await selector.refresh(context.person, candidate)
+    assert invocation.work == Work("ticket_mention", url)
+    seen = []
+
+    async def run_workflow(invocation):
+        seen.append(invocation)
+        await context.member.tickets.comment(url, "@yuki Here is the context.")
+        return "answered"
+
+    with trace_scope("routine", trace_id="mention-run", person_id="aiko"):
+        assert (
+            await selector.run(context.person, invocation, run_workflow) == "answered"
+        )
+
+    assert seen[0].work.kind == "ticket_mention"
+    assert moves == []
+    assert (item(url)["lane"], item(url)["assignees"]) == (lane, ["yuki"])
+    assert await selector.refresh(context.person, candidate) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("in_trace")
 @pytest.mark.parametrize(("raw", "expected"), [("", 5), ("0", 1), ("x", 5)])
 async def test_run_hands_the_turn_the_default_budget(monkeypatch, raw, expected):

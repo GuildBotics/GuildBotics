@@ -676,6 +676,24 @@ class BranvilDouble:
         def of(item: dict[str, Any]) -> bool:
             return item["repository"].partition("/")[0] == workspace
 
+        if rest == ["tickets"]:
+            assert params["mentions"] == "me"
+            cards = [
+                self._view(ticket)
+                | {
+                    "comments": self.entries[url]["comments"],
+                    "pull_requests": self._linked(url),
+                }
+                for url, ticket in self.tickets.items()
+                if of(ticket)
+                and ticket["state"] == params.get("state", ticket["state"])
+                and any(
+                    MEMBER in entry["mentions"]
+                    for entry in [self._view(ticket), *self.entries[url]["comments"]]
+                )
+            ]
+            return self._page(cards, params)
+
         if rest == ["board", "cards"]:
             lanes = params["lane"].split(",")
             cards = [

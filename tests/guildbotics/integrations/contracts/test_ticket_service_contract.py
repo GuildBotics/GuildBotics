@@ -58,6 +58,71 @@ async def _ticket(board: Harness, title: str = "Fix login") -> str:
     return (await board.tickets.create_ticket(board.tracker, title, "", [])).target.url
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uppercase", [False, True])
+async def test_unassigned_mentions_are_answered_once_without_taking_the_ticket(
+    board: Harness,
+    uppercase,
+):
+    url = await _ticket(board)
+    mention = board.mention.upper() if uppercase else board.mention
+    board.human_comment(url, f"{mention} Please provide context.")
+    before = await _read(board, url)
+
+    [task] = await board.tickets.candidates()
+    assert (task.url, task.assignee, task.trigger_reason) == (
+        url,
+        None,
+        "issue_mention",
+    )
+    assert (await board.tickets.refresh(task)).trigger_reason == "issue_mention"
+    assert await _read(board, url) == before
+
+    await board.tickets.comment(url, "Here is the context.")
+    board.human_comment(url, "Thanks.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    after = await _read(board, url)
+    assert (after["lane"], after["assignees"]) == (before["lane"], before["assignees"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_comments_addressed_to_other_members_do_not_wake_the_assignee(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    await board.tickets.comment(url, "Please ask the author for context.")
+    board.human_comment(url, "@OTOTA Please provide the context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+
+    board.human_comment(url, f"{board.mention} Here is the context.")
+    [selected] = await board.tickets.candidates()
+    assert selected.assignee is not None
+    assert selected.trigger_reason == ("issue_comment" if working else "ready_lane")
+    assert await board.tickets.refresh(selected) is not None
+
+
+@pytest.mark.asyncio
+async def test_assignment_refreshes_mention_work_into_regular_work_without_duplicates(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.human_comment(url, f"{board.mention} Context?")
+    [mention] = await board.tickets.candidates()
+    board.assign(url)
+    [assigned] = await board.tickets.candidates()
+    assert assigned.trigger_reason == "ready_lane"
+    refreshed = await board.tickets.refresh(mention)
+    assert refreshed.assignee == assigned.assignee
+    assert refreshed.trigger_reason == "ready_lane"
+
+
 async def _relate(board: Harness, url: str, **relations) -> None:
     """Change only the relations of ticket ``url``."""
     await board.tickets.update_ticket(

@@ -78,6 +78,11 @@ def _board(
     order = statuses if statuses is not None else ["Todo", "In Progress", "Done"]
     github = (
         ScriptedGitHub()
+        .on(
+            "GET",
+            "/search/issues",
+            {"items": [], "total_count": 0, "incomplete_results": False},
+        )
         .on_graphql(_FIELDS, _status_field(*order))
         .on_graphql(
             "fieldValues",
@@ -177,6 +182,64 @@ def _status_comment(reason: str) -> str:
             {"reason": reason, "person_id": "aiko", "run_id": "run-1"}
         ),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 60])
+async def test_mention_search_reads_only_matching_unassigned_tickets(
+    monkeypatch, count
+):
+    items = [
+        _item(number=number, status="Todo", assignee="someone")
+        for number in range(1, count + 1)
+    ]
+    service, github = _board(
+        monkeypatch,
+        items=items,
+        comments={1: [_comment("human", f"@{LOGIN} Context?")]},
+    )
+    github.on(
+        "GET",
+        "/search/issues",
+        {
+            "items": [{"html_url": issue_url(1)}],
+            "incomplete_results": False,
+            "total_count": 1,
+        },
+    )
+    [task] = await service.candidates()
+    assert (task.url, task.assignee, task.trigger_reason) == (
+        issue_url(1),
+        None,
+        "issue_mention",
+    )
+    requests = [
+        request for request in github.requests if request.url.path != "/graphql"
+    ]
+    assert [request.url.path for request in requests] == [
+        "/search/issues",
+        f"/repos/{REPO}/issues/1/comments",
+    ]
+    assert (
+        requests[0].url.params["q"] == f"is:issue is:open user:{OWNER} mentions:{LOGIN}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete,total", [(True, 1), (False, 101)])
+async def test_mention_search_never_treats_a_partial_result_as_complete(
+    monkeypatch, incomplete, total
+):
+    service, github = _board(monkeypatch, items=[])
+    github.on(
+        "GET",
+        "/search/issues",
+        {"items": [], "incomplete_results": incomplete, "total_count": total},
+    )
+    with pytest.raises(
+        ServiceError, match=t("integrations.github.response.mention_search_incomplete")
+    ):
+        await service.candidates()
 
 
 # --------------------------------------------------------------------------- #
@@ -821,7 +884,9 @@ async def test_mention_on_second_comment_page_reopens_the_ticket(monkeypatch):
     assert task.trigger_reason == "ready_lane"
     assert task.comments[-1].content == "⚙aiko one more thing"
     assert [
-        r.url.params["page"] for r in github.requests if r.url.path != "/graphql"
+        r.url.params["page"]
+        for r in github.requests
+        if r.url.path.endswith("/comments")
     ] == ["1", "2"]
 
 
