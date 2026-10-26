@@ -1342,8 +1342,7 @@ const resources = {
           chatParticipationChannel: "Channel",
           chatParticipationPolicy: "When to join",
           workStopNotifications: "Notify when work stops",
-          workStopNotificationsHint:
-            "Post here when this member needs a person's response. Off by default.",
+          workStopNotificationsHint: "Post here when this member needs a person's response.",
           chatParticipationOptions: {
             social: "Join actively",
             strict: "Join when needed",
@@ -2895,8 +2894,7 @@ const resources = {
           chatParticipationChannel: "チャンネル",
           chatParticipationPolicy: "会話への参加条件",
           workStopNotifications: "作業停止を通知する",
-          workStopNotificationsHint:
-            "このメンバーが人の対応を待って止まったときに投稿します。初期状態は無効です。",
+          workStopNotificationsHint: "このメンバーが人の対応を待って止まったときに投稿します。",
           chatParticipationOptions: {
             social: "積極的に参加",
             strict: "必要なときだけ参加",
