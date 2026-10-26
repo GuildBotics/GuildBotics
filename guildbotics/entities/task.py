@@ -17,6 +17,15 @@ MONTH_FIELD_INDEX = 3
 DAY_OF_WEEK_FIELD_INDEX = 4
 
 
+class AwaitedRun(BaseModel):
+    """The run that stopped to await a pull request's checks, and the work it
+    did, which the run its task starts resumes."""
+
+    run_id: str = Field(..., description="The run that awaited the checks.")
+    work_kind: str = Field(..., description="The kind of the work it did.")
+    work_identity: str = Field(..., description="The identity of that work.")
+
+
 class Task(BaseModel):
     """A piece of work a member is selected for: a ticket of the board, or a
     pull request that asks something of the member."""
@@ -62,6 +71,11 @@ class Task(BaseModel):
     created_at: datetime.datetime | None = Field(
         default=None, description="The date and time when the task was created."
     )
+    resumes: AwaitedRun | None = Field(
+        default=None,
+        description="For a pull request whose awaited checks settled: the run "
+        "that awaited them, whose work the task resumes.",
+    )
 
     def trace_attributes(self) -> dict[str, str]:
         """Correlation attributes that name this ticket in diagnostics.
@@ -82,7 +96,7 @@ class Task(BaseModel):
             attributes["target.url"] = url
         return attributes
 
-    def __lt__(self, other: "Task") -> bool:
+    def __lt__(self, other: Task) -> bool:
         """
         Compare two tasks based on creation date, oldest first.
 

@@ -39,7 +39,7 @@ function status(
     resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
-      default: "node:22.23.2-bookworm",
+      default: "node:24.22.1-bookworm",
       architecture: "arm64",
       reference: "",
       digest: "",
@@ -300,7 +300,7 @@ describe("AgentEnvironmentCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("guildbotics-abc")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.imageDefault"))).toBeInTheDocument();
-    expect(screen.getByText("node:22.23.2-bookworm")).toBeInTheDocument();
+    expect(screen.getByText("node:24.22.1-bookworm")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.network.modes.allowlist"))).toBeInTheDocument();
     expect(screen.getByText("github.com, pypi.org")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.dnsHost"))).toBeInTheDocument();

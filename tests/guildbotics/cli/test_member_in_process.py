@@ -168,7 +168,7 @@ def _record_git_commit(monkeypatch) -> None:
         return (await use(Service())).to_dict()
 
     monkeypatch.setattr(member_module, "_git", git)
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: False)
 
 
 def test_relative_paths_and_content_are_the_commands_own(monkeypatch, tmp_path) -> None:
@@ -255,7 +255,7 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
         "_resolve",
         lambda person: (None, SimpleNamespace(person_id=person)),
     )
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
     monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
 
@@ -312,6 +312,12 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
     )
     monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
+    if kind == "ticket":
+        # A ticket run ends blocked only after saying so on its item.
+        RunStore().append_evidence(
+            "run-1", "issue_comment", {"url": f"{_TICKET.identity}#comment-1"}
+        )
+    before = list(RunStore().records())
 
     exit_code, stdout, stderr = _run(
         arguments,
@@ -334,7 +340,7 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in " ".join(stderr.split())
-        assert list(RunStore().records()) == []
+        assert list(RunStore().records()) == before
 
 
 @pytest.mark.parametrize(
@@ -349,18 +355,21 @@ def test_a_run_command_acts_only_on_its_invocations_run_and_work(
     tmp_path, arguments, kind
 ) -> None:
     """The run and its subject are the invocation's, never ones the command
-    names, so a call whose invocation carries no run doing the command's kind
-    of work is refused."""
+    names, so a call whose invocation carries no run of the command's kind is
+    refused: a chat event's run for a chat command, any other run -- whatever
+    its work, such as a command's or a resumed run's -- for a task command."""
     other = "ticket" if kind == "chat" else "chat"
     run = _RUNS[kind]
-
-    for invocation in (
+    refused = [
         MemberInvocation(),
         _RUNS[other],
         replace(run, work=None),
         replace(run, work=_RUNS[other].work),
-        replace(run, work=Work("manual", "run-1")),
-    ):
+    ]
+    if kind == "chat":
+        refused.append(replace(run, work=Work("chat", _CHAT.identity)))
+
+    for invocation in refused:
         exit_code, stdout, stderr = _run(
             arguments,
             invocation,
@@ -368,8 +377,15 @@ def test_a_run_command_acts_only_on_its_invocations_run_and_work(
             stdin="Nothing to do.",
         )
 
+        if kind == "chat":
+            message = t("cli.member.run.required", kind="chat")
+        elif invocation.work is not None and invocation.work.chat is not None:
+            # A chat event's run is told what completes it instead.
+            message = t("cli.member.run.chat_event")
+        else:
+            message = t("cli.member.run.required_any")
         assert (exit_code, stdout) == (1, "")
-        assert t("cli.member.run.required", kind=kind) in " ".join(stderr.split())
+        assert message in " ".join(stderr.split())
     assert list(RunStore().records()) == []
 
 
@@ -495,7 +511,7 @@ def test_a_command_of_an_environment_runs_no_git_on_the_host(
 ) -> None:
     """The current mode runs git on the host in a repository the command's
     environment can write, whatever run the command belongs to, if any."""
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: False)
     guest = SimpleNamespace()
     of_an_environment = {
         "task run": MemberInvocation(task_run_id="run-1", guest=guest),

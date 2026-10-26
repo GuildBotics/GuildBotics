@@ -145,7 +145,7 @@ class InteractiveTraceStore:
             return {"sessions": {}}
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return {"sessions": {}}
         return loaded if isinstance(loaded, dict) else {"sessions": {}}
 

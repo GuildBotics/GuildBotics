@@ -57,7 +57,7 @@ def _read_stop_request(request_path: Path) -> StopRequest | None:
         return StopRequest.from_dict(
             json.loads(request_path.read_text(encoding="utf-8"))
         )
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

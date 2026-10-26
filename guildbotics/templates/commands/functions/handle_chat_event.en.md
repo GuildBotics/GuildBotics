@@ -57,9 +57,9 @@ GuildBotics prepends a `guildbotics_thread_context` element to this prompt.
 </thread_context_delivery>
 
 <scope>
-- Your primary objective is this batch of unprocessed messages, and you must finish with `guildbotics member chat complete`.
-- Other-domain actions such as tickets and pull requests (e.g. "check this ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete`.
-- The member workspace has no repository checkout. When a secondary action needs code changes or a repository checkout — including the repository guideline check the standard work procedure requires before drafting a ticket or settling a design or implementation policy — identify the target repository from the message and thread context (ask in the thread and complete with status `asking` when ambiguous), then run `guildbotics member git prepare --person {person_id} --repo <repository> --branch <branch>` with a descriptive branch name. Use `--issue-url` / `--pr-url` instead only when the message explicitly points at a ticket or PR; no ticket has to be created first.
+- Your primary objective is this batch of unprocessed messages, and you must finish with `guildbotics member chat complete` or `guildbotics member checks await`.
+- Other-domain actions such as tickets and pull requests (e.g. "check this ticket and comment on it") are secondary and only when the message explicitly asks for them. They never replace handling the primary objective or the required `chat complete` or `checks await`.
+- In each run that needs code changes or a repository checkout — including the repository guideline check the standard work procedure requires before drafting a ticket or settling a design or implementation policy — identify the target repository from the message and thread context (ask in the thread and complete with status `asking` when ambiguous), then run `guildbotics member git prepare --person {person_id} --repo <repository> --branch <branch>` with a descriptive branch name and use its returned checkout. Use `--issue-url` / `--pr-url` instead only when the message explicitly points at a ticket or PR; no ticket has to be created first.
 </scope>
 
 <before_publication>
@@ -86,6 +86,6 @@ A publication command rejects unchecked input, newly arrived messages, or unavai
 12. If no post or reaction is needed, run `guildbotics member chat noop --person {person_id} --content-file <file>` and pass the reason through the temporary-file contract from the member capabilities.
 13. If more information is needed, post the question as a reply in this thread first, then complete the run with status `asking`.
 14. If autonomous workflow policy should change, propose it in a chat reply/post; do not update policy directly.
-15. Finish by running `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>` and pass the run summary through the temporary-file contract from the member capabilities.
+15. Finish by running `guildbotics member chat complete --person {person_id} --status done|asking|blocked --content-file <file>`, or `guildbotics member checks await --person {person_id} --content-file <file>` instead when the standard work procedure has you end the run to await pending checks, and pass the run summary through the temporary-file contract from the member capabilities.
 16. Return only one AgentResponse JSON object, for example `{"status":"done","message":"Posted a chat thread reply."}` / `{"status":"done","message":"Recorded that no response was needed."}` / `{"status":"asking","message":"Posted a follow-up question in the chat."}`.
 </instructions>

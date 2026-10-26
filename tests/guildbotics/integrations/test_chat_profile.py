@@ -32,6 +32,7 @@ def test_get_chat_subscriptions_reads_message_channels():
             "channel_id": "C1",
             "channel_name": "dev-chat",
             "participation": "social",
+            "notify_work_stops": False,
             "startup_backfill_minutes": 60,
             "backfill_interval_seconds": 300,
         }
@@ -41,7 +42,12 @@ def test_get_chat_subscriptions_reads_message_channels():
 def test_get_chat_subscriptions_takes_the_channel_name_from_the_channel():
     person = _Person(message_channels=[{"name": "dev-chat", "chat": {"enabled": True}}])
     assert get_chat_subscriptions(person) == [
-        {"channel_id": "", "channel_name": "dev-chat", "participation": "strict"}
+        {
+            "channel_id": "",
+            "channel_name": "dev-chat",
+            "participation": "strict",
+            "notify_work_stops": False,
+        }
     ]
 
 
@@ -66,3 +72,9 @@ def test_a_channel_whose_chat_is_disabled_is_not_watched():
         ]
     )
     assert [sub["channel_id"] for sub in get_chat_subscriptions(person)] == ["C1"]
+
+
+@pytest.mark.parametrize("setting", [None, False, True, "false", "true", 1])
+def test_work_stop_notifications_require_an_explicit_true(setting):
+    person = _Person(message_channels=[{"chat": {"notify_work_stops": setting}}])
+    assert get_chat_subscriptions(person)[0]["notify_work_stops"] is (setting is True)

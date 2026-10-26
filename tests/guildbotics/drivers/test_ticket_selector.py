@@ -4,23 +4,33 @@ Every route that runs the ticket workflow goes through ``TicketSelector``; the
 workflow only runs the AI CLI turn with the input selected here.
 """
 
+from dataclasses import replace
+
 import pytest
 
-from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.capabilities.task_runs import RunStore, TaskRunStore
 from guildbotics.drivers.ticket_selector import TicketSelector
-from guildbotics.entities.task import Task
-from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.port import ServiceUnavailable, WorkflowStatus
+from guildbotics.entities.task import AwaitedRun, Task
+from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
+from guildbotics.entities.team import Person
+from guildbotics.integrations.local import store
+from guildbotics.integrations.local.chat import LocalChatService, channel_path
+from guildbotics.runtime.member_invocation import ChatSubject, Work
+from guildbotics.runtime.port import ServiceError, ServiceUnavailable, WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.correlation import current_trace, trace_scope
 from guildbotics.utils.i18n_tool import get_language, set_language, t
+from tests.guildbotics.local_chat import lines
 from tests.guildbotics.local_code_host import (
+    REPOSITORY,
     TRACKER,
     comment,
     item,
     local_member,
     pull_request,
+    remote_with,
     ticket,
+    write,
 )
 
 ISSUE_URL = f"local://tickets/{TRACKER}/T-1"
@@ -42,16 +52,35 @@ def _talk_as_echoes(monkeypatch):
     monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", fake_talk_as)
 
 
+#: The channel the member watches on the project's local chat.
+CHANNEL = "C1"
+
+
 class _Context:
-    """The member's local code host and board, closed per selection step."""
+    """The member's local code host, board and chat, closed per selection
+    step."""
 
     def __init__(self) -> None:
-        self.member = local_member()
+        self.member = local_member(
+            Person(
+                person_id="aiko",
+                name="Aiko",
+                person_type="agent",
+                message_channels=[
+                    {
+                        "name": "dev",
+                        "chat": {"channel_id": CHANNEL, "notify_work_stops": True},
+                    }
+                ],
+            )
+        )
         self.person = self.member.person
         self.team = self.member.team
+        self.team.project.services["chat_service"] = {"name": "local"}
+        self.chat = LocalChatService(self.person)
         self.closed = 0
 
-    def clone_for(self, person: object) -> "_Context":
+    def clone_for(self, person: object) -> _Context:
         return self
 
     def get_ticket_service(self):
@@ -59,6 +88,9 @@ class _Context:
 
     def get_code_hosting_service(self):
         return self.member.code
+
+    def get_chat_service(self):
+        return self.chat
 
     async def aclose(self) -> None:
         self.closed += 1
@@ -78,7 +110,7 @@ def _statuses(url: str = ISSUE_URL) -> list[WorkflowStatus]:
     ]
 
 
-def _moves(monkeypatch, context: "_Context") -> list[tuple[str, str]]:
+def _moves(monkeypatch, context: _Context) -> list[tuple[str, str]]:
     """The moves the selector makes on the board, each made."""
     moves: list[tuple[str, str]] = []
     move = context.member.tickets.move
@@ -178,6 +210,42 @@ async def test_run_moves_a_ready_ticket_and_hands_the_turn_its_run(monkeypatch):
     assert attributes["target.title"] == "Fix login"
     assert attributes["target.url"] == ISSUE_URL
     assert context.closed == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", [Task.NEW, Task.READY, Task.IN_PROGRESS, Task.DONE])
+async def test_mention_work_keeps_the_assignee_and_lane_and_has_its_own_session(
+    monkeypatch, lane
+):
+    context = _Context()
+    url = ticket(
+        1,
+        title="Context",
+        lane=lane,
+        assignees=["yuki"],
+        comments=[comment("owner", "@aiko Please provide context.")],
+    )
+    moves = _moves(monkeypatch, context)
+    selector = TicketSelector(context)
+    [candidate] = await selector.candidates(context.person)
+    invocation = await selector.refresh(context.person, candidate)
+    assert invocation.work == Work("ticket_mention", url)
+    seen = []
+
+    async def run_workflow(invocation):
+        seen.append(invocation)
+        await context.member.tickets.comment(url, "@yuki Here is the context.")
+        return "answered"
+
+    with trace_scope("routine", trace_id="mention-run", person_id="aiko"):
+        assert (
+            await selector.run(context.person, invocation, run_workflow) == "answered"
+        )
+
+    assert seen[0].work.kind == "ticket_mention"
+    assert moves == []
+    assert (item(url)["lane"], item(url)["assignees"]) == (lane, ["yuki"])
+    assert await selector.refresh(context.person, candidate) is None
 
 
 @pytest.mark.asyncio
@@ -473,6 +541,57 @@ async def test_candidates_are_the_pull_requests_and_then_the_board_and_refresh_b
     ]
 
 
+@pytest.mark.asyncio
+async def test_a_pr_whose_checks_settled_resumes_the_awaited_work():
+    """The patrol resumes the work the wait names -- here a chat thread's --
+    in its conversation, with what the awaiting run said of it as far as this
+    device has it: a record that has not arrived holds nothing up."""
+    context = _Context()
+    remote_with("feature")
+    pull = pull_request(2, "feature", author="aiko")
+    thread = ChatSubject("local", "C1", "T1", "E1", "aiko")
+    work = Work.of_chat(thread)
+    await context.member.code.comment(
+        pull,
+        "Waiting for CI.",
+        status=WorkflowStatus(
+            reason="awaiting_checks",
+            person_id="aiko",
+            run_id="run-0",
+            subject=thread.subject_id,
+            head=store.branch_tip(REPOSITORY, "feature"),
+            work_kind=work.kind,
+            work_identity=work.identity,
+        ),
+    )
+    store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "feature"), "success")
+    selector = TicketSelector(context)  # type: ignore[arg-type]
+    [candidate] = await selector.candidates(context.person)  # type: ignore[arg-type]
+
+    unread = await selector.refresh(context.person, candidate)  # type: ignore[arg-type]
+    assert unread is not None
+    assert (unread.work, unread.payload["awaited_summary"]) == (
+        Work("chat", work.identity),
+        "",
+    )
+
+    runs = RunStore()
+    runs.append_evidence("run-0", "checks_awaited", {"target": {"url": pull}})
+    runs.complete("run-0", "awaiting_checks", "Report in the thread.", work, "aiko")
+    invocation = await selector.refresh(context.person, candidate)  # type: ignore[arg-type]
+
+    assert invocation is not None
+    assert invocation.work == Work("chat", work.identity)
+    assert {
+        key: invocation.payload[key]
+        for key in ("trigger_reason", "awaited_run_id", "awaited_summary")
+    } == {
+        "trigger_reason": "pull_request_checks",
+        "awaited_run_id": "run-0",
+        "awaited_summary": "Report in the thread.",
+    }
+
+
 def test_ticket_trace_attributes_for_ticket_and_pull_request():
     ticket_task = Task(id="1", title="T", description="D", url=ISSUE_URL)
     assert ticket_task.trace_attributes() == {
@@ -494,7 +613,15 @@ def test_ticket_trace_attributes_for_ticket_and_pull_request():
     }
 
 
-def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
+#: The run that awaited a PR's checks, in a chat thread's work.
+_AWAITED = AwaitedRun(
+    run_id="run-0", work_kind="chat", work_identity="local:aiko:C1:T1"
+)
+
+
+def _checks_invocation(
+    pull: str, trigger: str, resumes: AwaitedRun | None = None
+) -> WorkflowInvocation:
     task = Task(
         id=pull,
         url=pull,
@@ -503,6 +630,7 @@ def _checks_invocation(pull: str, trigger: str) -> WorkflowInvocation:
         status=Task.IN_PROGRESS,
         pull_request_url=pull,
         trigger_reason=trigger,
+        resumes=resumes,
     )
     return WorkflowInvocation(
         command="workflows/ticket_driven_workflow",
@@ -531,7 +659,11 @@ def _completing(status: str, awaited: tuple[str, ...] = ()):
                 invocation.run_id, "checks_awaited", {"target": {"url": url}}
             )
         store.complete(
-            invocation.run_id, status, "summary", invocation.work.identity, "aiko"
+            invocation.run_id,
+            status,
+            "summary",
+            Work.of_ticket(invocation.work.identity),
+            "aiko",
         )
         return status
 
@@ -540,22 +672,32 @@ def _completing(status: str, awaited: tuple[str, ...] = ()):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("trigger", "status", "awaits", "settled"),
+    ("trigger", "resumes", "status", "awaits", "settled"),
     [
-        ("pull_request_checks", "done", (), True),
-        ("pull_request_checks", "asking", (), True),
-        ("pull_request_checks", "awaiting_checks", ("resumed",), False),
-        ("pull_request_checks", "awaiting_checks", ("resumed", "other"), False),
+        ("pull_request_checks", _AWAITED, "done", (), True),
+        ("pull_request_checks", _AWAITED, "asking", (), True),
+        ("pull_request_checks", _AWAITED, "awaiting_checks", ("resumed",), False),
+        (
+            "pull_request_checks",
+            _AWAITED,
+            "awaiting_checks",
+            ("resumed", "other"),
+            False,
+        ),
         # The run awaits another PR only: the resumed PR's wait is over.
-        ("pull_request_checks", "awaiting_checks", ("other",), True),
-        ("pull_request_feedback", "done", (), False),
+        ("pull_request_checks", _AWAITED, "awaiting_checks", ("other",), True),
+        # Feedback on a PR whose checks are awaited resumes the awaited work,
+        # and ends the wait like any run that resumes it.
+        ("pull_request_feedback", _AWAITED, "done", (), True),
+        ("pull_request_feedback", None, "done", (), False),
     ],
 )
 async def test_a_run_resumed_for_checks_ends_their_wait(
-    trigger, status, awaits, settled
+    trigger, resumes, status, awaits, settled
 ):
     """Whatever the resumed run wrote on the PR, the host ends the wait with
-    a notice of its own, unless the run awaits that PR's checks again."""
+    a notice of its own, unless the run awaits that PR's checks again. The
+    run answers for the PR, whatever work it resumes."""
     context = _Context()
     pull = pull_request(2, "feature", author="aiko")
     other = pull_request(3, "other", author="aiko")
@@ -565,11 +707,20 @@ async def test_a_run_resumed_for_checks_ends_their_wait(
     with trace_scope("routine", trace_id="trace-5", person_id="aiko"):
         result = await selector.run(  # type: ignore[arg-type]
             context.person,
-            _checks_invocation(pull, trigger),
+            _checks_invocation(pull, trigger, resumes),
             _completing(status, awaited),
         )
 
     assert result == status
+    assert (pull in RunStore().awaited_pull_requests("trace-5")) == (
+        "resumed" in awaits
+    )
+    resumed_for = [
+        item["payload"]["target"]["url"]
+        for item in RunStore().evidence("trace-5")
+        if item["evidence_type"] == "checks_resumed"
+    ]
+    assert resumed_for == ([pull] if resumes else [])
     assert _statuses(pull) == (
         [
             WorkflowStatus(
@@ -582,3 +733,385 @@ async def test_a_run_resumed_for_checks_ends_their_wait(
         if settled
         else []
     )
+
+
+def _notices() -> list[tuple[WorkflowStatus | None, str]]:
+    """The status and text of each notice the member posted in its channel."""
+    if not channel_path(CHANNEL).exists():
+        return []
+    return [
+        (WorkflowStatus.from_payload(line.get("status")), line["text"])
+        for line in lines(CHANNEL)
+    ]
+
+
+def _notice(reason: str, run_id: str, url: str, item: str, comment_url: str):
+    text = t(f"capabilities.work_stops.{reason}", name="Aiko", item=item, url=url)
+    if comment_url:
+        text += "\n" + t("capabilities.work_stops.comment", url=comment_url)
+    status = WorkflowStatus(
+        reason=reason,  # type: ignore[arg-type]
+        person_id="aiko",
+        run_id=run_id,
+        subject=url,
+    )
+    return (status, text)
+
+
+def _work(kind: str, source: str = "routine") -> tuple[WorkflowInvocation, str, str]:
+    """The invocation of ticket or pull request work, the URL of its item, and
+    how a notice names it."""
+    if kind == "ticket":
+        task = _task().model_copy(update={"label": "T-1"})
+        invocation, url, item = _invocation(task, source), ISSUE_URL, "T-1 Fix login"
+    else:
+        url = pull_request(2, "feature", author="aiko")
+        invocation = replace(
+            _checks_invocation(url, "pull_request_feedback"), source=source
+        )
+        task = Task.model_validate(invocation.payload["task"]).model_copy(
+            update={"label": "#2"}
+        )
+        item = "#2 Pull request 2"
+    return (
+        replace(invocation, payload={**invocation.payload, "task": task.model_dump()}),
+        url,
+        item,
+    )
+
+
+def _completing_on(status: str, url: str, comment_url: str):
+    """A run whose member comments on the item ``url``, at ``comment_url``,
+    and completes with ``status``."""
+
+    async def run_workflow(invocation: WorkflowInvocation) -> str:
+        store = TaskRunStore()
+        store.append_evidence(
+            invocation.run_id,
+            "pr_comment",
+            {"id": "comment-1", "url": comment_url, "target": {"url": url}},
+        )
+        if status == "awaiting_checks":
+            store.append_evidence(
+                invocation.run_id, "checks_awaited", {"target": {"url": url}}
+            )
+        store.complete(
+            invocation.run_id,
+            status,
+            "summary",
+            Work.of_ticket(invocation.work.identity),
+            "aiko",
+        )
+        return status
+
+    return run_workflow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["ticket", "pull_request"])
+@pytest.mark.parametrize("status", TASK_RUN_COMPLETIONS)
+async def test_a_run_that_waits_for_a_person_is_announced_once(kind, status):
+    """A run that ends asking or blocked leaves the member's comment as the
+    last word on its item: the member says so in its channel, linking the
+    item and the comment."""
+    context = _Context()
+    invocation, url, label = _work(kind)
+    comment_url = f"{url}#comment-1"
+
+    with trace_scope("routine", trace_id="trace-6", person_id="aiko"):
+        result = await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, _completing_on(status, url, comment_url)
+        )
+
+    assert result == status
+    assert _notices() == (
+        [_notice(status, "trace-6", url, label, comment_url)]
+        if status in {"asking", "blocked"}
+        else []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["ticket", "pull_request"])
+async def test_a_failed_run_is_announced_with_its_failure_comment(monkeypatch, kind):
+    """A failure the run reported on its item waits for a person like a
+    question does: the notice links the failure comment."""
+    context = _Context()
+    invocation, url, label = _work(kind)
+    service = context.member.code if kind == "pull_request" else context.member.tickets
+    comment = service.comment
+
+    async def addressed(*args, **kwargs):
+        written = await comment(*args, **kwargs)
+        return written.model_copy(update={"url": f"{url}#comment-9"})
+
+    monkeypatch.setattr(service, "comment", addressed)
+    error = RuntimeError("boom")
+
+    with (
+        trace_scope("routine", trace_id="trace-8", person_id="aiko"),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, _failing(error)
+        )
+
+    assert raised.value is error
+    assert [status.reason for status in _statuses(url)] == ["failed"]
+    assert _notices() == [_notice("failed", "trace-8", url, label, f"{url}#comment-9")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["ticket", "pull_request"])
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_a_timeout_posts_one_explanation_and_one_failed_notice(kind, language):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.agent_runtime.models import (
+        TURN_TIMEOUT_SECONDS,
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    set_language(language)
+    context = _Context()
+    invocation, url, _ = _work(kind)
+    error = CliAgentExecutionError(
+        cli_agent="claude",
+        result=CliAgentExecutionResult(
+            stdout="", stderr="timeout", returncode=1, error_category="timeout"
+        ),
+    )
+
+    async def timed_out(invocation):
+        raise CommandError("wrapped") from error
+
+    with trace_scope("routine", trace_id="timeout-run", person_id="aiko"):
+        with pytest.raises(CommandError):
+            await TicketSelector(context).run(context.person, invocation, timed_out)
+
+    comments = item(url)["comments"]
+    assert len(comments) == 1
+    assert comments[0]["body"] == t(
+        "drivers.task_scheduler.turn_timeout", hours=TURN_TIMEOUT_SECONDS // 3600
+    )
+    assert [status.reason for status in _statuses(url)] == ["failed"]
+    assert len(_notices()) == 1
+    assert _notices()[0][0].reason == "failed"
+    selector = TicketSelector(context)
+    assert await selector.candidates(context.person) == []
+    resumed_item = item(url)
+    resumed_item["comments"].append(
+        comment("human", "Please continue.", created_at="2099-01-01T00:00:00+00:00")
+    )
+    write(store.locate(url, kind), resumed_item)
+    [candidate] = await selector.candidates(context.person)
+    resumed = await selector.refresh(context.person, candidate)
+    assert resumed is not None
+    assert resumed.work == invocation.work
+    assert len(item(url)["comments"]) == 2
+    assert len(_notices()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [False, True])
+@pytest.mark.parametrize("outcome", ["member voice", "", "failure"])
+async def test_failure_comments_share_member_voice_and_fallback(
+    monkeypatch, timeout, outcome
+):
+    from guildbotics.intelligences.agent_runtime.models import (
+        TURN_TIMEOUT_SECONDS,
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    spoken = []
+
+    async def talk(context, text, role, attachments):
+        spoken.append((text, role, attachments))
+        if outcome == "failure":
+            raise RuntimeError("inference unavailable")
+        return outcome
+
+    monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", talk)
+    context = _Context()
+    invocation, url, _ = _work("ticket")
+    error = (
+        CliAgentExecutionError(
+            cli_agent="claude",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="timeout", returncode=1, error_category="timeout"
+            ),
+        )
+        if timeout
+        else RuntimeError("failed")
+    )
+    with trace_scope("routine", trace_id="voice-run", person_id="aiko"):
+        with pytest.raises(type(error)):
+            await TicketSelector(context).run(
+                context.person, invocation, _failing(error)
+            )
+    original = (
+        t("drivers.task_scheduler.turn_timeout", hours=TURN_TIMEOUT_SECONDS // 3600)
+        if timeout
+        else t("drivers.task_scheduler.task_error")
+    )
+    assert spoken == [(original, "Ticket", [])]
+    assert item(url)["comments"][0]["body"] == (
+        "member voice" if outcome == "member voice" else original
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_comment_without_an_address_is_announced_with_its_item():
+    context = _Context()
+    invocation, url, label = _work("ticket")
+
+    with (
+        trace_scope("routine", trace_id="trace-8", person_id="aiko"),
+        pytest.raises(RuntimeError),
+    ):
+        await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, _failing(RuntimeError("boom"))
+        )
+
+    assert _notices() == [_notice("failed", "trace-8", url, label, "")]
+
+
+async def _unavailable(invocation: WorkflowInvocation):
+    raise ServiceUnavailable("not connected")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["rate_limited", "deferred", "comment_failed"])
+async def test_a_stop_that_waits_for_no_person_is_not_announced(monkeypatch, case):
+    """A rate limit resumes on its own, a deferred run never started, and a
+    failure that could not be said on its item leaves no comment to answer."""
+    context = _Context()
+    invocation, _url, _label = _work("ticket")
+    _capture_rate_limit_events(monkeypatch)
+    run_workflow = {
+        "rate_limited": _failing(_rate_limit_error()),
+        "deferred": _unavailable,
+        "comment_failed": _failing(RuntimeError("boom")),
+    }[case]
+    if case == "comment_failed":
+
+        async def failing_comment(*_args, **_kwargs):
+            raise RuntimeError("the board is down")
+
+        monkeypatch.setattr(context.member.tickets, "comment", failing_comment)
+
+    with trace_scope("routine", trace_id="trace-2", person_id="aiko"):
+        try:
+            await TicketSelector(context).run(  # type: ignore[arg-type]
+                context.person, invocation, run_workflow
+            )
+        except RuntimeError:
+            pass
+
+    assert _notices() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["asking", "failed"])
+async def test_a_manual_run_is_not_announced(outcome):
+    """The person who started the run sees how it ended."""
+    context = _Context()
+    invocation, url, _label = _work("ticket", source="manual")
+    run_workflow = (
+        _failing(RuntimeError("boom"))
+        if outcome == "failed"
+        else _completing_on("asking", url, f"{url}#comment-1")
+    )
+
+    with trace_scope("manual", trace_id="trace-1", person_id="aiko"):
+        try:
+            await TicketSelector(context, source="manual").run(  # type: ignore[arg-type]
+                context.person, invocation, run_workflow
+            )
+        except RuntimeError:
+            pass
+
+    assert _notices() == []
+
+
+@pytest.mark.asyncio
+async def test_a_notice_that_cannot_be_posted_changes_nothing_of_the_run(monkeypatch):
+    context = _Context()
+    invocation, url, _label = _work("ticket")
+
+    async def failing_post(*_args, **_kwargs):
+        raise ServiceError("chat is down")
+
+    monkeypatch.setattr(context.chat, "post_message", failing_post)
+
+    with trace_scope("routine", trace_id="trace-a", person_id="aiko"):
+        result = await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, _completing_on("blocked", url, f"{url}#c")
+        )
+    error = RuntimeError("boom")
+    with (
+        trace_scope("routine", trace_id="trace-b", person_id="aiko"),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, _failing(error)
+        )
+
+    assert result == "blocked"
+    assert raised.value is error
+    assert [status.reason for status in _statuses(url)] == ["failed"]
+    assert context.closed == 2
+
+
+@pytest.mark.asyncio
+async def test_each_stop_is_announced_by_its_own_notice():
+    context = _Context()
+    invocation, url, label = _work("ticket")
+
+    for run_id, status in (("trace-x", "asking"), ("trace-y", "blocked")):
+        with trace_scope("routine", trace_id=run_id, person_id="aiko"):
+            await TicketSelector(context).run(  # type: ignore[arg-type]
+                context.person, invocation, _completing_on(status, url, f"{url}#c")
+            )
+
+    assert _notices() == [
+        _notice("asking", "trace-x", url, label, f"{url}#c"),
+        _notice("blocked", "trace-y", url, label, f"{url}#c"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", ["asking", "blocked"])
+async def test_a_run_that_fails_after_its_completion_is_announced_as_failed(
+    monkeypatch, recorded
+):
+    """A run that raised after its member recorded a completion (its result
+    failed validation, say) is settled as the failure it is: one notice, of
+    the failure, posted once the failure comment is on the item."""
+    context = _Context()
+    invocation, url, label = _work("ticket")
+    complete = _completing_on(recorded, url, f"{url}#comment-1")
+    post = context.chat.post_message
+    comments_when_posted: list[list[str]] = []
+
+    async def recorded_post(*args, **kwargs):
+        comments_when_posted.append([status.reason for status in _statuses(url)])
+        return await post(*args, **kwargs)
+
+    monkeypatch.setattr(context.chat, "post_message", recorded_post)
+
+    async def run_workflow(invocation: WorkflowInvocation) -> str:
+        await complete(invocation)
+        raise RuntimeError("the result is invalid")
+
+    with (
+        trace_scope("routine", trace_id="trace-c", person_id="aiko"),
+        pytest.raises(RuntimeError, match="invalid"),
+    ):
+        await TicketSelector(context).run(  # type: ignore[arg-type]
+            context.person, invocation, run_workflow
+        )
+
+    assert _notices() == [_notice("failed", "trace-c", url, label, "")]
+    assert comments_when_posted == [["failed"]]

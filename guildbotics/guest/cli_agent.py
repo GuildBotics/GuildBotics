@@ -100,7 +100,7 @@ def _agent_execution_context(kwargs: dict[str, Any]) -> dict[str, Any]:
 def _attempt(context: dict[str, Any]) -> int:
     try:
         return max(1, int(context.get("attempt") or 1))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 1
 
 
@@ -179,7 +179,7 @@ def _continuation_rejection(
     if not conversation.provider_session_id:
         return None
     identity_ok = _continuation_identity_matches(context, conversation)
-    if context.conversation_key.work_kind != "chat":
+    if not _feeds_chat_thread(context):
         if context.attempt > 1 and not identity_ok:
             return _rejection_details("identity_mismatch", context, conversation)
         return None
@@ -191,6 +191,13 @@ def _continuation_rejection(
     if relation == "equal" and not identity_ok:
         return _rejection_details("identity_mismatch", context, conversation)
     return None
+
+
+def _feeds_chat_thread(context: AgentExecutionContext) -> bool:
+    """Whether the turn feeds the session its chat thread up to a cursor, as a
+    chat event's does; a run resumed in a chat thread's work feeds none and
+    continues the session as any other work does."""
+    return bool(context.context_cursor)
 
 
 def _rejection_details(
@@ -220,7 +227,7 @@ def _native_turn_input(
     retried attempt (non-chat) is a legitimate same-run/event continuation.
     """
     if conversation.provider_session_id:
-        if context.conversation_key.work_kind != "chat":
+        if not _feeds_chat_thread(context):
             if context.attempt > 1:
                 return _continuation_input(input, configured)
             return input
@@ -235,7 +242,7 @@ def _native_turn_input(
             mode="incremental",
             after_cursor=conversation.context_cursor,
         )
-    if context.conversation_key.work_kind == "chat":
+    if _feeds_chat_thread(context):
         mode = "full" if context.rebuild_context_complete else "inspect_required"
         return _thread_context_input(input, configured, mode=mode)
     return input
@@ -545,6 +552,12 @@ class CliAgentBrain(Brain):
                 )
 
             async def emit(event: Any) -> None:
+                if (
+                    event.kind is AgentEventKind.TURN
+                    and event.name == CONTEXT_COMPACTION
+                ):
+                    conversation.healthy = False
+                    conversation.rotation_reason = CONTEXT_COMPACTION
                 await records.add(
                     EventEntry(
                         span=current_span(),
@@ -613,6 +626,10 @@ class CliAgentBrain(Brain):
                 )
                 if exc.rotate_session:
                     store.mark_unhealthy(conversation, exc.category.value)
+                elif exc.category is AgentRuntimeErrorCategory.TIMEOUT:
+                    conversation.last_run_id = context.run_id
+                    conversation.last_event_id = context.event_id
+                    store.save(conversation)
                 details = {str(key): str(value) for key, value in exc.details.items()}
                 details["cli_agent"] = adapter_name
                 if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
@@ -660,13 +677,6 @@ class CliAgentBrain(Brain):
                     "context_used_tokens", 0
                 )
                 conversation.context_size_tokens = terminal.usage["context_size_tokens"]
-            compacted = any(
-                event.kind is AgentEventKind.TURN and event.name == CONTEXT_COMPACTION
-                for event in terminal.events
-            )
-            conversation.healthy = not compacted
-            if compacted:
-                conversation.rotation_reason = CONTEXT_COMPACTION
             store.save(conversation)
             return CliAgentExecutionResult(
                 stdout=terminal.output.strip(),

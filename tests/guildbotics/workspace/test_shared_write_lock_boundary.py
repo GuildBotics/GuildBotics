@@ -572,7 +572,7 @@ def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
     def note(path: Path) -> None:
         try:
             relative = path.resolve().relative_to(shared.resolve())
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return
         if relative.parts and relative.parts[0] in {"config", "state"}:
             seen.append((relative.as_posix(), shared_write_lock_is_held(workspace)))

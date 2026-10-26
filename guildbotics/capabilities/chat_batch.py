@@ -44,6 +44,6 @@ def completed_chat_event_ids(evidence: list[dict[str, Any]], status: str) -> lis
             updates.update(dict.fromkeys(record["payload"]["event_ids"]))
         elif kind in _CHAT_ACTION_EVIDENCE_TYPES:
             handled.update(updates)
-    if status in {"done", "asking"}:
+    if status in {"done", "asking", "awaiting_checks"}:
         batch.update(handled)
     return list(batch)

@@ -65,8 +65,8 @@ runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出
 ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
 bindします）。
 
-環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIと、GuildBotics自身の
-Python環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
+環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIとそれが動くNode.jsと、
+GuildBotics自身のPython環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
 ベースイメージに入れます。Desktopの **エージェント実行環境** 画面がruntime、ベースイメージ、
 snapshotの状態（ビルドボタンつき）、
 割り当てリソース、network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
@@ -77,7 +77,7 @@ microVM起動時に適用します。imageのビルド中と環境が使えな�
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
 GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコードを動かすためのものです。
-`/opt/guildbotics/venv`にPython 3.12（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
+`/opt/guildbotics/venv`にPython 3.15（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
 入れます）と固定した依存を入れ、`to_pdf`が使うWeasyPrintのネイティブライブラリ（Pango）と、欧文・
 日本語のフォント（`fonts-dejavu-core`、`fonts-noto-cjk`）を`apt-get`で入れます。依存の一覧は
 `guildbotics/environment/requirements.txt`で、`uv.lock`からhostでしか使わない
@@ -93,13 +93,13 @@ build）を、どのコマンドのmicroVMにも`/opt/guildbotics/code/guildboti
 GuildBoticsのコードは`PYTHONPATH`を使わず`python -B`で動かすので、turnが自分のPythonでテストする
 プロジェクト（GuildBoticsのチェックアウトも含む）は、bindされたコードではなく自分のコードをimportします。
 
-既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルドは、macOSで約35秒
+ベースイメージ `node:22.23.2-bookworm`（arm64）でのsnapshotのビルドは、macOSで約35秒
 （ベースイメージ取得済み）です。snapshotが持つのはベースイメージに書き足した分（書き込み層
 `upper.ext4`）だけで、その使用量は約1.8 GBです。環境全体の大きさはこれにベースイメージを足したもの
-です。そのため、ビルドが入れるもの（Python 3.12など）を最初から持つimageでは、環境全体が大きくても
+です。そのため、ビルドが入れるもの（Python 3.15など）を最初から持つimageでは、環境全体が大きくても
 snapshotは小さくなります。
 
-ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
+ベースイメージは既定でGuildBoticsが固定したDebianのimage（gitとビルドの道具を含む）です。別の
 ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
 ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
 アーカイブを各端末で`guildbotics environment image load`で読み込み、**エージェント実行環境**
@@ -113,9 +113,10 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`）と、
+するか、buildの手順が使うもの（Debianの`apt-get`、`curl`と`tar`、GuildBoticsのPythonに
+wheelが無いPythonの依存をビルドする`gcc`・`g++`・`make`）と、
 [member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
-備えていれば何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
+備えていれば何でもかまいません。imageのNode.jsは、buildがGuildBoticsの固定した版で置き換えます。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。ワークスペースのコードホストのCIのジョブが同じimageで動く場合（Branvil）は、CIランナーが動くマシンで`guildbotics environment image load-ci <アーカイブ>`を実行し、CIランナーにも読み込みます（パイプラインはimageをタグだけで指すので、ジョブがどの版で動くかはランナーのキャッシュで決まります）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuild、この端末とCIランナーへの読み込み、宣言）が実例です。
 
@@ -812,7 +813,7 @@ GitHub Copilot CLIは、ACP標準の`usage_update`でセッション文脈量（
 
 GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
 提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
-GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.95を固定しており（1.0.83のserverには
+GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.103を固定しており（1.0.83のserverには
 `account.getQuota`が存在しません）、`connect`のあとに`account.getQuota`を呼ぶと
 `quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
 `entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
@@ -835,7 +836,7 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
 `agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.3.3
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.4.7
 を固定しており、構造化payloadは1.2.13で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
 既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /

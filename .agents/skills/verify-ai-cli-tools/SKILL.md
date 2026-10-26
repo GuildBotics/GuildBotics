@@ -8,10 +8,10 @@ description: Verify AI CLI releases on an existing GuildBotics update PR when a 
 Invoke with `$verify-ai-cli-tools` and an existing update PR, or use the PR
 already identified in the conversation. If the target is unknown, ask which
 PR to verify. This is optional, human-attended verification; the unattended
-[update skill](../update-ai-cli-tools/SKILL.md) does not call it.
+[update skill](../update-dependencies/SKILL.md) does not call it.
 
 Inspect the PR's current head, changed pins, and existing verification results.
-Use that PR's branch and checkout, normally `codex/update-ai-cli-tools`, in a
+Use that PR's branch and checkout, normally `codex/update-dependencies`, in a
 dedicated worktree. Do not verify the remote default branch or a different
 revision, switch the user's shared checkout, create a new update PR, or merge.
 Choose the affected tools and checks from the human's request and PR diff.
@@ -39,7 +39,7 @@ a service running old code can rebuild its own snapshot and remove yours.
 Saved logins are device-wide, so a separate workspace still uses the device's
 logins. Do not log in, reset, or replace them as part of verification.
 
-After build approval, run from the target PR checkout with Python 3.12 and
+After build approval, run from the target PR checkout with Python 3.15 and
 its dependencies. This creates a disposable workspace outside the repository:
 
 ```bash
@@ -152,7 +152,7 @@ the final configuration. A prior passing result is not evidence for that revisio
 ## 3. Record only observed behavior on the same PR
 
 Use the version searches and distinctions in the update skill's
-[version-dependent documentation section](../update-ai-cli-tools/SKILL.md#2-update-what-depends-on-the-version).
+[version-dependent documentation section](../update-dependencies/SKILL.md#2-update-what-depends-on-the-version).
 Advance measured descriptions, verified baselines, and fixtures only when a
 check observed that exact behavior on the final pin. Rename a newly recorded
 fixture and its references together; retain earlier evidence that remains useful.

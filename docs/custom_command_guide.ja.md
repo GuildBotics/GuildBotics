@@ -103,7 +103,7 @@ language_name: 日本語
 - 作業ディレクトリに直接書けるのは、そこが読み書き可の許可先（受け渡しフォルダなど）に含まれるときだけです。それ以外の作業ディレクトリでは、`.git` を読み取り専用にした写しでコマンドが動き、コマンドが成功して終わったときに、変わった通常ファイルだけが元の作業ディレクトリへ書き戻されます（リポジトリでは、ignore される未追跡ファイルを写さず、ignore される新しいファイルを書き戻しません。シンボリックリンクと `.git` の中は書き戻しません。詳しくは[ネイティブエージェント実行基盤](native_agent_runtime.ja.md)）。
 - 作業ディレクトリの外のファイルには、隔離環境に許可したディレクトリを通してだけ届きます。受け渡しフォルダ `~/Documents/GuildBotics` は常に許可され、コマンドが `read_only` を宣言していなければ読み書きできます（[3.1](#31-読み取り専用の宣言)）。
 - ネットワークには、`intelligences/agent_environment.yml` のワークスペース共通の `network:` が許す範囲でだけ届き、省略時はすべて拒否します。ネットワークに接続するコマンド（Web API やフィードの取得など）は、実行する前に接続先を `network:` で許可しておく必要があります。
-- Python コマンドは GuildBotics 自身の Python 環境（Python 3.12 と GuildBotics・その依存）で、シェルスクリプトは隔離環境のベースイメージにあるツールで動きます。
+- Python コマンドは GuildBotics 自身の Python 環境（Python 3.15 と GuildBotics・その依存）で、シェルスクリプトは隔離環境のベースイメージにあるツールで動きます。
 
 ディレクトリの許可と `network:` については [エージェント隔離環境のアクセス許可](native_agent_runtime.ja.md#エージェント隔離環境のアクセス許可) を参照してください。
 
@@ -332,7 +332,7 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` で、未設定・未対応のサービスは明示的にエラーになります。GitHub では、メンバーの認証情報（GitHub App または fine-grained PAT）に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存の App はインストール先で追加権限を承認し、既存の PAT はトークンの権限を編集して、organization が要求する承認を済ませてください。手順は [GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)を参照してください。
+コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` と `branvil` で、未設定・未対応のサービスは明示的にエラーになります。Branvil は、リポジトリの上流の GitHub の Dependabot アラートを、Branvil が GitHub の読み取りに使うアカウントで読んで返すので、そのアカウントに同じ権限が要ります（[Branvil 連携ガイド](branvil_integration.ja.md#上流が-github-のリポジトリ)）。上流の無いリポジトリは未対応として拒否されます。GitHub では、メンバーの認証情報（GitHub App または fine-grained PAT）に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存の App はインストール先で追加権限を承認し、既存の PAT はトークンの権限を編集して、organization が要求する承認を済ませてください。手順は [GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)を参照してください。
 
 `output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では未提供の任意項目を省略し、修正版の報告がない場合だけ明示します。見出しには取得する状態と、各アラートの ID・パッケージ・重要度を表示します。一覧には概要を、個別表示には他の項目の後ろに引用ブロックで説明の全文を表示します。対象は依存ライブラリの脆弱性です。
 

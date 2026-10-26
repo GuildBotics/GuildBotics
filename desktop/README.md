@@ -109,6 +109,13 @@ npm run test:watch    # ウォッチ
 npm run quality       # format:check + lint + typecheck + duplicates + test（E2E は含まない）
 ```
 
+入力停止から一定時間後の処理（idle自動実行など）を検証するテストは、
+必要なデータの取得と画面の表示を待ってから仮想時計を止めます。
+`fireEvent`で入力やフォーカスのイベントを送り、`act`内の`vi.advanceTimersByTimeAsync`で
+本番の期限の直前と到達時点まで時計を進めます。入力操作に掛かった実時間が待ち時間に含まれると、
+遅い環境で入力途中の値が先に処理されるためです。
+実装例は[`QuickRun.test.tsx`](src/quick/QuickRun.test.tsx)を参照してください。
+
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
 jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ FastAPI ↔ EventBus(websocket)` + 実ファイル書き込み」を貫く critical user journey を検証します。Tauri は使わず browser-preview mode で実 backend に接続し、各 journey を専用の temp workspace と backend / frontend ポートで隔離して起動します。

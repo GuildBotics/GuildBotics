@@ -379,6 +379,10 @@ def _issue(context: ssl.SSLContext, names: tuple[str, ...]) -> bytes:
             ),
             critical=True,
         )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
         .sign(ca_key, hashes.SHA256())
     )
     key = ec.generate_private_key(ec.SECP256R1())
@@ -391,6 +395,10 @@ def _issue(context: ssl.SSLContext, names: tuple[str, ...]) -> bytes:
         )
         .add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
         )
         .sign(ca_key, hashes.SHA256())
     )

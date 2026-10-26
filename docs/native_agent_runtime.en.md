@@ -79,7 +79,7 @@ path appears with its drive letter as the top-level directory (`C:\work`
 is `/c/work`); the working directory is bound under the same convention.
 
 What the environment holds -- the base image, the provider CLIs GuildBotics
-installs at pinned versions, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
+installs at pinned versions with the Node.js they run on, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
 when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
 **Agent execution environment** screen in the Desktop shows the runtime, the
@@ -97,7 +97,7 @@ loaded, an unbuilt snapshot, no login) is shown in the same words in the
 alert band at the top of the screen.
 
 GuildBotics' own Python environment is what GuildBotics' code runs with inside
-the environment. `/opt/guildbotics/venv` holds Python 3.12 (the image's own
+the environment. `/opt/guildbotics/venv` holds Python 3.15 (the image's own
 when it has one, otherwise installed by uv under `/opt/uv/python`) and the
 pinned dependencies, and `apt-get` installs WeasyPrint's native libraries
 (Pango) for `to_pdf` with fonts for Latin and Japanese text
@@ -118,16 +118,16 @@ writes into its `site-packages`; GuildBotics' code runs with `python -B` and
 no `PYTHONPATH`, so a project a turn tests with its own Python (the
 GuildBotics checkout among them) imports its own code, not the bound one.
 
-With the default base image (`node:22.23.2-bookworm`, arm64), the snapshot
+With the base image `node:22.23.2-bookworm` (arm64), the snapshot
 build takes about 35 s on macOS (base image already pulled). A snapshot holds
 only what the build adds on top of the base image (the writable layer
 `upper.ext4`), which uses about 1.8 GB; the whole environment is that plus the
-base image. An image that already has what the build installs (Python 3.12,
+base image. An image that already has what the build installs (Python 3.15,
 say) therefore gives a smaller snapshot even when the whole environment is
 larger.
 
-The base image is GuildBotics' own by default (Debian + Node.js + npm + git
-+ uv). A workspace that needs another toolchain -- a Python interpreter,
+The base image is a Debian image GuildBotics pins by default (with git and
+build tools). A workspace that needs another toolchain -- a Python interpreter,
 Rust, a browser -- declares an image it built itself. The image's content is
 not shared: load its `docker save` archive on each device with `guildbotics
 environment image load`, then pick it from the images loaded on this device under **LLM / AI
@@ -147,11 +147,12 @@ band, and in `environment status` that says how to fall in line. The
 snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
-build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
-`tar`) and git, which [member git](#member-git-and-the-members-clones) runs
+build steps what they use (Debian's `apt-get`, `curl` and
+`tar`, and `gcc`, `g++` and `make` for the Python dependencies that have no
+wheel for GuildBotics' Python) and git, which [member git](#member-git-and-the-members-clones) runs
 the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
-`libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
+`libwebkit2gtk` pull it in as a dependency; remove the binary then). The build replaces the image's Node.js with the version GuildBotics pins. A loaded image is used without asking a registry (pull policy
 `never`). When the CI jobs of the workspace's code host run on the same image
 (Branvil), load the archive into its CI runner too with `guildbotics environment
 image load-ci <archive>`, on the machine the runner runs on: a pipeline names the
@@ -972,7 +973,7 @@ rotates the session.
 GitHub Copilot's account quota comes from a different path than that ACP turn: the
 Copilot SDK server protocol (JSON-RPC with `Content-Length` framing) that the same
 CLI serves through `copilot --headless --stdio`. GuildBotics pins GitHub Copilot CLI
-1.0.95 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
+1.0.103 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
 After `connect`, `account.getQuota` answers with `quotaSnapshots`
 keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
 carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
@@ -1000,7 +1001,7 @@ turn-count, and token-total limits do. This is the same situation as Grok.
 Account quotas are a separate path from those per-turn counters. From Antigravity
 CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
 slash command without starting an agent turn, spending quota, or leaving a
-conversation. GuildBotics pins Antigravity CLI 1.3.3 in the isolated environment
+conversation. GuildBotics pins Antigravity CLI 1.4.7 in the isolated environment
 and verified the structured payload on 1.2.13: `command.data.groups[].buckets[]`
 carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
 `reset_time`. Those buckets become the same usage meters the Activity view already

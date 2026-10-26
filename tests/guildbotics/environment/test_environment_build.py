@@ -141,7 +141,7 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     _Sandbox.manifest_digest = "sha256:" + "m" * 64
     _Snapshot.created, _Snapshot.removed = {}, []
     _Image.handles = [
-        _handle("node:22.23.2-bookworm", "sha256:" + "a" * 64, "sha256:" + "n" * 64),
+        _handle("node:24.22.1-bookworm", "sha256:" + "a" * 64, "sha256:" + "n" * 64),
         _handle("local/agent:1", "sha256:" + "c" * 64, "sha256:" + "m" * 64),
     ]
     monkeypatch.setattr(microsandbox, "Sandbox", _Sandbox)
@@ -174,7 +174,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     path = await build_snapshot(
         name,
         dest_dir=tmp_path,
-        image="node:22.23.2-bookworm",
+        image="node:24.22.1-bookworm",
         pull=True,
         home="/Users/u",
         steps=_STEPS,
@@ -185,7 +185,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
 
     created = _Sandbox.created
     assert created["name"] == "guildbotics-build"
-    assert created["image"] == "node:22.23.2-bookworm"
+    assert created["image"] == "node:24.22.1-bookworm"
     assert created["pull_policy"] == microsandbox.PullPolicy.IF_MISSING
     assert created["replace"] is True
     assert (created["memory"], created["cpus"]) == (3072, 3)

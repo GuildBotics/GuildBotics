@@ -422,14 +422,25 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         body = _prompt_body("handle_ticket", language)
         assert "repository/pr_checks" in body, language
         assert "`readiness`" in body, language
+        assert "`completion_blockers`" in body, language
+        assert "`base_out_of_date`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language
         # Pending checks end the run instead of a wait in the turn, and the
-        # run the patrol resumes for them reports its outcome on the PR.
-        assert "done|asking|blocked|awaiting_checks" in body, language
+        # run the patrol resumes for them continues its work and reports its
+        # outcome on the PR and where the work came from.
+        assert "--status done|asking|blocked --content-file" in body, language
+        assert "guildbotics member checks await --person" in body, language
+        assert "awaiting_checks" not in body, language
         assert "`checks_pending`" in body, language
         assert "`pull_request_checks`" in body, language
         assert "`pr comment`" in body, language
+        assert "<awaited_summary>{awaited_summary}</awaited_summary>" in body
+        # Whether the run resumes one is told by the awaited run, which is
+        # always there, not by its summary, which may not have arrived.
+        assert body.count("{awaited_run_id}") == 1, language
+        assert "`chat reply`" in body, language
+        assert "{chat_channel_id}" in body and "{chat_thread_id}" in body
 
 
 def test_issue_comment_contract_not_in_chat_prompt():
@@ -493,6 +504,22 @@ def test_ticket_work_runs_at_high_effort_by_default():
         assert _frontmatter("handle_ticket", language)["effort"] == "high"
 
 
+def test_ticket_mentions_require_a_comment_and_exempt_repository_preparation():
+    english = _prompt_body("handle_ticket", "en")
+    japanese = _prompt_body("handle_ticket", "ja")
+    assert "For work other than `ticket_mention`" in english
+    assert "`ticket_mention` 以外の作業" in japanese
+    for body in (english, japanese):
+        instruction = body.split("15. ")[1].split("</instructions>")[0]
+        assert "guildbotics member ticket comment --content-file" in instruction
+        assert "guildbotics member task complete" in instruction
+        assert "done|asking|blocked" in instruction
+    assert "Do not prepare a repository, publish, or create a PR" in english
+    assert "リポジトリの準備・publish・PR 作成は行わない" in japanese
+    assert "mention the assignee" in english
+    assert "担当者をメンション" in japanese
+
+
 def test_chat_work_states_no_frontmatter_effort():
     """Chat effort is decided per event by the assessor, not fixed up front."""
     for language in ("en", "ja"):
@@ -507,15 +534,17 @@ def test_chat_judgment_owns_repository_work_criteria():
 
 
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
-    """The chat workspace has no checkout, so the prompt must route guideline
-    checks (issue #381) through `git prepare` — while the contract itself
+    """Each run must route guideline checks through its current prepared
+    checkout (issue #381), while the contract itself
     (origin default branch is canonical) stays in the member reference."""
     english = _prompt_body("handle_chat_event", "en")
     japanese = _prompt_body("handle_chat_event", "ja")
     assert "repository guideline check" in english
     assert "standard work procedure" in english
-    assert "repository ガイドライン確認" in japanese
+    assert "リポジトリのガイドライン確認" in japanese
     assert "標準作業手順" in japanese
+    assert "In each run" in english
+    assert "毎回" in japanese
 
 
 def test_agent_facing_layers_do_not_name_a_provider():

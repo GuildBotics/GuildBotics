@@ -9,7 +9,7 @@ Install the following before cloning the repository:
 - Visual Studio Build Tools 2022 with the **Desktop development with C++** workload and the Windows SDK.
 - [rustup](https://rustup.rs/) with the stable `x86_64-pc-windows-msvc` toolchain.
 - Node.js 24.
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.12 or later.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.15 or later.
 - Git for Windows. Run the repository build scripts from Git Bash.
 - WebView2 Runtime. Windows 11 normally includes it; the NSIS installer uses Tauri's download-bootstrapper mode when it is absent.
 - The **Windows Hypervisor Platform** optional feature, for the isolated agent environment (the microVM AI CLI turns run in). The runtime (microsandbox) ships inside the sidecar; GuildBotics places it under `%USERPROFILE%\.guildbotics\data\msb` on first use.

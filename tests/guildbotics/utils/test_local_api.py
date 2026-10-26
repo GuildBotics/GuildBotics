@@ -78,7 +78,7 @@ def impostor(request, machine_state) -> Iterator[_Seen]:
         def _serve(self) -> None:
             try:
                 self._answer()
-            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            except BrokenPipeError, ConnectionResetError, ConnectionAbortedError:
                 # The slow proof deliberately outlives the client's read timeout.
                 pass
             finally:

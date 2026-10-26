@@ -242,7 +242,7 @@ async def create_github_client(
                 private_key_pem=get_person_private_key_pem(person),
                 person_id=person.person_id,
             )
-        except (OSError, TypeError, ValueError):
+        except OSError, TypeError, ValueError:
             record_github_auth_failure(
                 person_id=person.person_id, code="invalid_app_credential"
             )

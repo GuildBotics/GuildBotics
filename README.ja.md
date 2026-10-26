@@ -312,9 +312,9 @@ GitHub App 作成後に以下の作業を行ってください。
 
 作業が始まると、メンバーとは次のようにやり取りします。
 
-- メンバーは作業中に質問がある場合、チケットコメントで質問を投稿します。チケットコメントで回答すると、メンバーは定期チェックで回答を拾って作業を進めます
+- メンバーは作業中に質問がある場合、チケットコメントで質問を投稿します。チケットコメントで回答すると、メンバーは定期チェックで回答を拾って作業を進めます。作業中のチケットに未回答のコメントやメンションがあれば、リンクされた PR が開いていてもマージ済みでも取り上げ、開いた既存 PR を再利用します
 - タスクが完了すると、メンバーがコメント / PR URL / レビュー返信 / リアクションを残します
-- チケットから作成された PR へのレビューは PR 上で書き込んでください。メンバーはチケットではなく Pull Request の巡回でその PR を追います（→ [Pull Request の巡回](#pull-request-の巡回)）
+- チケットから作成された PR へのレビューは PR 上で書き込んでください。Pull Request の巡回が PR 上の会話を追います（→ [Pull Request の巡回](#pull-request-の巡回)）。チケットのコメントとメンションに回答したあとは、開いた PR があれば待機し、マージ済みなら「完了」に移します。メンバー自身の失敗・レート制限の状態が最後なら、チケットは保留します
 
 止めるときは **停止** を押します。新しい作業の受付を止め、実行中の作業の完了を待ってから終了します。待たずに終了する場合は **強制停止** を押すと、実行中の作業をキャンセルします。
 
@@ -332,7 +332,7 @@ CLI からサービスを起動・停止する方法は [サーバーで運用�
 どちらの役割でも、メンバーは他の人の発言をすべて読み、対応するかどうかは読んだうえで判断し、発言ごとに必ず応答を残します。対応したら何をしたかを返信し、採らない指摘には理由を返信し、対応するものが無ければ（お礼や LGTM など）リアクションします。発言とは、最後の発言が他の人の未解決 review thread、本文のある review（承認も含む）、conversation comment です。メンバーが後から書いたコメント・review・thread 返信か、その発言へのリアクションがあれば応答済みです。本文の無い review とワークフローの状態通知は拾いません。
 
 - **メンバーが作成した PR**: まだ応答していない発言を拾います。メンバーは妥当な指摘についてコードを修正します
-- **CI 待ち**: メンバーは実行の中で CI を待ちません。PR の完了を妨げているのが終わっていないチェックだけなら、PR に告知を残して実行を終え（Desktop では「CI 待ち」）、チェックが終わるか新しいコミットが積まれると、巡回がその PR を再び拾います。再開した実行は PR に結果を報告するか、失敗を直します。マージ・クローズされた PR は拾い直しません
+- **CI 待ち**: メンバーは実行の中で CI を待ちません。チケット・チャットのスレッド・定期または手動のコマンドのどれから始まった実行でも、PR の完了を妨げているのが終わっていないチェックだけなら、PR に告知を残して実行を終え（チケットとチャットのスレッドの実行は Desktop で「CI 待ち」と表示）、チェックが終わるか新しいコミットが積まれると、巡回が同じ作業を再開します。再開した実行は失敗を直すか、PR と作業の入口（チケット、スレッド、コマンドの報告先）に結果を報告します。マージ・クローズされた PR は拾い直しません
 - **メンバーがレビューする PR**: レビューを依頼されたとき（personal token のメンバーのみ。GitHub Apps にはレビュー依頼ができません）、前回のレビュー後に新しいコミットが積まれたとき、まだ応答していない発言があるとき（thread は参加中のものだけ）に起動します。発言だけで起動して結論が変わらないときは、review を submit し直しません（本文付きの review は作成者の巡回を起こすため）。依頼によらない自動再レビューは 3 回で止まります。上限に達すると、巡回の仕組みがその PR を Draft にしてから、メンバーがその旨を PR 上に告知します（下の Draft の扱いのとおり、作成者側の巡回も止まります）。そのまま続けてよければ **Ready for review** に戻してください。回数は Ready for review に戻した時点より後のレビューから、どのレビュワーも数え直します。進め方を見直すなら、Slack か対話セッションで指示し、区切りがついたら Ready for review に戻してください
 - 結論は GitHub の review（approve か request changes）として submit します。これがレビュー依頼を消化し、メンバーをその PR のレビュワーにします。最初のレビューは Slack か対話セッションで依頼してください（→ [Slack で作業を依頼する](#slack-で作業を依頼する)）。以降は巡回がその PR を追います
 - **Draft の PR はどちらの役割でも巡回しません。** Draft にするのは人と、自動再レビューの上限に達したときの巡回の仕組みだけで、Ready for review に戻すのは人だけです（メンバーの作業からは変えられません）。ある PR をしばらく自分の手で進めたいとき（例: 対話セッションで方針を練り直す間、他のメンバーの再レビューを止めたいとき）は、その PR を Draft に変換してください。サービスはそれ以外の作業を続けます。終わったら **Ready for review** に戻すと、次の巡回から再び拾われ、新しいコミットには再レビューが走ります（自動再レビューの回数も、失敗で止まっていたメンバーの保留も、そこから数え直します）
@@ -356,6 +356,8 @@ Slack でどう振る舞うか（本文で返信する / リアクションだ�
 すでに Slack App を作成済みの場合は **登録済みの App を使う** を選び、トークンの貼り付けから始められます。
 
 トークンはメンバーの認証情報として保存され、すべてのワークスペースで共通です。チャンネルは、ワークスペースのそのメンバーの `member.yml`（`message_channels`）に保存されます。
+
+巡回や定期実行でのメンバーのチケットや PR の作業が人を待って止まったとき（質問した、作業を進められない、エラーで止まったことをその項目に書いた）は、**Setup → メンバー → Slack**（またはプロジェクトのチャットプロバイダーのタブ）で **作業停止を通知する** を有効にした各チャンネルに、その項目とコメントへのリンクを 1 回投稿します。未指定なら投稿しません。既存のチャンネル設定も含め、通知は初期状態では無効です。有効にして保存すると通知され、選択を外して保存すると通知されなくなります。
 
 チャットイベントを受信するには、**サービス実行** 画面で **イベント起動** を含めてサービスを開始します。決まった時刻の定期投稿（ニュースダイジェストなど）は受信とは別経路で、定期実行コマンドとして `workflows/chat_post_command` を設定します。
 
@@ -989,7 +991,7 @@ sidebar はワークスペースとメンバーの同期のうち、対応が必
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、エージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
-- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian + Node.js。別のツールチェーンが必要なら git を残して自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
+- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian。別のツールチェーンが必要なら git を残して自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。

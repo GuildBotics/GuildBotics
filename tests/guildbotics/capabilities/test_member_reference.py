@@ -85,7 +85,7 @@ def test_reference_includes_standard_work_procedure():
     assert "`--closes-issue` applies to all of them" in text
     assert "A child ticket can therefore be closed by a PR" in text
     assert "`--issue-url <child> --closes-issue`" in text
-    assert "refer to the parent ticket on a standalone line" in text
+    assert "refer to the parent ticket in ordinary body prose" in text
     assert "feature branch to the default branch closes the parent ticket" in text
     assert "tickets that the merge does not complete" in text
     assert (
@@ -105,13 +105,17 @@ def test_reference_includes_standard_work_procedure():
     assert "repository/pr_checks failed_logs=true" in text
     assert "check CI again" in text
     assert "unless `readiness` is `ready`" in text
-    assert "head must not be behind the current base" in text
+    assert "resolve its `completion_blockers`" in text
+    assert "the host requires an up-to-date head" in text
     assert "checked head SHA must still be current" in text
-    # CI runs outside the environment: a ticket workflow run ends to await it
-    # and the patrol resumes the work, instead of waiting in the turn.
-    assert "In a ticket workflow run, do not wait for CI in the turn" in text
-    assert "`member task complete --status awaiting_checks`" in text
-    assert "the patrol resumes the work once the checks finish" in text
+    # CI runs outside the environment: whatever work a run does, it ends to
+    # await it and the patrol resumes that work, instead of waiting in the turn.
+    assert "In any workflow or command run" in text
+    assert "do not wait for CI in the turn" in text
+    assert "end the run with `member checks await`" in text
+    assert "summary says where the outcome is to be reported" in text
+    assert "the patrol resumes the run's work once the checks finish" in text
+    assert "awaiting_checks" not in text
     # Observable-outcome principle: leave externally visible traces at the
     # work's entry point, and avoid duplicate / unwanted posts.
     assert "externally visible trace" in text

@@ -120,11 +120,6 @@ class HostRunLedger:
         self.run_id = run_id
         self.work = work
 
-    @property
-    def work_kind(self) -> str:
-        """The kind of work the run does."""
-        return self.work.kind
-
     @cached_property
     def _store(self) -> RunStore:
         return RunStore()

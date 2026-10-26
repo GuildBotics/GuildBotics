@@ -5,6 +5,8 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunStore
 from guildbotics.entities.task_run import TaskRunRecord
+from guildbotics.runtime.member_invocation import ChatSubject, Work
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 
 
@@ -34,7 +36,7 @@ def test_task_run_complete_requires_write_evidence(tmp_path):
             "run-1",
             "done",
             "summary",
-            "https://github.com/owner/repo/issues/1",
+            Work.of_ticket("https://github.com/owner/repo/issues/1"),
             "aiko",
         )
 
@@ -47,7 +49,7 @@ def test_task_run_complete_and_status(tmp_path):
         "run-1",
         "done",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
 
@@ -109,25 +111,11 @@ def test_task_run_accepts_pr_update_evidence(tmp_path):
         "run-1",
         "done",
         "Updated the pull request body.",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
 
     assert status.evidence_types == ["pr_update"]
-
-
-def test_task_run_asking_requires_comment_evidence(tmp_path):
-    store = TaskRunStore(tmp_path)
-    store.append_evidence("run-1", "git_publish", {"commit_sha": "abc"})
-
-    with pytest.raises(TaskRunError, match="write evidence"):
-        store.complete(
-            "run-1",
-            "asking",
-            "summary",
-            "https://github.com/owner/repo/issues/1",
-            "aiko",
-        )
 
 
 def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
@@ -139,7 +127,7 @@ def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
             "run-1",
             "done",
             "summary",
-            "https://github.com/owner/repo/issues/1",
+            Work.of_ticket("https://github.com/owner/repo/issues/1"),
             "aiko",
         )
 
@@ -149,7 +137,7 @@ def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
         "run-1",
         "done",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
 
@@ -167,14 +155,14 @@ def test_task_run_accepts_pr_review_evidence(tmp_path, evidence_type):
         "run-done",
         "done",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
     asking = store.complete(
         "run-asking",
         "asking",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
 
@@ -320,6 +308,54 @@ def test_chat_run_blocked_requires_summary_but_no_evidence(tmp_path):
 
     assert status.status == "blocked"
     assert status.evidence_types == []
+
+
+@pytest.mark.parametrize("status", ["asking", "blocked"])
+def test_ticket_run_waiting_for_a_person_requires_a_comment_on_the_item(
+    tmp_path, status
+):
+    """The member's comment is its last word on the item, which keeps the work
+    out of the patrol until a person answers there: a run that waits for one
+    without saying so would be taken up, and announced, again on every
+    patrol. The refusal names the comment it lacks."""
+    store = RunStore(tmp_path)
+    url = "local://tickets/acme/team/demo-tickets/T-1"
+    store.append_evidence("run-1", "pr_create", {"url": "local://code/pulls/2"})
+
+    with pytest.raises(TaskRunError) as refused:
+        store.complete(
+            "run-1", status, "Needs a decision.", Work.of_ticket(url), "aiko"
+        )
+
+    assert str(refused.value) == t(
+        "capabilities.task_runs.comment_required", run_id="run-1", status=status
+    )
+    store.append_evidence("run-1", "issue_comment", {"url": f"{url}#comment-1"})
+    if status == "blocked":
+        # A blocked run still says why in its summary.
+        with pytest.raises(TaskRunError, match="write evidence"):
+            store.complete("run-1", status, " ", Work.of_ticket(url), "aiko")
+
+    assert store.complete(
+        "run-1", status, "Needs a decision.", Work.of_ticket(url), "aiko"
+    ).status == (status)
+
+
+@pytest.mark.parametrize("boundary_status", ["failed", "succeeded", "cancelled"])
+def test_a_run_its_boundary_finished_recorded_no_completion(tmp_path, boundary_status):
+    """However the execution boundary finished a run, its member recorded no
+    completion: nothing reads that run as one, whatever it wrote."""
+    store = RunStore(tmp_path)
+    store.start_record(
+        "run-1", work_kind="chat", execution_mode="autonomous", member_id="aiko"
+    )
+    store.append_evidence("run-1", "issue_comment", {"url": "local://tickets/T-1#c"})
+    store.finish_record(
+        "run-1", status=boundary_status, safe_summary="Execution failed."
+    )
+
+    with pytest.raises(TaskRunError, match="recorded no completion"):
+        store.status("run-1")
 
 
 def test_start_record_reopens_a_run_that_left_its_work_undone(tmp_path):
@@ -489,3 +525,57 @@ def test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded(
     assert "sk-live-secret-12345" not in (
         tmp_path / "runs/run-1/result.json"
     ).read_text(encoding="utf-8")
+
+
+_THREAD = ChatSubject("slack", "C1", "100.1", "E1", "U_BOT")
+
+
+@pytest.mark.parametrize(
+    ("work", "subject"),
+    [
+        (
+            Work.of_ticket("https://example.test/1"),
+            ("ticket", "https://example.test/1"),
+        ),
+        (Work.of_chat(_THREAD), ("chat", _THREAD.subject_id)),
+        (
+            Work("chat", "slack:U_BOT:C1:100.1"),
+            ("chat_thread", "slack:U_BOT:C1:100.1"),
+        ),
+        (Work("manual", "run-1"), ("manual", "run-1")),
+    ],
+)
+def test_any_run_ends_awaiting_checks_on_the_notices_alone(tmp_path, work, subject):
+    """Whatever the run's work, awaiting checks takes the notices it posted and
+    nothing else, and the completion names the subject the work does."""
+    store = TaskRunStore(tmp_path)
+    store.append("run-1", {"kind": "note", "message": "started"})
+
+    with pytest.raises(TaskRunError, match="write evidence"):
+        store.complete("run-1", "awaiting_checks", "Waiting.", work, "aiko")
+
+    store.append_evidence("run-1", "checks_awaited", {"target": {"url": "pr"}})
+    status = store.complete("run-1", "awaiting_checks", "Waiting.", work, "aiko")
+
+    assert (status.status, status.subject_type, status.subject_id) == (
+        "awaiting_checks",
+        *subject,
+    )
+    assert store.summary("run-1") == "Waiting."
+    assert store.summary("run-2") == ""
+
+
+def test_a_run_resumed_in_a_chat_threads_work_completes_as_an_item_does(tmp_path):
+    """A run resumed in a chat thread's work answers no chat event, so it is
+    done only once it wrote on an item, and asks or is blocked only after it
+    commented on one, as its prompt says; a chat reply alone is not enough."""
+    store = TaskRunStore(tmp_path)
+    work = Work("chat", "slack:U_BOT:C1:100.1")
+    store.append_evidence("run-1", "chat_reply", {"message_id": "1.2"})
+
+    for status in ("done", "asking", "blocked"):
+        with pytest.raises(TaskRunError):
+            store.complete("run-1", status, "Asked in the thread.", work, "aiko")
+
+    store.append_evidence("run-1", "pr_comment", {"url": "pr#comment-1"})
+    assert store.complete("run-1", "done", "Reported.", work, "aiko").status == "done"

@@ -1631,7 +1631,7 @@ function environmentStatus(
     resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
-      default: "node:22.23.2-bookworm",
+      default: "node:24.22.1-bookworm",
       architecture: "arm64",
       reference: "",
       digest: "",
@@ -1732,6 +1732,7 @@ function memberConfig(): MemberConfig {
     character: {},
     accounts: {},
     chat_channels: [],
+    work_stop_notification_channels: [],
     chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
@@ -2413,6 +2414,7 @@ function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig
     },
     accounts: {},
     chat_channels: [],
+    work_stop_notification_channels: [],
     chat_channel_participation: {},
     routine_commands: [],
     task_schedules: [],
@@ -2777,6 +2779,7 @@ describe("MembersSection", () => {
       config_dir: "/workspace/.guildbotics/config",
       git_email: "",
       chat_channels: [],
+      work_stop_notification_channels: [],
       chat_channel_participation: {},
     });
     // The default add form links the agent to no provider: each account is
@@ -3767,6 +3770,108 @@ describe("MembersSection", () => {
     });
   });
 
+  it.each(["en", "ja"])("saves and reloads work stop destinations in %s", async (language) => {
+    await i18n.changeLanguage(language);
+    const t = i18n.getFixedT(language);
+    const user = userEvent.setup();
+    let saved = memberConfigDetail({
+      accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+      chat_channels: ["general", "random"],
+      work_stop_notification_channels: [],
+    });
+    vi.mocked(getMemberConfig).mockImplementation(async () => saved);
+    vi.mocked(updateMemberConfig).mockImplementation(async (_id, body) => {
+      saved = {
+        ...saved,
+        work_stop_notification_channels: body.work_stop_notification_channels ?? [],
+      };
+      return configWriteResponse();
+    });
+    const view = renderSetupPage("/setup?section=members&tab=slack");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    const switches = () =>
+      screen.getAllByRole("switch", { name: new RegExp(t("setup.members.workStopNotifications")) });
+    await waitFor(() => expect(switches()).toHaveLength(2));
+    expect(switches()[0]).not.toBeChecked();
+    expect(switches()[1]).not.toBeChecked();
+    await user.click(switches()[1]);
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(saved.work_stop_notification_channels).toEqual(["random"]));
+
+    view.unmount();
+    renderSetupPage("/setup?section=members&tab=slack");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    await waitFor(() => expect(switches()[1]).toBeChecked());
+    expect(switches()[0]).not.toBeChecked();
+    await user.click(switches()[1]);
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(saved.work_stop_notification_channels).toEqual([]));
+  });
+
+  it("keeps a work stop destination with a renamed row and removes it with the row", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+        chat_channels: ["#general", "random"],
+        work_stop_notification_channels: ["#general"],
+      }),
+    );
+    renderSetupPage("/setup?section=members&tab=slack");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    const channel = await screen.findByDisplayValue("#general");
+    await user.clear(channel);
+    await user.type(channel, "#ops");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateMemberConfig).mock.calls[0][1].work_stop_notification_channels).toEqual([
+      "ops",
+    ]);
+    await user.click(
+      screen.getAllByRole("button", { name: t("setup.members.chatChannelRemove") })[0],
+    );
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateMemberConfig).mock.calls[1][1].work_stop_notification_channels).toEqual(
+      [],
+    );
+    await user.type(
+      screen.getAllByRole("textbox", { name: t("setup.members.chatChannelAdd") })[0],
+      "#ops",
+    );
+    await user.click(screen.getByRole("button", { name: t("setup.members.chatChannelAddButton") }));
+    expect(
+      screen.getAllByRole("switch", {
+        name: new RegExp(t("setup.members.workStopNotifications")),
+      })[1],
+    ).not.toBeChecked();
+  });
+
+  it("keeps notification and participation choices on their own rows while both names are empty", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({
+        accounts: { slack: { user_id: "", has_bot_token: true, has_app_token: true } },
+        chat_channels: ["general", "random"],
+        chat_channel_participation: { general: "strict", random: "muted" },
+        work_stop_notification_channels: ["general"],
+      }),
+    );
+    renderSetupPage("/setup?section=members&tab=slack");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+    const first = await screen.findByDisplayValue("general");
+    const second = screen.getByDisplayValue("random");
+    await user.clear(first);
+    await user.clear(second);
+    await user.type(second, "ops");
+    await user.type(first, "general");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(updateMemberConfig).mock.calls[0][1];
+    expect(body.work_stop_notification_channels).toEqual(["general"]);
+    expect(body.chat_channel_participation).toEqual({ general: "strict", ops: "muted" });
+  });
+
   it.each([
     ["removeButton", "removeConfirmTitle", deleteMemberConfig],
     ["deleteButton", "deleteConfirmTitle", deleteIdentity],
@@ -4075,6 +4180,7 @@ describe("MembersSection", () => {
       routine_commands: [],
       task_schedules: [],
       chat_channels: [],
+      work_stop_notification_channels: [],
       chat_channel_participation: {},
       // A human's accounts are the human's own: no token of any provider.
       accounts: {

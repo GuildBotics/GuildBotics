@@ -410,7 +410,7 @@ def test_image_list_prints_what_the_declaration_may_name(
         runtime,
         "list_images",
         lambda: (
-            ImageInfo("node:22.23.2-bookworm", "sha256:" + "a" * 64, "arm64", 381),
+            ImageInfo("node:24.22.1-bookworm", "sha256:" + "a" * 64, "arm64", 381),
             ImageInfo(
                 "docker.io/library/node@sha256:" + "a" * 64,
                 "sha256:" + "a" * 64,

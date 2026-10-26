@@ -92,7 +92,7 @@ def discover_llm_providers(
             parameters = {}
         try:
             order = int(data.get("order", _DEFAULT_ORDER))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             order = _DEFAULT_ORDER
         providers.append(
             LlmProviderInfo(

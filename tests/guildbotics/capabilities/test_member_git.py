@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import git
@@ -269,6 +269,8 @@ class _Member:
     service: MemberGitWorkspaceService
     guest: _LocalGuest
     remotes: dict[str, Path]
+    work: Work = field(default_factory=lambda: Work.of_ticket(_ISSUE))
+    paths: dict[str, Path] = field(default_factory=dict)
 
     def pull_request(self, number: int, head: str, head_repository: str = "") -> str:
         """Open ``!<number>`` of ``REPOSITORY`` from ``head`` (of
@@ -276,8 +278,8 @@ class _Member:
         return pull_request(number, head, head_repository=head_repository or REPOSITORY)
 
     def clone_of(self, repository: str) -> Path:
-        """Where the member's clone of ``repository`` is: its whole path."""
-        return self.service.workspace_root.joinpath(*repository.split("/"))
+        """The last checkout prepared here, or the seeded ticket's checkout."""
+        return self.paths.get(repository, self.service.workspace_root / "seeded")
 
     @property
     def clone(self) -> Path:
@@ -295,14 +297,18 @@ class _Member:
 
     def run(self, operation: Callable[[MemberGitWorkspaceService], object]):
         async def invoke():
-            with member_invocation_scope(MemberInvocation(guest=self.guest)):
+            with member_invocation_scope(
+                MemberInvocation(guest=self.guest, work=self.work)
+            ):
                 return await operation(self.service)  # type: ignore[misc]
 
         return invoke()
 
     async def prepare(self, **anchor: str) -> dict:
         anchor = anchor or {"issue_url": _ISSUE}
-        return await self.run(lambda service: service.prepare(**anchor))
+        result = await self.run(lambda service: service.prepare(**anchor))
+        self.paths[result["repository"]] = Path(result["repo_path"])
+        return result
 
     def repo(self, repository: str = REPOSITORY) -> git.Repo:
         return git.Repo(self.clone_of(repository))
@@ -729,6 +735,7 @@ async def test_chat_run_cannot_push_unchecked_work(member):
         {"event_ids": ["E1"]},
     )
     ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+    member.work = Work.of_chat(ChatSubject("slack", "C1", "100.1", "E1", "U_BOT"))
     await member.prepare()
     commit_sha = member.stage().index.commit("local commit").hexsha
     invocation = MemberInvocation(
@@ -801,13 +808,13 @@ async def test_prepare_branch_mode_checks_out_ad_hoc_branch(member):
 
 
 @pytest.mark.asyncio
-async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
-    member, tmp_path
-):
-    """What is not committed is dropped; commits the remote lacks survive a
-    branch it can fast-forward, and a diverged branch is reset to it."""
+async def test_prepare_preserves_uncommitted_work_on_the_same_branch(member, tmp_path):
+    """A continued run retains its HEAD, index, tracked and untracked edits."""
     await member.prepare(repo=REPOSITORY, branch="main")
     local_sha = member.stage().index.commit("unpushed").hexsha
+    (member.clone / "staged.txt").write_text("staged\n", encoding="utf-8")
+    member.repo().git.add("staged.txt")
+    index_tree = member.repo().index.write_tree().hexsha
     (member.clone / "untracked.txt").write_text("x", encoding="utf-8")
     (member.clone / "README.md").write_text("dirty\n", encoding="utf-8")
 
@@ -815,14 +822,602 @@ async def test_prepare_follows_the_remote_and_drops_what_is_not_committed(
 
     repo = member.repo()
     assert repo.head.commit.hexsha == local_sha
-    assert not (member.clone / "untracked.txt").exists()
-    assert not repo.is_dirty()
+    assert (member.clone / "untracked.txt").read_text() == "x"
+    assert (member.clone / "README.md").read_text() == "dirty\n"
+    assert repo.is_dirty()
+    assert repo.index.write_tree().hexsha == index_tree
 
     remote_sha = _advance(member.remotes["owner"], tmp_path, "remote\n")
     await member.prepare(repo=REPOSITORY, branch="main")
 
-    assert member.repo().head.commit.hexsha == remote_sha
+    assert member.repo().head.commit.hexsha == local_sha
     assert member.repo().commit("refs/remotes/origin/main").hexsha == remote_sha
+
+
+@pytest.mark.asyncio
+async def test_prepare_updates_a_clean_checkout_to_the_new_remote_head(
+    member, tmp_path
+):
+    await member.prepare(repo=REPOSITORY, branch="main")
+    remote_sha = _advance(member.remotes["owner"], tmp_path, "new head\n")
+    await member.prepare(repo=REPOSITORY, branch="main")
+    assert member.repo().head.commit.hexsha == remote_sha
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+@pytest.mark.parametrize("same_work", [True, False])
+@pytest.mark.parametrize("remote_change", ["rewrite", "delete"])
+async def test_idle_checkout_follows_remote_changes(
+    member, tmp_path, same_work, remote_change
+):
+    other_path = tmp_path / "rewriter"
+    other = git.Repo.clone_from(str(member.remotes["owner"]), other_path, branch="main")
+    with other.config_writer() as writer:
+        writer.set_value("user", "name", "Other")
+        writer.set_value("user", "email", "other@example.com")
+    other.git.checkout("-b", "feature")
+    _commit_readme(other, other_path, "before rewrite\n", "feature")
+    other.git.push("origin", "feature")
+    first = await member.prepare(repo=REPOSITORY, branch="feature")
+    cache = _warm_cache(member.repo())
+    member.repo().git.config("branch.autoSetupMerge", "false")
+    if remote_change == "rewrite":
+        (other_path / "README.md").write_text("rewritten\n", encoding="utf-8")
+        other.git.add("README.md")
+        other.git.commit("--amend", "-m", "rewritten")
+        other.git.push("--force", "origin", "feature")
+        expected = other.head.commit.hexsha
+    else:
+        other.git.push("origin", "--delete", "feature")
+        expected = _advance(member.remotes["owner"], tmp_path, "new default\n")
+    if not same_work:
+        member.work = Work("manual", "next-work")
+
+    prepared = await member.prepare(repo=REPOSITORY, branch="feature")
+
+    assert prepared["repo_path"] == first["repo_path"]
+    assert prepared["branch"] == "feature"
+    assert member.repo().head.commit.hexsha == expected
+    tracked = "feature" if remote_change == "rewrite" else "main"
+    assert (
+        member.repo().active_branch.tracking_branch().path
+        == f"refs/remotes/origin/{tracked}"
+    )
+    assert cache.read_text() == "warm"
+    assert _clone_count(member) == 1
+
+
+def _warm_cache(repo: git.Repo, value: str = "warm") -> Path:
+    (Path(repo.git_dir) / "info" / "exclude").write_text("target/\n", encoding="utf-8")
+    cache = Path(repo.working_tree_dir) / "target" / "cache"
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text(value, encoding="utf-8")
+    return cache
+
+
+def _remove_tree(path: Path) -> None:
+    def writable(function, name, _):
+        os.chmod(name, 0o700)
+        function(name)
+
+    shutil.rmtree(path, onexc=writable)
+
+
+def _clone_count(member) -> int:
+    return sum(
+        path.is_dir() and len(path.name) == 64
+        for path in member.service.workspace_root.iterdir()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+async def test_clean_checkouts_are_reused_with_their_build_cache(member):
+    first = await member.prepare(repo=REPOSITORY, branch="main")
+    cache = _warm_cache(member.repo())
+    for kind in ("ticket", "chat", "manual", "ticket", "chat", "manual"):
+        member.work = Work(kind, f"new-{kind}-{member.work.identity}")
+        prepared = await member.prepare(repo=REPOSITORY, branch="next")
+        assert prepared["repo_path"] == first["repo_path"]
+        assert cache.read_text() == "warm"
+        assert _clone_count(member) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+async def test_idle_clones_are_pruned_after_parallel_work_finishes(member):
+    paths = []
+    for number in range(4):
+        member.work = Work("ticket", f"work-{number}")
+        prepared = await member.prepare(repo=REPOSITORY, branch=f"work/{number}")
+        path = Path(prepared["repo_path"])
+        _warm_cache(member.repo(), str(number))
+        (path / "pending.txt").write_text("unfinished", encoding="utf-8")
+        paths.append(path)
+    assert _clone_count(member) == 4
+    for path in paths:
+        (path / "pending.txt").unlink()
+    member.work = Work("manual", "next-run")
+    prepared = await member.prepare(repo=REPOSITORY, branch="main")
+    assert prepared["repo_path"] in {str(path) for path in paths}
+    assert _clone_count(member) == 1
+    assert (Path(prepared["repo_path"]) / "target" / "cache").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_published_clone_can_be_reused_after_squash_and_branch_deletion(
+    member, tmp_path
+):
+    first = await member.prepare()
+    cache = _warm_cache(member.repo())
+    member.stage().index.commit("feature work")
+    await member.run(lambda service: service.push(member.clone))
+    _advance(member.remotes["owner"], tmp_path, "squashed work\n")
+    member.remote().git.branch("-D", _TICKET_BRANCH)
+    member.work = Work("ticket", "next-ticket")
+    prepared = await member.prepare(repo=REPOSITORY, branch="main")
+    assert prepared["repo_path"] == first["repo_path"]
+    assert cache.read_text() == "warm"
+    assert _clone_count(member) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recreated", [False, True])
+async def test_reassigned_same_branch_starts_at_the_current_remote_or_default(
+    member, tmp_path, recreated
+):
+    first = await member.prepare()
+    member.stage().index.commit("old feature")
+    await member.run(lambda service: service.push(member.clone))
+    expected = _advance(member.remotes["owner"], tmp_path, "squashed feature\n")
+    member.remote().git.branch("-D", _TICKET_BRANCH)
+    if recreated:
+        member.remote().git.branch(_TICKET_BRANCH, "main")
+    place = "acme/team/second-tickets"
+    tracker(place, repository=REPOSITORY)
+    url = ticket(1, place=place)
+    member.work = Work.of_ticket(url)
+    prepared = await member.prepare(issue_url=url)
+    assert prepared["repo_path"] == first["repo_path"]
+    assert member.repo().head.commit.hexsha == expected
+
+
+@pytest.mark.asyncio
+async def test_remote_tracking_refs_are_not_unpublished_local_work(member):
+    first = await member.prepare(repo=REPOSITORY, branch="main")
+    baseline = member.repo().head.commit.hexsha
+    dangling = member.stage().index.commit("discarded local work").hexsha
+    member.repo().git.reset("--hard", baseline)
+    member.repo().git.update_ref("refs/remotes/other/old-feature", dangling)
+    member.work = Work("manual", "next-run")
+    prepared = await member.prepare(repo=REPOSITORY, branch="next")
+    assert prepared["repo_path"] == first["repo_path"]
+
+
+@pytest.mark.asyncio
+async def test_fetched_tag_history_remains_public_after_remote_tag_deletion(member):
+    remote = member.remote()
+    remote.git.execute(
+        [
+            "git",
+            "-c",
+            "user.name=Remote",
+            "-c",
+            "user.email=remote@example.test",
+            "tag",
+            "-a",
+            "release",
+            "-m",
+            "release",
+            "main",
+        ]
+    )
+    first = await member.prepare()
+    remote.git.tag("-d", "release")
+    member.work = Work("manual", "next-run")
+    prepared = await member.prepare(repo=REPOSITORY, branch="main")
+    assert prepared["repo_path"] == first["repo_path"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+@pytest.mark.parametrize(
+    "state",
+    [
+        "tracked",
+        "assume_unchanged",
+        "skip_worktree",
+        "staged",
+        "untracked",
+        "unpublished",
+        "other_branch",
+        "forged_remote",
+        "stash",
+        "tag",
+        "detached",
+        "worktree",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "MERGE_AUTOSTASH",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+        "BISECT_LOG",
+        "index.lock",
+        "HEAD.lock",
+    ],
+)
+async def test_every_unfinished_git_state_keeps_its_slot(member, state):
+    work = member.work
+    first = await member.prepare(repo=REPOSITORY, branch="main")
+    path = Path(first["repo_path"])
+    repo = member.repo()
+    baseline = repo.head.commit.hexsha
+    if state in {"assume_unchanged", "skip_worktree"}:
+        flag = (
+            "--assume-unchanged" if state == "assume_unchanged" else "--skip-worktree"
+        )
+        repo.git.update_index(flag, "README.md")
+        (path / "README.md").write_bytes(b"hidden unfinished\x00\xff")
+    elif state in {"tracked", "staged", "untracked"}:
+        (path / ("extra.txt" if state == "untracked" else "README.md")).write_bytes(
+            b"unfinished\x00\xff"
+        )
+        if state == "staged":
+            repo.git.add("README.md")
+    elif state in {"unpublished", "other_branch", "forged_remote"}:
+        if state == "other_branch":
+            repo.git.checkout("-b", "local/unfinished")
+        unpublished = member.stage().index.commit("not published").hexsha
+        if state == "other_branch":
+            repo.git.checkout("main")
+        if state == "forged_remote":
+            repo.git.update_ref("refs/remotes/origin/main", unpublished)
+    elif state == "stash":
+        member.stage()
+        repo.git.stash("push")
+    elif state == "tag":
+        repo.git.execute(
+            [
+                "git",
+                "-c",
+                "user.name=Local",
+                "-c",
+                "user.email=local@example.test",
+                "tag",
+                "-a",
+                "private-tag",
+                "-m",
+                "unfinished",
+                "HEAD",
+            ]
+        )
+    elif state == "detached":
+        repo.git.checkout("--detach")
+    elif state == "worktree":
+        repo.git.worktree(
+            "add", "-b", "local/worktree", str(member.service.workspace_root / "linked")
+        )
+    else:
+        marker = Path(repo.git_dir) / state
+        if state in {"rebase-merge", "rebase-apply", "sequencer"}:
+            marker.mkdir()
+        else:
+            marker.write_text(baseline + "\n", encoding="utf-8")
+    head = repo.head.commit.hexsha
+    index = {
+        key: (entry.mode, entry.hexsha) for key, entry in repo.index.entries.items()
+    }
+    contents = (path / "README.md").read_bytes()
+    local_refs = repo.git.for_each_ref(
+        "--format=%(refname) %(objectname)", "refs/heads", "refs/tags", "refs/stash"
+    )
+    member.work = Work("manual", "other-work")
+    second = await member.prepare(repo=REPOSITORY, branch="main")
+    assert second["repo_path"] != first["repo_path"]
+    assert repo.head.commit.hexsha == head
+    assert {
+        key: (entry.mode, entry.hexsha) for key, entry in repo.index.entries.items()
+    } == index
+    assert (path / "README.md").read_bytes() == contents
+    assert (
+        repo.git.for_each_ref(
+            "--format=%(refname) %(objectname)", "refs/heads", "refs/tags", "refs/stash"
+        )
+        == local_refs
+    )
+    member.work = work
+    resumed = await member.prepare(repo=REPOSITORY, branch="main")
+    assert resumed["repo_path"] == first["repo_path"]
+    assert repo.head.commit.hexsha == head
+    assert resumed["branch"] == ("" if state == "detached" else "main")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["commit", "push", "publish"])
+async def test_member_writes_reject_a_reassigned_checkout(member, operation):
+    from guildbotics.utils.i18n_tool import get_language, set_language, t
+
+    owner = member.work
+    first = await member.prepare()
+    member.work = Work("manual", "other")
+    second = await member.prepare()
+    assert second["repo_path"] == first["repo_path"]
+    member.stage()
+    member.work = owner
+    call = {
+        "commit": lambda s: s.commit(member.clone, "stale"),
+        "push": lambda s: s.push(member.clone),
+        "publish": lambda s: s.publish(member.clone, "stale"),
+    }[operation]
+    previous = get_language()
+    try:
+        for language in ("en", "ja"):
+            set_language(language)
+            with pytest.raises(MemberCapabilityError) as raised:
+                await member.run(call)
+            assert str(raised.value) == t("capabilities.member_git.checkout_reassigned")
+            assert "capabilities.member_git.checkout_reassigned" not in str(
+                raised.value
+            )
+    finally:
+        set_language(previous)
+    resumed = await member.prepare()
+    assert resumed["repo_path"] != second["repo_path"]
+
+
+@pytest.mark.asyncio
+async def test_failed_initialization_resumes_its_registered_slot(member, monkeypatch):
+    run = member.guest.run
+
+    def fail_init(argv, **kwargs):
+        if tuple(argv[:2]) == ("git", "init"):
+            raise GuestProcessError("initialization stopped")
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(member.guest, "run", fail_init)
+    with pytest.raises(MemberCapabilityError, match="initialization stopped"):
+        await member.prepare()
+    [record] = list((member.service.host_root / "checkouts").glob("*.json"))
+    monkeypatch.setattr(member.guest, "run", run)
+    resumed = await member.prepare()
+    assert Path(resumed["repo_path"]).name == record.stem
+    assert _clone_count(member) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_reassignment_keeps_the_previous_owner(member, monkeypatch):
+    first_owner = member.work
+    first = await member.prepare()
+    run = member.guest.run
+
+    def fail_checkout(argv, **kwargs):
+        if tuple(argv[:2]) == ("git", "checkout"):
+            raise GuestProcessError("checkout stopped")
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(member.guest, "run", fail_checkout)
+    member.work = Work("manual", "other")
+    with pytest.raises(MemberCapabilityError, match="checkout stopped"):
+        await member.prepare(repo=REPOSITORY, branch="other")
+    record = member_git._checkout_record(
+        member.service.host_root, Path(first["repo_path"]).name
+    )
+    assert member_git._Checkout.model_validate_json(
+        record.read_text()
+    ).owner == member_git._work_id(first_owner)
+    monkeypatch.setattr(member.guest, "run", run)
+    member.work = first_owner
+    assert (await member.prepare())["repo_path"] == first["repo_path"]
+
+
+@pytest.mark.asyncio
+async def test_failed_push_does_not_make_local_history_reusable(member, tmp_path):
+    first = await member.prepare(repo=REPOSITORY, branch="main")
+    unpublished = member.stage().index.commit("local work").hexsha
+    _advance(member.remotes["owner"], tmp_path, "concurrent remote work\n")
+    with pytest.raises(MemberCapabilityError, match="Failed to push"):
+        await member.run(lambda service: service.push(member.clone))
+    member.work = Work("manual", "other-work")
+    second = await member.prepare(repo=REPOSITORY, branch="main")
+    assert second["repo_path"] != first["repo_path"]
+    assert git.Repo(first["repo_path"]).head.commit.hexsha == unpublished
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", [False, True])
+async def test_failed_idle_cleanup_keeps_its_record_for_the_next_prepare(
+    member, monkeypatch, caplog, partial
+):
+    paths = []
+    for number in range(2):
+        member.work = Work("manual", f"work-{number}")
+        prepared = await member.prepare()
+        path = Path(prepared["repo_path"])
+        _warm_cache(member.repo())
+        (path / "pending.txt").write_text("pending", encoding="utf-8")
+        paths.append(path)
+    for path in paths:
+        (path / "pending.txt").unlink()
+    run = member.guest.run
+
+    def fail_delete(argv, **kwargs):
+        if argv[0] == "sh" and "rm -rf" in argv[2]:
+            git_dir = member.service.workspace_root / argv[-1] / ".git"
+            if partial and git_dir.is_dir():
+                _remove_tree(git_dir)
+            raise GuestProcessError("cleanup stopped")
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(member.guest, "run", fail_delete)
+    member.work = Work("manual", "next")
+    await member.prepare()
+    assert _clone_count(member) == 2
+    assert (
+        sum(
+            len(list((member.service.host_root / name).glob("*.json")))
+            for name in ("checkouts", "discarded")
+        )
+        == 2
+    )
+    assert "Could not remove idle checkout" in caplog.text
+    [discarded] = list((member.service.host_root / "discarded").glob("*.json"))
+    if partial:
+        held = member.clone
+        (held / "pending.txt").write_text("pending", encoding="utf-8")
+        member.work = Work("manual", "while-cleanup-is-blocked")
+        prepared = await member.prepare()
+        assert Path(prepared["repo_path"]).name != discarded.stem
+        assert (Path(prepared["repo_path"]) / ".git").is_dir()
+        (held / "pending.txt").unlink()
+    monkeypatch.setattr(member.guest, "run", run)
+    await member.prepare()
+    assert _clone_count(member) == 1
+    assert len(list((member.service.host_root / "checkouts").glob("*.json"))) == 1
+    assert not list((member.service.host_root / "discarded").glob("*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+@pytest.mark.parametrize("other", ["ticket", "same_key", "pr", "branch", "chat"])
+async def test_unfinished_work_survives_other_work_in_the_same_repository(
+    member, other
+):
+    """Other anchors and even the same branch have their own HEAD and index."""
+    first_work = member.work
+    first = await member.prepare()
+    first_path = Path(first["repo_path"])
+    repo = member.stage(content="committed A\n")
+    before = repo.index.commit("local A").hexsha
+    member.stage(name="staged.txt", content="staged A\n")
+    index = repo.index.write_tree().hexsha
+    (first_path / "README.md").write_bytes(b"unstaged A\x00\xff")
+    (first_path / "untracked.txt").write_bytes(b"untracked A\x00\xff")
+
+    if other in {"ticket", "same_key"}:
+        if other == "same_key":
+            place = "acme/team/other-tickets"
+            tracker(place, repository=REPOSITORY)
+            url = ticket(1, place=place)
+        else:
+            url = ticket(2)
+        member.work = Work.of_ticket(url)
+        anchor = {"issue_url": url}
+    elif other == "pr":
+        member.remote().git.branch(_TICKET_BRANCH, "main")
+        url = member.pull_request(7, _TICKET_BRANCH)
+        member.work = Work.of_ticket(url)
+        anchor = {"pr_url": url}
+    else:
+        if other == "chat":
+            member.work = Work("chat", "local:aiko:C1:T2")
+        anchor = {
+            "repo": REPOSITORY,
+            "branch": _TICKET_BRANCH if other == "chat" else "other",
+        }
+
+    second = await member.prepare(**anchor)
+    second_path = Path(second["repo_path"])
+    assert second_path != first_path
+    assert Path(member.repo().git_dir) != Path(repo.git_dir)
+    assert member.repo().head.commit.hexsha != before
+    assert not (second_path / "staged.txt").exists()
+    assert not (second_path / "untracked.txt").exists()
+    member.stage(content="B\n")
+    await member.run(lambda service: service.publish(second_path, "work B"))
+
+    member.work = first_work
+    resumed = await member.prepare()
+    assert resumed["repo_path"] == str(first_path)
+    assert member.repo().head.commit.hexsha == before
+    assert member.repo().index.write_tree().hexsha == index
+    assert (first_path / "README.md").read_bytes() == b"unstaged A\x00\xff"
+    assert (first_path / "untracked.txt").read_bytes() == b"untracked A\x00\xff"
+
+
+@pytest.mark.asyncio
+@pytest.mark.windows
+async def test_preparing_again_keeps_a_dirty_branch_the_agent_created(member):
+    first = await member.prepare()
+    member.repo().git.checkout("-b", "agent/chosen")
+    member.stage(content="unfinished work\n")
+
+    resumed = await member.prepare()
+
+    assert resumed["repo_path"] == first["repo_path"]
+    assert resumed["branch"] == "agent/chosen"
+    published = await member.run(
+        lambda s: s.publish(member.clone, "finish chosen branch")
+    )
+    assert member.remote().commit("agent/chosen").hexsha == published.commit_sha
+    assert _TICKET_BRANCH not in [head.name for head in member.remote().heads]
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_resumed_for_its_prs_checks_reuses_its_checkout(member):
+    first = await member.prepare()
+    member.remote().git.branch(_TICKET_BRANCH, "main")
+    url = member.pull_request(7, _TICKET_BRANCH)
+    member.stage(content="unfinished ticket work\n")
+
+    resumed = await member.prepare(pr_url=url)
+
+    assert resumed["repo_path"] == first["repo_path"]
+    assert (member.clone / "README.md").read_text() == "unfinished ticket work\n"
+
+
+def test_slot_and_work_ids_are_bounded_and_keep_distinct_inputs_separate():
+    ids = [
+        member_git._checkout_id(repository, slot)
+        for repository in (REPOSITORY, FORK)
+        for slot in range(3)
+    ]
+    ids += [
+        member_git._work_id(Work(kind, identity))
+        for kind in ("ticket", "chat", "manual")
+        for identity in ("a:b", "a/b", "é", "e\u0301", "x" * 1000)
+    ]
+    assert len(set(ids)) == len(ids)
+    assert all(
+        len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+        for value in ids
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_prepare_requires_the_hosts_work_context(member, language):
+    from guildbotics.utils.i18n_tool import get_language, set_language, t
+
+    previous = get_language()
+    set_language(language)
+    try:
+        with member_invocation_scope(MemberInvocation(guest=member.guest)):
+            with pytest.raises(MemberCapabilityError) as raised:
+                await member.service.prepare(issue_url=_ISSUE)
+        assert str(raised.value) == t("capabilities.member_git.work_required")
+        assert "capabilities.member_git.work_required" not in str(raised.value)
+    finally:
+        set_language(previous)
+
+
+@pytest.mark.asyncio
+async def test_prepare_keeps_divergent_unpublished_work_on_its_branch(member, tmp_path):
+    await member.prepare(repo=REPOSITORY, branch="main")
+    local_sha = member.stage().index.commit("local work").hexsha
+    _advance(member.remotes["owner"], tmp_path, "remote work\n")
+    await member.prepare(repo=REPOSITORY, branch="main")
+    assert member.repo().head.commit.hexsha == local_sha
+
+
+@pytest.mark.asyncio
+async def test_preparing_another_branch_keeps_unpushed_default_branch_commits(member):
+    first = await member.prepare(repo=REPOSITORY, branch="main")
+    local_sha = member.stage().index.commit("unpushed default branch work").hexsha
+    await member.prepare(repo=REPOSITORY, branch="another-task")
+    assert git.Repo(first["repo_path"]).commit("main").hexsha == local_sha
 
 
 @pytest.mark.asyncio
@@ -879,7 +1474,10 @@ async def test_repositories_of_one_name_have_a_clone_each(member):
     assert member.repo(FORK).remote("origin").url == member.url("contributor")
     checkouts = member.service.host_root / "checkouts"
     assert sorted(
-        record.read_text(encoding="utf-8") for record in checkouts.iterdir()
+        member_git._Checkout.model_validate_json(
+            record.read_text(encoding="utf-8")
+        ).repository
+        for record in checkouts.iterdir()
     ) == sorted([REPOSITORY, FORK])
 
 
@@ -1047,12 +1645,7 @@ def _plant_remote(member: _Member, trap: Path, marker: Path) -> None:
 
 def _plant_gitfile(member: _Member, trap: Path, marker: Path) -> None:
     dot_git = member.clone / ".git"
-
-    def writable(function, path, _):
-        os.chmod(path, 0o700)
-        function(path)
-
-    shutil.rmtree(dot_git, onexc=writable)
+    _remove_tree(dot_git)
     dot_git.write_text(f"gitdir: {(trap / '.git').as_posix()}\n", encoding="utf-8")
 
 

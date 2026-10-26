@@ -87,7 +87,7 @@ class HubRelayClient:
             publisher = self._publisher or self._open_publisher()
             try:
                 publisher.write(line)
-            except (BrokenPipeError, OSError):
+            except BrokenPipeError, OSError:
                 publisher.close()
                 publisher = self._open_publisher()
                 publisher.write(line)
@@ -150,7 +150,7 @@ class HubRelayClient:
                         break
                     if line.rstrip("\r\n"):
                         callback(line.rstrip("\r\n"))
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 pass
             finally:
                 with self._watch_lock:

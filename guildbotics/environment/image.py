@@ -22,13 +22,15 @@ from guildbotics.environment.toolchain import ToolchainDeclaration
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.managed_cli import managed_cli_command
 
-#: The base image unless the declaration names one: Debian with Node.js,
-#: npm, and git, the tools the provider CLIs are installed and run with.
-#: Pinned to an exact tag so two devices building the same declaration get
-#: the same environment. An image the declaration names must give the recipe
-#: the same: Debian's apt, Node.js with npm, curl and tar; and git, which
-#: member git runs a member's clones with.
-IMAGE = "node:22.23.2-bookworm"
+#: The base image unless the declaration names one: Debian with curl, the
+#: compilers and git. Pinned to an exact tag so two devices building the same
+#: declaration get the same environment. An image the declaration names must
+#: give the recipe the same: Debian's apt, curl and tar; gcc, g++ and make,
+#: which build the Python dependencies that have no wheel for
+#: :data:`.snapshot.PYTHON_VERSION`; and git, which member git runs a member's
+#: clones with. The Node.js the provider CLIs run with is the recipe's own
+#: (:data:`.snapshot.NODE_VERSION`), installed over the image's.
+IMAGE = "node:24.22.1-bookworm"
 #: How much of a digest a person is shown: enough to tell two apart.
 _SHORT_DIGEST = len("sha256:") + 12
 #: The runtime's own name for what it pulled, beside the tag it was asked

@@ -112,7 +112,7 @@ def _parse_window(name: str, raw: Any, label: str = "") -> CliAgentUsageWindow |
         return None
     try:
         used_percent = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return CliAgentUsageWindow(
         window=name,
@@ -147,7 +147,7 @@ def _parse_reset(raw: Any) -> str:
     """
     try:
         epoch = int(raw or 0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         if not isinstance(raw, str):
             return ""
         try:
@@ -162,7 +162,7 @@ def _parse_reset(raw: Any) -> str:
 def _parse_minutes(raw: Any) -> int | None:
     try:
         minutes = int(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return minutes if minutes > 0 else None
 
@@ -233,7 +233,7 @@ def _optional_decimal_val(raw: Any) -> float | None:
         return None
     try:
         value = float(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return value if math.isfinite(value) and value >= 0 else None
 
@@ -338,7 +338,7 @@ def _parse_claude_reset(raw: str, now: datetime | None = None) -> str:
     try:
         zone = ZoneInfo(match.group("tz"))
         month = datetime.strptime(match.group("month")[:3], "%b").month
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         return ""
     hour = int(match.group("hour")) % 12
     if match.group("ampm") == "pm":
@@ -454,7 +454,7 @@ def _bounded(raw: Any, upper: float) -> float | None:
         return None
     try:
         value = float(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not math.isfinite(value) or value < 0.0 or value > upper:
         return None

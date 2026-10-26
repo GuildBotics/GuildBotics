@@ -1,0 +1,5 @@
+ja:
+  asking: "%{name} が %{item} で質問し、そこで回答を待っています: %{url}"
+  blocked: "%{name} は %{item} の作業を進められず、そこで人の対応を待っています: %{url}"
+  failed: "%{name} は %{item} の作業をエラーで止め、そこで人の対応を待っています: %{url}"
+  comment: "メンバーのコメント: %{url}"

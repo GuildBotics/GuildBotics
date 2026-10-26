@@ -131,7 +131,7 @@ def _chat_context(members: list[Any]) -> Any:
     return type("ContextStub", (), {"team": team})()
 
 
-def _client(runtime: "RuntimeStub") -> TestClient:
+def _client(runtime: RuntimeStub) -> TestClient:
     """Build a TestClient bound to a stubbed runtime with a fixed token."""
     return TestClient(create_app(session_token="secret", runtime=runtime))
 
@@ -1875,6 +1875,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 },
                 "chat_channels": ["C09999999"],
                 "chat_channel_participation": {"C09999999": "muted"},
+                "work_stop_notification_channels": ["C09999999"],
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -1911,8 +1912,14 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert member["message_channels"][0]["chat"] == {
             "enabled": True,
             "participation": "muted",
+            "notify_work_stops": True,
             "channel_id": "C09999999",
         }
+        saved = client.get(
+            "/config/members/alice",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+        assert saved.json()["work_stop_notification_channels"] == ["C09999999"]
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "token-b"
         assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-b"
         assert store.get("ALICE_SLACK_APP_TOKEN") == "xapp-b"
@@ -2127,7 +2134,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(
     release = threading.Event()
 
     class BlockingScheduler:
-        instances: ClassVar[list["BlockingScheduler"]] = []
+        instances: ClassVar[list[BlockingScheduler]] = []
 
         def __init__(
             self,
@@ -2263,7 +2270,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
         return object()
 
     class RunningEventListener:
-        instances: ClassVar[list["RunningEventListener"]] = []
+        instances: ClassVar[list[RunningEventListener]] = []
 
         def __init__(
             self,
@@ -2292,7 +2299,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
     scheduler_release = threading.Event()
 
     class RunningScheduler:
-        instances: ClassVar[list["RunningScheduler"]] = []
+        instances: ClassVar[list[RunningScheduler]] = []
 
         def __init__(
             self,
@@ -2399,7 +2406,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(
         return object()
 
     class StuckEventListener:
-        instances: ClassVar[list["StuckEventListener"]] = []
+        instances: ClassVar[list[StuckEventListener]] = []
 
         def __init__(
             self,

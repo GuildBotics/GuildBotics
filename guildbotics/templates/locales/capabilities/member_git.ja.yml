@@ -1,0 +1,3 @@
+ja:
+  work_required: "メンバーの作業ツリーを準備するには、実行中のコマンドの作業情報が必要です。"
+  checkout_reassigned: "この作業ツリーは現在の作業に割り当てられていません。この作業でmember git prepareを実行し、返されたrepo_pathを使ってください。"

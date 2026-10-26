@@ -53,6 +53,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "no repository), a PR head (--pr-url, alone or together with "
                 "--issue-url, which checks out the PR head), or an ad-hoc branch "
                 "(--repo --branch). A repository is named by its path. "
+                "Unfinished checkouts stay assigned to their work and requested branch; "
+                "idle checkouts of the same repository are reused with their build caches. "
+                "Call prepare every run and use the returned repo_path and branch: a path "
+                "from an earlier run may now belong to another work. Unfinished Git state "
+                "is kept, including an agent-created branch; an empty branch means detached HEAD. "
                 "Member workspaces are worked on only inside a running GuildBotics "
                 "command, whose isolated environment runs every git of them.",
             ),
@@ -168,12 +173,14 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr update --person <person> --url <pr_url> "
-                "[--content-file <file>] [--title <title>] [--drop-issue-links]",
-                "Change a PR's body or title. Body replacement preserves the ticket "
-                "links the existing body carries as the code host reads them; new "
-                "links to the same ticket take precedence. Empty content keeps only "
-                "the links. --drop-issue-links requires content and disables "
-                "preservation.",
+                "[--content-file <file>] [--title <title>] "
+                "[--issue-url <url> ... [--closes-issue|--refs-issue] | --drop-issue-links]",
+                "Change a PR's body, title, or ticket links. --issue-url replaces all "
+                "links with those tickets; --closes-issue closes all of them on merge "
+                "and --refs-issue only refers (the default). --drop-issue-links removes "
+                "all links without requiring a body. Without either option, body "
+                "replacement preserves existing ticket links and ignores new "
+                "managed link lines in the body.",
             ),
             (
                 "guildbotics member pr comment --person <person> --url <pr_url> --content-file <file>",
@@ -328,7 +335,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "Run completion — workflow runs only",
+        "Run completion — workflow and command runs only",
         [
             (
                 "guildbotics member chat noop --person <person> --content-file <file>",
@@ -341,14 +348,20 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member task complete --person <person> "
-                "--status done|asking|blocked|awaiting_checks --content-file <file>",
-                "Finish the ticket workflow run on its ticket with evidence, "
-                "revalidating affected PR readiness before accepting done, or end "
-                "it to await the PRs' pending checks, which resume it.",
+                "--status done|asking|blocked --content-file <file>",
+                "Finish a run other than a chat event's with evidence, revalidating "
+                "affected PR readiness before accepting done.",
             ),
             (
                 "guildbotics member task status --person <person>",
-                "Inspect the ticket run's recorded evidence.",
+                "Inspect the run's recorded evidence.",
+            ),
+            (
+                "guildbotics member checks await --person <person> "
+                "--content-file <file>",
+                "End any run -- a ticket's, a chat thread's, or a command's -- "
+                "to await its own PRs' pending checks: a notice on each PR, from "
+                "which the patrol resumes the run's work once they settle.",
             ),
         ],
     ),
@@ -397,17 +410,28 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "create`. Pass `--issue-url` once for each ticket the PR works on, and add "
     "`--closes-issue` only when every one of those tickets is complete once this PR "
     "merges into the branch that receives its work. `--closes-issue` applies to all "
-    "of them, so with it link only the tickets the merge completes and refer to any "
-    "other on a standalone line in the body. "
+    "of them, so with it link only the tickets the merge completes. Mention any "
+    "other tickets in ordinary body prose, for example `Parent ticket: <url>`, "
+    "rather than managed link lines such as `Refs #43` or `Refs <url>`: managed "
+    "link lines may be removed when replacing ticket links. "
     "A child ticket can therefore be closed by a PR to its parent's feature "
     "branch: pass the child with `--issue-url <child> --closes-issue` and refer to "
-    "the parent ticket on a standalone line in the body. A PR from that feature "
+    "the parent ticket in ordinary body prose as above. A PR from that feature "
     "branch to the default branch closes the parent ticket. Keep the default "
     "reference for stacked PRs, partial steps, and tracking or parent tickets "
     "that the merge does not complete. A merge into a branch other than the default "
     "branch closes no ticket automatically, so after a human merges a child "
     "PR into a feature branch, follow the manual-close rule below. A closing link "
     "only states intent and does not by itself authorize closing the ticket.",
+    "When a PR's completion conditions are met after its creation, replace its "
+    "ticket links with `member pr update --issue-url <url> --closes-issue`, "
+    "repeating --issue-url only for tickets this merge completes. This replaces "
+    "the entire link list, and --closes-issue applies to every supplied ticket; "
+    "reference-only tickets, including unfinished parents, must stay outside "
+    "that list. Mention them in ordinary body prose as above, not managed "
+    "`Refs` lines; supply the revised body in the same update if needed. "
+    "Use --refs-issue to make every supplied ticket a reference instead, or "
+    "--drop-issue-links to remove all links.",
     "When creating new PR inline feedback, first inspect the PR with "
     "`repository/pr_inspect include_diff=true`, then use `member pr "
     "review-comment --head <head_sha>` with explicit diff coordinates from "
@@ -421,21 +445,24 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "If a check fails, use `repository/pr_checks failed_logs=true` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
     "check CI again. Do not report the work complete unless `readiness` is `ready`: "
-    "for every open PR, every observed check must succeed, the head must not be behind "
-    "the current base, and the checked head SHA must still be current. Closed and merged "
-    "PRs are not completion targets, but their CI rollup, checks, and failed logs remain "
-    "available for inspection. `rollup=no_checks` is visible and does not block a "
+    "for every open PR, resolve its `completion_blockers`. `base_out_of_date` means "
+    "the host requires an up-to-date head. The checked head SHA must still be current. "
+    "Closed and merged PRs are not completion targets, but their CI rollup, checks, "
+    "and failed logs remain available for inspection. `rollup=no_checks` is visible and does not block a "
     "repository whose base also has no checks; if the base has checks, an empty head is "
     "treated as registration pending. If an unrelated failure or an unavailable "
     "check blocks completion, follow the failure-handling rule above and report that blocker. "
-    "In a ticket workflow run, do not wait for CI in the turn: when pending checks "
-    "(`checks_pending`) are the only blocker left, finish the run with `member task "
-    "complete --status awaiting_checks`, and the patrol resumes the work once the "
-    "checks finish or the head moves.",
+    "In any workflow or command run -- a ticket's, a chat thread's, or a command's -- "
+    "do not wait for CI in the turn: when pending checks (`checks_pending`) are the "
+    "only blocker left, "
+    "end the run with `member checks await`, whose summary says where the outcome is "
+    "to be reported, and the patrol resumes the run's work once the checks finish or "
+    "the head moves.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating ticket or PR for ticket-driven work, the review thread or PR "
-    "conversation for PR review work, the chat thread for chat-driven work. "
+    "conversation for PR review work, the chat thread for chat-driven work, the "
+    "destination the command names for command-driven work. "
     "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
 ]

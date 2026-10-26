@@ -48,7 +48,12 @@ async def main(context: Context) -> Any:
     host drives until the member records a completion, and raises when it
     cannot.
     """
-    turn = context.shared_state[WORKFLOW_INVOCATION_KEY].payload
+    invocation = context.shared_state[WORKFLOW_INVOCATION_KEY]
+    turn = invocation.payload
+    # The work the run does: the ticket's, or the one a run resumed for its
+    # PR's checks continues.
+    work = invocation.work
+    channel_id, thread_id = work.chat_thread()
     person_id = context.person.person_id
     ticket_url = turn["ticket_url"]
     pull_request_url = turn["pull_request_url"]
@@ -67,14 +72,24 @@ async def main(context: Context) -> Any:
         work_type=(
             (trigger_reason or "pull_request_feedback")
             if pull_request_url
+            else "ticket_mention"
+            if work.kind == "ticket_mention"
             else "ticket"
         ),
         trigger_reason=trigger_reason,
+        work_kind=work.kind,
+        work_identity=work.identity,
+        # The awaiting run a resumed run continues, and what it said of the work.
+        awaited_run_id=turn["awaited_run_id"],
+        awaited_summary=turn["awaited_summary"],
+        chat_channel_id=channel_id,
+        chat_thread_id=thread_id,
         language=context.language_name,
         member_workspace=str(member_workspace),
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
-            "resume_policy": "fresh",
+            # A new run feeds its instructions into the work's existing session.
+            "resume_policy": "auto",
             "attempt": 1,
             "max_completion_attempts": turn["max_completion_attempts"],
         },

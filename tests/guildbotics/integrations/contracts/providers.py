@@ -2,8 +2,8 @@
 
 A provider's harness gives the code host and the tickets of one member, and
 what a contract cannot do through the ports: a branch on the remote, a new
-commit on it, an artifact of a commit, an assignment on the board, a human's
-merge. The
+commit on it, an artifact of a commit, an assignment on the board, someone
+else's pull request, a human's merge. The
 harness speaks as the ports do -- items by their URLs, comments and reviews by
 the ids their reads give -- and names its repository, its tracker, and a
 repository outside the member's scope by the paths its provider spells.
@@ -43,6 +43,7 @@ from guildbotics.integrations.local import store
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations import branvil_double
+from tests.guildbotics.integrations.github_services import rendered_body
 from tests.guildbotics.local_code_host import tracker, write
 
 MEMBER = "aiko"
@@ -71,12 +72,19 @@ class Harness:
     branch: Callable[[str], None]
     #: Put one more commit on ``branch``.
     advance: Callable[[str], None]
+    #: Advance the current base independently of an already opened PR head.
+    advance_base: Callable[[], None]
+    #: Set a configurable host's freshness requirement; return its actual value.
+    require_up_to_date: Callable[[bool], bool]
     #: Delete ``branch`` of the repository's remote.
     delete_branch: Callable[[str], None]
     #: Put the ticket in the board's ready lane, assigned to the member.
     assign: Callable[[str], None]
     #: Keep the CI artifact ``name`` of the commit ``sha``.
     artifact: Callable[[str, str, bytes], None]
+    #: Make someone else the author of the pull request ``url``, as if they had
+    #: opened it: a code host takes no verdict of the author's own.
+    make_theirs: Callable[[str], None]
     #: A human merges the pull request ``url`` into its base, which closes the
     #: tickets the code host links to be closed by it.
     merge: Callable[[str], None]
@@ -89,6 +97,8 @@ class Harness:
     #: The optional features the provider has; it refuses the others.
     features: frozenset[str]
     #: The writes that reached the provider, as ``"<what> <where>"``.
+    human_comment: Callable[[str, str], None]
+    mention: str
     writes: list[str] = field(default_factory=list)
 
     async def aclose(self) -> None:
@@ -168,10 +178,27 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ticket.update(lane=Task.READY, assignees=[MEMBER])
         write(ref, ticket)
 
+    def human_comment(url: str, body: str) -> None:
+        ref = store.locate(url, "ticket")
+        ticket = store.load(ref)
+        ticket["comments"].append(
+            {
+                "id": f"human-{len(ticket['comments'])}",
+                "author": "owner",
+                "body": body,
+                "created_at": store.now(),
+            }
+        )
+        write(ref, ticket)
+
     def artifact(sha: str, name: str, content: bytes) -> None:
         path = store.artifact(repository, sha, name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+
+    def make_theirs(url: str) -> None:
+        ref = store.locate(url, "pull_request")
+        write(ref, {**store.load(ref), "author": "them"})
 
     def merge(url: str) -> None:
         ref = store.locate(url, "pull_request")
@@ -234,9 +261,12 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         their_tracker,
         lambda name: commit(name, "main"),
         lambda name: commit(name, None),
+        lambda: commit("main", None),
+        lambda required: True,
         delete_branch,
         assign,
         artifact,
+        make_theirs,
         merge,
         Task(
             id=theirs_ref.url,
@@ -248,7 +278,9 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         "comment-1",
         store.ref_of("ticket", tickets_tracker, 404).url,
         frozenset({"request_changes", "artifacts", "off_board"}),
-        writes,
+        writes=writes,
+        human_comment=human_comment,
+        mention=f"@{MEMBER}",
     )
 
 
@@ -276,6 +308,11 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
     branvil_double.serve(double, monkeypatch)
     monkeypatch.setenv(f"{MEMBER.upper()}_BRANVIL_TOKEN", branvil_double.TOKEN)
     code, tickets = _services("branvil", branvil_double.SCOPE, key="workspace")
+
+    def advance_base() -> None:
+        double.advance("main")
+        double.behind_by += 1
+
     return Harness(
         "branvil",
         code,
@@ -286,9 +323,12 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         branvil_double.THEIR_REPO,
         double.branch,
         double.advance,
+        advance_base,
+        lambda required: False,
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.make_theirs,
         double.merge,
         Task(
             id=double.their_ticket,
@@ -299,8 +339,12 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         ),
         double.their_comment,
         f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
-        frozenset({"request_changes", "artifacts"}),
-        double.writes,
+        frozenset({"request_changes", "artifacts", "dependency_alerts"}),
+        writes=double.writes,
+        human_comment=lambda url, body: double._entry(
+            url, "comments", branvil_double.OWNER, body
+        ),
+        mention=f"@{MEMBER}",
     )
 
 
@@ -321,6 +365,25 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         url=f"https://github.com/orgs/{OWNER}/projects/1",
     )
     theirs = f"https://github.com/{THEIRS}/issues/1"
+
+    def advance_base() -> None:
+        double.advance("main")
+        double.behind_by += 1
+
+    def require_up_to_date(required: bool) -> bool:
+        double.requires_up_to_date = required
+        return required
+
+    def human_comment(url: str, body: str) -> None:
+        number = int(url.rsplit("/", 1)[1])
+        entry = double._entry(
+            {"body": body},
+            issue=number,
+            issue_url=f"{API}/repos/{REPO}/issues/{number}",
+        )
+        entry["user"] = {"login": "owner"}
+        double.comments[entry["id"]] = entry
+
     return Harness(
         "github",
         code,
@@ -331,9 +394,12 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         THEIRS,
         double.branch,
         double.advance,
+        advance_base,
+        require_up_to_date,
         double.branches.pop,
         double.assign,
         double.add_artifact,
+        double.make_theirs,
         double.merge,
         Task(
             id=_THEIR_NODE,
@@ -345,7 +411,9 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         "issuecomment-1",
         f"https://github.com/{REPO}/issues/404",
         frozenset({"request_changes", "artifacts", "dependency_alerts", "off_board"}),
-        double.writes,
+        writes=double.writes,
+        human_comment=human_comment,
+        mention=f"@{LOGIN}",
     )
 
 
@@ -390,6 +458,8 @@ class GitHubDouble:
         self.review_comments: dict[int, dict[str, Any]] = {}
         self.reviews: dict[int, dict[str, Any]] = {}
         self.branches: dict[str, str] = {"main": "base-sha"}
+        self.behind_by = 0
+        self.requires_up_to_date = False
         self.artifacts: dict[int, dict[str, Any]] = {}
         #: The Project's items: issue number -> Status option name.
         self.board: dict[int, str] = {}
@@ -426,6 +496,10 @@ class GitHubDouble:
             "content": content,
         }
 
+    def make_theirs(self, url: str) -> None:
+        """Someone else is the pull request's author."""
+        self.items[int(url.rsplit("/", 1)[1])]["user"] = {"login": "them"}
+
     def merge(self, url: str) -> None:
         """A human merges the pull request into the default branch: GitHub
         closes the issues its body closes."""
@@ -445,6 +519,38 @@ class GitHubDouble:
             return httpx.Response(200, json={"data": self._graphql(body)})
         if path == "/rate_limit":
             return httpx.Response(200, json={"resources": {}})
+        if path == "/search/issues":
+            assert (
+                request.url.params["q"]
+                == f"is:issue is:open user:{OWNER} mentions:{LOGIN}"
+            )
+            found = [
+                item
+                for item in self.items.values()
+                if "pull_request" not in item
+                and item["state"] == "open"
+                and any(
+                    f"@{LOGIN}" in (entry["body"] or "").casefold()
+                    for entry in [
+                        item,
+                        *[
+                            comment
+                            for comment in self.comments.values()
+                            if comment["issue_url"].endswith(
+                                f"/issues/{item['number']}"
+                            )
+                        ],
+                    ]
+                )
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "items": found,
+                    "total_count": len(found),
+                    "incomplete_results": False,
+                },
+            )
         match = re.fullmatch(r"/repos/([^/]+/[^/]+)(/.*)?", path)
         if match is None:
             return httpx.Response(404, json={"message": "Not Found"})
@@ -515,8 +621,20 @@ class GitHubDouble:
             item = self.items.get(int(match.group(2)))
             if item is None or (match.group(1) == "pulls" and "head" not in item):
                 return None
+            if match.group(1) == "pulls":
+                item["mergeable_state"] = (
+                    "behind" if self.requires_up_to_date and self.behind_by else "clean"
+                )
             if method == "PATCH":
                 item.update(body)
+                if "body" in body:
+                    item["body_html"] = rendered_body(body["body"] or "")
+                if "head" in item and "body" in body:
+                    number = int(match.group(2))
+                    for linked in self.timeline.values():
+                        linked[:] = [pull for pull in linked if pull != number]
+                    for linked in _ISSUE_LINK.findall(body.get("body") or ""):
+                        self.timeline.setdefault(int(linked), []).append(number)
                 if body.get("state") == "closed":
                     item["closed_at"] = _CLOSED_AT
             return item
@@ -556,7 +674,9 @@ class GitHubDouble:
                     "source": {
                         "issue": {
                             **self.items[pull],
-                            "pull_request": {"merged_at": None},
+                            "pull_request": {
+                                "merged_at": self.items[pull]["merged_at"]
+                            },
                         }
                     },
                 }
@@ -598,7 +718,7 @@ class GitHubDouble:
             sha = self.branches.get(match.group(1))
             return None if sha is None else {"commit": {"sha": sha}}
         if re.fullmatch(r"/compare/.+", route):
-            return {"behind_by": 0}
+            return {"behind_by": self.behind_by}
         if re.fullmatch(r"/commits/[^/]+/check-runs", route):
             return {
                 "check_runs": [
@@ -696,6 +816,7 @@ class GitHubDouble:
             "node_id": f"NODE{number}",
             "title": body["title"],
             "body": body.get("body"),
+            "body_html": rendered_body(body.get("body") or ""),
             "state": "open",
             "html_url": f"https://github.com/{REPO}/{collection}/{number}",
             "user": {"login": LOGIN},
@@ -728,6 +849,7 @@ class GitHubDouble:
             "id": entry_id,
             "node_id": f"NODE_C{entry_id}",
             "body": body.get("body", ""),
+            "body_html": rendered_body(body.get("body") or ""),
             "user": {"login": LOGIN},
             "created_at": "2026-07-02T00:00:00Z",
             "html_url": f"https://github.com/{REPO}#{entry_id}",
@@ -808,6 +930,7 @@ class GitHubDouble:
                         "url": item["html_url"],
                         "title": item["title"],
                         "body": item["body"],
+                        "bodyHTML": item["body_html"],
                         "createdAt": item["created_at"],
                         "state": item["state"].upper(),
                         "closedAt": item["closed_at"],

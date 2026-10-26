@@ -187,7 +187,7 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
     assert "add_session_state_to_context" not in captured
 
 
-def _model_config(**overrides) -> "agno_agent.ModelConfig":
+def _model_config(**overrides) -> agno_agent.ModelConfig:
     return agno_agent.ModelConfig(
         name="models/test.yml",
         model_class="tests.FakeModel",

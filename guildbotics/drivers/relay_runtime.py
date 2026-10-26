@@ -101,7 +101,7 @@ class RelayRuntime:
                 return cached[1]
         try:
             owner = self.client.owner_get()
-        except (HubRelayClientError, OSError, RuntimeError):
+        except HubRelayClientError, OSError, RuntimeError:
             return None
         result = owner is not None and owner.owner_device_id == self.client.device_id
         with self._owner_cache_lock:
@@ -122,7 +122,7 @@ class RelayRuntime:
             return
         try:
             payload = json.loads(line)
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except TypeError, ValueError, json.JSONDecodeError:
             self._report_relay_error("live_invalid")
             return
         if isinstance(payload, dict) and payload.get("kind") == LIVE_EXPIRED_EVENT_KIND:
@@ -148,7 +148,7 @@ class RelayRuntime:
             return
         try:
             state = LiveState.model_validate(payload)
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except TypeError, ValueError, json.JSONDecodeError:
             if _requires_client_update(payload):
                 self._report_relay_error("live_client_update_required")
             else:

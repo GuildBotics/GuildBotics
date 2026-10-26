@@ -180,7 +180,7 @@ def _failure(response: httpx.Response) -> ServiceError:
     try:
         error = response.json()["error"]
         code, message = str(error["code"]), str(error["message"])[:_MESSAGE_LIMIT]
-    except (ValueError, KeyError, TypeError):
+    except ValueError, KeyError, TypeError:
         code, message = "", ""
     status = response.status_code
     if status == httpx.codes.NOT_FOUND:
@@ -511,11 +511,14 @@ class BranvilApi(Calls):
         conditions: dict[str, Any],
         continuation: str,
         translate: Callable[[dict[str, Any]], ReadModel | dict[str, Any]],
+        **params: Any,
     ) -> ReadPage:
         """The page of the collection at ``path`` that ``continuation`` (a
-        cursor Branvil gave, bound to the collection) asks for."""
+        cursor Branvil gave, bound to the collection and ``params``) asks
+        for."""
         page = await self.get(
             path,
+            **params,
             limit=conditions["page_size"],
             **({"cursor": continuation} if continuation else {}),
         )
@@ -654,6 +657,11 @@ class BranvilApi(Calls):
             )
             is not None
         )
+
+    def mentions_member(self, data: dict[str, Any]) -> bool:
+        """Whether a stored ticket or comment mentions this member."""
+        me = username(self.person).casefold()
+        return any(name.casefold() == me for name in data["mentions"])
 
     async def post_comment(
         self, item: BranvilItem, body: str, status: WorkflowStatus | None

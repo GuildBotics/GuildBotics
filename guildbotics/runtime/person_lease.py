@@ -49,7 +49,7 @@ class PersonLeaseMetadata:
                 run_id=str(value.get("run_id", "")),
                 started_at=str(value["started_at"]),
             )
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             return None
         return metadata if metadata.pid > 0 and metadata.person_id else None
 
@@ -179,5 +179,5 @@ def current_person_lease() -> PersonExecutionLease | None:
 def _read_metadata(handle: IO[str]) -> PersonLeaseMetadata | None:
     try:
         return PersonLeaseMetadata.from_dict(json.loads(_read_lock_data(handle)))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None

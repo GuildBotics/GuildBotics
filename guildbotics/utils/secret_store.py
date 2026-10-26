@@ -626,7 +626,7 @@ class KeyringSecretStore(SecretStore):
         """
         try:
             data = json.loads(self._local_index.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError, ValueError:
             data = None
         except OSError as exc:
             raise SecretStoreError(str(exc)) from exc

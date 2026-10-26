@@ -10,6 +10,15 @@ project chooses (Slack, for example).
 This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
 the exact `branvil` commands, are in the Branvil README.
 
+Ticket mention selection uses the `mentions` lists Branvil returns on bodies
+and comments. Branvil resolves names against its members when a body is saved.
+Install the matching Branvil (storage schema 20) before this provider.
+Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
+unanswered mentions outside the member's assignment, without scanning every
+ticket's comments. These runs respond on the ticket and leave its lane and
+assignee unchanged. Comments addressed only to other members do not wake the
+assignee; a response that affects their work should mention them.
+
 ## How it fits together
 
 ```text
@@ -232,9 +241,12 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   **New**, and `member ticket create --no-add-to-board` is refused.
 - A ticket assigned to the member in the **Ready** lane of the workspace's board is
   taken up and moved to **In progress**; one in **In progress** is taken up again when
-  someone else has spoken since the member last did. Once a pull request refers to the
-  ticket, the patrol follows the pull request instead, and its merge moves the ticket to
-  **Done**.
+  someone else has spoken since the member last did, or an unanswered mention remains.
+  These ticket conversations are picked up even with an open or merged linked pull
+  request; an existing open pull request is reused. The member's latest failure or
+  rate-limit status holds the ticket first. With no unanswered conversation, an open
+  pull request is followed by the PR patrol, and a merged one moves the ticket to
+  **Done**. Without a linked pull request or comments since assignment, work resumes.
 - A member's pull request is taken up when someone says something the member has not
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.
@@ -268,3 +280,9 @@ things:
   marks its pull request merged, so the patrol moves the ticket to **Done** as usual.
 - A ticket can name the GitHub issue it stands for; the published pull request then
   closes that issue.
+- GitHub's Dependabot alerts of the upstream are read through Branvil
+  (`member repo-info read --resource dependency_alerts`,
+  `repository/security_alerts`): Branvil reads them with the account that reads GitHub
+  for it, which then needs **Dependabot alerts: Read-only** and access to the
+  repository (a GitHub App's added permission approved on its installation). A
+  repository without an upstream has no alerts and refuses the read as unsupported.

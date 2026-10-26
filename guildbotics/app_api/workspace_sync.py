@@ -702,7 +702,7 @@ class WorkspaceSyncService:
                 on_relay_error=self._receive_relay_error,
             )
             runtime.start()
-        except (ServiceOwnerError, OSError, ValueError):
+        except ServiceOwnerError, OSError, ValueError:
             if runtime is not None:
                 runtime.stop()
             return

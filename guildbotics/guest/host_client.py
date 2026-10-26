@@ -116,7 +116,6 @@ class ClientRunLedger:
     def __init__(self, client: HostClient, facts: CommandFacts) -> None:
         self._client = client
         self.run_id = facts.run_id
-        self.work_kind = facts.work_kind
 
     def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
@@ -193,7 +192,7 @@ def _result(response: httpx.Response) -> Any:
         return response.json()["result"]
     try:
         error = response.json()["error"]
-    except (ValueError, KeyError, TypeError):
+    except ValueError, KeyError, TypeError:
         raise HostCallError(
             "refused", f"The host refused the call ({response.status_code})."
         ) from None

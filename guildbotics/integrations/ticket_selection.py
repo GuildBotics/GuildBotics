@@ -7,9 +7,10 @@ from those alone. Being assigned is how a human asks the member to act, so
 only what was said since then shows whether the member already has. A ticket
 in the ready lane is the member's unless the member spoke last and was not
 summoned again; in the working lane it is taken up again when someone else
-has spoken since, or when nobody has said anything yet. A pull request that
-refers to the ticket takes it over: the pull request patrol follows it, and
-its merge finishes the ticket.
+has spoken since, or when nobody has said anything yet. Unanswered comments
+and mentions take precedence over a linked pull request: the pull request
+patrol follows the PR's conversation, while the ticket still answers its own.
+Otherwise a linked pull request takes over, and its merge finishes the ticket.
 """
 
 from __future__ import annotations
@@ -43,20 +44,16 @@ def since_assignment(comments: Sequence[Message], assigned_at: str) -> list[Mess
     ]
 
 
-def mention_pending(
-    description: str, comments: Sequence[Message], mentions: Callable[[str], bool]
-) -> bool:
+def mention_pending(described: bool, comments: Iterable[tuple[Message, bool]]) -> bool:
     """Whether a mention of the member is still unanswered.
 
-    A mention in the description or in any comment marks the member as
-    summoned; the member's own next comment answers it.
+    Providers supply resolved mention flags and comments, oldest first (since
+    assignment for assigned work, all history otherwise). A mention in the description or a comment summons the
+    member; their own next comment answers it, even if it mentions them.
     """
-    pending = mentions(description)
-    for comment in comments:
-        if mentions(comment.content):
-            pending = True
-        if comment.author_type == Message.ASSISTANT:
-            pending = False
+    pending = described
+    for comment, mentioned in comments:
+        pending = (pending or mentioned) and comment.author_type != Message.ASSISTANT
     return pending
 
 
@@ -67,6 +64,32 @@ def linked_pull_state(pulls: Iterable[tuple[str, str]]) -> str | None:
     found = list(pulls)
     candidates = [pull for pull in found if pull[0] == "open"] or found
     return max(candidates, key=lambda pull: pull[1])[0] if candidates else None
+
+
+def relevant_comments(comments: Iterable[tuple[Message, bool]]) -> list[Message]:
+    """The assigned work's conversation, excluding external remarks to others.
+
+    Providers resolve whether each comment is addressed elsewhere. The member's
+    own comments always count as answers or held statuses. The full history
+    remains on the task, and a summons to this member is never excluded.
+    """
+    return [
+        comment
+        for comment, elsewhere in comments
+        if not elsewhere or comment.author_type == Message.ASSISTANT
+    ]
+
+
+def select_mention(task: Task, *, pending: bool) -> Task | None:
+    """Select an unanswered summons outside the member's assigned work.
+
+    It answers the ticket's conversation without taking ownership of its lane
+    or following its linked pull request.
+    """
+    if not pending:
+        return None
+    task.trigger_reason = "issue_mention"
+    return task
 
 
 async def select(
@@ -97,17 +120,21 @@ async def select(
             return None
         task.trigger_reason = "ready_lane"
         return task
+    if held:
+        return None
+    if since and not mine:
+        task.trigger_reason = "issue_comment"
+        return task
+    if pending:
+        task.trigger_reason = "issue_mention"
+        return task
     pull = await linked_pull()
     if pull is not None:
-        # A merged PR finishes the ticket; an open one is followed on the PR
-        # itself by the pull request patrol, never through the ticket.
+        # With the ticket's conversation answered, the PR patrol takes over.
         if pull == "merged":
             await done()
         return None
-    if held or (since and mine):
-        return None
     if since:
-        task.trigger_reason = "issue_comment"
-    else:
-        task.trigger_reason = "issue_mention" if pending else "working_lane"
+        return None
+    task.trigger_reason = "working_lane"
     return task

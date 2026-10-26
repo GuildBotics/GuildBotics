@@ -281,6 +281,11 @@ type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
+type ChatChannelDraft = {
+  name: string;
+  participation: ChatParticipationPolicy;
+  notifyWorkStops: boolean;
+};
 const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 /** The providers whose accounts a member form holds, whatever the project uses. */
 const MEMBER_ACCOUNT_UIS = Object.entries(PROVIDER_UIS).flatMap(([name, ui]) =>
@@ -3056,12 +3061,10 @@ function MembersSection({
   const [characterAvoidWhenText, setCharacterAvoidWhenText] = useState("");
   const [characterContributionText, setCharacterContributionText] = useState("");
   const [characterExtras, setCharacterExtras] = useState<Record<string, unknown>>({});
-  const [chatChannels, setChatChannels] = useState<string[]>([]);
+  const [chatChannelDrafts, setChatChannelDrafts] = useState<ChatChannelDraft[]>([]);
+  const chatChannels = chatChannelDrafts.map((channel) => channel.name);
   const [chatChannelInput, setChatChannelInput] = useState("");
   const [chatChannelInputError, setChatChannelInputError] = useState<string | null>(null);
-  const [chatChannelParticipation, setChatChannelParticipation] = useState<
-    Record<string, ChatParticipationPolicy>
-  >({});
   const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
   const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
@@ -3079,9 +3082,9 @@ function MembersSection({
   const [joiningPersonId, setJoiningPersonId] = useState<string | null>(null);
   const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
-  const routineDefaultDismissedRef = useRef(false);
+  const [routineDefaultDismissed, setRoutineDefaultDismissed] = useState(false);
   const hasPersistedProject = Boolean(config?.project_file_exists);
-  const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
+  const [avatarTimestamp, setAvatarTimestamp] = useState(() => Date.now());
   const [importingAvatar, setImportingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const isHumanMember = personType === "human";
@@ -3266,14 +3269,12 @@ function MembersSection({
     }
   }, [applyPresetFields, displayedMembers.length, mode]);
 
-  useEffect(() => {
-    if (
-      isHumanMember &&
-      (activeTab === "intelligence" || activeTab === "patrol" || activeTab === "diagnostics")
-    ) {
-      showTab("basic");
-    }
-  }, [activeTab, isHumanMember, showTab]);
+  if (
+    isHumanMember &&
+    (activeTab === "intelligence" || activeTab === "patrol" || activeTab === "diagnostics")
+  ) {
+    showTab("basic");
+  }
 
   const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
     setPersonId("");
@@ -3290,13 +3291,12 @@ function MembersSection({
     }
     setRelationships("");
     setCharacterExtras({});
-    setChatChannels([]);
+    setChatChannelDrafts([]);
     setChatChannelInput("");
     setChatChannelInputError(null);
-    setChatChannelParticipation({});
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
-    routineDefaultDismissedRef.current = false;
+    setRoutineDefaultDismissed(false);
     setScheduledCommands([]);
     setPersonType("agent");
     setIsActive(true);
@@ -3338,14 +3338,20 @@ function MembersSection({
     setCharacterAvoidWhenText(characterFields.avoidWhen.join("\n"));
     setCharacterContributionText(characterFields.contributionStyle.join("\n"));
     setCharacterExtras(characterFields.extras);
-    setChatChannels(member.chat_channels ?? []);
+    setChatChannelDrafts(() =>
+      member.chat_channels.map((name) => ({
+        name,
+        participation: member.chat_channel_participation[normalizeChatChannel(name)] ?? "strict",
+        notifyWorkStops: member.work_stop_notification_channels
+          .map(normalizeChatChannel)
+          .includes(normalizeChatChannel(name)),
+      })),
+    );
     setChatChannelInput("");
     setChatChannelInputError(null);
-    setChatChannelParticipation(member.chat_channel_participation ?? {});
     setRoutineOverrideEnabled(member.routine_commands.length > 0);
     setRoutineCommands(member.routine_commands);
-    routineDefaultDismissedRef.current =
-      nextPersonType === "human" || member.routine_commands.length > 0;
+    setRoutineDefaultDismissed(nextPersonType === "human" || member.routine_commands.length > 0);
     setScheduledCommands(
       flattenTaskSchedules(member.task_schedules).map((entry) =>
         scheduledCommandToDraft(entry, commandCatalog),
@@ -3573,28 +3579,17 @@ function MembersSection({
     }
     setRoutineCommands((current) => (current.length > 0 ? current : [routineDefaultCommand]));
   }, [routineDefaultCommand]);
-  useEffect(() => {
-    if (
-      formMode === "add" &&
-      !isHumanMember &&
-      shouldSeedDefaultRoutine &&
-      // Without a default to offer (no saved project to read commands from
-      // yet), the routine is left to the save, which seeds the same default.
-      routineDefaultCommand &&
-      !routineDefaultDismissedRef.current &&
-      (!routineOverrideEnabled || routineCommands.length === 0)
-    ) {
-      seedDefaultRoutineCommands();
-    }
-  }, [
-    formMode,
-    isHumanMember,
-    shouldSeedDefaultRoutine,
-    routineDefaultCommand,
-    routineOverrideEnabled,
-    routineCommands.length,
-    seedDefaultRoutineCommands,
-  ]);
+  if (
+    formMode === "add" &&
+    !isHumanMember &&
+    shouldSeedDefaultRoutine &&
+    // The saved project must offer a default before it can seed the form.
+    routineDefaultCommand &&
+    !routineDefaultDismissed &&
+    (!routineOverrideEnabled || routineCommands.length === 0)
+  ) {
+    seedDefaultRoutineCommands();
+  }
   const memberContext: MemberContext = {
     human: isHumanMember,
     personId,
@@ -3654,44 +3649,27 @@ function MembersSection({
       return;
     }
     const channelRef = normalizeChatChannel(channel);
-    setChatChannels([
-      ...chatChannels.filter((existing) => normalizeChatChannel(existing) !== channelRef),
-      channel,
+    const existing = chatChannelDrafts.find((row) => normalizeChatChannel(row.name) === channelRef);
+    setChatChannelDrafts([
+      ...chatChannelDrafts.filter((row) => normalizeChatChannel(row.name) !== channelRef),
+      {
+        name: channel,
+        participation: existing?.participation ?? "strict",
+        notifyWorkStops: existing?.notifyWorkStops ?? false,
+      },
     ]);
-    setChatChannelParticipation((current) => ({
-      ...current,
-      [channelRef]: current[channelRef] ?? "strict",
-    }));
     setChatChannelInput("");
     setChatChannelInputError(null);
   };
 
-  const updateChatChannel = (index: number, value: string) => {
-    const previousRef = normalizeChatChannel(chatChannels[index] ?? "");
-    const nextRef = normalizeChatChannel(value);
-    setChatChannels(
-      chatChannels.map((channel, currentIndex) => (currentIndex === index ? value : channel)),
+  const updateChatChannel = (index: number, update: Partial<ChatChannelDraft>) => {
+    setChatChannelDrafts((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...update } : row)),
     );
-    if (!nextRef || previousRef === nextRef) {
-      return;
-    }
-    setChatChannelParticipation((current) => {
-      const { [previousRef]: previousPolicy, ...rest } = current;
-      return {
-        ...rest,
-        [nextRef]: previousPolicy ?? current[nextRef] ?? "strict",
-      };
-    });
   };
 
   const removeChatChannel = (index: number) => {
-    const removedRef = normalizeChatChannel(chatChannels[index] ?? "");
-    setChatChannels(chatChannels.filter((_, currentIndex) => currentIndex !== index));
-    setChatChannelParticipation((current) => {
-      const next = { ...current };
-      delete next[removedRef];
-      return next;
-    });
+    setChatChannelDrafts((current) => current.filter((_, rowIndex) => rowIndex !== index));
   };
 
   const chatChannelsField = (
@@ -3722,49 +3700,57 @@ function MembersSection({
         <div className="empty-row">{t("setup.members.chatChannelsEmpty")}</div>
       ) : (
         <Stack gap="sm">
-          {chatChannels.map((channel, index) => {
-            const channelRef = normalizeChatChannel(channel);
+          {chatChannelDrafts.map((channel, index) => {
             return (
-              <Group key={`${channelRef}-${index}`} align="start">
-                <TextInput
-                  className="member-chat-channel-input"
-                  label={t("setup.members.chatParticipationChannel")}
-                  value={channel}
-                  onChange={(event) => updateChatChannel(index, event.currentTarget.value)}
-                />
-                <Select
-                  className="member-chat-policy-select"
-                  label={t("setup.members.chatParticipationPolicy")}
-                  data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
-                    value: option,
-                    label: t(`setup.members.chatParticipationOptions.${option}`),
-                  }))}
-                  value={chatChannelParticipation[channelRef] ?? "strict"}
-                  onChange={(value) =>
-                    setChatChannelParticipation((current) => ({
-                      ...current,
-                      [channelRef]: toChatParticipationPolicy(value),
-                    }))
+              <Stack key={index} gap="xs">
+                <Group align="start">
+                  <TextInput
+                    className="member-chat-channel-input"
+                    label={t("setup.members.chatParticipationChannel")}
+                    value={channel.name}
+                    onChange={(event) =>
+                      updateChatChannel(index, { name: event.currentTarget.value })
+                    }
+                  />
+                  <Select
+                    className="member-chat-policy-select"
+                    label={t("setup.members.chatParticipationPolicy")}
+                    data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
+                      value: option,
+                      label: t(`setup.members.chatParticipationOptions.${option}`),
+                    }))}
+                    value={channel.participation}
+                    onChange={(value) =>
+                      updateChatChannel(index, { participation: toChatParticipationPolicy(value) })
+                    }
+                    renderOption={({ option }) => (
+                      <Stack gap={2}>
+                        <Text size="sm">{option.label}</Text>
+                        <Text size="xs" c="dimmed">
+                          {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
+                        </Text>
+                      </Stack>
+                    )}
+                  />
+                  <ActionIcon
+                    aria-label={t("setup.members.chatChannelRemove")}
+                    color="danger"
+                    mt={25}
+                    variant="subtle"
+                    onClick={() => removeChatChannel(index)}
+                  >
+                    <Trash2 size={16} />
+                  </ActionIcon>
+                </Group>
+                <Switch
+                  label={t("setup.members.workStopNotifications")}
+                  description={t("setup.members.workStopNotificationsHint")}
+                  checked={channel.notifyWorkStops}
+                  onChange={(event) =>
+                    updateChatChannel(index, { notifyWorkStops: event.currentTarget.checked })
                   }
-                  renderOption={({ option }) => (
-                    <Stack gap={2}>
-                      <Text size="sm">{option.label}</Text>
-                      <Text size="xs" c="dimmed">
-                        {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
-                      </Text>
-                    </Stack>
-                  )}
                 />
-                <ActionIcon
-                  aria-label={t("setup.members.chatChannelRemove")}
-                  color="danger"
-                  mt={25}
-                  variant="subtle"
-                  onClick={() => removeChatChannel(index)}
-                >
-                  <Trash2 size={16} />
-                </ActionIcon>
-              </Group>
+              </Stack>
             );
           })}
         </Stack>
@@ -3803,13 +3789,18 @@ function MembersSection({
         ]),
       ),
       chat_channels: isHumanMember ? [] : chatChannels,
+      work_stop_notification_channels: isHumanMember
+        ? []
+        : chatChannelDrafts
+            .filter((channel) => channel.notifyWorkStops)
+            .map((channel) => normalizeChatChannel(channel.name)),
       chat_channel_participation: isHumanMember
         ? {}
         : Object.fromEntries(
-            chatChannels.map((channel) => {
-              const channelRef = normalizeChatChannel(channel);
-              return [channelRef, chatChannelParticipation[channelRef] ?? "strict"];
-            }),
+            chatChannelDrafts.map((channel) => [
+              normalizeChatChannel(channel.name),
+              channel.participation,
+            ]),
           ),
       routine_commands: isHumanMember || !routineOverrideEnabled ? [] : routineCommands,
       task_schedules: isHumanMember
@@ -4559,7 +4550,7 @@ function MembersSection({
                     routineCommands={routineCommands}
                     scheduledCommands={scheduledCommands}
                     onRoutineOverrideChange={(enabled) => {
-                      routineDefaultDismissedRef.current = !enabled;
+                      setRoutineDefaultDismissed(!enabled);
                       if (enabled) {
                         seedDefaultRoutineCommands();
                       } else {

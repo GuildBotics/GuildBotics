@@ -141,10 +141,7 @@ def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Byte-for-byte: authoring reads the file as bytes, so a newline the
     # platform translated here would come back as a difference.
-    # ``Path.open`` rather than ``write_text``: the latter only takes
-    # ``newline`` from Python 3.13, and this repository supports 3.12.
-    with path.open("w", encoding="utf-8", newline="\n") as stream:
-        stream.write(content)
+    path.write_text(content, encoding="utf-8", newline="\n")
     return path
 
 

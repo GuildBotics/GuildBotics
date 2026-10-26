@@ -13,6 +13,8 @@ en:
     unavailable_with_holder: "Person execution lease is already held by pid %{pid} (%{source}: %{command})."
   run:
     required: "This command acts on the %{kind} workflow run that invoked it and is available only inside one."
+    required_any: "This command acts on the workflow or command run that invoked it and is available only inside one."
+    chat_event: "This command acts on a run other than a chat event's; a chat event's run is completed with guildbotics member chat complete."
   sync:
     invalid_identity: "Workspace synchronization did not start because %{path} is invalid. No command changes were made; repair the file and run the command again."
   chat_updates:

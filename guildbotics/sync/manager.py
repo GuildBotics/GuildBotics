@@ -416,7 +416,7 @@ class GitSyncManager:
             remote = self._repository.remote_head()
             if local is not None and remote is not None:
                 ahead, behind = self._repository.ahead_behind(local, remote)
-        except (GitCommandError, SyncRepositoryError, OSError):
+        except GitCommandError, SyncRepositoryError, OSError:
             pass
         return GitSyncStatus(
             workspace_id=self._workspace_id,

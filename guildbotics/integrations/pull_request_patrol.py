@@ -27,10 +27,13 @@ host records it, so every reviewer starts a new count; nothing else is stored.
 A review-limit notice by any member also counts as that point, so a PR
 announced before the limit made it a draft resumes too.
 
-Checks role (``pull_request_checks``): the member's run on its own PR stopped
-to await the head's checks (its latest status notice there is
+Checks role (``pull_request_checks``): a run of the member's -- whatever
+work it did: a ticket, a chat thread, a command -- stopped to await the head's
+checks on the member's own PR (its latest status notice there is
 ``awaiting_checks``), and they have settled -- no ``checks_pending`` blocker
-is left -- or the head moved past the one it awaited. The wait lasts until the
+is left -- or the head moved past the one it awaited. Any task on the PR
+resumes, while the wait lasts, the work the notice names
+(:attr:`~guildbotics.entities.task.Task.resumes`). The wait lasts until the
 member's next status notice on the PR: a later wait, a failure, or the notice
 the host leaves when the resumed run ends otherwise
 (:func:`checks_settled`), so no comment a run writes or leaves out can end it
@@ -54,7 +57,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from guildbotics.entities import Task
+from guildbotics.entities.task import AwaitedRun
 from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import ServiceError, WorkflowStatus, WorkflowStatusReason
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.timestamps import parse_iso_datetime
@@ -357,7 +362,10 @@ async def patrol(
     """The task *pr* is for the member *me*; one at the re-review limit is
     handed over instead (:func:`hand_over_at_review_limit`). Only the checks
     role reads the code host beyond the snapshot, and only for a PR whose
-    member awaits its checks at the head the snapshot has.
+    member awaits its checks at the head the snapshot has. While the member
+    awaits them, whatever the PR asks of it resumes the awaited work, so a
+    run for its feedback reports where that work came from, and awaits the
+    checks again for that work, not for the PR's.
 
     Args:
         code: The code host the PR is on.
@@ -368,8 +376,8 @@ async def patrol(
         draft: Makes the PR a draft.
     """
     work = pull_request_work(pr, me)
+    awaited = _awaited_checks(pr, me)
     if work is None:
-        awaited = _awaited_checks(pr, me)
         if awaited is None or not await _checks_settled(code, pr, awaited):
             return None
         work = CHECKS
@@ -388,6 +396,15 @@ async def patrol(
         assignee=person_id,
         pull_request_url=pr.url,
         trigger_reason=work,
+        resumes=(
+            AwaitedRun(
+                run_id=awaited.run_id,
+                work_kind=awaited.work_kind,
+                work_identity=awaited.work_identity,
+            )
+            if awaited is not None
+            else None
+        ),
     )
 
 
@@ -436,11 +453,12 @@ async def await_checks(
     *,
     person_id: str,
     run_id: str,
+    work: Work,
     subject: str,
     head: str,
 ) -> None:
-    """Say on the PR that the member's run stopped to await the checks of
-    ``head``; the patrol resumes the member once they settle."""
+    """Say on the PR that the member's run doing ``work`` stopped to await the
+    checks of ``head``; the patrol resumes that work once they settle."""
     await code.comment(
         url,
         t("integrations.pull_request_patrol.awaiting_checks"),
@@ -450,6 +468,8 @@ async def await_checks(
             run_id=run_id,
             subject=subject,
             head=head,
+            work_kind=work.kind,
+            work_identity=work.identity,
         ),
     )
 
@@ -457,8 +477,9 @@ async def await_checks(
 async def checks_settled(
     code: CodeHostingService, url: str, *, person_id: str, run_id: str
 ) -> None:
-    """End the wait on the PR: the run resumed for its checks ended without
-    awaiting them again."""
+    """End the wait on the PR: the run that resumed its work -- for the
+    checks, or for feedback that arrived meanwhile -- ended without awaiting
+    them again."""
     await code.comment(
         url,
         t("integrations.pull_request_patrol.checks_settled"),

@@ -10,10 +10,8 @@ that made a change. Neither identity authenticates anything; OpenSSH does that.
 
 from __future__ import annotations
 
-import secrets
 import socket
 import sys
-import time
 import uuid
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -108,17 +106,9 @@ class DeviceRecord(SharedRecord):
 
 
 def new_uuid7() -> str:
-    """Return a UUID version 7: a 48-bit millisecond timestamp plus randomness.
-
-    Time-ordered identifiers keep directory listings of shared records roughly
-    chronological, which the standard library gains only in Python 3.14.
-    """
-    value = (int(time.time() * 1000) & 0xFFFF_FFFF_FFFF) << 80
-    value |= 0x7 << 76
-    value |= secrets.randbits(12) << 64
-    value |= 0b10 << 62
-    value |= secrets.randbits(62)
-    return str(uuid.UUID(int=value))
+    """Return a UUID version 7, so directory listings of shared records stay
+    roughly chronological."""
+    return str(uuid.uuid7())
 
 
 def current_device_os() -> DeviceOs:

@@ -196,6 +196,7 @@ message_channels:
     chat:
       enabled: true
       participation: strict
+      notify_work_stops: true
       startup_backfill_minutes: 60
       backfill_interval_seconds: 300
 
@@ -208,6 +209,7 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものがプロジェクトのチャット（`services.chat_service`）で監視対象になります
+- 巡回や定期実行でのメンバーのチケット・PR の作業が人を待って止まったとき（`asking` か `blocked` で終わった、またはエラーで止まったことをその項目に書いた）は、選択したチャット有効な各チャネルに、その項目とコメントへのリンクを 1 回投稿します。**Setup → メンバー → Slack** で通知先の **作業停止を通知する** を有効にして保存します（上の例の `chat.notify_work_stops: true`）。未指定なら投稿しません。設定を省略した場合も含め、既定は `false` です。選択を外して保存すると通知されなくなります。**会話への参加条件** とは別の設定で、通知にはどのメンバーも応答しません
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - すべてのワークスペースで共通のメンバーのアイデンティティ（`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`）の `profile.character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します。人間のメンバーの Slack User ID は、同じファイルの `account_info.slack_user_id` です

@@ -1,0 +1,2 @@
+ja:
+  comment_required: "run '%{run_id}' は、チケットか pull request にコメントする前には %{status} で完了できません。先に、質問または作業を妨げているものをそこへ投稿してください（ticket comment、pr comment、pr reply、または pr review）。そのコメントが、人が作業を再開させる場所になります。"

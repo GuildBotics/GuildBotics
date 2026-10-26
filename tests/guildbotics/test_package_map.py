@@ -84,7 +84,6 @@ calls = []
 
 class Ledger:
     run_id = "run-1"
-    work_kind = "chat"
 
     def require_completion(self):
         calls.append("require_completion")
@@ -110,7 +109,7 @@ runner._invoke_once = invoke_once
 result = asyncio.run(
     runner._invoke(
         "functions/handle_chat_event",
-        agent_execution_context={"max_completion_attempts": 2},
+        agent_execution_context={"max_completion_attempts": 2, "event_id": "E1"},
     )
 )
 print(json.dumps({"result": result, "calls": calls, "loaded": sorted(sys.modules)}))

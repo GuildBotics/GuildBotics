@@ -21,7 +21,7 @@ class _EmbeddedServer(Server):
     """Run uvicorn without replacing the application's signal handlers."""
 
     @contextmanager
-    def capture_signals(self) -> Generator[None, None, None]:
+    def capture_signals(self) -> Generator[None]:
         yield
 
 

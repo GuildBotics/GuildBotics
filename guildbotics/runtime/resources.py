@@ -196,6 +196,7 @@ class Check(ReadModel):
     status: str
     conclusion: str | None
     details_url: str
+    details: str | None = Field(default=None, exclude_if=_absent)
 
 
 class CompletionBlocker(ReadModel):
@@ -385,5 +386,5 @@ def read_conditions(
         if bool(conditions["node"]) != (resource == "review_thread_comments"):
             raise ValueError
         return conditions
-    except (ValueError, ValidationError):
+    except ValueError, ValidationError:
         raise ServiceError(t("integrations.resources.parameters")) from None

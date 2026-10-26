@@ -2012,6 +2012,9 @@ _FIXED_TMP = {
     ("guildbotics/intelligences/cli_agents.py", "<module>"): (
         "an install script the snapshot build runs inside the image it builds"
     ),
+    ("guildbotics/environment/snapshot.py", "build_steps"): (
+        "the Node.js archive the snapshot build fetches inside the image it builds"
+    ),
     ("guildbotics/guest/antigravity.py", "_run_active_turn"): (
         "a directory of the turn's own, inside the command's microVM"
     ),
