@@ -2104,7 +2104,9 @@ async def test_a_reaction_reaches_the_comment_of_the_ticket_by_its_id(
     github = (
         _issues()
         .on("GET", f"/repos/{REPO}/issues/comments/5", _issue_comment(5, owner_url))
-        .on_graphql(ADD_REACTION, {"addReaction": {"reaction": {"content": "EYES"}}})
+        .on_graphql(
+            ADD_REACTION, {"addReaction": {"reaction": {"content": "THUMBS_UP"}}}
+        )
     )
     service = ticket_service(github, monkeypatch)
 
@@ -2114,7 +2116,7 @@ async def test_a_reaction_reaches_the_comment_of_the_ticket_by_its_id(
     reaction = github.documents()[-1]
     assert reaction == {
         "query": ADD_REACTION,
-        "variables": {"subject": "IC_5", "content": "EYES"},
+        "variables": {"subject": "IC_5", "content": "THUMBS_UP"},
     }
 
 

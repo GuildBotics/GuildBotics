@@ -57,7 +57,7 @@ CONVERSATION = "issuecomment-"
 INLINE = "discussion_r"
 REVIEW = "pullrequestreview-"
 _REACTIONS: dict[SemanticReaction, str] = {
-    "ack": "EYES",
+    "ack": "THUMBS_UP",
     "agree": "THUMBS_UP",
     "celebrate": "HOORAY",
     "support": "HEART",
