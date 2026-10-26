@@ -418,7 +418,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - 定期コマンドと routine コマンドを実行
 - 連続エラー数でワーカーループ停止（`consecutive_error_limit`）
 - 実行記録の境界（`track_work`）は実行する coroutine の内側に置き、失敗も強制停止も境界まで届けて `failed` / `cancelled` で閉じる（外側に置くと、例外を受け止めた後の正常終了として `succeeded` で閉じる）。失敗を連続エラー数に数えるのは境界の外
-- ticket workflow は、patrol・scheduled・手動実行（`guildbotics run` / Desktop）のどの経路でも `drivers/ticket_selector.py` の `TicketSelector` で候補を選び、`TicketSelector.run` の中で動かす。レーンの移動（`READY` → `IN_PROGRESS`）、run_id と完了の試行回数（`GUILDBOTICS_TICKET_MAX_ATTEMPTS`）、trace の属性、失敗とレート制限のステータスコメント、`workflow.rate_limited` の記録、作業が人を待って止まったとき（`asking` / `blocked` の完了、項目に書いた失敗。手動実行を除く）にメンバーが監視対象のチャンネルへ投稿する通知はここが持ち、ワークフローは turn を 1 回頼むだけ。レート制限は chat と違って再送出せず、ステータスコメントがリセットまで候補から外すので、連続エラー数に数えない
+- ticket workflow は、patrol・scheduled・手動実行（`guildbotics run` / Desktop）のどの経路でも `drivers/ticket_selector.py` の `TicketSelector` で候補を選び、`TicketSelector.run` の中で動かす。レーンの移動（`READY` → `IN_PROGRESS`）、run_id と完了の試行回数（`GUILDBOTICS_TICKET_MAX_ATTEMPTS`）、trace の属性、失敗とレート制限のステータスコメント、`workflow.rate_limited` の記録、作業が人を待って止まったとき（`asking` / `blocked` の完了、項目に書いた失敗。手動実行を除く）にメンバーが `chat.notify_work_stops: true` に指定したチャット有効なチャンネルへ投稿する通知（未指定なら投稿しない）はここが持ち、ワークフローは turn を 1 回頼むだけ。レート制限は chat と違って再送出せず、ステータスコメントがリセットまで候補から外すので、連続エラー数に数えない
 - この device の隔離環境が使えない間（runtime 無し / 宣言不正 / snapshot が ready でない。`status.device_status().refusal`）は、コマンドはすべて隔離環境の中で動くので、ticket patrol・routine・scheduled command・chat dispatch を**見送る**（失敗として数えない）。build 中に worker が止まるのを防ぐためで、理由が変わったときだけ 1 回 warning を出す。scheduled command は実行済みにせず、使えるようになってから動く
 
 既定 routine コマンド:

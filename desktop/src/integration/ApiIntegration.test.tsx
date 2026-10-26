@@ -588,6 +588,7 @@ describe("Setup integration (real client + mock server)", () => {
         slack: { bot_token: "", app_token: "" },
       },
       chat_channels: [],
+      work_stop_notification_channels: [],
       config_dir: "/workspace/.guildbotics/config",
     });
 

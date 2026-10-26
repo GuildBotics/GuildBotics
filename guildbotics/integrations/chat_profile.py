@@ -44,6 +44,7 @@ def _channel_to_subscription(ch: Any) -> dict[str, Any] | None:
         "channel_id": channel_id,
         "channel_name": channel_name,
         "participation": chat_participation(chat_cfg.get("participation")),
+        "notify_work_stops": chat_cfg.get("notify_work_stops") is True,
     }
     for key in (
         "startup_backfill_minutes",

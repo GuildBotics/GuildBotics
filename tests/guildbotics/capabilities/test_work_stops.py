@@ -87,7 +87,10 @@ def _person(*channels: dict) -> Person:
         name="Aiko",
         person_type="agent",
         message_channels=[
-            {"name": channel.pop("name", "dev-chat"), "chat": channel}
+            {
+                "name": channel.pop("name", "dev-chat"),
+                "chat": {"notify_work_stops": True, **channel},
+            }
             for channel in (dict(c) for c in channels)
         ],
     )
@@ -132,7 +135,7 @@ def events(monkeypatch) -> list[dict]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
 @pytest.mark.parametrize("reason", ["asking", "blocked", "failed"])
-async def test_the_notice_is_posted_once_in_each_chat_enabled_channel(
+async def test_the_notice_is_posted_once_only_in_selected_channels(
     events, notice_language, reason
 ):
     context = _Context(
@@ -140,6 +143,8 @@ async def test_the_notice_is_posted_once_in_each_chat_enabled_channel(
             {"name": "dev", "channel_id": "C1"},
             {"name": "ops", "channel_id": "C2", "enabled": True},
             {"name": "quiet", "channel_id": "C3", "enabled": False},
+            {"name": "unselected", "channel_id": "C4", "notify_work_stops": False},
+            {"name": "duplicate", "channel_id": "C1"},
         )
     )
 
@@ -173,6 +178,7 @@ async def test_the_notice_is_posted_once_in_each_chat_enabled_channel(
         [event] = (await context.chat.list_channel_events(channel_id)).events
         assert event.status == status
     assert not channel_path("C3").exists()
+    assert not channel_path("C4").exists()
     assert [
         (event["event_type"], event["person_id"], event["payload"]) for event in events
     ] == [
@@ -244,6 +250,7 @@ async def test_a_channel_that_cannot_be_resolved_is_recorded_undelivered(events)
         # The member watches no channel.
         ([], True),
         ([{"channel_id": "C1", "enabled": False}], True),
+        ([{"channel_id": "C1", "notify_work_stops": False}], True),
     ],
 )
 async def test_a_member_with_nowhere_to_say_it_posts_nothing(events, channels, chat):
@@ -257,6 +264,28 @@ async def test_a_member_with_nowhere_to_say_it_posts_nothing(events, channels, c
     await notify_work_stop(context, _stop())  # type: ignore[arg-type]
 
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_existing_channels_without_a_notification_setting_post_nothing(events):
+    person = Person(
+        person_id="aiko",
+        name="Aiko",
+        person_type="agent",
+        message_channels=[{"name": "dev", "chat": {"channel_id": "C1"}}],
+    )
+    await notify_work_stop(_Context(person), _stop())  # type: ignore[arg-type]
+    assert not channel_path("C1").exists()
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_a_selected_name_and_id_resolving_to_the_same_channel_post_once(events):
+    say("C1", "hello", message_id="1")
+    context = _Context(_person({"name": "C1"}, {"channel_id": "C1"}))
+    await notify_work_stop(context, _stop())  # type: ignore[arg-type]
+    assert len(lines("C1")) == 2
+    assert len(events) == 1
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,44 @@ test("first-run setup happy path writes project.yml and enters the service view"
   );
   expect(projectYaml).toContain("  chat_service:\n    name: slack\n");
 
+  const memberFile = join(ctx.configDir, "team", "members", "local-agent", "member.yml");
+  await page.goto("/#/setup?section=members&person_id=local-agent&tab=slack");
+  await page.getByRole("tab", { name: "Basic", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
+    "Local Agent",
+  );
+  await page.getByRole("tab", { name: "Slack", exact: true }).click();
+  await page.getByLabel("Slack Bot token", { exact: true }).fill("xoxb-e2e-test");
+  await page.getByLabel("Slack App token", { exact: true }).fill("xapp-e2e-test");
+  await page.getByRole("textbox", { name: "Channel", exact: true }).fill("C0123456789");
+  await page.getByRole("button", { name: "Add channel", exact: true }).click();
+  await page.getByRole("textbox", { name: "Channel", exact: true }).first().fill("random");
+  await page.getByRole("button", { name: "Add channel", exact: true }).click();
+  const notification = page.getByRole("switch", { name: /Notify when work stops/ }).first();
+  await expect(notification).toBeVisible({ timeout: 5000 });
+  await notification.check();
+  const saveMember = async () => {
+    const saved = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/config/members/local-agent" &&
+        response.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    expect((await saved).status()).toBe(200);
+  };
+  await saveMember();
+  expect(readFileSync(memberFile, "utf-8")).toContain("notify_work_stops: true");
+  await page.reload();
+  await expect(notification).toBeChecked();
+  await page.getByRole("combobox", { name: "Display language", exact: true }).click();
+  await page.getByRole("option", { name: "Japanese", exact: true }).click();
+  await expect(page.getByRole("switch", { name: /作業停止を通知する/ }).first()).toBeChecked();
+  await page.getByRole("combobox", { name: "表示言語", exact: true }).click();
+  await page.getByRole("option", { name: "English", exact: true }).click();
+  await notification.uncheck();
+  await saveMember();
+  expect(readFileSync(memberFile, "utf-8")).toContain("notify_work_stops: false");
+
   // Effort overlay: the settings UI builds typed controls from the descriptor
   // the backend serves for the provider. jsdom can only prove the editor state
   // changed; that a number survives client -> FastAPI -> YAML as a number needs

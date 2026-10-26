@@ -66,7 +66,12 @@ class _Context:
                 person_id="aiko",
                 name="Aiko",
                 person_type="agent",
-                message_channels=[{"name": "dev", "chat": {"channel_id": CHANNEL}}],
+                message_channels=[
+                    {
+                        "name": "dev",
+                        "chat": {"channel_id": CHANNEL, "notify_work_stops": True},
+                    }
+                ],
             )
         )
         self.person = self.member.person
