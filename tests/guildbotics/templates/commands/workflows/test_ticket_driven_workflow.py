@@ -7,6 +7,7 @@ status comments of a failed or rate-limited run belong to the host's
 
 import asyncio
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,15 @@ from guildbotics.runtime.workflow_invocation import (
 )
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.correlation import trace_scope
-from tests.guildbotics.local_code_host import item, local_member, ticket
+from tests.guildbotics.local_code_host import (
+    REPOSITORY,
+    comment,
+    item,
+    local_member,
+    pull_request,
+    remote_with,
+    ticket,
+)
 
 ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
 PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"
@@ -185,16 +194,37 @@ async def test_workflow_passes_pull_request_work_type(trigger_reason, work_type)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("linked_pr", [False, True])
 async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_board(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, linked_pr
 ):
     """One round of the ticket workflow on the local code host and board: the
     host selects the member's ready ticket and moves it to the working lane,
     the turn answers on it with the member's commands, and its completion is
-    accepted against the ticket."""
+    accepted against the ticket. With an open PR, the human's answer resumes
+    ticket work and the turn reuses that PR before answering on the ticket."""
     member_cli = importlib.import_module("guildbotics.cli.member")
     member = local_member()
-    url = ticket(1, title="Fix login", lane=Task.READY, assignees=["aiko"])
+    url = ticket(
+        1,
+        title="Fix login",
+        lane=Task.IN_PROGRESS if linked_pr else Task.READY,
+        assignees=["aiko"],
+        comments=[
+            comment("aiko", "Should I add the check?"),
+            comment("owner", "Yes, please add the check."),
+        ]
+        if linked_pr
+        else [],
+    )
+    if linked_pr:
+        remote_with("ticket/T-1")
+        pr_url = pull_request(
+            1,
+            "ticket/T-1",
+            author="aiko",
+            tickets=[{"url": url, "closes": False}],
+        )
     monkeypatch.setattr(
         member_cli, "resolve_member_context", lambda _: (member, member.person)
     )
@@ -224,18 +254,42 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
 
         async def invoke(self, command_name: str, **kwargs):
             lanes.append(item(url)["lane"])
+            assert kwargs["work_type"] == "ticket"
+            assert kwargs["trigger_reason"] == (
+                "issue_comment" if linked_pr else "ready_lane"
+            )
             invocation = MemberInvocation(
                 task_run_id=run.run_id,
                 work=run.work,
                 lease=PersonExecutionLease("aiko", tmp_path),
             )
-            for arguments, stdin in [
+            commands = [
                 (
                     ["ticket", "comment", "--url", kwargs["ticket_url"]],
                     "Done.",
                 ),
                 (["task", "complete", "--status", "done"], "Fixed the login."),
-            ]:
+            ]
+            if linked_pr:
+                commands.insert(
+                    0,
+                    (
+                        [
+                            "pr",
+                            "create",
+                            "--repo",
+                            REPOSITORY,
+                            "--head",
+                            "ticket/T-1",
+                            "--title",
+                            "Fix login",
+                            "--issue-url",
+                            url,
+                        ],
+                        "Add the requested check.",
+                    ),
+                )
+            for arguments, stdin in commands:
                 # As the member broker runs it: on a worker thread of its own.
                 code, stdout, stderr = await asyncio.to_thread(
                     member_cli.run_in_process,
@@ -245,6 +299,10 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
                     stdin=stdin,
                 )
                 assert (code, stderr) == (0, ""), stdout
+                if arguments[:2] == ["pr", "create"]:
+                    result = json.loads(stdout)
+                    assert result["created"] is False
+                    assert result["target"]["url"] == pr_url
             return AgentResponse(status=AgentResponse.DONE, message="done")
 
     async def run_workflow(invocation):
@@ -266,7 +324,11 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
     assert response.status == AgentResponse.DONE
     assert lanes == [Task.IN_PROGRESS]
     assert run.payload["ticket_url"] == url
-    assert [c["body"] for c in item(url)["comments"]] == ["Done."]
+    assert item(url)["comments"][-1]["body"] == "Done."
+    if linked_pr:
+        assert len(item(url)["comments"]) == 3
+        linked = await member.code.read("ticket_pull_requests", url)
+        assert [p["url"] for p in linked.items] == [pr_url]
     assert RunStore().status("run-1").to_dict()["status"] == "done"
     # Answered by the member, the ticket waits for someone else.
     assert await member.tickets.candidates() == []

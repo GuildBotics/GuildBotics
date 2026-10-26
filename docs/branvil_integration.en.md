@@ -232,9 +232,12 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   **New**, and `member ticket create --no-add-to-board` is refused.
 - A ticket assigned to the member in the **Ready** lane of the workspace's board is
   taken up and moved to **In progress**; one in **In progress** is taken up again when
-  someone else has spoken since the member last did. Once a pull request refers to the
-  ticket, the patrol follows the pull request instead, and its merge moves the ticket to
-  **Done**.
+  someone else has spoken since the member last did, or an unanswered mention remains.
+  These ticket conversations are picked up even with an open or merged linked pull
+  request; an existing open pull request is reused. The member's latest failure or
+  rate-limit status holds the ticket first. With no unanswered conversation, an open
+  pull request is followed by the PR patrol, and a merged one moves the ticket to
+  **Done**. Without a linked pull request or comments since assignment, work resumes.
 - A member's pull request is taken up when someone says something the member has not
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.

@@ -7,9 +7,10 @@ from those alone. Being assigned is how a human asks the member to act, so
 only what was said since then shows whether the member already has. A ticket
 in the ready lane is the member's unless the member spoke last and was not
 summoned again; in the working lane it is taken up again when someone else
-has spoken since, or when nobody has said anything yet. A pull request that
-refers to the ticket takes it over: the pull request patrol follows it, and
-its merge finishes the ticket.
+has spoken since, or when nobody has said anything yet. Unanswered comments
+and mentions take precedence over a linked pull request: the pull request
+patrol follows the PR's conversation, while the ticket still answers its own.
+Otherwise a linked pull request takes over, and its merge finishes the ticket.
 """
 
 from __future__ import annotations
@@ -97,17 +98,21 @@ async def select(
             return None
         task.trigger_reason = "ready_lane"
         return task
+    if held:
+        return None
+    if since and not mine:
+        task.trigger_reason = "issue_comment"
+        return task
+    if pending:
+        task.trigger_reason = "issue_mention"
+        return task
     pull = await linked_pull()
     if pull is not None:
-        # A merged PR finishes the ticket; an open one is followed on the PR
-        # itself by the pull request patrol, never through the ticket.
+        # With the ticket's conversation answered, the PR patrol takes over.
         if pull == "merged":
             await done()
         return None
-    if held or (since and mine):
-        return None
     if since:
-        task.trigger_reason = "issue_comment"
-    else:
-        task.trigger_reason = "issue_mention" if pending else "working_lane"
+        return None
+    task.trigger_reason = "working_lane"
     return task
