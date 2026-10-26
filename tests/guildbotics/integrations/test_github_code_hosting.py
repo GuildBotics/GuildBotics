@@ -859,7 +859,7 @@ async def test_a_reaction_to_an_id_of_no_kind_is_refused_unread(monkeypatch, tar
 @pytest.mark.parametrize(
     ("reaction", "content"),
     [
-        ("ack", "EYES"),
+        ("ack", "THUMBS_UP"),
         ("agree", "THUMBS_UP"),
         ("celebrate", "HOORAY"),
         ("support", "HEART"),
@@ -873,8 +873,9 @@ async def test_each_reaction_is_githubs_own(monkeypatch, reaction, content):
     )
     service = _service(github, monkeypatch)
 
-    await service.add_reaction(PULL, "issuecomment-1", reaction)
+    added = await service.add_reaction(PULL, "issuecomment-1", reaction)
 
+    assert (added.reaction, added.id) == (reaction, "issuecomment-1")
     assert github.documents()[-1]["variables"]["content"] == content
 
 
