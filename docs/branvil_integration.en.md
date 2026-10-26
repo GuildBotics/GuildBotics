@@ -12,12 +12,18 @@ the exact `branvil` commands, are in the Branvil README.
 
 Ticket mention selection uses the `mentions` lists Branvil returns on bodies
 and comments. Branvil resolves names against its members when a body is saved.
-Install the matching Branvil (storage schema 20) before this provider.
+Install the matching Branvil (storage schema 22) before this provider.
 Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
 unanswered mentions outside the member's assignment, without scanning every
 ticket's comments. These runs respond on the ticket and leave its lane and
 assignee unchanged. Comments addressed only to other members do not wake the
 assignee; a response that affects their work should mention them.
+
+A ticket a human marks interactive (`interactive` on Branvil's tickets) is theirs to
+work on with an agent: the patrol never selects it, by any trigger (the ready or
+working lane, a comment, or a mention, assigned or not). A pull request that links
+it is still reviewed, but the member does not take up its own such pull request,
+neither for feedback nor once the checks it awaits settle.
 
 ## How it fits together
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import httpx
@@ -47,10 +48,18 @@ from tests.guildbotics.integrations.branvil_double import (
 PULL = f"{BASE}/{REPO}/-/pulls/1"
 
 
-async def _pull(double: BranvilDouble, code, author: str = MEMBER) -> str:
+async def _pull(
+    double: BranvilDouble, code, author: str = MEMBER, tickets: Sequence[str] = ()
+) -> str:
     double.branch("feature")
     created = await code.create_pull_request(
-        REPO, "feature", "", "Fix", "", draft=False, tickets=[]
+        REPO,
+        "feature",
+        "",
+        "Fix",
+        "",
+        draft=False,
+        tickets=[TicketLink(url, closes=False) for url in tickets],
     )
     double.pulls[created.target.url]["author"] = author
     return created.target.url
@@ -83,6 +92,83 @@ async def test_the_author_answers_what_others_said(monkeypatch):
     comment = double.entries[url]["comments"][-1]
     comment["reactions"].append({"author": "Aiko", "reaction": "ack"})
     assert await code.refresh_pull_request(task) is None
+
+
+def _role(double: BranvilDouble, url: str, ticket: str, role: str) -> None:
+    """Have the pull request ask ``role`` of the member."""
+    if role == "pull_request_review":
+        double.make_theirs(url)
+        double.pulls[url]["reviewers"] = ["aiko"]
+    elif role == "pull_request_feedback":
+        double.comment(url, "otota", "Please rename it.")
+    else:
+        awaiting = WorkflowStatus(
+            reason="awaiting_checks",
+            person_id=MEMBER,
+            run_id="run-1",
+            subject=ticket,
+            head="feature-sha",
+            work_kind="ticket",
+            work_identity=ticket,
+        )
+        double.comment(url, MEMBER, "Waiting for CI.", **awaiting.payload())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role", ["pull_request_feedback", "pull_request_checks", "pull_request_review"]
+)
+async def test_an_interactive_ticket_leaves_its_authors_pull_request_to_the_human(
+    monkeypatch, role
+):
+    double, code, _ = services(monkeypatch)
+    ticket = double._ticket(REPO, "Fix", "", [])["url"]
+    url = await _pull(double, code, tickets=[ticket])
+    _role(double, url, ticket, role)
+    [task] = await code.pull_request_candidates()
+    assert task.trigger_reason == role
+    read: list[str] = []
+    respond = double.respond
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        read.append(request.url.path)
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", recorded)
+
+    double.tickets[ticket]["interactive"] = True
+    # Reviewing it stays the member's, without reading the ticket.
+    reviewed = role == "pull_request_review"
+    assert await _work(code) == ([role] if reviewed else [])
+    assert await code.refresh_pull_request(task) == (task if reviewed else None)
+    assert (f"/api/v1/repos/{REPO}/tickets/1" in read) != reviewed
+
+    double.tickets[ticket]["interactive"] = False
+    assert await _work(code) == [role]
+    assert await code.refresh_pull_request(task) == task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("links", "interactive"),
+    [
+        (["https://tickets.example.com/T-1"], False),
+        (["quiet"], False),
+        (["https://tickets.example.com/T-1", "quiet", "interactive"], True),
+    ],
+    ids=["another_service", "not_interactive", "one_of_many"],
+)
+async def test_only_a_linked_interactive_ticket_of_branvil_holds_the_author(
+    monkeypatch, links, interactive
+):
+    double, code, _ = services(monkeypatch)
+    quiet, held = (double._ticket(REPO, name, "", [])["url"] for name in "QH")
+    double.tickets[held]["interactive"] = True
+    named = {"quiet": quiet, "interactive": held}
+    url = await _pull(double, code, tickets=[named.get(link, link) for link in links])
+    double.comment(url, "otota", "Please rename it.")
+
+    assert await _work(code) == ([] if interactive else ["pull_request_feedback"])
 
 
 @pytest.mark.asyncio

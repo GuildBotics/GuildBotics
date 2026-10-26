@@ -5,7 +5,9 @@ Branvil keeps what is said on a pull request as it was sent -- a workflow
 status as the comment's ``meta`` -- and judges nothing of GuildBotics' own:
 the patrol's rules (:mod:`~guildbotics.integrations.pull_request_patrol`)
 and readiness (:mod:`~guildbotics.integrations.readiness`) are applied here
-to what it answers.
+to what it answers. A pull request that links an interactive ticket is
+reviewed as any other, but its author's part is left to the human working on
+that ticket with an agent.
 """
 
 from __future__ import annotations
@@ -523,14 +525,30 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         if not pull.get("head_sha"):
             return None  # the head branch is gone: there is nothing to work on
         item = _pull_item(pull)
-        return await patrol(
+        me = username(self.person).casefold()
+        task = await patrol(
             self,
             self._snapshot(item, pull, activity),
-            username(self.person).casefold(),
+            me,
             provider=PROVIDER,
             person_id=self.person.person_id,
             draft=lambda: self.call("PATCH", item.api, {"draft": True}),
         )
+        if task is not None and _name(pull) == me and await self._interactive(pull):
+            return None
+        return task
+
+    async def _interactive(self, pull: dict[str, Any]) -> bool:
+        """Whether ``pull`` links an interactive ticket: a human works on it
+        with an agent, so the patrol leaves the author's work on the pull
+        request -- its feedback and its checks -- to them. A link that is
+        not to this Branvil names no ticket of it."""
+        for link in pull["tickets"]:
+            if self.serves(link["url"]):
+                ticket = await self.get(self.item(link["url"], "ticket").api)
+                if ticket["interactive"]:
+                    return True
+        return False
 
     def _snapshot(
         self, item: BranvilItem, pull: dict[str, Any], activity: dict[str, Any]
