@@ -207,7 +207,11 @@ class GitHubApi:
             raise ServiceError(t("integrations.github.response.response")) from None
 
     async def paginated(
-        self, path: str, *, params: dict[str, Any] | None = None
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Every item of the REST collection at ``path``."""
         client = await self.client()
@@ -218,7 +222,9 @@ class GitHubApi:
                 raise ServiceError(t("integrations.github.response.response"))
             return [item for item in page if isinstance(item, dict)]
 
-        async for item in paginated_items(client.get, path, parse_page, params=params):
+        async for item in paginated_items(
+            client.get, path, parse_page, params=params, headers=headers
+        ):
             yield item
 
     async def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -231,13 +237,20 @@ class GitHubApi:
             raise graphql_error(errors)
         return payload["data"]
 
-    async def fetch(self, item: GitHubItem, *, bounded: bool = False) -> dict[str, Any]:
+    async def fetch(
+        self,
+        item: GitHubItem,
+        *,
+        bounded: bool = False,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """The issue or pull request ``item`` names.
 
         Args:
             item: What to fetch.
             bounded: Hold the response to one read page, for a read that
                 returns the item; what reads only some of its fields is not.
+            headers: A media type needed by a provider's read.
 
         Raises:
             ServiceNotFound: If there is none of its kind: GitHub answers a
@@ -245,6 +258,7 @@ class GitHubApi:
         """
         data = await self.get(
             item.api,
+            headers=headers,
             follow_redirects=False,
             extensions={"max_response_bytes": MAX_PAGE_BYTES} if bounded else {},
         )

@@ -8,10 +8,40 @@ from guildbotics.entities import Task
 from guildbotics.entities.message import Message
 from guildbotics.integrations.ticket_selection import (
     mention_pending,
+    relevant_comments,
     select,
     since_assignment,
 )
 from guildbotics.runtime.port import WorkflowStatus
+
+
+@pytest.mark.asyncio
+async def test_a_remark_to_someone_else_does_not_prevent_linked_pr_completion():
+    own = Message(author_type=Message.ASSISTANT, content="Answered.")
+    other = Message(author_type=Message.USER, content="@yuki Thanks.")
+    since = relevant_comments([(own, False), (other, True)])
+    task = Task(
+        title="Work", description="", status=Task.IN_PROGRESS, comments=[own, other]
+    )
+    done = AsyncMock()
+    assert (
+        await select(
+            task,
+            since,
+            latest_status=None,
+            pending=False,
+            linked_pull=AsyncMock(return_value="merged"),
+            done=done,
+        )
+        is None
+    )
+    done.assert_awaited_once()
+    assert task.comments == [own, other]
+
+
+def test_the_members_own_answer_cannot_be_filtered_as_a_remark_to_someone_else():
+    own = Message(author_type=Message.ASSISTANT, content="@yuki Context?")
+    assert relevant_comments([(own, True)]) == [own]
 
 
 @pytest.mark.asyncio

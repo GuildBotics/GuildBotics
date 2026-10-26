@@ -47,8 +47,8 @@ def since_assignment(comments: Sequence[Message], assigned_at: str) -> list[Mess
 def mention_pending(described: bool, comments: Iterable[tuple[Message, bool]]) -> bool:
     """Whether a mention of the member is still unanswered.
 
-    Providers supply resolved mention flags and assignment-filtered comments,
-    oldest first. A mention in the description or a comment summons the
+    Providers supply resolved mention flags and comments, oldest first (since
+    assignment for assigned work, all history otherwise). A mention in the description or a comment summons the
     member; their own next comment answers it, even if it mentions them.
     """
     pending = described
@@ -64,6 +64,32 @@ def linked_pull_state(pulls: Iterable[tuple[str, str]]) -> str | None:
     found = list(pulls)
     candidates = [pull for pull in found if pull[0] == "open"] or found
     return max(candidates, key=lambda pull: pull[1])[0] if candidates else None
+
+
+def relevant_comments(comments: Iterable[tuple[Message, bool]]) -> list[Message]:
+    """The assigned work's conversation, excluding external remarks to others.
+
+    Providers resolve whether each comment is addressed elsewhere. The member's
+    own comments always count as answers or held statuses. The full history
+    remains on the task, and a summons to this member is never excluded.
+    """
+    return [
+        comment
+        for comment, elsewhere in comments
+        if not elsewhere or comment.author_type == Message.ASSISTANT
+    ]
+
+
+def select_mention(task: Task, *, pending: bool) -> Task | None:
+    """Select an unanswered summons outside the member's assigned work.
+
+    It answers the ticket's conversation without taking ownership of its lane
+    or following its linked pull request.
+    """
+    if not pending:
+        return None
+    task.trigger_reason = "issue_mention"
+    return task
 
 
 async def select(

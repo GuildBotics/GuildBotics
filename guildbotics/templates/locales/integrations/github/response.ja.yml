@@ -1,4 +1,6 @@
 ja:
+  mention_search_incomplete: "GitHub のメンション検索が不完全か、上限の1,000件を超えています。不完全な検索は再試行し、件数超過は解決済みの open issue を閉じて検索結果を減らしてください。返信だけでは検索への一致は減りません。"
+  mention_discovery_failed: "メンションの取得に失敗しました。担当チケットとPRの作業は続行できます。詳細: %{message}"
   too_large: "GitHub の応答がページ上限を超えました。一覧では page_size を減らしてください。個別項目が上限を超える場合は返せません。"
   response: "GitHub の応答形式が不正です。"
   rate_limit: "GitHub がリクエストを制限しました。時間をおいて再試行してください。"

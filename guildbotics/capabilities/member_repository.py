@@ -358,13 +358,12 @@ async def _answered(
     the patrol resumes the member only for its own PRs, so no other PR's
     checks are the run's to await.
     """
+    urls = list(_pull_request_urls(evidence))
+    if work.kind != "ticket" and not urls:
+        return []
     code = context.get_code_hosting_service()
-    urls = (
-        await _ticket_pull_requests(code, work.identity)
-        if work.kind == "ticket"
-        else []
-    )
-    urls.extend(_pull_request_urls(evidence))
+    if work.kind == "ticket":
+        urls = [*await _ticket_pull_requests(code, work.identity), *urls]
     answered = []
     for url in dict.fromkeys(urls):
         pr = (await code.read("pull_requests", url)).items[0]

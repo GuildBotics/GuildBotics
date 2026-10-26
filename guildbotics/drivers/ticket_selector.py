@@ -146,7 +146,11 @@ class TicketSelector:
         context = self._context.clone_for(person)
         try:
             try:
-                if task.status == Task.READY and task.id is not None:
+                if (
+                    not (invocation.work and invocation.work.kind == "ticket_mention")
+                    and task.status == Task.READY
+                    and task.id is not None
+                ):
                     await context.get_ticket_service().move(task, "in_progress")
                 if task.resumes is not None:
                     # What the run answers for, whatever work it resumes.
@@ -263,11 +267,14 @@ class TicketSelector:
         assert task.url
         ticket_url = task.url
         resumes = task.resumes
-        work = (
-            Work(resumes.work_kind, resumes.work_identity)
-            if resumes is not None
-            else Work.of_ticket(ticket_url)
-        )
+        if resumes is not None:
+            work = Work(resumes.work_kind, resumes.work_identity)
+        elif (
+            task.assignee != person.person_id and task.trigger_reason == "issue_mention"
+        ):
+            work = Work("ticket_mention", ticket_url)
+        else:
+            work = Work.of_ticket(ticket_url)
         payload = {
             "task": task.model_dump(),
             "ticket_url": ticket_url,

@@ -16,6 +16,12 @@ ROOT = Path(__file__).parents[3]
 # Adding a raw GET requires both a classification and a concrete reason.
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
+        "guildbotics/integrations/github/ticket_service.py",
+        "_search_mentions",
+        "self.get",
+        "'/search/issues'",
+    ): "bounded: one mention search paginates by total_count up to GitHub's 1000-result ceiling; partial results fail only mention discovery",
+    (
         "guildbotics/integrations/github/api.py",
         "get",
         "(await self.client()).get",

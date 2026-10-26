@@ -13,6 +13,11 @@ the exact `branvil` commands, are in the Branvil README.
 Ticket mention selection uses the `mentions` lists Branvil returns on bodies
 and comments. Branvil resolves names against its members when a body is saved.
 Install the matching Branvil (storage schema 20) before this provider.
+Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
+unanswered mentions outside the member's assignment, without scanning every
+ticket's comments. These runs respond on the ticket and leave its lane and
+assignee unchanged. Comments addressed only to other members do not wake the
+assignee; a response that affects their work should mention them.
 
 ## How it fits together
 

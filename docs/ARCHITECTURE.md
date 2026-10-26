@@ -311,6 +311,28 @@ purpose:
   (`TicketService.candidates()`), and each is re-read from the port it came
   from before it is dispatched; a failed or rate-limited run's status comment goes to
   that port too.
+  Unanswered mentions on open tickets outside the member's assignment are also
+  candidates, even outside the ready/working lanes. Providers resolve mentions;
+  `ticket_selection.mention_pending` considers a member's subsequent comment an
+  answer. These runs use `Work("ticket_mention", ticket_url)`: a separate conversation
+  that posts a comment and completes, without preparing a repository, publishing,
+  creating a PR, or moving the ticket. A response affecting the assignee's work
+  mentions that assignee. An external comment addressed only to other members
+  is excluded only from the assigned work's decision history. The task keeps the full
+  conversation; initial work, unanswered summons, held status and linked-PR completion
+  still use their own evidence. Comments without mentions keep the ordinary behavior.
+  GitHub uses `bodyHTML` / `body_html` mention links resolved by the host, plus configured
+  `⚙person_id` tokens outside code; raw Markdown `@` patterns are not mention evidence.
+  Discovery adds a workspace mention query for Branvil, one issue Search query
+  (`is:issue is:open user:<owner> mentions:<login>`) for GitHub, and a file scan for
+  local. GitHub reads comments only for assigned or search-matched issues. It paginates
+  search matches in updated order (100 per request, up to GitHub's 1,000-result limit),
+  so answered open issues do not permanently hide page 2. Incomplete, overflowing or
+  failed discovery is reported as a warning and returns no partial mention snapshot;
+  assigned ticket and PR work remains available. Replies do not remove search matches;
+  closing resolved issues reduces the count. Non-assigned discovery uses native
+  `@login` mentions; agent tokens continue to work on assigned tickets. Assignment and
+  unanswered mentions are rechecked before dispatch.
   Every route that runs it — the patrol, a scheduled command, a manual run
   (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the
