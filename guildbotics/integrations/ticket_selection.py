@@ -66,6 +66,20 @@ def linked_pull_state(pulls: Iterable[tuple[str, str]]) -> str | None:
     return max(candidates, key=lambda pull: pull[1])[0] if candidates else None
 
 
+def relevant_comments(comments: Iterable[tuple[Message, bool]]) -> list[Message]:
+    """The assigned work's conversation, excluding external remarks to others.
+
+    Providers resolve whether each comment is addressed elsewhere. The member's
+    own comments always count as answers or held statuses. The full history
+    remains on the task, and a summons to this member is never excluded.
+    """
+    return [
+        comment
+        for comment, elsewhere in comments
+        if not elsewhere or comment.author_type == Message.ASSISTANT
+    ]
+
+
 def select_mention(task: Task, *, pending: bool) -> Task | None:
     """Select an unanswered summons outside the member's assigned work.
 
@@ -86,7 +100,6 @@ async def select(
     pending: bool,
     linked_pull: Callable[[], Awaitable[str | None]],
     done: Callable[[], Awaitable[object]],
-    addressed_elsewhere: bool = False,
 ) -> Task | None:
     """``task`` with why it is the member's work now, or ``None``.
 
@@ -98,11 +111,7 @@ async def select(
         linked_pull: The state of the pull request that refers to the ticket
             (:func:`linked_pull_state`).
         done: Moves the ticket to the done lane.
-        addressed_elsewhere: The last external comment mentions someone, but
-            does not mention this member.
     """
-    if addressed_elsewhere:
-        return None
     mine = bool(since) and since[-1].author_type == Message.ASSISTANT
     # The member's own failure or rate limit keeps the ticket out of selection.
     held = mine and latest_status is not None and latest_status.holds_selection()

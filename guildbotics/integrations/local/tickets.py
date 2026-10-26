@@ -26,6 +26,7 @@ from guildbotics.integrations.local.chat import mentions
 from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     mention_pending,
+    relevant_comments,
     select,
     select_mention,
 )
@@ -306,19 +307,29 @@ class LocalTicketService(TicketService):
         async def no_pull() -> None:
             return None
 
+        since = relevant_comments(
+            (
+                message,
+                bool(mentions(message.content.casefold()))
+                and not mentioned(message.content),
+            )
+            for message in messages
+        )
+        metadata = [
+            comment
+            for message, comment in zip(messages, comments, strict=True)
+            if message in since
+        ]
+
         return await select(
             task,
-            messages,
-            latest_status=WorkflowStatus.from_payload(comments[-1].get("status"))
-            if comments
+            since,
+            latest_status=WorkflowStatus.from_payload(metadata[-1].get("status"))
+            if metadata
             else None,
             pending=pending,
             linked_pull=no_pull,
             done=lambda: self.move(task, "done"),
-            addressed_elsewhere=bool(messages)
-            and messages[-1].author_type != Message.ASSISTANT
-            and bool(mentions(messages[-1].content.casefold()))
-            and not mentioned(messages[-1].content),
         )
 
 

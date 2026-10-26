@@ -43,6 +43,7 @@ from guildbotics.integrations.local import store
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations import branvil_double
+from tests.guildbotics.integrations.github_services import rendered_body
 from tests.guildbotics.local_code_host import tracker, write
 
 MEMBER = "aiko"
@@ -626,6 +627,8 @@ class GitHubDouble:
                 )
             if method == "PATCH":
                 item.update(body)
+                if "body" in body:
+                    item["body_html"] = rendered_body(body["body"] or "")
                 if "head" in item and "body" in body:
                     number = int(match.group(2))
                     for linked in self.timeline.values():
@@ -671,7 +674,9 @@ class GitHubDouble:
                     "source": {
                         "issue": {
                             **self.items[pull],
-                            "pull_request": {"merged_at": None},
+                            "pull_request": {
+                                "merged_at": self.items[pull]["merged_at"]
+                            },
                         }
                     },
                 }
@@ -811,6 +816,7 @@ class GitHubDouble:
             "node_id": f"NODE{number}",
             "title": body["title"],
             "body": body.get("body"),
+            "body_html": rendered_body(body.get("body") or ""),
             "state": "open",
             "html_url": f"https://github.com/{REPO}/{collection}/{number}",
             "user": {"login": LOGIN},
@@ -843,6 +849,7 @@ class GitHubDouble:
             "id": entry_id,
             "node_id": f"NODE_C{entry_id}",
             "body": body.get("body", ""),
+            "body_html": rendered_body(body.get("body") or ""),
             "user": {"login": LOGIN},
             "created_at": "2026-07-02T00:00:00Z",
             "html_url": f"https://github.com/{REPO}#{entry_id}",
@@ -923,6 +930,7 @@ class GitHubDouble:
                         "url": item["html_url"],
                         "title": item["title"],
                         "body": item["body"],
+                        "bodyHTML": item["body_html"],
                         "createdAt": item["created_at"],
                         "state": item["state"].upper(),
                         "closedAt": item["closed_at"],

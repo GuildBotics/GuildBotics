@@ -17,7 +17,6 @@ from logging import Logger
 from typing import Any
 
 from guildbotics.entities import Person, Service, Task, Team
-from guildbotics.entities.message import Message
 from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
@@ -29,6 +28,7 @@ from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
+    relevant_comments,
     select,
     select_mention,
     since_assignment,
@@ -331,7 +331,18 @@ class BranvilTicketService(BranvilApi, TicketService):
                     ),
                 ),
             )
-        since = since_assignment(task.comments, card["assignee"]["assigned_at"])
+        since = since_assignment(
+            relevant_comments(
+                (
+                    message,
+                    bool(comment["mentions"]) and not self.mentions_member(comment),
+                )
+                for message, comment in zip(
+                    task.comments, card["comments"], strict=True
+                )
+            ),
+            card["assignee"]["assigned_at"],
+        )
         # Keep the source metadata and stored mention flags with the same
         # filtered messages; unknown timestamps need not form a suffix.
         comments = [
@@ -364,10 +375,6 @@ class BranvilTicketService(BranvilApi, TicketService):
             ),
             linked_pull=linked_pull,
             done=lambda: self.move(task, "done"),
-            addressed_elsewhere=bool(comments)
-            and comments[-1][0].author_type != Message.ASSISTANT
-            and bool(comments[-1][1]["mentions"])
-            and not self.mentions_member(comments[-1][1]),
         )
 
 

@@ -20,7 +20,13 @@ import pytest_asyncio
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.integrations.factory import PROVIDERS
-from guildbotics.runtime.port import ServiceError, ServiceNotFound, ServiceUnsupported
+from guildbotics.runtime.code_hosting_service import TicketLink
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations.contracts.providers import (
     LABEL,
@@ -106,6 +112,88 @@ async def test_comments_addressed_to_other_members_do_not_wake_the_assignee(
     assert selected.assignee is not None
     assert selected.trigger_reason == ("issue_comment" if working else "ready_lane")
     assert await board.tickets.refresh(selected) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_new_ready_assignment_starts_despite_a_comment_addressed_elsewhere(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.assign(url)
+    board.human_comment(url, "@otota Please add context.")
+    [task] = await board.tickets.candidates()
+    assert (task.url, task.trigger_reason) == (url, "ready_lane")
+    assert (await board.tickets.refresh(task)).trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_unanswered_mentions_survive_later_comments_to_other_members(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    board.human_comment(url, f"{board.mention} Please investigate.")
+    board.human_comment(url, "@otota Please supply the context.")
+    [selected] = await board.tickets.candidates()
+    assert (selected.url, selected.trigger_reason) == (
+        url,
+        "issue_comment" if working else "ready_lane",
+    )
+    assert await board.tickets.refresh(selected) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_other_recipients_do_not_erase_the_members_held_status(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    await board.tickets.comment(
+        url,
+        "The run failed.",
+        status=WorkflowStatus(reason="failed", person_id="aiko", run_id="failed-run"),
+    )
+    board.human_comment(url, "@otota Please supply context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+
+
+@pytest.mark.asyncio
+async def test_a_held_ticket_does_not_finish_its_merged_pr_after_other_recipients(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    await board.tickets.move(task, "in_progress")
+    board.branch("feature")
+    pull = await board.code.create_pull_request(
+        board.repository,
+        "feature",
+        "main",
+        "Feature",
+        "",
+        draft=False,
+        tickets=[TicketLink(url=url, closes=False)],
+    )
+    board.merge(pull.target.url)
+    await board.tickets.comment(
+        url,
+        "The run failed.",
+        status=WorkflowStatus(reason="failed", person_id="aiko", run_id="failed-run"),
+    )
+    board.human_comment(url, "@otota Please supply context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert (await _read(board, url))["lane"] == "in_progress"
 
 
 @pytest.mark.asyncio

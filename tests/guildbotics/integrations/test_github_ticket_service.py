@@ -4,12 +4,16 @@ Projects board it selects work from."""
 import json
 import logging
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
+from guildbotics.entities.team import Person
+from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
     ADD_REACTION,
@@ -38,6 +42,7 @@ from tests.guildbotics.integrations.github_services import (
     member,
     pages,
     pull_url,
+    rendered_body,
     serve,
     team,
     ticket_service,
@@ -137,6 +142,7 @@ def _item(
             "url": issue_url(number),
             "title": f"issue {number}",
             "body": body,
+            "bodyHTML": rendered_body(body),
             "createdAt": created_at,
             "assignees": {"nodes": [{"login": assignee}] if assignee else []},
             "timelineItems": {
@@ -155,7 +161,263 @@ def _item(
 
 
 def _comment(user: str, body: str, created_at: str = "2026-01-01T00:00:00Z"):
-    return {"user": {"login": user}, "body": body, "created_at": created_at}
+    return {
+        "user": {"login": user},
+        "body": body,
+        "body_html": rendered_body(body),
+        "created_at": created_at,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body,html",
+    [
+        (
+            "`@pytest.fixture` を使ってください",
+            "<p><code>@pytest.fixture</code> を使ってください</p>",
+        ),
+        (
+            "`npm i -D @types/node` が必要です",
+            "<p><code>npm i -D @types/node</code> が必要です</p>",
+        ),
+        ("```python\n@someone\n```", "<pre><code>@someone</code></pre>"),
+    ],
+)
+async def test_code_in_a_human_comment_is_not_a_recipient(monkeypatch, body, html):
+    human = {**_comment("human", body), "body_html": html}
+    service, _ = _board(
+        monkeypatch,
+        items=[_item(number=1, status="In Progress")],
+        comments={1: [_comment(LOGIN, "Done."), human]},
+    )
+    [task] = await service.candidates()
+    assert task.trigger_reason == "issue_comment"
+
+
+@pytest.mark.asyncio
+async def test_the_second_search_page_contains_an_unanswered_mention(monkeypatch):
+    count = 101
+    service, github = _board(
+        monkeypatch,
+        items=[
+            _item(number=n, status="Todo", assignee=None) for n in range(1, count + 1)
+        ],
+        comments={
+            n: [
+                _comment("human", f"@{LOGIN} Please help."),
+                *([_comment(LOGIN, "Answered.")] if n < count else []),
+            ]
+            for n in range(1, count + 1)
+        },
+    )
+
+    def result(request):
+        page = int(request.url.params.get("page", "1"))
+        return {
+            "items": [
+                {"html_url": issue_url(n)}
+                for n in range((page - 1) * 100 + 1, min(page * 100, count) + 1)
+            ],
+            "total_count": count,
+            "incomplete_results": False,
+        }
+
+    github.on("GET", "/search/issues", result)
+    [task] = await service.candidates()
+    assert task.url == issue_url(count)
+    search = [
+        request for request in github.requests if request.url.path == "/search/issues"
+    ]
+    assert [request.url.params["page"] for request in search] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 100, 101, 1000])
+async def test_search_reads_every_page_without_an_extra_request_at_the_limit(
+    monkeypatch, count
+):
+    service, github = _board(monkeypatch, items=[])
+
+    def page(request):
+        number = int(request.url.params["page"])
+        assert (request.url.params["sort"], request.url.params["order"]) == (
+            "updated",
+            "asc",
+        )
+        return {
+            "items": [
+                {"html_url": issue_url(n)}
+                for n in range((number - 1) * 100 + 1, min(number * 100, count) + 1)
+            ],
+            "total_count": count,
+            "incomplete_results": False,
+        }
+
+    github.on("GET", "/search/issues", page)
+    assert len(await service._search_mentions()) == count
+    assert len([r for r in github.requests if r.url.path == "/search/issues"]) == max(
+        1, (count + 99) // 100
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", ["overflow", "incomplete", "http", "malformed", "later_page"]
+)
+async def test_mention_discovery_failure_preserves_assigned_and_pr_work(
+    monkeypatch, caplog, failure
+):
+    service, github = _board(monkeypatch, items=[_item(number=1, status="Todo")])
+    if failure == "http":
+        answer = httpx.Response(503, json={"message": "Unavailable"})
+    elif failure == "malformed":
+        answer = {"unexpected": "shape"}
+    elif failure == "later_page":
+
+        def answer(request):
+            if request.url.params["page"] == "1":
+                return {
+                    "items": [{"html_url": issue_url(n)} for n in range(2, 102)],
+                    "total_count": 101,
+                    "incomplete_results": False,
+                }
+            return httpx.Response(503, json={"message": "Unavailable"})
+    else:
+        answer = {
+            "items": [],
+            "total_count": 1001 if failure == "overflow" else 1,
+            "incomplete_results": failure == "incomplete",
+        }
+    github.on("GET", "/search/issues", answer)
+    pr = Task(
+        title="PR feedback",
+        description="",
+        url=pull_url(2),
+        pull_request_url=pull_url(2),
+    )
+    context = SimpleNamespace(
+        team=service.team,
+        clone_for=lambda _: context,
+        get_code_hosting_service=lambda: SimpleNamespace(
+            pull_request_candidates=AsyncMock(return_value=[pr])
+        ),
+        get_ticket_service=lambda: service,
+        aclose=service.aclose,
+    )
+    candidates = await TicketSelector(context).candidates(service.person)
+    assert [task.url for task in candidates] == [pull_url(2), issue_url(1)]
+    assert "assigned tickets and PR work remain available" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["body", "comment"])
+async def test_native_mentions_in_code_do_not_summon_an_unassigned_member(
+    monkeypatch, source
+):
+    issue = _item(number=1, status="Todo", assignee=None)
+    comments = []
+    if source == "body":
+        issue["content"].update(
+            body=f"`@{LOGIN}`", bodyHTML=f"<p><code>@{LOGIN}</code></p>"
+        )
+    else:
+        comments = [
+            {
+                **_comment("human", f"`@{LOGIN}`"),
+                "body_html": f"<pre><code>@{LOGIN}</code></pre>",
+            }
+        ]
+    service, github = _board(monkeypatch, items=[issue], comments={1: comments})
+    github.on(
+        "GET",
+        "/search/issues",
+        {
+            "items": [{"html_url": issue_url(1)}],
+            "total_count": 1,
+            "incomplete_results": False,
+        },
+    )
+    assert await service.candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_patrol_reads_comment_html_with_the_original_markdown(monkeypatch):
+    service, github = _board(
+        monkeypatch,
+        items=[_item(number=1, status="Todo")],
+        comments={1: [_comment("human", "**Hello**")]},
+    )
+    [task] = await service.candidates()
+    assert task.comments[0].content == "**Hello**"
+    [request] = [r for r in github.requests if r.url.path.endswith("/comments")]
+    assert request.headers["Accept"] == "application/vnd.github.full+json"
+
+
+@pytest.mark.asyncio
+async def test_off_board_mentions_fetch_html_and_refresh_after_an_answer(monkeypatch):
+    service, github = _board(monkeypatch, items=[])
+    url = issue_url(1)
+    body = f"@{LOGIN} Context?"
+    snapshot = {
+        "html_url": url,
+        "node_id": "I1",
+        "title": "Context",
+        "body": body,
+        "body_html": rendered_body(body),
+        "state": "open",
+        "assignees": [],
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    github.on(
+        "GET",
+        "/search/issues",
+        {"items": [{"html_url": url}], "total_count": 1, "incomplete_results": False},
+    )
+    github.on("GET", f"/repos/{REPO}/issues/1", snapshot)
+    github.on("GET", f"/repos/{REPO}/issues/1/comments", [])
+    [task] = await service.candidates()
+    assert (task.url, task.trigger_reason, task.assignee) == (
+        url,
+        "issue_mention",
+        None,
+    )
+    assert await service.refresh(task) is not None
+    github.on("GET", f"/repos/{REPO}/issues/1/comments", [_comment(LOGIN, "Answered.")])
+    assert await service.refresh(task) is None
+    assert all(
+        request.headers["Accept"] == "application/vnd.github.full+json"
+        for request in github.requests
+        if request.url.path.startswith(f"/repos/{REPO}/issues/")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token,other,expected",
+    [("⚙aiko", True, "issue_comment"), ("⚙yuki", False, None), ("⚙yuki", True, None)],
+)
+async def test_token_recipients_survive_html_line_boundaries(
+    monkeypatch, token, other, expected
+):
+    html = (
+        f"<p>{token}<br>please"
+        + (' <a class="user-mention">@otota</a>' if other else "")
+        + "</p>"
+    )
+    comment = {**_comment("human", f"{token}\nplease"), "body_html": html}
+    service, _ = _board(
+        monkeypatch,
+        items=[_item(number=1, status="In Progress")],
+        comments={1: [_comment(LOGIN, "Answered."), comment]},
+    )
+    service.team.members.append(
+        Person(person_id="yuki", name="Yuki", person_type="agent")
+    )
+    candidates = await service.candidates()
+    assert [task.trigger_reason for task in candidates] == (
+        [expected] if expected else []
+    )
 
 
 def _referring(state: str, updated_at: str, *, merged: bool = False) -> dict:
@@ -228,7 +490,7 @@ async def test_mention_search_reads_only_matching_unassigned_tickets(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("incomplete,total", [(True, 1), (False, 101)])
 async def test_mention_search_never_treats_a_partial_result_as_complete(
-    monkeypatch, incomplete, total
+    monkeypatch, caplog, incomplete, total
 ):
     service, github = _board(monkeypatch, items=[])
     github.on(
@@ -236,10 +498,15 @@ async def test_mention_search_never_treats_a_partial_result_as_complete(
         "/search/issues",
         {"items": [], "incomplete_results": incomplete, "total_count": total},
     )
-    with pytest.raises(
-        ServiceError, match=t("integrations.github.response.mention_search_incomplete")
-    ):
-        await service.candidates()
+    assert await service.candidates() == []
+    assert t("integrations.github.response.mention_search_incomplete") in caplog.text
+    assert (
+        t(
+            "integrations.github.response.mention_discovery_failed",
+            message=t("integrations.github.response.mention_search_incomplete"),
+        )
+        in caplog.text
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -969,7 +1236,7 @@ async def test_app_member_is_recognized_under_the_graphql_login(monkeypatch):
     # The comment predates the assignment, so it is not this member's answer.
     assert task.trigger_reason == "ready_lane"
     assert task.comments[0].author_type == Message.ASSISTANT
-    assert service._text_mentions_me("@aiko-app please")
+    assert service._mentions_me(service._mentions(rendered_body("@aiko-app please")))
 
 
 # --------------------------------------------------------------------------- #

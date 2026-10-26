@@ -1,7 +1,6 @@
 """GitHub as a member's tickets: the issues of the configured owner's
 repositories, and the Projects V2 board they are taken from."""
 
-import re
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime
@@ -16,6 +15,7 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.github.api import GitHubApi, GitHubItem
 from guildbotics.integrations.github.async_client import GitHubNotFound
 from guildbotics.integrations.github.github_utils import (
+    GITHUB_PAGE_SIZE,
     get_agent_token,
     get_author_type,
     get_github_username,
@@ -23,6 +23,7 @@ from guildbotics.integrations.github.github_utils import (
     normalize_login,
     parse_timestamp,
 )
+from guildbotics.integrations.github.mentions import mentions
 from guildbotics.integrations.github.reads import (
     read_collection,
     reading,
@@ -41,6 +42,7 @@ from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
+    relevant_comments,
     select,
     select_mention,
     since_assignment,
@@ -68,6 +70,10 @@ from guildbotics.runtime.ticket_service import (
     TicketUpdated,
 )
 from guildbotics.utils.i18n_tool import t
+
+_FULL = {"Accept": "application/vnd.github.full+json"}
+#: GitHub Search's result ceiling, independent of REST's page size.
+_SEARCH_LIMIT = 1000
 
 #: The project items of an issue, with their Status, and the issues it is
 #: related to. GitHub holds at most 100 sub-issues of an issue; more of any
@@ -142,6 +148,7 @@ query($proj: ID!, $cursor: String) {
               url
               title
               body
+              bodyHTML
               state
               createdAt
               assignees(first: 10) { nodes { id login name } }
@@ -722,43 +729,38 @@ class GitHubTicketService(GitHubApi, TicketService):
         """Whether a login from either GitHub API names this member."""
         return bool(self._login) and normalize_login(login) == self._login
 
-    def _text_mentions_me(self, text: str | None) -> bool:
-        """
-        Return True when the given text contains a mention of the current user.
-        Args:
-            text (str | None): The text to check for mentions.
-        Returns:
-            bool: True if the text mentions the user, False otherwise.
-        """
-        if not text:
-            return False
+    def _mentions(self, html: str) -> set[str]:
+        return mentions(html, (get_agent_token(member) for member in self.team.members))
 
-        if self._mention_token and self._mention_token in text:
-            return True
-
-        if self._login:
-            mention_re = (
-                r"(^|[^A-Za-z0-9_])@" + re.escape(self._login) + r"(?=$|[^A-Za-z0-9-])"
+    def _mentions_me(self, names: set[str]) -> bool:
+        return (
+            any(
+                self._is_me(name.removeprefix("@"))
+                for name in names
+                if name.startswith("@")
             )
-            if re.search(mention_re, text, flags=re.IGNORECASE):
-                return True
+            or self._mention_token.casefold() in names
+        )
 
-        return False
-
-    async def _comments(self, item: GitHubItem) -> list[Message]:
+    async def _comments(self, item: GitHubItem) -> list[tuple[Message, set[str]]]:
         comments = []
-        async for found in self.paginated(f"{item.conversation}/comments"):
+        async for found in self.paginated(
+            f"{item.conversation}/comments", headers=_FULL
+        ):
             login = found["user"]["login"]
             author_type = get_author_type(self.person, login)
             comments.append(
-                Message(
-                    content=found["body"],
-                    author=get_person_name(self.team.members, login) or author_type,
-                    author_type=author_type,
-                    timestamp=found["created_at"],
+                (
+                    Message(
+                        content=found["body"],
+                        author=get_person_name(self.team.members, login) or author_type,
+                        author_type=author_type,
+                        timestamp=found["created_at"],
+                    ),
+                    self._mentions(found["body_html"] or ""),
                 )
             )
-        return sorted(comments, key=lambda comment: comment.timestamp)
+        return sorted(comments, key=lambda comment: comment[0].timestamp)
 
     async def _related_pull_request_state(self, item: GitHubItem) -> str | None:
         """The state of the pull request that refers to the issue -- ``merged``
@@ -843,6 +845,7 @@ class GitHubTicketService(GitHubApi, TicketService):
                 "assigned_at": assigned_at,
                 # The open issues it is blocked by.
                 "blocked": issue["issueDependenciesSummary"]["blockedBy"] > 0,
+                "body_html": issue["bodyHTML"] or "",
             }
         return sorted(tasks), task_metadata
 
@@ -857,21 +860,29 @@ class GitHubTicketService(GitHubApi, TicketService):
             return None
         assert task.url
         item = self.item(task.url, "ticket")
-        task.comments = await self._comments(item)
+        comments = await self._comments(item)
+        task.comments = [message for message, _ in comments]
+        described = self._mentions_me(self._mentions(metadata["body_html"]))
         if not metadata["assigned"]:
             return select_mention(
                 task,
                 pending=mention_pending(
-                    self._text_mentions_me(task.description),
+                    described,
                     (
-                        (comment, self._text_mentions_me(comment.content))
-                        for comment in task.comments
+                        (message, self._mentions_me(names))
+                        for message, names in comments
                     ),
                 ),
             )
         # The agent still receives the whole history on the task; only the
         # decision is limited to what was said after the assignment.
-        since = since_assignment(task.comments, str(metadata.get("assigned_at") or ""))
+        since = since_assignment(
+            relevant_comments(
+                (message, bool(names) and not self._mentions_me(names))
+                for message, names in comments
+            ),
+            str(metadata.get("assigned_at") or ""),
+        )
         return await select(
             task,
             since,
@@ -879,22 +890,15 @@ class GitHubTicketService(GitHubApi, TicketService):
             if since
             else None,
             pending=mention_pending(
-                self._text_mentions_me(task.description),
+                described,
                 (
-                    (comment, self._text_mentions_me(comment.content))
-                    for comment in since
+                    (message, self._mentions_me(names))
+                    for message, names in comments
+                    if message in since
                 ),
             ),
             linked_pull=lambda: self._related_pull_request_state(item),
             done=lambda: self.move(task, "done"),
-            addressed_elsewhere=bool(since)
-            and since[-1].author_type != Message.ASSISTANT
-            and bool(
-                re.search(
-                    r"(?<![\w@])@[A-Za-z0-9][A-Za-z0-9-]*|⚙[\w-]+", since[-1].content
-                )
-            )
-            and not self._text_mentions_me(since[-1].content),
         )
 
     async def candidates(self) -> list[Task]:
@@ -911,33 +915,87 @@ class GitHubTicketService(GitHubApi, TicketService):
             selected = await self._select_actionable_task(task, task_metadata[task.id])
             if selected:
                 candidates.append(selected)
-        page = await self.get(
-            "/search/issues",
-            params={
-                "q": f"is:issue is:open user:{self.owner} mentions:{get_github_username(self.person, strict=True)}",
-                "per_page": 100,
-            },
-        )
-        if page["incomplete_results"] or page["total_count"] > len(page["items"]):
-            raise ServiceError(
-                t("integrations.github.response.mention_search_incomplete")
-            )
         known = {task.url: task for task in tasks}
-        for issue in page["items"]:
-            item = self.item(issue["html_url"], "ticket")
-            if not in_scope(self.owner, item.repository):
-                continue
-            task = known.get(issue["html_url"]) or self._mention_task(issue)
-            metadata = task_metadata.get(
-                str(task.id), {"assigned": bool(task.assignee)}
+        mentioned = []
+        try:
+            for issue in await self._search_mentions():
+                item = self.item(issue["html_url"], "ticket")
+                if not in_scope(self.owner, item.repository):
+                    continue
+                known_task = known.get(issue["html_url"])
+                if known_task is None:
+                    snapshot = await self.fetch(item, headers=_FULL)
+                    if snapshot["state"] != "open":
+                        continue
+                    task = self._mention_task(snapshot)
+                    metadata = {
+                        "assigned": bool(task.assignee),
+                        "body_html": snapshot["body_html"] or "",
+                    }
+                else:
+                    task = known_task
+                    metadata = task_metadata[str(task.id)]
+                if (
+                    not metadata["assigned"]
+                    and (selected := await self._select_actionable_task(task, metadata))
+                    is not None
+                ):
+                    mentioned.append(selected)
+        except ServiceError as exc:
+            # Discovery of mentions is independent of assigned work and PRs.
+            # No partial mention snapshot is returned as a complete search.
+            self.logger.warning(
+                t(
+                    "integrations.github.response.mention_discovery_failed",
+                    message=str(exc),
+                )
             )
-            if metadata["assigned"]:
-                continue
-            if (
-                selected := await self._select_actionable_task(task, metadata)
-            ) is not None:
-                candidates.append(selected)
+        else:
+            candidates.extend(mentioned)
         return candidates
+
+    async def _search_mentions(self) -> list[dict[str, Any]]:
+        """One search query, paginated to GitHub's 1,000-result limit.
+
+        Answered mentions still match open issues. Following result pages
+        prevents them from permanently hiding unanswered mentions after page 1.
+        Incomplete or overflowing searches fail this discovery path explicitly.
+        """
+        found: dict[str, dict[str, Any]] = {}
+        for number in range(1, _SEARCH_LIMIT // GITHUB_PAGE_SIZE + 1):
+            page = await self.get(
+                "/search/issues",
+                params={
+                    "q": f"is:issue is:open user:{self.owner} mentions:{get_github_username(self.person, strict=True)}",
+                    "per_page": GITHUB_PAGE_SIZE,
+                    "page": number,
+                    "sort": "updated",
+                    "order": "asc",
+                },
+            )
+            if (
+                not isinstance(page, dict)
+                or not isinstance(page.get("items"), list)
+                or type(page.get("total_count")) is not int
+                or page["total_count"] < 0
+                or type(page.get("incomplete_results")) is not bool
+                or not all(
+                    isinstance(issue, dict) and isinstance(issue.get("html_url"), str)
+                    for issue in page["items"]
+                )
+            ):
+                raise ServiceError(t("integrations.github.response.response"))
+            if page["incomplete_results"] or page["total_count"] > _SEARCH_LIMIT:
+                raise ServiceError(
+                    t("integrations.github.response.mention_search_incomplete")
+                )
+            for issue in page["items"]:
+                found[issue["html_url"]] = issue
+            if len(found) >= page["total_count"]:
+                return list(found.values())
+            if len(page["items"]) < GITHUB_PAGE_SIZE:
+                break
+        raise ServiceError(t("integrations.github.response.mention_search_incomplete"))
 
     def _mention_task(self, issue: dict[str, Any]) -> Task:
         """An issue outside the board's work window, for conversation only."""
@@ -967,12 +1025,14 @@ class GitHubTicketService(GitHubApi, TicketService):
             return await self._select_actionable_task(task, task_metadata[task.id])
         if candidate.url:
             item = self.item(candidate.url, "ticket")
-            issue = await self.fetch(item)
+            issue = await self.fetch(item, headers=_FULL)
             if issue["state"] != "open" or not in_scope(self.owner, item.repository):
                 return None
             task = self._mention_task(issue)
             if task.assignee is None:
-                return await self._select_actionable_task(task, {"assigned": False})
+                return await self._select_actionable_task(
+                    task, {"assigned": False, "body_html": issue["body_html"] or ""}
+                )
         return None
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
