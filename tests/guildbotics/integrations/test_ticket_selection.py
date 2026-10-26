@@ -98,10 +98,40 @@ async def test_only_comments_since_assignment_resume_a_working_ticket(pull):
             task,
             since,
             latest_status=None,
-            pending=mention_pending("", since, lambda body: "@aiko" in body),
+            pending=mention_pending(
+                False, ((comment, "@aiko" in comment.content) for comment in since)
+            ),
             linked_pull=AsyncMock(return_value=pull),
             done=done,
         )
         is None
     )
     assert done.await_count == int(pull == "merged")
+
+
+@pytest.mark.parametrize(
+    ("described", "comments", "expected"),
+    [
+        (False, [], False),
+        (True, [], True),
+        (True, [(Message.USER, False)], True),
+        (False, [(Message.USER, True)], True),
+        (False, [(Message.ASSISTANT, True)], False),
+        (True, [(Message.ASSISTANT, False)], False),
+        (False, [(Message.USER, True), (Message.ASSISTANT, True)], False),
+        (True, [(Message.ASSISTANT, False), (Message.USER, False)], False),
+        (True, [(Message.ASSISTANT, False), (Message.USER, True)], True),
+    ],
+)
+def test_resolved_mentions_are_answered_by_the_members_next_comment(
+    described, comments, expected
+):
+    # Content deliberately disagrees with the flags: resolution is the provider's job.
+    messages = (
+        (
+            Message(author_type=author, content="No summons" if mentioned else "@aiko"),
+            mentioned,
+        )
+        for author, mentioned in comments
+    )
+    assert mention_pending(described, messages) is expected

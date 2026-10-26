@@ -10,6 +10,10 @@ project chooses (Slack, for example).
 This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
 the exact `branvil` commands, are in the Branvil README.
 
+Ticket mention selection uses the `mentions` lists Branvil returns on bodies
+and comments. Branvil resolves names against its members when a body is saved.
+Install the matching Branvil (storage schema 20) before this provider.
+
 ## How it fits together
 
 ```text

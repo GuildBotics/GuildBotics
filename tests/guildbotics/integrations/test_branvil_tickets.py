@@ -175,6 +175,111 @@ async def test_a_mention_is_a_word_of_its_own(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "mentions", "reason"),
+    [("@aiko", [], "working_lane"), ("Stored summons", ["AIKO"], "issue_mention")],
+)
+async def test_selection_uses_branvils_resolved_mentions(
+    monkeypatch, body, mentions, reason
+):
+    double, _, tickets = services(monkeypatch)
+    # The response is authoritative even when local text parsing would disagree.
+    monkeypatch.setattr(double, "_mentions", lambda _body: mentions)
+    url = _ticket(double, body=body, lane="in_progress")
+    assert await _reasons(tickets) == [(url, reason)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["candidates", "refresh"])
+@pytest.mark.parametrize("pull_state", [None, "open", "merged"])
+@pytest.mark.parametrize("when", ["before", "at", "after", "unknown", "invalid"])
+async def test_assignment_filters_comment_mentions_on_both_read_paths(
+    monkeypatch, route, pull_state, when
+):
+    double, code, tickets = services(monkeypatch)
+    url = double._ticket(REPO, "Work", "", [])["url"]
+    comment = double.comment(url, "otota", "@aiko earlier request")
+    if pull_state:
+        double.branch("feature")
+        pull = await code.create_pull_request(
+            REPO,
+            "feature",
+            "",
+            "Work",
+            "",
+            draft=False,
+            tickets=[TicketLink(url, False)],
+        )
+        if pull_state == "merged":
+            double.merge(pull.target.url)
+    double.assign(url, "in_progress")
+    assigned = double.tickets[url]["assignee"]["assigned_at"]
+    if when == "at":
+        comment["created_at"] = assigned
+    elif when == "after":
+        comment["created_at"] = double.now()
+    elif when in {"unknown", "invalid"}:
+        comment["created_at"] = None if when == "unknown" else "not-a-time"
+    if route == "candidates":
+        tasks = await tickets.candidates()
+    else:
+        refreshed = await tickets.refresh(
+            Task(url=url, title="Work", description="", status=Task.IN_PROGRESS)
+        )
+        tasks = [] if refreshed is None else [refreshed]
+    expected = (
+        "issue_comment"
+        if when != "before"
+        else "working_lane"
+        if pull_state is None
+        else None
+    )
+    assert [(task.url, task.trigger_reason) for task in tasks] == (
+        [(url, expected)] if expected else []
+    )
+    if tasks:
+        assert [message.content for message in tasks[0].comments] == [comment["body"]]
+    assert double.tickets[url]["lane"] == (
+        "done" if when == "before" and pull_state == "merged" else "in_progress"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["candidates", "refresh"])
+@pytest.mark.parametrize("timestamp", [None, "not-a-time"])
+@pytest.mark.parametrize("reason", ["failed", "rate_limited"])
+async def test_holding_status_comes_from_the_last_retained_comment(
+    monkeypatch, route, timestamp, reason
+):
+    double, code, tickets = services(monkeypatch)
+    url = double._ticket(REPO, "Held work", "", [])["url"]
+    fields = (
+        {"retry_after_at": "2100-01-01T00:00:00+00:00"}
+        if reason == "rate_limited"
+        else {}
+    )
+    held = double.comment(url, MEMBER, "Held", **_status(reason, **fields))
+    held["created_at"] = timestamp
+    double.comment(url, "otota", "Before assignment")
+    double.branch("feature")
+    pull = await code.create_pull_request(
+        REPO, "feature", "", "Work", "", draft=False, tickets=[TicketLink(url, False)]
+    )
+    double.merge(pull.target.url)
+    double.assign(url, "in_progress")
+    if route == "candidates":
+        assert await tickets.candidates() == []
+    else:
+        assert (
+            await tickets.refresh(
+                Task(url=url, title="Work", description="", status=Task.IN_PROGRESS)
+            )
+            is None
+        )
+    assert double.tickets[url]["lane"] == "in_progress"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("closes", [True, False])
 async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, closes):
     double, code, tickets = services(monkeypatch)

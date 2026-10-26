@@ -10,6 +10,10 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 このガイドは、GuildBotics が Branvil に求めるものを説明します。Branvil のインストールと起動、
 `branvil` コマンドの正確な使い方は Branvil の README を参照してください。
 
+チケットのメンション判定には、Branvil が本文とコメントに返す `mentions` を使います。
+名前は Branvil のメンバーとして本文の保存時に解決されます。対応する Branvil（保存形式20）を
+先に導入してください。
+
 ## 全体の構成
 
 ```text

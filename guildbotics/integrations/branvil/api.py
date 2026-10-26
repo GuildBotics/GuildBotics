@@ -658,6 +658,11 @@ class BranvilApi(Calls):
             is not None
         )
 
+    def mentions_member(self, data: dict[str, Any]) -> bool:
+        """Whether a stored ticket or comment mentions this member."""
+        me = username(self.person).casefold()
+        return any(name.casefold() == me for name in data["mentions"])
+
     async def post_comment(
         self, item: BranvilItem, body: str, status: WorkflowStatus | None
     ) -> CommentWritten:

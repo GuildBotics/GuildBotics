@@ -864,7 +864,13 @@ class GitHubTicketService(GitHubApi, TicketService):
             latest_status=parse_workflow_status_comment(since[-1].content)
             if since
             else None,
-            pending=mention_pending(task.description, since, self._text_mentions_me),
+            pending=mention_pending(
+                self._text_mentions_me(task.description),
+                (
+                    (comment, self._text_mentions_me(comment.content))
+                    for comment in since
+                ),
+            ),
             linked_pull=lambda: self._related_pull_request_state(item),
             done=lambda: self.move(task, "done"),
         )
