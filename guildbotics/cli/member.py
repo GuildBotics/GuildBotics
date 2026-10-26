@@ -6,13 +6,12 @@ import json
 import re
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Literal, TextIO
-from uuid import uuid4
 
 import click
 from pydantic import ValidationError
@@ -83,10 +82,6 @@ from guildbotics.runtime.member_invocation import (
     Work,
     current_member_invocation,
     member_invocation_scope,
-)
-from guildbotics.runtime.person_lease import (
-    PersonExecutionLease,
-    PersonLeaseUnavailableError,
 )
 from guildbotics.runtime.port import SEMANTIC_REACTIONS, SemanticReaction, ServiceError
 from guildbotics.runtime.resources import (
@@ -270,8 +265,8 @@ class _MemberCommand(click.Command):
         """Run the work the callback returns under the member command's guard.
 
         The callback only reads and checks the command's input, so a usage
-        error needs neither the workspace nor the lease; what the command does
-        is the work it returns, which runs once the guard admits it.
+        error needs neither the workspace nor delegation checks. The work it
+        returns runs once its delegation is validated.
         """
         work = super().invoke(ctx)
         if work is None:
@@ -1206,7 +1201,7 @@ async def _code_hosting(
             ),
         }
         record_member_work_target(
-            member_person, target, read_only=not _member_command_needs_lease()
+            member_person, target, read_only=not _member_command_writes()
         )
     if then is not None:
         then(member_person, {**result, "target": target})
@@ -2041,18 +2036,18 @@ def _parse_scalar(value: str) -> Any:
 def _run(coro: _CommandWork, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
-    needs_sync = _member_command_needs_lease()
+    needs_sync = _member_command_writes()
     prepared_sync = None
     started = False
     try:
-        with _member_execution_guard(command, interactive_session):
-            if needs_sync:
-                prepared_sync = _prepare_member_sync()
-            started = True
-            if interactive_session is None:
-                result = _run_in_owner_trace(coro, command)
-            else:
-                result = _run_interactive(coro, interactive_session, command)
+        _validate_member_delegation()
+        if needs_sync:
+            prepared_sync = _prepare_member_sync()
+        started = True
+        if interactive_session is None:
+            result = _run_in_owner_trace(coro, command)
+        else:
+            result = _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
         ServiceError,
@@ -2151,42 +2146,25 @@ def _sync_member_result(
     return result
 
 
-@contextmanager
-def _member_execution_guard(command: str, session: InteractiveTraceSession | None):
-    if not _member_command_needs_lease():
-        yield
+def _validate_member_delegation() -> None:
+    """Require workflow writes to act under their turn's delegated lease.
+
+    Interactive commands do not use the member's clone and take no execution
+    lease; their shared state and git operations have their own locks.
+    """
+    if not _running_under_workflow() or not _member_command_writes():
         return
     person = _current_person()
     if not person:
-        yield
         return
-    if _running_under_workflow():
-        # The workflow's turn holds the person's lease; its commands act under it.
-        lease = current_member_invocation().lease
-        if lease is None or (
-            lease.person_id != person
-            and lease.person_id != _resolve(person)[1].person_id
-        ):
-            raise click.ClickException(t("cli.member.lease.invalid_delegation"))
-        yield
-        return
-    _context, member_person = _resolve(person)
-    lease = PersonExecutionLease(member_person.person_id)
-    try:
-        lease.acquire(
-            source="interactive",
-            command=command,
-            work_id=session.trace_id if session is not None else uuid4().hex,
-        )
-    except PersonLeaseUnavailableError as exc:
-        raise click.ClickException(str(exc)) from exc
-    try:
-        yield
-    finally:
-        lease.release()
+    lease = current_member_invocation().lease
+    if lease is None or (
+        lease.person_id != person and lease.person_id != _resolve(person)[1].person_id
+    ):
+        raise click.ClickException(t("cli.member.lease.invalid_delegation"))
 
 
-def _member_command_needs_lease() -> bool:
+def _member_command_writes() -> bool:
     context = click.get_current_context(silent=True)
     callback = context.command.callback if context is not None else None
     # New or malformed commands fail closed as write-capable until their callback

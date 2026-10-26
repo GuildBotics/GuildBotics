@@ -168,7 +168,7 @@ def _record_git_commit(monkeypatch) -> None:
         return (await use(Service())).to_dict()
 
     monkeypatch.setattr(member_module, "_git", git)
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: False)
 
 
 def test_relative_paths_and_content_are_the_commands_own(monkeypatch, tmp_path) -> None:
@@ -255,7 +255,7 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
         "_resolve",
         lambda person: (None, SimpleNamespace(person_id=person)),
     )
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
     monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
 
@@ -511,7 +511,7 @@ def test_a_command_of_an_environment_runs_no_git_on_the_host(
 ) -> None:
     """The current mode runs git on the host in a repository the command's
     environment can write, whatever run the command belongs to, if any."""
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: False)
     guest = SimpleNamespace()
     of_an_environment = {
         "task run": MemberInvocation(task_run_id="run-1", guest=guest),

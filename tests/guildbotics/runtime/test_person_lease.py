@@ -106,11 +106,11 @@ def test_stale_lock_file_is_reclaimed(tmp_path) -> None:
     lease.release()
 
 
-def test_only_the_work_boundaries_make_a_person_lease() -> None:
+def test_only_track_work_makes_a_person_lease() -> None:
     """A member's lease is taken where work is tracked, nowhere else: every
     host run -- the Desktop's, ``guildbotics run``'s, the scheduler's -- goes
-    through ``track_work``, and an interactive member CLI command through its
-    own guard. A host entry that took the lease on its own would run without
+    through ``track_work``. Interactive member commands do not take a lease.
+    A host entry that took the lease on its own would run without
     the trace and the task-run record that the boundary keeps. A lease is
     acquired only by whoever makes it, so the makers are the population."""
     package = Path(guildbotics.__file__).parent
@@ -128,5 +128,4 @@ def test_only_the_work_boundaries_make_a_person_lease() -> None:
 
     assert makers == {
         ("guildbotics/drivers/execution.py", "track_work"),
-        ("guildbotics/cli/member.py", "_member_execution_guard"),
     }

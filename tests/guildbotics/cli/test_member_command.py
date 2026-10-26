@@ -4,6 +4,7 @@ import logging
 import os
 from contextlib import ExitStack
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import click
 import httpx
@@ -14,6 +15,7 @@ from guildbotics.capabilities import member_activity_events
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.github import async_client
@@ -47,7 +49,7 @@ member_module = importlib.import_module("guildbotics.cli.member")
 
 
 def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, capsys):
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
     calls = []
 
     class PreparedSync:
@@ -119,6 +121,78 @@ def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
 
     assert result == {"written": True}
     assert json.loads(capsys.readouterr().out) == result
+
+
+def test_read_only_member_command_skips_one_shot_sync(monkeypatch):
+    def prepare():
+        pytest.fail("read-only commands must not prepare one-shot sync")
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
+
+    @click.command()
+    @member_module._read_only_member_command
+    def read_command():
+        async def read():
+            return {"read": True}
+
+        member_module._run(read(), output_format="json")
+
+    result = CliRunner().invoke(read_command)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"read": True}
+
+
+@pytest.mark.parametrize("source", ["routine", "scheduled", "manual", "event_queue"])
+def test_interactive_write_and_sync_run_while_the_members_clone_is_in_use(
+    monkeypatch, source
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _: (FakeContext(person), person),
+    )
+    calls = []
+
+    class PreparedSync:
+        def commit_and_push_once(self, *, timeout):
+            calls.append("sync")
+            return SimpleNamespace(failure=None)
+
+    def prepare():
+        calls.append("prepare")
+        return PreparedSync()
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
+    coordinator = ExecutionCoordinator()
+    with coordinator.track_work(source=source, person_id="aiko", command="workflow"):
+        result = CliRunner().invoke(
+            member_module.member,
+            [
+                "memory",
+                "record",
+                "--person",
+                "aiko",
+                "--scope",
+                "personal",
+                "--title",
+                "Concurrent note",
+                "--content-stdin",
+            ],
+            input="Saved while the workflow uses the clone.\n",
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["doc_id"]
+        # The interactive command neither releases nor replaces the run's lease.
+        with pytest.raises(WorkRejectedError) as excinfo:
+            with coordinator.track_work(
+                source="manual", person_id="aiko", command="another workflow"
+            ):
+                pass
+        assert excinfo.value.reason == "lease_unavailable"
+
+    assert calls == ["prepare", "sync"]
 
 
 @pytest.fixture
@@ -404,7 +478,7 @@ def test_member_help_prints_capability_reference():
     assert "#### レビュー指摘への対応" in result.output
 
 
-def test_member_command_lease_classification_uses_callback_metadata() -> None:
+def test_member_command_write_classification_uses_callback_metadata() -> None:
     @click.command(name="context")
     def unmarked_command() -> None:
         """A write-capable command whose name resembles a read-only command."""
@@ -415,9 +489,9 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         """A read-only command whose name does not imply its access mode."""
 
     with click.Context(unmarked_command):
-        assert member_module._member_command_needs_lease() is True
+        assert member_module._member_command_writes() is True
     with click.Context(read_only_command):
-        assert member_module._member_command_needs_lease() is False
+        assert member_module._member_command_writes() is False
 
 
 _READ_GROUPS = {"ticket": "ticket", "pull_request": "pr", "repository": "repo-info"}
@@ -431,7 +505,7 @@ def test_ci_inspection_commands_are_read_only() -> None:
         commands["pr"].commands["artifact"].commands["download"],
     ):
         with click.Context(command):
-            assert member_module._member_command_needs_lease() is False
+            assert member_module._member_command_writes() is False
 
 
 def test_inspection_cli_leaves_are_removed():

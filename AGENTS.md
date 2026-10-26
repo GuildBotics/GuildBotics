@@ -322,7 +322,7 @@ help / docstring が正であり、member コマンドの一行説明は
 流れ:
 
 1. `prepare_command()`（host）が対象メンバーとメインコマンドを 1 回だけ解決する（`PreparedCommand`）
-2. host の入口が実行の境界を開く。手動実行は Desktop（`AppRuntime._execute_command`）も `guildbotics run` の手元実行（`cli/run.py` の `_run_custom_command`）も同じ形で、`trace_scope("manual")` と `TaskRunCoordinator.track_work(source="manual", exclusive=not read_only)`（TaskRun の start/finish と、read-only でなければメンバーの lease）と `command.started` / `command.finished` を残す。scheduler は `task_scheduler.py` の `track_work` と `drivers/utils.run_command` の `command_boundary`。lease を取るのは `track_work` と対話の member CLI（`cli/member.py` の `_member_execution_guard`）の 2 か所だけ（`tests/guildbotics/runtime/test_person_lease.py` が固定する）
+2. host の入口が実行の境界を開く。手動実行は Desktop（`AppRuntime._execute_command`）も `guildbotics run` の手元実行（`cli/run.py` の `_run_custom_command`）も同じ形で、`trace_scope("manual")` と `TaskRunCoordinator.track_work(source="manual", exclusive=not read_only)`（TaskRun の start/finish と、read-only でなければメンバーの lease）と `command.started` / `command.finished` を残す。scheduler は `task_scheduler.py` の `track_work` と `drivers/utils.run_command` の `command_boundary`。lease は clone を使う read-only でない run どうしを直列化するために `track_work` の 1 か所だけで取る（`tests/guildbotics/runtime/test_person_lease.py` が固定する）。対話の member CLI は lease を取らず、共有 state と git 操作はそれぞれの専用 lock で守る。workflow 内の member 書き込みは委任された lease と run の検査を残し、read-only と宣言していない member コマンドの後は従来どおり one-shot 同期を行う
 3. `run_main_command()`（host）が ticket workflow なら ticket selector を通し、`run_in_environment()` がコマンドの隔離環境を起動し、その中の入口が `CommandRunner` で解決済みのファイルを実行する
 4. `CommandSpecFactory` が `CommandSpec` を構築
 5. 子コマンド（`commands:`）を先に実行

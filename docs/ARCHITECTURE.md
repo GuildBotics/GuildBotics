@@ -379,16 +379,19 @@ Invariants:
 
 - Scheduler-managed work is serial per person: one worker thread per active member
   (`drivers/task_scheduler.py`) runs scheduled, routine, and queued-event work one at
-  a time. `runtime/person_lease.py` extends that guarantee to manual commands,
-  interactive sessions, and separate GuildBotics processes with one OS advisory lease
-  per person. The lease is taken in two places only: `track_work` in
-  `drivers/execution.py`, which every host run goes through (the scheduler's work, and
-  a manual command whether the Desktop or a local `guildbotics run` starts it), and the
-  interactive member CLI's own guard. Nested `member` writes require the exact delegated
-  lease/run identity; environment-variable presence alone never authorizes them.
+  a time. `runtime/person_lease.py` serializes non-read-only runs that use a member's
+  clone across manual commands and separate GuildBotics processes with one OS advisory
+  lease per person. Only `track_work` in `drivers/execution.py` takes the lease;
+  every host run goes through it (the scheduler's work, and a manual command whether
+  the Desktop or a local `guildbotics run` starts it). Interactive `member` commands
+  take no execution lease: shared state and git operations have their own locks,
+  and interactive sessions cannot use the member's clone. Nested `member` writes
+  require the exact delegated lease/run identity; environment-variable presence alone
+  never authorizes them.
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
-  command-name strings.
+  command-name strings. Write-capable commands still perform one-shot synchronization
+  after execution, independently of the execution lease.
 - The long-running background service is singleton per machine. CLI `guildbotics
 start` and the Desktop-managed service contend on the same OS advisory lock at
   `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
