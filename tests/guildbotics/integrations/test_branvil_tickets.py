@@ -175,6 +175,21 @@ async def test_a_mention_is_a_word_of_its_own(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "mentions", "reason"),
+    [("@aiko", [], "working_lane"), ("Stored summons", ["AIKO"], "issue_mention")],
+)
+async def test_selection_uses_branvils_resolved_mentions(
+    monkeypatch, body, mentions, reason
+):
+    double, _, tickets = services(monkeypatch)
+    # The response is authoritative even when local text parsing would disagree.
+    monkeypatch.setattr(double, "_mentions", lambda _body: mentions)
+    url = _ticket(double, body=body, lane="in_progress")
+    assert await _reasons(tickets) == [(url, reason)]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("closes", [True, False])
 async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, closes):
     double, code, tickets = services(monkeypatch)

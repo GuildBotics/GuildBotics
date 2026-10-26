@@ -51,6 +51,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -771,6 +772,7 @@ class BranvilDouble:
             return {key: self.tickets[other][key] for key in keys}
 
         return ticket | {
+            "mentions": self._mentions(ticket["body"]),
             "parent": ticket["parent"] and relative(ticket["parent"]),
             "children": [
                 relative(u) for u, t in self.tickets.items() if t["parent"] == url
@@ -921,6 +923,7 @@ class BranvilDouble:
             "id": entry_id,
             "author": author,
             "body": body,
+            "mentions": self._mentions(body),
             "reactions": [],
             "url": f"{url}#{entry_id}",
             **(
@@ -973,6 +976,16 @@ class BranvilDouble:
             "items": items[start:end],
             "next_cursor": f"o:{end}" if end < len(items) else None,
         }
+
+    def _mentions(self, body: str) -> list[str]:
+        """Existing Branvil members, in the order they occur in the text."""
+        found = []
+        for member in self.members:
+            pattern = rf"(?<![\w.@-])@{re.escape(member)}(?![\w-]|\.[\w-])"
+            match = re.search(pattern, body, flags=re.IGNORECASE | re.ASCII)
+            if match:
+                found.append((match.start(), member))
+        return [member for _, member in sorted(found)]
 
 
 #: What every pull request changes: ``CHANGED``, added on the branch.
