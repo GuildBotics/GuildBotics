@@ -44,20 +44,16 @@ def since_assignment(comments: Sequence[Message], assigned_at: str) -> list[Mess
     ]
 
 
-def mention_pending(
-    description: str, comments: Sequence[Message], mentions: Callable[[str], bool]
-) -> bool:
+def mention_pending(described: bool, comments: Iterable[tuple[Message, bool]]) -> bool:
     """Whether a mention of the member is still unanswered.
 
-    A mention in the description or in any comment marks the member as
-    summoned; the member's own next comment answers it.
+    Providers supply resolved mention flags and assignment-filtered comments,
+    oldest first. A mention in the description or a comment summons the
+    member; their own next comment answers it, even if it mentions them.
     """
-    pending = mentions(description)
-    for comment in comments:
-        if mentions(comment.content):
-            pending = True
-        if comment.author_type == Message.ASSISTANT:
-            pending = False
+    pending = described
+    for comment, mentioned in comments:
+        pending = (pending or mentioned) and comment.author_type != Message.ASSISTANT
     return pending
 
 

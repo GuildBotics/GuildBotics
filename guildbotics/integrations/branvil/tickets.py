@@ -17,7 +17,6 @@ from logging import Logger
 from typing import Any
 
 from guildbotics.entities import Person, Service, Task, Team
-from guildbotics.entities.message import Message
 from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
@@ -28,6 +27,7 @@ from guildbotics.integrations.branvil.api import (
 from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
+    mention_pending,
     select,
     since_assignment,
 )
@@ -302,15 +302,13 @@ class BranvilTicketService(BranvilApi, TicketService):
 
     async def _select(self, task: Task, card: dict[str, Any]) -> Task | None:
         since = since_assignment(task.comments, card["assignee"]["assigned_at"])
-        # Branvil resolves mentions against its own members at write time.
-        # Do not infer them again from the text or the local team's roster.
-        pending = self.mentions_member(card)
-        for comment in card["comments"]:
-            message = self.message(comment)
-            if since_assignment([message], card["assignee"]["assigned_at"]):
-                pending = (pending or self.mentions_member(comment)) and (
-                    message.author_type != Message.ASSISTANT
-                )
+        # Keep the source metadata and stored mention flags with the same
+        # filtered messages; unknown timestamps need not form a suffix.
+        comments = [
+            (message, comment)
+            for message, comment in zip(task.comments, card["comments"], strict=True)
+            if message in since
+        ]
 
         async def linked_pull() -> str | None:
             return linked_pull_state(
@@ -324,11 +322,16 @@ class BranvilTicketService(BranvilApi, TicketService):
         return await select(
             task,
             since,
-            # What was said since the assignment ends the comments.
-            latest_status=WorkflowStatus.from_payload(card["comments"][-1].get("meta"))
-            if since
+            latest_status=WorkflowStatus.from_payload(comments[-1][1].get("meta"))
+            if comments
             else None,
-            pending=pending,
+            pending=mention_pending(
+                self.mentions_member(card),
+                (
+                    (message, self.mentions_member(comment))
+                    for message, comment in comments
+                ),
+            ),
             linked_pull=linked_pull,
             done=lambda: self.move(task, "done"),
         )
