@@ -313,9 +313,9 @@ To ask for work, use a GitHub Projects ticket as follows:
 
 Once work starts, you interact with the member like this:
 
-- When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues
+- When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues. In-progress tickets with unanswered comments or mentions are picked up even when a linked PR is open or merged; the member reuses an existing open PR
 - When the task completes, the member leaves a comment / PR URL / review reply / reaction
-- Review the PR created from the ticket on the PR itself. The member follows the PR through the pull request patrol, not through the ticket (→ [Pull Request Patrol](#pull-request-patrol))
+- Review the PR created from the ticket on the PR itself. The pull request patrol follows its conversation (→ [Pull Request Patrol](#pull-request-patrol)). Once the ticket's comments and mentions are answered, an open PR keeps the ticket waiting and a merged PR moves it to Done. The member's latest failure or rate-limit status keeps the ticket on hold
 
 To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
 

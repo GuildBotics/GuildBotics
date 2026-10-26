@@ -198,6 +198,35 @@ async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("merged", [False, True])
+@pytest.mark.parametrize("mention", [False, True])
+async def test_ticket_conversations_are_answered_before_a_linked_pr_takes_over(
+    monkeypatch, merged, mention
+):
+    double, code, tickets = services(monkeypatch)
+    url = _ticket(double, "@aiko please" if mention else "", lane="in_progress")
+    if not mention:
+        double.comment(url, MEMBER, "Should I add the check?")
+        double.comment(url, "otota", "Yes, please.")
+    double.branch("feature")
+    pull = await code.create_pull_request(
+        REPO, "feature", "", "Work", "", draft=False, tickets=[TicketLink(url, False)]
+    )
+    if merged:
+        double.merge(pull.target.url)
+
+    [task] = await tickets.candidates()
+    refreshed = await tickets.refresh(task)
+
+    assert refreshed is not None
+    assert refreshed.trigger_reason == ("issue_mention" if mention else "issue_comment")
+    assert double.tickets[url]["lane"] == "in_progress"
+    await tickets.comment(url, "Added the check.")
+    assert await tickets.refresh(task) is None
+    assert double.tickets[url]["lane"] == ("done" if merged else "in_progress")
+
+
+@pytest.mark.asyncio
 async def test_a_ticket_of_another_workspace_is_neither_work_nor_written_to(
     monkeypatch,
 ):

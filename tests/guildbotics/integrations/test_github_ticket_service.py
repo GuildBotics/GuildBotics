@@ -408,16 +408,45 @@ async def test_merged_pr_moves_ticket_to_done_without_triggering(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_open_pr_keeps_its_issue_out_of_the_working_lane(monkeypatch):
-    """Feedback on a PR is followed on the PR; the issue is never re-dispatched."""
+@pytest.mark.parametrize("comments", [[], [_comment(LOGIN, "Done for now.")]])
+async def test_open_pr_keeps_an_answered_issue_out_of_selection(monkeypatch, comments):
+    """The PR patrol takes over once the ticket's conversation is answered."""
     service, _ = _board(
         monkeypatch,
         items=[_item(number=1, status="In Progress")],
-        comments={1: [_comment("human", "Also do this")]},
+        comments={1: comments},
         timeline={1: [_referring("open", "2026-01-02T00:00:00Z")]},
     )
 
     assert await service.first_task() is None
+    assert service.moved == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("merged", [False, True])
+@pytest.mark.parametrize("mention", [False, True])
+async def test_a_linked_pr_does_not_hide_a_ticket_conversation(
+    monkeypatch, merged, mention
+):
+    service, _ = _board(
+        monkeypatch,
+        items=[_item(number=1, status="In Progress", body="⚙aiko" if mention else "")],
+        comments={} if mention else {1: [_comment("human", "Also do this")]},
+        timeline={
+            1: [
+                _referring(
+                    "closed" if merged else "open",
+                    "2026-01-02T00:00:00Z",
+                    merged=merged,
+                )
+            ]
+        },
+    )
+
+    task = await service.first_task()
+
+    assert task is not None
+    assert task.trigger_reason == ("issue_mention" if mention else "issue_comment")
     assert service.moved == []
 
 
