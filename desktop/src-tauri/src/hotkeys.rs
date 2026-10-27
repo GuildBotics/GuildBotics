@@ -143,23 +143,25 @@ fn pasteboard_change_count() -> Option<i64> {
     None
 }
 
-/// Turn the quick-run window into a non-activating panel.
-///
-/// A normal window can only take keyboard focus while its application is
-/// active, and activating the application makes macOS raise every other window
-/// it owns — so the main window jumped forward (on whichever display it lives
-/// on) whenever the quick window appeared or closed. A panel with
-/// `NonactivatingPanel` takes key input without activating us at all, which is
-/// how launcher-style windows avoid this.
 /// Panel subclass that can take keyboard focus.
 ///
 /// The quick window is borderless, and a borderless window reports
 /// `canBecomeKeyWindow == false` by default — the window class Tauri builds
 /// overrides that, so swapping to a plain `NSPanel` throws the override away
 /// and leaves the window unable to accept typing.
+///
+/// Swapping an object's class is sound only when both classes lay the instance
+/// out identically. The classes between `NSWindow` and the window's current
+/// class (the one Tauri builds, and the observer subclass KVO inserts above it)
+/// add instance variables that are read by name afterwards, so the panel
+/// reproduces each one at the same offset with the same span. That holds only
+/// while `NSPanel` is laid out like `NSWindow`, so `None` otherwise.
 #[cfg(target_os = "macos")]
-fn quick_panel_class() -> Option<&'static objc2::runtime::AnyClass> {
-    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+fn quick_panel_class(
+    window_class: &objc2::runtime::AnyClass,
+) -> Option<&'static objc2::runtime::AnyClass> {
+    use objc2::ffi;
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Ivar, Sel};
     use objc2::sel;
 
     const NAME: &std::ffi::CStr = c"GuildBoticsQuickPanel";
@@ -167,21 +169,70 @@ fn quick_panel_class() -> Option<&'static objc2::runtime::AnyClass> {
         return Some(existing);
     }
 
+    let window = AnyClass::get(c"NSWindow")?;
+    let panel = AnyClass::get(c"NSPanel")?;
+    if panel.instance_size() != window.instance_size() {
+        return None;
+    }
+
     extern "C" fn can_become_key(_this: &AnyObject, _cmd: Sel) -> Bool {
         Bool::YES
     }
 
-    let mut builder = ClassBuilder::new(NAME, AnyClass::get(c"NSPanel")?)?;
-    // Safety: the signature matches `- (BOOL)canBecomeKeyWindow`.
+    let mut subclasses: Vec<&AnyClass> =
+        std::iter::successors(Some(window_class), |class| class.superclass())
+            .take_while(|class| !std::ptr::eq(*class, window))
+            .collect();
+    subclasses.reverse();
+    let ivars: Vec<&Ivar> = subclasses
+        .iter()
+        .flat_map(|class| class.instance_variables().to_vec())
+        .collect();
+    let ends = ivars
+        .iter()
+        .skip(1)
+        .map(|ivar| ivar.offset())
+        .chain([window_class.instance_size() as isize]);
+    let key_method = panel.instance_method(sel!(canBecomeKeyWindow))?;
+    // Safety: the class pair is registered only after every ivar and method is
+    // added; the implementation matches `- (BOOL)canBecomeKeyWindow`, whose
+    // type encoding is taken from the method it overrides.
     unsafe {
-        builder.add_method(
+        let class = ffi::objc_allocateClassPair(panel, NAME.as_ptr(), 0);
+        if class.is_null() {
+            return None;
+        }
+        for (ivar, end) in ivars.iter().zip(ends) {
+            // Byte alignment places each ivar right after the previous one,
+            // which is where the window class put it, padding included.
+            ffi::class_addIvar(
+                class,
+                ivar.name().as_ptr(),
+                (end - ivar.offset()) as usize,
+                0,
+                ivar.type_encoding().as_ptr(),
+            );
+        }
+        ffi::class_addMethod(
+            class,
             sel!(canBecomeKeyWindow),
-            can_become_key as extern "C" fn(_, _) -> _,
+            std::mem::transmute::<extern "C" fn(&AnyObject, Sel) -> Bool, Imp>(can_become_key),
+            ffi::method_getTypeEncoding(key_method),
         );
+        ffi::objc_registerClassPair(class);
+        Some(&*class)
     }
-    Some(builder.register())
 }
 
+/// Turn the quick-run window into a non-activating panel.
+///
+/// A normal window can only take keyboard focus while its application is
+/// active, and activating the application makes macOS raise every other window
+/// it owns — so the main window jumped forward (on whichever display it lives
+/// on) whenever the quick window appeared or closed. A panel with
+/// `NonactivatingPanel` takes key input without activating us at all, which is
+/// how launcher-style windows avoid this. When the layouts cannot match, the
+/// window stays a normal window rather than risk an unsound class swap.
 #[cfg(target_os = "macos")]
 fn make_non_activating_panel(window: &tauri::WebviewWindow) {
     use objc2::runtime::AnyObject;
@@ -192,14 +243,18 @@ fn make_non_activating_panel(window: &tauri::WebviewWindow) {
     let Ok(handle) = window.ns_window() else {
         return;
     };
-    let Some(panel_class) = quick_panel_class() else {
+    // Safety: the pointer is the live NSWindow backing this Tauri window.
+    let object: &AnyObject = unsafe { &*(handle as *const AnyObject) };
+    let Some(panel_class) = quick_panel_class(object.class())
+        .filter(|panel| panel.instance_size() == object.class().instance_size())
+    else {
         return;
     };
 
-    // Safety: the pointer is the live NSWindow backing this Tauri window, and
-    // NSPanel is a subclass of NSWindow, so the instance layout is compatible.
+    // Safety: the panel class subclasses NSPanel (itself an NSWindow) and lays
+    // the instance out exactly like the window's current class.
     let ns_window: &NSWindow = unsafe {
-        AnyObject::set_class(&*(handle as *const AnyObject), panel_class);
+        AnyObject::set_class(object, panel_class);
         &*(handle as *const NSWindow)
     };
 
