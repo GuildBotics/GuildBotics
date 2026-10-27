@@ -219,6 +219,10 @@ class LocalTicketService(TicketService):
         ref = store.locate(task.url, "ticket")
         return await self._work(ref, store.load(ref))
 
+    async def can_receive_work(self, url: str) -> bool:
+        ref = store.locate(url, "ticket")
+        return await self._work(ref, store.load(ref), finish_merged=False) is not None
+
     async def move(self, task: Task, lane: MoveLane) -> bool:
         assert task.url
         ref = store.locate(task.url, "ticket")
@@ -258,7 +262,9 @@ class LocalTicketService(TicketService):
         check_path(self.scope, ref.place, provider="local")
         return ref.url
 
-    async def _work(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
+    async def _work(
+        self, ref: store.Ref, item: dict[str, Any], *, finish_merged: bool = True
+    ) -> Task | None:
         me = self.person.person_id
         lane = item["lane"]
         if item["state"] != "open" or not in_scope(self.scope, ref.place):
@@ -330,6 +336,7 @@ class LocalTicketService(TicketService):
             pending=pending,
             linked_pull=no_pull,
             done=lambda: self.move(task, "done"),
+            finish_merged=finish_merged,
         )
 
 

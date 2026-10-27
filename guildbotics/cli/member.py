@@ -52,6 +52,7 @@ from guildbotics.capabilities.task_runs import (
     current_run_id,
     current_task_run_id,
 )
+from guildbotics.capabilities.waiting_for import validate_waiting_for
 from guildbotics.cli._options import (
     CLI_CONTEXT_SETTINGS,
     SharedWriteBusyGroup,
@@ -1837,6 +1838,11 @@ def task() -> None:
 @task.command(name="complete")
 @_person_option
 @click.option(
+    "--waiting-for",
+    multiple=True,
+    help="Member whose patrol will receive the request (repeatable; asking/blocked only).",
+)
+@click.option(
     "--status",
     required=True,
     type=click.Choice(["done", "asking", "blocked"]),
@@ -1844,26 +1850,42 @@ def task() -> None:
 )
 @_required_content_stdin_option
 @_json_format_option
-def task_complete(person: str, status: str, output_format: str) -> _CommandWork:
+def task_complete(
+    person: str, status: str, waiting_for: tuple[str, ...], output_format: str
+) -> _CommandWork:
     run_id, work = _task_run()
     summary = _read_stdin("run summary")
-    return _task_complete(person, run_id, work, status, summary)
+    return _task_complete(person, run_id, work, status, summary, waiting_for)
 
 
 async def _task_complete(
-    person: str, run_id: str, work: Work, status: str, summary: str
+    person: str,
+    run_id: str,
+    work: Work,
+    status: str,
+    summary: str,
+    waiting_for: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     context, _ = _resolve(person)
     store = TaskRunStore()
     readiness: list[dict[str, Any]] = []
-    if status == "done":
-        try:
+    try:
+        recipients = await validate_waiting_for(
+            context,
+            work,
+            status,
+            waiting_for,
+            store.evidence(run_id) if waiting_for else (),
+        )
+        if status == "done":
             readiness = await member_repository.task_completion_readiness(
                 context, work, store.evidence(run_id)
             )
-        finally:
-            await context.aclose()
-    payload = store.complete(run_id, status, summary, work, person).to_dict()
+    finally:
+        await context.aclose()
+    payload = store.complete(
+        run_id, status, summary, work, person, waiting_for=recipients
+    ).to_dict()
     if status == "done":
         payload["pr_readiness"] = readiness
     return payload

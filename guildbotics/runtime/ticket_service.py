@@ -147,6 +147,11 @@ class TicketService(ABC):
     async def refresh(self, task: Task) -> Task | None:
         """Re-read one candidate immediately before it is dispatched."""
 
+    async def can_receive_work(self, url: str) -> bool:
+        """Whether the current conversation dispatches this ticket to the member,
+        without changing its lane or recording a patrol action."""
+        raise NotImplementedError
+
     @abstractmethod
     async def move(self, task: Task, lane: MoveLane) -> bool:
         """Move the ticket to ``lane``.

@@ -53,6 +53,28 @@ AGENT_FIELD = GitHubTicketService.FIELD_AGENT
 _FIELDS = "fields(first"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_field", [False, True])
+async def test_waiting_eligibility_uses_assignee_and_agent_field_without_board_writes(
+    monkeypatch, agent_field
+):
+    service, _ = _board(
+        monkeypatch,
+        items=[
+            _item(
+                number=42,
+                status="In Progress",
+                assignee=None if agent_field else LOGIN,
+                agent="⚙aiko" if agent_field else None,
+            )
+        ],
+        comments={42: [_comment("human", "Please answer.")]},
+    )
+    assert await service.can_receive_work(issue_url(42))
+    assert service.moved == []
+    assert [task.url for task in await service.candidates()] == [issue_url(42)]
+
+
 class _Board(GitHubTicketService):
     """The board read from GitHub, and the moves it is asked for."""
 

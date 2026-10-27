@@ -27,11 +27,14 @@ from guildbotics.integrations.branvil.api import (
 )
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
     Comment,
     PullRequest,
     Review,
     ReviewThread,
     patrol,
+    pull_request_work,
 )
 from guildbotics.integrations.readiness import (
     FAILED_CONCLUSIONS,
@@ -518,6 +521,20 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         item = self.item(task.pull_request_url, "pull_request")
         pull = await self.get(item.api)
         return await self._work(pull, await self.get(f"{item.api}/activity"))
+
+    async def can_receive_work(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        pull = await self.get(item.api)
+        if not pull.get("head_sha"):
+            return False
+        me = username(self.person).casefold()
+        if _name(pull) == me and await self._interactive(pull):
+            return False
+        activity = await self.get(f"{item.api}/activity")
+        return pull_request_work(self._snapshot(item, pull, activity), me) in {
+            FEEDBACK,
+            REVIEW,
+        }
 
     async def _work(
         self, pull: dict[str, Any], activity: dict[str, Any]

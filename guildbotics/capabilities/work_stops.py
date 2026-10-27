@@ -6,7 +6,8 @@ leaves the member's comment as the last word on that item, so the patrol does
 not take the work up again until someone answers there. The member posts one
 notice in each of its selected chat channels so that someone learns of it. The
 notice carries the stop as its status, which keeps every member from answering
-it.
+it. When the run declared recipients and all are active agents, the stop is
+recorded in diagnostics with those recipients instead of posting a notice.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, Literal, cast, get_args
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError
 from guildbotics.entities.task import Task
-from guildbotics.entities.team import Service
+from guildbotics.entities.team import Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.context import Context
@@ -30,6 +31,7 @@ StopReason = Literal["asking", "blocked", "failed"]
 STOP_REASONS: tuple[StopReason, ...] = get_args(StopReason)
 
 NOTIFIED_EVENT_TYPE = "work_stop.notified"
+SUPPRESSED_EVENT_TYPE = "work_stop.suppressed"
 
 
 @dataclass(frozen=True)
@@ -63,16 +65,38 @@ class WorkStop:
         )
 
 
-def completed_stop(task: Task, run_id: str) -> WorkStop | None:
+def completed_stop(task: Task, run_id: str, team: Team) -> WorkStop | None:
     """The stop the run's completion is, if it left the work waiting for a
     person; ``None`` for any other completion, or a run that recorded none."""
     store = RunStore()
     try:
-        status = store.status(run_id).status
+        completion = store.status(run_id)
+        status = completion.status
         evidence = store.evidence(run_id)
     except TaskRunError:
         return None
     if status not in STOP_REASONS:
+        return None
+    members = {person.person_id: person for person in team.members if person.is_active}
+    if (
+        status in {"asking", "blocked"}
+        and completion.waiting_for
+        and all(
+            person_id in members and members[person_id].person_type != "human"
+            for person_id in completion.waiting_for
+        )
+    ):
+        with suppress(Exception):
+            record_correlated_event(
+                event_type=SUPPRESSED_EVENT_TYPE,
+                person_id=completion.person_id,
+                payload={
+                    "run_id": run_id,
+                    "reason": status,
+                    "url": task.pull_request_url or task.url or "",
+                    "waiting_for": completion.waiting_for,
+                },
+            )
         return None
     stop = WorkStop.of(task, cast(StopReason, status), run_id)
     return replace(stop, comment_url=comment_url_of(evidence, stop.url))

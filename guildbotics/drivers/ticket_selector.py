@@ -123,7 +123,8 @@ class TicketSelector:
         work the awaiting run did, and answers for the PR whatever that work
         is. A run of autonomous
         work that ends asking or blocked, or fails and says so on its item,
-        waits for a person: the member announces it in chat, once, since the
+        waits for an answer. Unless it names only active agent recipients,
+        the member announces it in chat, once, since the
         member's comment keeps the work out of selection until someone
         answers. That holds while the comment is all the item waits on: on the
         member's own PR, any thread whose last word is someone else's keeps it
@@ -184,7 +185,9 @@ class TicketSelector:
                     raise
                 return notice
             await _settle_checks(context, task, run_id)
-            if self._source != "manual" and (stop := completed_stop(task, run_id)):
+            if self._source != "manual" and (
+                stop := completed_stop(task, run_id, context.team)
+            ):
                 await notify_work_stop(context, stop)
             return result
         finally:

@@ -22,11 +22,14 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.local import items, store
 from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
     Comment,
     PullRequest,
     Review,
     ReviewThread,
     patrol,
+    pull_request_work,
 )
 from guildbotics.integrations.readiness import Freshness, readiness_of
 from guildbotics.integrations.repository_scope import check_path
@@ -505,6 +508,12 @@ class LocalCodeHostingService(CodeHostingService):
         assert task.pull_request_url
         ref = store.locate(task.pull_request_url, "pull_request")
         return await self._patrol(ref, store.load(ref))
+
+    async def can_receive_work(self, url: str) -> bool:
+        ref = store.locate(url, "pull_request")
+        return pull_request_work(
+            _snapshot(ref, store.load(ref)), self.person.person_id
+        ) in {FEEDBACK, REVIEW}
 
     async def _patrol(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
         async def draft() -> None:

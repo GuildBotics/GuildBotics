@@ -1565,7 +1565,7 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 ## `guildbotics member task complete`
 
-Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done.
+Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, --waiting-for names members whose patrol receives the request; when all are active agents, record the stop without a chat notice. Without it, the run waits for a human.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1574,6 +1574,7 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
+| `--waiting-for TEXT` | Member whose patrol will receive the request (repeatable; asking/blocked only). |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |

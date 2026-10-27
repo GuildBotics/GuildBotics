@@ -65,6 +65,7 @@ def test_task_run_complete_and_status(tmp_path):
         "evidence_count": 1,
         "evidence_types": ["pr_create"],
         "completed_at": status.completed_at,
+        "waiting_for": [],
     }
     assert store.status("run-1").completed is True
 
@@ -96,6 +97,7 @@ def test_task_run_completion_keeps_the_input_identity_fixed(tmp_path):
         "subject_id": "slack:C1:100.1:E1",
         "subject_url": "",
         "status": "done",
+        "waiting_for": [],
     }
 
 

@@ -50,6 +50,23 @@ async def _reasons(tickets) -> list[tuple[str | None, str | None]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interactive", [False, True])
+async def test_waiting_eligibility_reuses_ticket_selection_without_moving_it(
+    monkeypatch, interactive
+):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, lane="in_progress")
+    double.comment(url, "otota", "Please answer.")
+    double.tickets[url]["interactive"] = interactive
+    assert await tickets.can_receive_work(url) is not interactive
+    assert double.tickets[url]["lane"] == "in_progress"
+    assert bool(await tickets.candidates()) is not interactive
+    if not interactive:
+        double.comment(url, MEMBER, "Answered.")
+        assert not await tickets.can_receive_work(url)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("count", [1, 60])
 async def test_other_assignees_mentions_use_one_workspace_query_without_scanning_cards(
     monkeypatch, count

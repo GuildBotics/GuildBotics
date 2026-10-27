@@ -41,7 +41,13 @@ from guildbotics.integrations.github.reads import (
 from guildbotics.integrations.github.repository_scope import (
     CONVERT_PULL_REQUEST_TO_DRAFT,
 )
-from guildbotics.integrations.pull_request_patrol import patrol
+from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
+    PullRequest,
+    patrol,
+    pull_request_work,
+)
 from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
@@ -462,15 +468,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def _pull_request_work(self, url: str) -> Task | None:
         """What the PR asks of the member now; one at the re-review limit is
         handed over instead."""
-        item = self.item(url, "pull_request")
-        owner, name = item.repository.split("/")
-        data = await self.graphql(
-            PULL_REQUEST_QUERY, {"owner": owner, "repo": name, "number": item.number}
-        )
-        node = (data.get("repository") or {}).get("pullRequest")
-        if not node:
-            raise ServiceNotFound(f"{url} is not there.")
-        pull = parse_pull_request(node)
+        pull = await self._patrol_snapshot(url)
         return await patrol(
             self,
             pull,
@@ -482,12 +480,36 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             ),
         )
 
+    async def can_receive_work(self, url: str) -> bool:
+        # Resolve the kind before searching: a ticket must still be routed to
+        # the ticket service, rather than look like a PR the search omitted.
+        self.item(url, "pull_request")
+        if not any(
+            item["html_url"] == url for item in await self._search_pull_requests()
+        ):
+            return False
+        pull = await self._patrol_snapshot(url)
+        return pull_request_work(
+            pull, normalize_login(get_github_username(self.person, strict=True))
+        ) in {FEEDBACK, REVIEW}
+
+    async def _patrol_snapshot(self, url: str) -> PullRequest:
+        item = self.item(url, "pull_request")
+        owner, name = item.repository.split("/")
+        data = await self.graphql(
+            PULL_REQUEST_QUERY, {"owner": owner, "repo": name, "number": item.number}
+        )
+        node = (data.get("repository") or {}).get("pullRequest")
+        if not node:
+            raise ServiceNotFound(f"{url} is not there.")
+        return parse_pull_request(node)
+
     async def _search_pull_requests(self) -> list[dict[str, Any]]:
         """Open PRs under the project owner that name this member.
 
         Search is the one listing that needs no repository list and works for
-        both PAT and GitHub App logins (``<app>[bot]``). Three qualifiers cover
-        the two roles: written by, reviewed by, and review requested from the
+        both PAT and GitHub App logins (``<app>[bot]``). The qualifiers cover
+        the two roles: written by, reviewed or commented on by, and review requested from the
         member (the last never matches a GitHub App, which GitHub cannot
         request a review from).
 
@@ -498,7 +520,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         """
         username = get_github_username(self.person, strict=True)
         found: dict[str, dict[str, Any]] = {}
-        for qualifier in ("author", "reviewed-by", "review-requested"):
+        for qualifier in ("author", "reviewed-by", "review-requested", "commenter"):
             page = await self.get(
                 "/search/issues",
                 params={
