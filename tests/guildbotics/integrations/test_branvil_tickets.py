@@ -204,6 +204,48 @@ async def test_the_working_lane_takes_a_ticket_up_again_by_what_was_said(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lane", "body", "comments", "assignee", "reason"),
+    [
+        ("ready", "", [], MEMBER, "ready_lane"),
+        ("in_progress", "", [], MEMBER, "working_lane"),
+        (
+            "in_progress",
+            "",
+            [(MEMBER, "Should I add the check?"), ("otota", "Yes, please.")],
+            MEMBER,
+            "issue_comment",
+        ),
+        ("in_progress", "@aiko please", [], MEMBER, "issue_mention"),
+        ("new", "", [("otota", "@aiko Please help.")], "otota", "issue_mention"),
+    ],
+    ids=["ready", "working", "comment", "mention", "unassigned_mention"],
+)
+async def test_an_interactive_ticket_is_left_to_the_human_by_every_trigger(
+    monkeypatch, lane, body, comments, assignee, reason
+):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, body, lane)
+    double.assign(url, lane, name=assignee)
+    for author, text in comments:
+        double.comment(url, author, text)
+    [task] = await tickets.candidates()
+    assert (task.url, task.trigger_reason) == (url, reason)
+    before = len(double.writes)
+
+    double.tickets[url]["interactive"] = True
+    assert await tickets.candidates() == []
+    assert await tickets.refresh(task) is None
+    assert double.writes[before:] == []
+
+    double.tickets[url]["interactive"] = False
+    assert await _reasons(tickets) == [(url, reason)]
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert refreshed.trigger_reason == reason
+
+
+@pytest.mark.asyncio
 async def test_a_mention_is_a_word_of_its_own(monkeypatch):
     _, _, tickets = services(monkeypatch)
 

@@ -15,7 +15,8 @@ unsupported``), and an artifact only if it is a zip archive. A repository
 (``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
 requests, and a ticket is always in a lane of its workspace's board: a new one in
 the lane it names, ``new`` if none, and a lane that is not one (``null``
-included) is refused (``400 invalid``). A ticket keeps
+included) is refused (``400 invalid``). A ticket is not ``interactive`` until a
+test makes it so, as a human does in Branvil's GUI. A ticket keeps
 its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
 shown from both sides. It does not hold writes to the member's scope -- the
 provider refuses those before any request. The author's own review is only
@@ -760,6 +761,7 @@ class BranvilDouble:
             "assignee": None,
             "labels": labels,
             "lane": lane,
+            "interactive": False,
             "parent": None,
             "blocked_by": [],
             "created_at": self.now(),
