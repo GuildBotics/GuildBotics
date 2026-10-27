@@ -13,6 +13,7 @@ from guildbotics.entities.team import Person
 from guildbotics.integrations.local import store
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.local_code_host import (
     comment,
     item,
@@ -82,7 +83,10 @@ async def test_waiting_request_is_dispatched_recorded_and_not_announced(
             assignees=["recipient"] if role == "assignee" else [], lane="in_progress"
         )
         await context.tickets.comment(
-            url, "Please answer." if role == "assignee" else "@recipient Please answer."
+            url,
+            "Please answer."
+            if role == "assignee"
+            else "@local-recipient Please answer.",
         )
         tasks = await recipient.tickets.candidates()
     assert [task.pull_request_url or task.url for task in tasks] == [url]
@@ -141,7 +145,6 @@ async def test_waiting_request_is_dispatched_recorded_and_not_announced(
         "no_routine",
         "unrelated",
         "done",
-        "manual",
         "answered_mention",
         "addressed_elsewhere",
         "draft",
@@ -205,7 +208,18 @@ async def test_unreachable_recipients_are_rejected(context, case):
             )
         )
     with pytest.raises(MemberCapabilityError):
-        await validate_waiting_for(context, work, status, (waiting,))
+        await validate_waiting_for(
+            context,
+            work,
+            status,
+            (waiting,),
+            [
+                {
+                    "evidence_type": "issue_comment",
+                    "payload": {"target": {"url": work.identity}},
+                }
+            ],
+        )
 
 
 @pytest.mark.asyncio
@@ -217,7 +231,11 @@ async def test_the_author_can_wait_for_an_existing_reviewers_answer(context):
     await other.code.review(url, "A finding", "request_changes", head)
     await context.code.comment(url, "Could you clarify?")
     assert await validate_waiting_for(
-        context, Work.of_ticket(url), "asking", ("recipient",)
+        context,
+        Work.of_ticket(url),
+        "asking",
+        ("recipient",),
+        [{"evidence_type": "pr_comment", "payload": {"target": {"url": url}}}],
     ) == ["recipient"]
     [task] = await other.code.pull_request_candidates()
     assert task.pull_request_url == url
@@ -226,6 +244,138 @@ async def test_the_author_can_wait_for_an_existing_reviewers_answer(context):
 @pytest.mark.asyncio
 async def test_no_recipients_keeps_the_human_wait_default(context):
     assert await validate_waiting_for(context, Work("manual", "cmd"), "done", ()) == []
+
+
+@pytest.mark.asyncio
+async def test_ticket_run_can_wait_on_its_pr_without_a_resumed_marker(
+    context, monkeypatch
+):
+    remote_with("feature")
+    source = ticket()
+    url = pull_request(1, "feature", author="requester", reviewers=["recipient"])
+    await context.code.comment(url, "Please clarify.")
+    runs = RunStore()
+    runs.append_evidence("run-1", "pr_comment", {"target": {"url": url}})
+    cli = importlib.import_module("guildbotics.cli.member")
+    monkeypatch.setattr(cli, "_resolve", lambda person: (context, None))
+    result = await cli._task_complete(
+        "requester",
+        "run-1",
+        Work.of_ticket(source),
+        "asking",
+        "Waiting.",
+        ("recipient",),
+    )
+    assert result["waiting_for"] == ["recipient"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["pr_create", "checks_resumed", "git_publish"])
+async def test_only_comment_targets_authorize_a_wait(context, kind):
+    remote_with("feature")
+    url = pull_request(
+        1, "feature", author="recipient", comments=[comment("requester")]
+    )
+    evidence = [{"evidence_type": kind, "payload": {"target": {"url": url}}}]
+    with pytest.raises(MemberCapabilityError):
+        await validate_waiting_for(
+            context, Work.of_ticket(url), "asking", ("recipient",), evidence
+        )
+
+
+@pytest.mark.asyncio
+async def test_each_recipient_can_receive_a_different_commented_item(context):
+    remote_with("feature")
+    pr = pull_request(1, "feature", author="recipient", comments=[comment("requester")])
+    source = ticket(
+        assignees=["third"], lane="in_progress", comments=[comment("requester")]
+    )
+    evidence = [
+        {"evidence_type": "issue_comment", "payload": {"target": {"url": source}}},
+        {"evidence_type": "pr_comment", "payload": {"target": {"url": pr}}},
+    ]
+    assert await validate_waiting_for(
+        context,
+        Work.of_ticket("unrelated-entry"),
+        "asking",
+        ("recipient", "third"),
+        evidence,
+    ) == ["recipient", "third"]
+
+
+@pytest.mark.asyncio
+async def test_the_run_item_does_not_authorize_a_wait_without_a_comment_on_it(context):
+    source = ticket(
+        assignees=["recipient"], lane="in_progress", comments=[comment("requester")]
+    )
+    elsewhere = ticket(2, assignees=["third"], lane="in_progress")
+    with pytest.raises(MemberCapabilityError):
+        await validate_waiting_for(
+            context,
+            Work.of_ticket(source),
+            "asking",
+            ("recipient",),
+            [
+                {
+                    "evidence_type": "issue_comment",
+                    "payload": {"target": {"url": elsewhere}},
+                }
+            ],
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["asking", "blocked"])
+async def test_cli_announces_the_owner_notification_when_no_recipient_is_named(
+    context, monkeypatch, status
+):
+    url = ticket()
+    runs = RunStore()
+    runs.append_evidence("run-1", "issue_comment", {"target": {"url": url}})
+    cli = importlib.import_module("guildbotics.cli.member")
+    monkeypatch.setattr(cli, "_resolve", lambda person: (context, None))
+    result = await cli._task_complete(
+        "requester", "run-1", Work.of_ticket(url), status, "Waiting."
+    )
+    assert result["notification"] == t("capabilities.task_runs.owner_notified")
+
+
+@pytest.mark.asyncio
+async def test_human_recipients_need_no_routine_or_service_identity(context):
+    person = context.team.members[1]
+    person.person_type = "human"
+    person.routine_commands = []
+    person.is_active = False
+    assert await validate_waiting_for(
+        context, Work.of_ticket("source"), "asking", ("recipient",)
+    ) == ["recipient"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["request_changes", "approve", "comment"])
+async def test_reviewer_finishes_done_without_a_stop_notice(
+    context, monkeypatch, verdict
+):
+    remote_with("feature")
+    url = pull_request(1, "feature", author="recipient", reviewers=["requester"])
+    head = store.git("acme/team/demo", "rev-parse", "feature")
+    await context.code.review(url, "Review verdict.", verdict, head)
+    runs = RunStore()
+    runs.append_evidence("run-1", "pr_review", {"target": {"url": url}})
+    cli = importlib.import_module("guildbotics.cli.member")
+    monkeypatch.setattr(cli, "_resolve", lambda person: (context, None))
+    result = await cli._task_complete(
+        "requester", "run-1", Work.of_ticket(url), "done", "Reviewed."
+    )
+    assert result["status"] == "done"
+    assert (
+        completed_stop(
+            Task(url=url, title="PR", description="", pull_request_url=url),
+            "run-1",
+            context.team,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

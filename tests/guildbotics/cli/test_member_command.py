@@ -19,6 +19,7 @@ from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedErro
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.github import async_client
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local import chat
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -3686,7 +3687,7 @@ def _replies(channel_id: str) -> list[tuple[str, str]]:
     return [
         (line["text"], line["thread_id"])
         for line in lines(channel_id)
-        if line["author"] == "aiko" and "reaction" not in line
+        if line["author"] == username("aiko") and "reaction" not in line
     ]
 
 
@@ -3823,7 +3824,7 @@ def test_member_chat_reaction_accepts_message_url(local_chat):
     assert payload["channel_id"] == local_chat
     assert payload["message_id"] == "r1"
     assert [line for line in lines(local_chat) if "reaction" in line] == [
-        {"reaction": "ack", "author": "aiko", "message_id": "r1"}
+        {"reaction": "ack", "author": username("aiko"), "message_id": "r1"}
     ]
 
 

@@ -106,6 +106,7 @@ def _missing(what: str) -> Refusal:
 
 class BranvilDouble:
     def __init__(self) -> None:
+        self.actor = MEMBER
         self.writes: list[str] = []
         #: The branches of ``REPO``: name -> commit.
         self.branches: dict[str, str] = {"main": "main-sha"}
@@ -323,6 +324,7 @@ class BranvilDouble:
                 token = self.tokens.get(bearer.removeprefix("Bearer "))
                 if token is None:
                     raise Refusal(401, "unauthorized")
+                self.actor = token["member"]
                 status, answer = self._route(
                     request.method,
                     parts,
@@ -594,10 +596,13 @@ class BranvilDouble:
                 return 200, self._page(entries[kind], params)
             case "POST", ["comments"]:
                 return 201, self.comment(
-                    url, MEMBER, body["body"], **body.get("meta") or {}
+                    url, self.actor, body["body"], **body.get("meta") or {}
                 )
             case "POST", ["reviews"]:
-                if body["verdict"] != "comment" and pull["author"].casefold() == MEMBER:
+                if (
+                    body["verdict"] != "comment"
+                    and pull["author"].casefold() == self.actor
+                ):
                     raise Refusal(
                         400,
                         "invalid",
@@ -606,8 +611,8 @@ class BranvilDouble:
                     )
                 self._at_head(pull, body["commit"])
                 fields = {key: body[key] for key in ("verdict", "commit")}
-                self._consume(pull, MEMBER)
-                review = self._entry(url, "reviews", MEMBER, body["body"], **fields)
+                self._consume(pull, self.actor)
+                review = self._entry(url, "reviews", self.actor, body["body"], **fields)
                 keys = ("id", "verdict", "commit", "submitted_at", "url")
                 return 201, {key: review[key] for key in keys}
             case "POST", ["inline-comments"]:
@@ -619,8 +624,8 @@ class BranvilDouble:
                         f"{body['path']} is not changed by !{pull['number']}.",
                     )
                 fields = {k: v for k, v in body.items() if k != "body"}
-                self._consume(pull, MEMBER)
-                return 201, self._root(url, MEMBER, body["body"], **fields)
+                self._consume(pull, self.actor)
+                return 201, self._root(url, self.actor, body["body"], **fields)
             case "GET", ["threads"]:
                 return 200, self._page(self._threads(url), params)
             case "GET", ["threads", root, "comments"]:
@@ -632,7 +637,7 @@ class BranvilDouble:
             case "POST", ["threads", root, "replies"]:
                 self._thread(url, root)
                 reply = self._entry(
-                    url, "inline", MEMBER, body["body"], reply_to_id=root
+                    url, "inline", self.actor, body["body"], reply_to_id=root
                 )
                 return 201, reply
             case "POST", ["reactions"]:
@@ -691,7 +696,7 @@ class BranvilDouble:
                 return 200, self._page(self._attachments(ticket), params)
             case "POST", ["comments"]:
                 return 201, self.comment(
-                    url, MEMBER, body["body"], **body.get("meta") or {}
+                    url, self.actor, body["body"], **body.get("meta") or {}
                 )
             case "POST", ["reactions"]:
                 return 200, self._react(url, ("comments",), body)
@@ -724,7 +729,7 @@ class BranvilDouble:
                 if of(ticket)
                 and ticket["state"] == params.get("state", ticket["state"])
                 and any(
-                    MEMBER in entry["mentions"]
+                    self.actor in entry["mentions"]
                     for entry in [self._view(ticket), *self.entries[url]["comments"]]
                 )
             ]
@@ -742,7 +747,7 @@ class BranvilDouble:
                 if of(ticket)
                 and ticket["lane"] in lanes
                 and ticket["state"] == params.get("state", ticket["state"])
-                and (ticket["assignee"] or {}).get("name") == MEMBER
+                and (ticket["assignee"] or {}).get("name") == self.actor
             ]
             return self._page(
                 sorted(cards, key=lambda card: LANES.index(card["lane"])), params
@@ -780,7 +785,7 @@ class BranvilDouble:
         body: str,
         labels: list[str],
         lane: str = "new",
-        author: str = MEMBER,
+        author: str | None = None,
     ) -> dict[str, Any]:
         number = 1 + sum(t["repository"] == repo for t in self.tickets.values())
         url = f"{BASE}/{repo}/-/tickets/{number}"
@@ -792,7 +797,7 @@ class BranvilDouble:
             "body": body,
             "state": "open",
             "state_reason": None,
-            "author": author,
+            "author": author or self.actor,
             "assignee": None,
             "labels": labels,
             "lane": lane,
@@ -905,7 +910,7 @@ class BranvilDouble:
             "state": "open",
             "merged": False,
             "draft": body["draft"],
-            "author": MEMBER,
+            "author": self.actor,
             "ready_at": None if body["draft"] else self.now(),
             "head": body["head"],
             "head_repository": repo,
@@ -940,10 +945,10 @@ class BranvilDouble:
                 if pull["state"] == "open"
                 and not pull["draft"]
                 and (
-                    pull["author"] == MEMBER
-                    or MEMBER in map(str.casefold, pull["reviewers"])
+                    pull["author"] == self.actor
+                    or self.actor in map(str.casefold, pull["reviewers"])
                     or any(
-                        entry["author"] == MEMBER
+                        entry["author"] == self.actor
                         for kind in ("reviews", "inline")
                         for entry in self.entries[pull["url"]][kind]
                     )
@@ -1013,7 +1018,7 @@ class BranvilDouble:
         at = self.now()
         entry = {
             "id": entry_id,
-            "author": author,
+            "author": author or self.actor,
             "body": body,
             "mentions": self._mentions(body),
             "reactions": [],
@@ -1043,7 +1048,7 @@ class BranvilDouble:
         )
         if found is None:
             raise _missing(f"{body['target_id']} of {url}")
-        found["reactions"].append({"author": MEMBER, "reaction": body["reaction"]})
+        found["reactions"].append({"author": self.actor, "reaction": body["reaction"]})
         return {"id": found["id"], "reaction": body["reaction"]}
 
     def _consume(self, pull: dict[str, Any], author: str) -> None:

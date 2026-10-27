@@ -17,7 +17,7 @@ ROOT = Path(__file__).parents[3]
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
         "guildbotics/integrations/github/ticket_service.py",
-        "_search_mentions",
+        "_search_mentions_query",
         "self.get",
         "'/search/issues'",
     ): "bounded: one mention search paginates by total_count up to GitHub's 1000-result ceiling; partial results fail only mention discovery",

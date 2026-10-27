@@ -1,5 +1,6 @@
 ja:
-  waiting_status: "--waiting-for は ticket / pull request の作業を asking / blocked で終えるときだけ指定できます。"
-  waiting_member: "'%{person}' は待ち先に指定できません。自分以外の、有効で routine_commands にチケットのワークフローを持つメンバーを指定してください。"
+  waiting_status: "--waiting-for は asking / blocked で終えるときだけ指定できます。"
+  waiting_member: "'%{person}' は待ち先に指定できません。名簿から自分以外のチームのメンバーを指定してください。"
+  owner_notified: "待ち先が指定されていないため、オーナーに通知されます。"
   waiting_item: "'%{person}' は待ち先に指定できません。現在の依頼を巡回がそのメンバーに渡しません。先に項目上で、対象となる作者・レビュアー・担当・メンションされたメンバーへ依頼してください。"
   comment_required: "run '%{run_id}' は、チケットか pull request にコメントする前には %{status} で完了できません。先に、質問または作業を妨げているものをそこへ投稿してください（ticket comment、pr comment、pr reply、または pr review）。そのコメントが、人が作業を再開させる場所になります。"

@@ -1881,7 +1881,7 @@ def task() -> None:
 @click.option(
     "--waiting-for",
     multiple=True,
-    help="Member whose patrol will receive the request (repeatable; asking/blocked only).",
+    help="Next member to act, by the context roster's person_id (repeatable; asking/blocked only).",
 )
 @click.option(
     "--status",
@@ -1929,6 +1929,8 @@ async def _task_complete(
     ).to_dict()
     if status == "done":
         payload["pr_readiness"] = readiness
+    elif not recipients:
+        payload["notification"] = t("capabilities.task_runs.owner_notified")
     return payload
 
 

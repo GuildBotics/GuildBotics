@@ -22,10 +22,9 @@ from guildbotics.entities import Person, Service, Team
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
-    get_github_username,
-    normalize_login,
     paginated_items,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.integrations.github.repository_scope import ADD_REACTION
 from guildbotics.integrations.github.workflow_status_comment import (
     render_workflow_status_comment,
@@ -372,9 +371,7 @@ def _addressed(comment: str, author: str, person: Person) -> str:
     """``comment`` with a mention of the item's author, unless the member is
     the author or the comment already mentions them (logins are
     case-insensitive)."""
-    if not author or normalize_login(author) == normalize_login(
-        get_github_username(person)
-    ):
+    if not author or member_identity(person).matches(author):
         return comment
     mention = r"(^|[^A-Za-z0-9_])@" + re.escape(author) + r"(?=$|[^A-Za-z0-9-])"
     if re.search(mention, comment, flags=re.IGNORECASE):

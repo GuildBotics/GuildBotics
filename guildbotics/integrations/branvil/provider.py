@@ -19,6 +19,7 @@ from guildbotics.integrations.branvil.api import (
     username,
 )
 from guildbotics.integrations.branvil.code_hosting import BranvilCodeHostingService
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.branvil.owner_git import owner_git_credential
 from guildbotics.integrations.branvil.setup import SETUP
 from guildbotics.integrations.branvil.tickets import BranvilTicketService
@@ -266,6 +267,7 @@ async def _load_ci_image(archive: Path) -> list[str]:
 
 BRANVIL = Provider(
     name=PROVIDER,
+    member_identity=member_identity,
     # The token's ID names the token a save replaces, for it to be revoked.
     secret_keys=frozenset({"BRANVIL_TOKEN", "BRANVIL_TOKEN_ID"}),
     account_info_keys=frozenset({"branvil_username"}),

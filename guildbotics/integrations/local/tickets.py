@@ -26,6 +26,7 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
 from guildbotics.integrations.local.chat import mentions
+from guildbotics.integrations.local.identity import member_identity
 from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_attachments import referred
 from guildbotics.integrations.ticket_selection import (
@@ -120,7 +121,7 @@ class LocalTicketService(TicketService):
                 "body": comment["body"],
                 "author": comment["author"],
                 "author_type": Message.ASSISTANT
-                if comment["author"] == self.person.person_id
+                if comment["author"] == member_identity(self.person).name
                 else Message.USER,
                 "created_at": comment["created_at"],
                 "url": None,
@@ -142,7 +143,9 @@ class LocalTicketService(TicketService):
         self, url: str, body: str, *, status: WorkflowStatus | None = None
     ) -> CommentWritten:
         ref = store.locate(url, "ticket")
-        return items.comment(self.scope, ref, self.person.person_id, body, status)
+        return items.comment(
+            self.scope, ref, member_identity(self.person).name, body, status
+        )
 
     async def create_ticket(
         self,
@@ -156,7 +159,7 @@ class LocalTicketService(TicketService):
         defined = _defined_labels(tracker, labels)
         ref, number = store.new_ref("ticket", tracker)
         item = {
-            **items.new_item(number, title, body, self.person.person_id),
+            **items.new_item(number, title, body, member_identity(self.person).name),
             "labels": defined,
             "lane": Task.NEW if add_to_board else None,
             "parent": None,
@@ -215,7 +218,9 @@ class LocalTicketService(TicketService):
         self, url: str, target_id: str, reaction: SemanticReaction
     ) -> ReactionAdded:
         ref = store.locate(url, "ticket")
-        return items.react(self.scope, ref, self.person.person_id, target_id, reaction)
+        return items.react(
+            self.scope, ref, member_identity(self.person).name, target_id, reaction
+        )
 
     # -- the board ----------------------------------------------------------
 
@@ -286,7 +291,7 @@ class LocalTicketService(TicketService):
     async def _work(
         self, ref: store.Ref, item: dict[str, Any], *, finish_merged: bool = True
     ) -> Task | None:
-        me = self.person.person_id
+        me = member_identity(self.person).name
         lane = item["lane"]
         if item["state"] != "open" or not in_scope(self.scope, ref.place):
             return None
@@ -317,7 +322,7 @@ class LocalTicketService(TicketService):
             ref,
             item,
             status=lane or Task.NEW,
-            assignee=me if assigned else None,
+            assignee=self.person.person_id if assigned else None,
             comments=messages,
         )
 

@@ -251,7 +251,7 @@ async def test_the_second_search_page_contains_an_unanswered_mention(monkeypatch
     search = [
         request for request in github.requests if request.url.path == "/search/issues"
     ]
-    assert [request.url.params["page"] for request in search] == ["1", "2"]
+    assert [request.url.params["page"] for request in search] == ["1", "2", "1", "2"]
 
 
 @pytest.mark.asyncio
@@ -278,9 +278,9 @@ async def test_search_reads_every_page_without_an_extra_request_at_the_limit(
 
     github.on("GET", "/search/issues", page)
     assert len(await service._search_mentions()) == count
-    assert len([r for r in github.requests if r.url.path == "/search/issues"]) == max(
-        1, (count + 99) // 100
-    )
+    assert len(
+        [r for r in github.requests if r.url.path == "/search/issues"]
+    ) == 2 * max(1, (count + 99) // 100)
 
 
 @pytest.mark.asyncio
@@ -501,6 +501,7 @@ async def test_mention_search_reads_only_matching_unassigned_tickets(
         request for request in github.requests if request.url.path != "/graphql"
     ]
     assert [request.url.path for request in requests] == [
+        "/search/issues",
         "/search/issues",
         f"/repos/{REPO}/issues/1/comments",
     ]

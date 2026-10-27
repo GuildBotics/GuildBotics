@@ -4,7 +4,6 @@ repositories, and the Projects V2 board they are taken from."""
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
-from functools import cached_property
 from logging import Logger
 from typing import IO, Any, ClassVar, cast
 from urllib.parse import quote
@@ -20,9 +19,9 @@ from guildbotics.integrations.github.github_utils import (
     get_author_type,
     get_github_username,
     get_person_name,
-    normalize_login,
     parse_timestamp,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.integrations.github.mentions import mentions
 from guildbotics.integrations.github.reads import (
     read_collection,
@@ -55,6 +54,7 @@ from guildbotics.runtime.port import (
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    ActorName,
     Attachment,
     CommentWritten,
     Lane,
@@ -88,6 +88,9 @@ query($owner: String!, $repo: String!, $number: Int!) {
         nodes {
           project { id }
           fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+          agent: fieldValueByName(name: "Agent") {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
           }
         }
@@ -253,7 +256,7 @@ class GitHubTicketService(GitHubApi, TicketService):
                     repository=item.repository,
                     body=data.get("body") or "",
                     state=data["state"],
-                    assignees=[user["login"] for user in data.get("assignees") or []],
+                    assignees=await self._assignees(data, place),
                     labels=[label["name"] for label in data.get("labels") or []],
                     lane=await self._lane(place),
                     parent=_relative(parent) if parent else None,
@@ -489,6 +492,26 @@ class GitHubTicketService(GitHubApi, TicketService):
         await self._sync_status_columns()
         option = (on_board[0].get("fieldValueByName") or {}).get("name")
         return cast(Lane, self._status_from_option(option) or Task.NEW)
+
+    async def _assignees(
+        self, data: dict[str, Any], place: dict[str, Any]
+    ) -> list[ActorName]:
+        """Both GitHub assignees and this board's Agent assignment."""
+        names = [ActorName(user["login"]) for user in data.get("assignees") or []]
+        project = await self._project_node()
+        for node in _nodes(place["projectItems"]):
+            if (node.get("project") or {}).get("id") != project:
+                continue
+            token = (node.get("agent") or {}).get("name")
+            for member in self.team.members:
+                identity = member_identity(member)
+                if (
+                    token
+                    and identity.mention == token
+                    and not any(identity.matches(name) for name in names)
+                ):
+                    names.append(ActorName(identity.name))
+        return names
 
     # --------------------------------------------------------------------- #
     #   The board                                                           #
@@ -728,15 +751,9 @@ class GitHubTicketService(GitHubApi, TicketService):
         await self._sync_status_columns()
         return await self._project_connection(_BOARD_ITEMS, "items")
 
-    @cached_property
-    def _login(self) -> str:
-        """The member's login, read only by what decides the member's work:
-        reading the board's closed work needs no one's identity."""
-        return normalize_login(get_github_username(self.person, strict=True))
-
     def _is_me(self, login: str) -> bool:
         """Whether a login from either GitHub API names this member."""
-        return bool(self._login) and normalize_login(login) == self._login
+        return member_identity(self.person).matches(login)
 
     def _mentions(self, html: str) -> set[str]:
         return mentions(html, (get_agent_token(member) for member in self.team.members))
@@ -965,6 +982,18 @@ class GitHubTicketService(GitHubApi, TicketService):
         return candidates
 
     async def _search_mentions(self) -> list[dict[str, Any]]:
+        """Discover native mentions and the directory's explicit member token."""
+        identity = member_identity(self.person)
+        login = get_github_username(self.person)
+        queries = [f"mentions:{login}"] if login else []
+        queries.append(f'"{identity.mention}" in:body,comments')
+        found: dict[str, dict[str, Any]] = {}
+        for query in queries:
+            for issue in await self._search_mentions_query(query):
+                found[issue["html_url"]] = issue
+        return list(found.values())
+
+    async def _search_mentions_query(self, query: str) -> list[dict[str, Any]]:
         """One search query, paginated to GitHub's 1,000-result limit.
 
         Answered mentions still match open issues. Following result pages
@@ -976,7 +1005,7 @@ class GitHubTicketService(GitHubApi, TicketService):
             page = await self.get(
                 "/search/issues",
                 params={
-                    "q": f"is:issue is:open user:{self.owner} mentions:{get_github_username(self.person, strict=True)}",
+                    "q": f"is:issue is:open user:{self.owner} {query}",
                     "per_page": GITHUB_PAGE_SIZE,
                     "page": number,
                     "sort": "updated",

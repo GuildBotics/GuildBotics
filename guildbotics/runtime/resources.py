@@ -15,7 +15,7 @@ member CLI see one shape from every provider.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -72,6 +72,8 @@ class WorkTarget(ReadModel):
 
 
 Lane = Literal["new", "ready", "in_progress", "done"]
+ActorName = NewType("ActorName", str)
+"""A public service account name, resolved through the member roster."""
 
 
 class TicketRelative(WorkTarget):
@@ -91,7 +93,7 @@ class Ticket(WorkTarget):
     repository: str | None
     body: str
     state: str
-    assignees: list[str]
+    assignees: list[ActorName]
     labels: list[str]
     #: The ticket's lane on the board; ``None`` when it is not on it.
     lane: Lane | None
@@ -109,7 +111,9 @@ class PullRequest(WorkTarget):
     repository: str
     body: str
     state: str
-    assignees: list[str]
+    assignees: list[ActorName]
+    author: ActorName
+    requested_reviewers: list[ActorName]
     labels: list[str]
     #: ``assistant`` when the member wrote it, as for comments.
     author_type: str
@@ -126,7 +130,7 @@ class PullRequest(WorkTarget):
 class Comment(ReadModel):
     id: str
     body: str
-    author: str
+    author: ActorName
     author_type: str
     created_at: str | None
     url: str | None
@@ -165,7 +169,7 @@ ReviewVerdict = Literal["approve", "request_changes", "comment"]
 class Review(ReadModel):
     id: str
     body: str
-    author: str
+    author: ActorName
     author_type: str
     #: What the reviewer decided; ``dismissed`` when the decision was set aside.
     verdict: ReviewVerdict | Literal["dismissed"]

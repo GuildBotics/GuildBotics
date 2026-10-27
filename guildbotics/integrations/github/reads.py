@@ -247,6 +247,10 @@ def pull_request(
         "assignees": [user["login"] for user in data.get("assignees") or []],
         "labels": [label["name"] for label in data.get("labels") or []],
         "author_type": api.author_type(data),
+        "author": str((data.get("user") or {}).get("login") or ""),
+        "requested_reviewers": [
+            user["login"] for user in data.get("requested_reviewers") or []
+        ],
         "head": head.branch,
         "head_repository": head.repository,
         "head_sha": head_sha_of(item, data),

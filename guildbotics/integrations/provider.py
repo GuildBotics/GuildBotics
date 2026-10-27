@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from guildbotics.entities import Person, Service, Team
 from guildbotics.integrations.event_listener import EventListener
+from guildbotics.integrations.member_identity import MemberIdentity
 from guildbotics.runtime.chat_service import ChatService
 from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.context import Context
@@ -305,6 +306,10 @@ class Provider:
     """A provider, its services named as ``project.services`` names the kinds."""
 
     name: str
+    #: Public names and mention spelling, without reading credentials.
+    member_identity: Callable[[Person], MemberIdentity] = lambda person: (
+        MemberIdentity()
+    )
     #: The secrets a member may need, by their member-relative names: all the
     #: provider's package reads of a member's secrets.
     secret_keys: frozenset[str] = frozenset()

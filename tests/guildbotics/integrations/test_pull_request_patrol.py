@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from guildbotics.integrations.github.github_utils import normalize_login
+from guildbotics.integrations.github.identity import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
     PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
     PULL_REQUEST_QUERY,

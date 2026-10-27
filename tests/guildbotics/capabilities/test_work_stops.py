@@ -20,6 +20,7 @@ from guildbotics.capabilities.work_stops import (
 from guildbotics.entities.task import Task
 from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local.chat import LocalChatService, channel_path
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import (
@@ -170,7 +171,7 @@ async def test_the_notice_is_posted_once_only_in_selected_channels(
     for channel_id in ("C1", "C2"):
         [line] = lines(channel_id)
         assert (line["author"], line["text"], line["status"]) == (
-            "aiko",
+            username("aiko"),
             text,
             status.payload(),
         )

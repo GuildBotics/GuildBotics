@@ -32,7 +32,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member context --person <person> [--check-credentials]",
-                "Read role, profile, communication style, credentials, and this reference.",
+                "Read role, profile, communication style, the public team roster, credentials, and this reference.",
             ),
             (
                 "guildbotics member help",
@@ -362,9 +362,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "--status done|asking|blocked [--waiting-for <person_id> ...] --content-file <file>",
                 "Finish a run other than a chat event's with evidence, revalidating "
                 "affected PR readiness before accepting done. For asking/blocked, "
-                "--waiting-for names members whose patrol receives the request; "
-                "when all are active agents, record the stop without a chat notice. "
-                "Without it, the run waits for a human.",
+                "use the context roster: name the next member to act by person_id "
+                "and address them on the item with their service mention spelling. "
+                "The CLI validates whether their patrol receives any item you commented on. "
+                "Human members are recorded and notified; omit only for people outside the team. "
+                "Without a recipient, the CLI says the owner will be notified.",
             ),
             (
                 "guildbotics member task status --person <person>",

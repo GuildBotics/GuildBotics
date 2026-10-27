@@ -14,8 +14,8 @@ from guildbotics.integrations.github.api import INLINE, GitHubItem, number_of
 from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_github_token,
-    normalize_login,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.integrations.github.issue_links import (
     append_external_issue_link,
     append_issue_link,
@@ -472,7 +472,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         return await patrol(
             self,
             pull,
-            normalize_login(get_github_username(self.person, strict=True)),
+            member_identity(self.person).name,
             provider="github",
             person_id=self.person.person_id,
             draft=lambda: self.graphql(
@@ -489,9 +489,10 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         ):
             return False
         pull = await self._patrol_snapshot(url)
-        return pull_request_work(
-            pull, normalize_login(get_github_username(self.person, strict=True))
-        ) in {FEEDBACK, REVIEW}
+        return pull_request_work(pull, member_identity(self.person).name) in {
+            FEEDBACK,
+            REVIEW,
+        }
 
     async def _patrol_snapshot(self, url: str) -> PullRequest:
         item = self.item(url, "pull_request")
