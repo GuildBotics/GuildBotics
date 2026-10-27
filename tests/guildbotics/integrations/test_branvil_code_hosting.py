@@ -147,11 +147,13 @@ def _role(double: BranvilDouble, url: str, ticket: str, role: str) -> None:
 @pytest.mark.parametrize(
     "role", ["pull_request_feedback", "pull_request_checks", "pull_request_review"]
 )
+@pytest.mark.parametrize("depth", [0, 2], ids=["itself", "grandparent"])
 async def test_an_interactive_ticket_leaves_its_authors_pull_request_to_the_human(
-    monkeypatch, role
+    monkeypatch, role, depth
 ):
     double, code, _ = services(monkeypatch)
     ticket = double._ticket(REPO, "Fix", "", [])["url"]
+    holder = double.ancestor(ticket, depth)
     url = await _pull(double, code, tickets=[ticket])
     _role(double, url, ticket, role)
     [task] = await code.pull_request_candidates()
@@ -165,14 +167,14 @@ async def test_an_interactive_ticket_leaves_its_authors_pull_request_to_the_huma
 
     monkeypatch.setattr(double, "respond", recorded)
 
-    double.tickets[ticket]["interactive"] = True
+    double.tickets[holder]["interactive"] = True
     # Reviewing it stays the member's, without reading the ticket.
     reviewed = role == "pull_request_review"
     assert await _work(code) == ([role] if reviewed else [])
     assert await code.refresh_pull_request(task) == (task if reviewed else None)
     assert (f"/api/v1/repos/{REPO}/tickets/1" in read) != reviewed
 
-    double.tickets[ticket]["interactive"] = False
+    double.tickets[holder]["interactive"] = False
     assert await _work(code) == [role]
     assert await code.refresh_pull_request(task) == task
 

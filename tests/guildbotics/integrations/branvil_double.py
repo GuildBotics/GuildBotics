@@ -20,8 +20,9 @@ the lane it names, ``new`` if none, and a lane that is not one (``null``
 included) is refused (``400 invalid``). A ticket is not ``interactive`` until a
 test makes it so, as a human does in Branvil's GUI. A ticket keeps
 its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
-shown from both sides. It does not hold writes to the member's scope -- the
-provider refuses those before any request. The author's own review is only
+shown from both sides and with its nearest interactive ancestor. It does not
+hold writes to the member's scope -- the provider refuses those before any
+request. The author's own review is only
 a ``comment`` (``400 invalid`` otherwise); a verdict or a new inline comment
 consumes its author's review request, a reply does not; marking a pull
 request ready for review (or opening it as one) sets ``ready_at``; a merge
@@ -201,6 +202,15 @@ class BranvilDouble:
 
     def advance(self, name: str) -> None:
         self.branches[name] = f"{name.replace('/', '-')}-sha{next(self._revisions)}"
+
+    def ancestor(self, url: str, depth: int) -> str:
+        """Put the ticket ``url`` under ``depth`` new ancestors and return the
+        topmost, whose ``interactive`` makes ``url`` interactive too (``url``
+        itself for a depth of 0)."""
+        for _ in range(depth):
+            parent = self._ticket(self.tickets[url]["repository"], "Epic", "", [])
+            self.tickets[url]["parent"] = url = parent["url"]
+        return url
 
     def assign(self, url: str, lane: str = "ready", name: str = MEMBER) -> None:
         self.tickets[url].update(
@@ -849,8 +859,12 @@ class BranvilDouble:
             keys = ("url", "repository", "key", "title", "state", "state_reason")
             return {key: self.tickets[other][key] for key in keys}
 
+        ancestor = ticket["parent"]
+        while ancestor and not self.tickets[ancestor]["interactive"]:
+            ancestor = self.tickets[ancestor]["parent"]
         return ticket | {
             "mentions": self._mentions(ticket["body"]),
+            "interactive_ancestor": ancestor and relative(ancestor),
             "parent": ticket["parent"] and relative(ticket["parent"]),
             "children": [
                 relative(u) for u, t in self.tickets.items() if t["parent"] == url

@@ -19,11 +19,13 @@ ticket's comments. These runs respond on the ticket and leave its lane and
 assignee unchanged. Comments addressed only to other members do not wake the
 assignee; a response that affects their work should mention them.
 
-A ticket a human marks interactive (`interactive` on Branvil's tickets) is theirs to
-work on with an agent: the patrol never selects it, by any trigger (the ready or
-working lane, a comment, or a mention, assigned or not). A pull request that links
-it is still reviewed, but the member does not take up its own such pull request,
-neither for feedback nor once the checks it awaits settle.
+A ticket a human marks interactive (`interactive` on Branvil's tickets), and every
+descendant of it (a ticket with an interactive ancestor, Branvil's
+`interactive_ancestor`), is theirs to work on with an agent: the patrol never
+selects it, by any trigger (the ready or working lane, a comment, or a mention,
+assigned or not). A pull request that links it is still reviewed, but the member
+does not take up its own such pull request, neither for feedback nor once the
+checks it awaits settle.
 
 ## How it fits together
 
