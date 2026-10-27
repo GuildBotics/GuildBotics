@@ -27,6 +27,7 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
 from guildbotics.integrations.local.chat import mentions
 from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_attachments import referred
 from guildbotics.integrations.ticket_selection import (
     mention_pending,
     relevant_comments,
@@ -36,7 +37,6 @@ from guildbotics.integrations.ticket_selection import (
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
-    ServiceNotFound,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import (
@@ -134,30 +134,7 @@ class LocalTicketService(TicketService):
         self, url: str, attachment_id: str, limit: int
     ) -> AsyncIterator[tuple[Attachment, IO[bytes]]]:
         ref = store.locate(url, "ticket")
-        found = next(
-            (
-                attachment
-                for attachment in _attachments(ref, store.load(ref))
-                if attachment.id == attachment_id
-            ),
-            None,
-        )
-        if found is None:
-            raise ServiceNotFound(
-                t(
-                    "integrations.resources.attachment_missing",
-                    url=url,
-                    id=attachment_id,
-                )
-            )
-        if found.size > limit:
-            raise ServiceError(
-                t(
-                    "integrations.resources.attachment_too_large",
-                    name=found.name,
-                    limit=limit,
-                )
-            )
+        found = referred(_attachments(ref, store.load(ref)), url, attachment_id, limit)
         with (store.attachments(ref.place) / found.id).open("rb") as content:
             yield found, content
 

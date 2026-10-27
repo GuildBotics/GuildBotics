@@ -24,9 +24,8 @@ from guildbotics.capabilities.artifact_archive import (
     MAX_ATTACHMENT_BYTES,
     ArtifactError,
     Unpacked,
-    extract_artifact,
-    place_attachment,
     unpacked,
+    write_download,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
@@ -527,11 +526,7 @@ def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked
     guest = current_member_invocation().guest
     if guest is None:
         try:
-            files = (
-                [place_attachment(download, destination, *attachment)]
-                if attachment
-                else extract_artifact(download, destination)
-            )
+            files = write_download(download, destination, *attachment)
         except ArtifactError as exc:
             raise MemberCapabilityError(str(exc)) from exc
         return unpacked(destination, files)

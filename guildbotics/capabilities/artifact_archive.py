@@ -153,6 +153,23 @@ def place_attachment(
     return target
 
 
+def write_download(
+    download: IO[bytes], destination: Path, *attachment: str
+) -> list[Path]:
+    """Write ``download`` into ``destination``: unpacked as an artifact, or,
+    given an attachment's name and id, as that attachment.
+
+    Returns:
+        The files written.
+
+    Raises:
+        ArtifactError: If it cannot be written safely.
+    """
+    if attachment:
+        return [place_attachment(download, destination, *attachment)]
+    return extract_artifact(download, destination)
+
+
 def unpacked(destination: Path, files: list[Path]) -> Unpacked:
     """Where the download was written, as its reader reports it."""
     return {
@@ -181,11 +198,7 @@ def main(arguments: list[str]) -> int:
             download.write(chunk)
         download.seek(0)
         try:
-            files = (
-                [place_attachment(download, destination, *attachment)]
-                if attachment
-                else extract_artifact(download, destination)
-            )
+            files = write_download(download, destination, *attachment)
         except ArtifactError as exc:
             print(exc, file=sys.stderr)
             return 1

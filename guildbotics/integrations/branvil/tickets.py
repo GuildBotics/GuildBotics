@@ -26,6 +26,7 @@ from guildbotics.integrations.branvil.api import (
     username,
 )
 from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_attachments import referred, too_large
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
@@ -37,7 +38,6 @@ from guildbotics.integrations.ticket_selection import (
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
-    ServiceNotFound,
     ServiceUnsupported,
     WorkflowStatus,
 )
@@ -116,33 +116,14 @@ class BranvilTicketService(BranvilApi, TicketService):
         """An attachment of the ticket's repository, which is one of the
         ticket's only while its body or a comment refers to it."""
         item = self.item(url, "ticket")
-        found = next(
-            (
-                _attachment(entry)
-                for entry in await self.items(f"{item.api}/attachments")
-                if entry["id"] == attachment_id
-            ),
-            None,
+        found = referred(
+            map(_attachment, await self.items(f"{item.api}/attachments")),
+            url,
+            attachment_id,
+            limit,
         )
-        if found is None:
-            raise ServiceNotFound(
-                t(
-                    "integrations.resources.attachment_missing",
-                    url=url,
-                    id=attachment_id,
-                )
-            )
-        too_large = ServiceError(
-            t(
-                "integrations.resources.attachment_too_large",
-                name=found.name,
-                limit=limit,
-            )
-        )
-        if found.size > limit:
-            raise too_large
         path = f"/repos/{segment(item.place)}/attachments/{segment(attachment_id)}"
-        async with self.download(path, limit, too_large) as content:
+        async with self.download(path, limit, too_large(found, limit)) as content:
             yield found, content
 
     async def comment(
