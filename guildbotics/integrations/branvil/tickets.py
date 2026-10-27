@@ -21,6 +21,7 @@ from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
     BranvilItem,
+    interactive,
     segment,
     username,
 )
@@ -294,15 +295,15 @@ class BranvilTicketService(BranvilApi, TicketService):
 
         Only assigned work is restricted to actionable lanes and blockers;
         a mention response can answer without starting the assigned work.
-        An interactive card is none: a human works on it with an agent, so
-        no trigger selects it.
+        An interactive card, or one of an interactive ancestor, is none: a
+        human works on it with an agent, so no trigger selects it.
         """
         me = username(self.person).casefold()
         assigned = bool(card["assignee"]) and card["assignee"]["name"].casefold() == me
         if not (
             me
             and card["state"] == "open"
-            and not card["interactive"]
+            and not interactive(card)
             and self._on_board(card)
             and (
                 not assigned

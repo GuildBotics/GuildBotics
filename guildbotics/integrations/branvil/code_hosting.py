@@ -22,6 +22,7 @@ from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
     BranvilItem,
+    interactive,
     segment,
     username,
 )
@@ -561,10 +562,10 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         request -- its feedback and its checks -- to them. A link that is
         not to this Branvil names no ticket of it."""
         for link in pull["tickets"]:
-            if self.serves(link["url"]):
-                ticket = await self.get(self.item(link["url"], "ticket").api)
-                if ticket["interactive"]:
-                    return True
+            if self.serves(link["url"]) and interactive(
+                await self.get(self.item(link["url"], "ticket").api)
+            ):
+                return True
         return False
 
     def _snapshot(

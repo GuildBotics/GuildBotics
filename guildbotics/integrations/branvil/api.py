@@ -132,6 +132,12 @@ def username(person: Person) -> str:
     return str(person.account_info.get("branvil_username") or "")
 
 
+def interactive(ticket: dict[str, Any]) -> bool:
+    """Whether a human works on ``ticket`` with an agent: it, or one of its
+    ancestors, is marked interactive."""
+    return bool(ticket["interactive"] or ticket["interactive_ancestor"])
+
+
 def segment(path: str) -> str:
     """A repository, workspace, branch, or id as one API path segment."""
     return quote(path, safe="")
