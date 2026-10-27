@@ -9,8 +9,8 @@ workflow ``status`` it carries when they apply) or a reaction to one (``reaction
 messages they react to. A thread is named by its first message, so a message
 that starts one has its own id as ``thread_id``.
 
-A member is the user of its ``person_id``, and mentions one as
-``@<person_id>``. A message is addressed by
+A member is the user ``local-<person_id>``, and mentions one as
+``@local-<person_id>``. A message is addressed by
 ``local://chat/<channel_id>/<message_id>``, with ``?thread=<thread_id>`` when it
 is a reply.
 

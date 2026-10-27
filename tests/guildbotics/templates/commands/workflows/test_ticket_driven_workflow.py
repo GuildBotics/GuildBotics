@@ -15,6 +15,7 @@ import pytest
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.entities.task import Task
+from guildbotics.integrations.local.identity import username
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.runtime.member_invocation import MemberInvocation, Work
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -347,7 +348,7 @@ async def test_a_ticket_is_selected_moved_worked_and_completed_on_the_local_boar
 
     assert response.status == AgentResponse.DONE
     assert lanes == [Task.READY if mention_only and not linked_pr else Task.IN_PROGRESS]
-    assert item(url)["assignees"] == ["yuki" if mention_only else "aiko"]
+    assert item(url)["assignees"] == [username("yuki" if mention_only else "aiko")]
     assert run.payload["ticket_url"] == url
     assert item(url)["comments"][-1]["body"] == "Done."
     if linked_pr:

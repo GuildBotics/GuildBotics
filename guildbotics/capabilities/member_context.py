@@ -54,7 +54,7 @@ async def member_context(
                         "mention": public_identity.mention,
                     }
                     for provider in configured_providers(context.team)
-                    if (public_identity := provider.member_identity(member))
+                    if (public_identity := provider.member_identity(member)).names
                 },
             }
             for member in context.team.members
