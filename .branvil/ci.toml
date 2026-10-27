@@ -7,6 +7,8 @@
 # its own shell. Keep dependency caches here, rather than relying on HOME, and
 # point CARGO_HOME here too: the image's is not writable to the job, and
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
+# PR heads select jobs by paths; default-branch and landing-gate runs execute
+# every job. test and markdown-links always run, as their inputs span the repo.
 
 [[jobs]]
 name = "test"
@@ -34,6 +36,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
+paths = ["desktop/**"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "cd desktop && npm_config_cache=/work/.ci/npm npm ci",
@@ -47,6 +50,7 @@ cache = { paths = [".ci/npm"], key_files = ["desktop/package-lock.json"] }
 # public networks, and its scripts/guildbotics-smoke.sh run with this commit.
 [[jobs]]
 name = "branvil-integration"
+paths = ["guildbotics/**", "pyproject.toml", "uv.lock", ".python-version"]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
