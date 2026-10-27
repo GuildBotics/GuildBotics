@@ -228,6 +228,19 @@ class BranvilTicketService(BranvilApi, TicketService):
         found = self._task(card)
         return None if found is None else await self._select(found, card)
 
+    async def can_receive_work(self, url: str) -> bool:
+        item = self.item(url, "ticket")
+        card = {
+            **await self.get(item.api),
+            "comments": await self.items(f"{item.api}/comments"),
+            "pull_requests": await self.items(f"{item.api}/pulls"),
+        }
+        found = self._task(card)
+        return (
+            found is not None
+            and await self._select(found, card, finish_merged=False) is not None
+        )
+
     async def move(self, task: Task, lane: MoveLane) -> bool:
         """Move a ticket of the workspace's board to ``lane``.
 
@@ -320,7 +333,9 @@ class BranvilTicketService(BranvilApi, TicketService):
             comments=[self.message(comment) for comment in card["comments"]],
         )
 
-    async def _select(self, task: Task, card: dict[str, Any]) -> Task | None:
+    async def _select(
+        self, task: Task, card: dict[str, Any], *, finish_merged: bool = True
+    ) -> Task | None:
         if task.assignee is None:
             return select_mention(
                 task,
@@ -378,6 +393,7 @@ class BranvilTicketService(BranvilApi, TicketService):
             ),
             linked_pull=linked_pull,
             done=lambda: self.move(task, "done"),
+            finish_merged=finish_merged,
         )
 
 

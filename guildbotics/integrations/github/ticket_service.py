@@ -850,7 +850,7 @@ class GitHubTicketService(GitHubApi, TicketService):
         return sorted(tasks), task_metadata
 
     async def _select_actionable_task(
-        self, task: Task, metadata: dict[str, Any]
+        self, task: Task, metadata: dict[str, Any], *, finish_merged: bool = True
     ) -> Task | None:
         # A ticket is not started while an issue it is blocked by is open.
         if metadata["assigned"] and (
@@ -899,6 +899,7 @@ class GitHubTicketService(GitHubApi, TicketService):
             ),
             linked_pull=lambda: self._related_pull_request_state(item),
             done=lambda: self.move(task, "done"),
+            finish_merged=finish_merged,
         )
 
     async def candidates(self) -> list[Task]:
@@ -1034,6 +1035,33 @@ class GitHubTicketService(GitHubApi, TicketService):
                     task, {"assigned": False, "body_html": issue["body_html"] or ""}
                 )
         return None
+
+    async def can_receive_work(self, url: str) -> bool:
+        tasks, metadata = self._build_project_tasks(await self.get_all_tickets())
+        for task in tasks:
+            if task.url == url:
+                assert task.id
+                return (
+                    await self._select_actionable_task(
+                        task, metadata[task.id], finish_merged=False
+                    )
+                    is not None
+                )
+        item = self.item(url, "ticket")
+        issue = await self.fetch(item, headers=_FULL)
+        if issue["state"] != "open" or not in_scope(self.owner, item.repository):
+            return False
+        task = self._mention_task(issue)
+        if task.assignee is not None:
+            return False
+        return (
+            await self._select_actionable_task(
+                task,
+                {"assigned": False, "body_html": issue["body_html"] or ""},
+                finish_merged=False,
+            )
+            is not None
+        )
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
         project_id = await self._project_node()

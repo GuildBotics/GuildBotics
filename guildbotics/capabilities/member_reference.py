@@ -348,9 +348,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member task complete --person <person> "
-                "--status done|asking|blocked --content-file <file>",
+                "--status done|asking|blocked [--waiting-for <person_id> ...] --content-file <file>",
                 "Finish a run other than a chat event's with evidence, revalidating "
-                "affected PR readiness before accepting done.",
+                "affected PR readiness before accepting done. For asking/blocked, "
+                "--waiting-for names members whose patrol receives the request; "
+                "when all are active agents, record the stop without a chat notice. "
+                "Without it, the run waits for a human.",
             ),
             (
                 "guildbotics member task status --person <person>",

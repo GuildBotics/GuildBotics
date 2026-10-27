@@ -1,2 +1,5 @@
 en:
+  waiting_status: "--waiting-for is accepted only for asking/blocked ticket or pull request work."
+  waiting_member: "Cannot wait for '%{person}': choose another active team member with the ticket workflow in routine_commands."
+  waiting_item: "Cannot wait for '%{person}': the patrol does not currently dispatch this request to that member. Address an eligible author, reviewer, assignee, or mentioned member on the item first."
   comment_required: "Run '%{run_id}' cannot be completed as %{status} before you comment on the ticket or pull request: post your question, or what blocks the work, there first (ticket comment, pr comment, pr reply, or pr review). That comment is where a person picks the work back up."

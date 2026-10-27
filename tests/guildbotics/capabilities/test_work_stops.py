@@ -391,7 +391,7 @@ def test_a_completion_is_a_stop_only_when_it_waits_for_a_person(status):
     store.complete("run-1", status, "summary", Work.of_ticket(TICKET), "aiko")
     task = Task(id=TICKET, url=TICKET, title="Fix login", label="T-1", description="")
 
-    assert work_stops.completed_stop(task, "run-1") == (
+    assert work_stops.completed_stop(task, "run-1", chat_team(_person())) == (
         WorkStop(
             reason=status,  # type: ignore[arg-type]
             run_id="run-1",
@@ -408,7 +408,7 @@ def test_a_completion_is_a_stop_only_when_it_waits_for_a_person(status):
 def test_a_run_that_recorded_no_completion_is_no_stop():
     task = Task(id=TICKET, url=TICKET, title="Fix login", description="")
 
-    assert work_stops.completed_stop(task, "run-missing") is None
+    assert work_stops.completed_stop(task, "run-missing", chat_team(_person())) is None
 
 
 def test_only_the_ticket_selector_announces_a_stop():

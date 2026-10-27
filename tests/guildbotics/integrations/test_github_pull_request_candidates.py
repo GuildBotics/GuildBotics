@@ -20,7 +20,7 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.github_services import (
     LOGIN,
@@ -393,6 +393,7 @@ async def test_search_covers_both_roles_and_dedupes_oldest_first(monkeypatch):
         "author": [_search_item(3), _search_item(2)],
         "reviewed-by": [_search_item(2), _search_item(4)],
         "review-requested": [_search_item(1)],
+        "commenter": [_search_item(5)],
     }
     github = ScriptedGitHub().on(
         "GET",
@@ -408,9 +409,80 @@ async def test_search_covers_both_roles_and_dedupes_oldest_first(monkeypatch):
         f"is:pr is:open draft:false user:{OWNER} author:{LOGIN}",
         f"is:pr is:open draft:false user:{OWNER} reviewed-by:{LOGIN}",
         f"is:pr is:open draft:false user:{OWNER} review-requested:{LOGIN}",
+        f"is:pr is:open draft:false user:{OWNER} commenter:{LOGIN}",
     ]
     assert all(r.url.params["per_page"] == "100" for r in github.requests)
-    assert [item["number"] for item in items] == [1, 2, 3, 4]
+    assert [item["number"] for item in items] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_a_comment_participant_is_discovered_by_the_patrol(
+    monkeypatch,
+):
+    github, service = _patrol(
+        monkeypatch,
+        _pull_request_node(
+            author="other",
+            comments=[
+                {
+                    "author": {"login": LOGIN},
+                    "body": "A question",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "author": {"login": "other"},
+                    "body": "Please clarify",
+                    "createdAt": "2026-01-02T00:00:00Z",
+                },
+            ],
+        ),
+    )
+    # Search returns this PR only through its comment participant, not a review.
+    github.respond = ScriptedGitHub.respond.__get__(github)
+    github.on(
+        "GET",
+        "/search/issues",
+        lambda request: {
+            "items": [_search_item(2)]
+            if "commenter:" in request.url.params["q"]
+            else []
+        },
+    )
+    assert await service.can_receive_work(pull_url(2))
+    [task] = await service.pull_request_candidates()
+    assert task.pull_request_url == pull_url(2)
+    assert task.trigger_reason == "pull_request_review"
+    assert github.conversions == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_count", [0, 100])
+async def test_waiting_recipient_must_be_in_the_patrols_actual_discovery(
+    monkeypatch, other_count
+):
+    target = _pull_request_node(number=102, author="other", requested=[LOGIN])
+    github, service = _patrol(monkeypatch, target)
+    # The snapshot grants a requested-review role, but the actual search may
+    # omit it through its host filters or the patrol's first-page limit.
+    github.search_items = [_search_item(number) for number in range(1, other_count + 1)]
+    github.pull_request_nodes.update(
+        {
+            number: _pull_request_node(number=number)
+            for number in range(1, other_count + 1)
+        }
+    )
+    assert await service._pull_request_work(pull_url(102)) is not None
+    assert not await service.can_receive_work(pull_url(102))
+    assert await service.pull_request_candidates() == []
+    assert github.conversions == 0
+
+
+@pytest.mark.asyncio
+async def test_waiting_on_a_ticket_still_routes_to_the_ticket_service(monkeypatch):
+    github, service = _patrol(monkeypatch)
+    with pytest.raises(ServiceNotFound):
+        await service.can_receive_work(f"https://github.com/{REPO}/issues/42")
+    assert github.requests == []
 
 
 @pytest.mark.asyncio
@@ -423,4 +495,8 @@ async def test_search_failure_is_not_silently_downgraded(monkeypatch):
     with pytest.raises(ServiceError) as raised:
         await service.pull_request_candidates()
 
+    assert str(raised.value) == t("integrations.github.response.rejected")
+
+    with pytest.raises(ServiceError) as raised:
+        await service.can_receive_work(pull_url(2))
     assert str(raised.value) == t("integrations.github.response.rejected")

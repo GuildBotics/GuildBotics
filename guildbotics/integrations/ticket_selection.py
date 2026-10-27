@@ -100,6 +100,7 @@ async def select(
     pending: bool,
     linked_pull: Callable[[], Awaitable[str | None]],
     done: Callable[[], Awaitable[object]],
+    finish_merged: bool = True,
 ) -> Task | None:
     """``task`` with why it is the member's work now, or ``None``.
 
@@ -131,7 +132,7 @@ async def select(
     pull = await linked_pull()
     if pull is not None:
         # With the ticket's conversation answered, the PR patrol takes over.
-        if pull == "merged":
+        if pull == "merged" and finish_merged:
             await done()
         return None
     if since:

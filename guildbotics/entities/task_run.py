@@ -47,6 +47,7 @@ class TaskRunResult(BaseModel):
     subject_id: str
     subject_url: str = ""
     status: TaskRunCompletion
+    waiting_for: list[str] = Field(default_factory=list)
 
 
 class TaskRunRecord(BaseModel):

@@ -73,6 +73,35 @@ async def _work(code) -> list[str | None]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["author", "reviewer"])
+async def test_waiting_eligibility_obeys_interactive_author_exclusion(
+    monkeypatch, role
+):
+    double, code, _ = services(monkeypatch)
+    ticket = double._ticket(REPO, "Work", "", [])["url"]
+    double.tickets[ticket]["interactive"] = True
+    url = await _pull(double, code, tickets=[ticket])
+    _role(
+        double,
+        url,
+        ticket,
+        "pull_request_feedback" if role == "author" else "pull_request_review",
+    )
+    assert await code.can_receive_work(url) is (role == "reviewer")
+    assert bool(await code.pull_request_candidates()) is (role == "reviewer")
+    assert not double.pulls[url]["draft"]
+
+
+@pytest.mark.asyncio
+async def test_waiting_eligibility_refuses_review_limit_without_drafting(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code, author="otota")
+    _past_the_review_limit(double, url)
+    assert not await code.can_receive_work(url)
+    assert not double.pulls[url]["draft"]
+
+
+@pytest.mark.asyncio
 async def test_the_author_answers_what_others_said(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code)

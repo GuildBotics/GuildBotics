@@ -116,6 +116,7 @@ class RunStatus:
     evidence_count: int
     evidence_types: list[str]
     completed_at: str
+    waiting_for: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +131,7 @@ class RunStatus:
             "evidence_count": self.evidence_count,
             "evidence_types": self.evidence_types,
             "completed_at": self.completed_at,
+            "waiting_for": self.waiting_for,
         }
 
 
@@ -409,7 +411,14 @@ class RunStore:
         ]
 
     def complete(
-        self, run_id: str, status: str, summary: str, work: Work, person_id: str
+        self,
+        run_id: str,
+        status: str,
+        summary: str,
+        work: Work,
+        person_id: str,
+        *,
+        waiting_for: list[str] | None = None,
     ) -> RunStatus:
         """Record how the member says the run doing ``work`` ended, about the
         subject the work names (:func:`work_subject`)."""
@@ -422,6 +431,7 @@ class RunStore:
             subject_id=subject_id,
             subject_url=subject_url,
             person_id=person_id,
+            waiting_for=waiting_for,
         )
 
     def complete_run(
@@ -434,6 +444,7 @@ class RunStore:
         subject_id: str,
         subject_url: str = "",
         person_id: str,
+        waiting_for: list[str] | None = None,
     ) -> RunStatus:
         # Evidence validation and the result update share one span. A queue
         # checkout cannot replace the evidence between the check and the
@@ -478,6 +489,7 @@ class RunStore:
                             subject_id=subject_id,
                             subject_url=subject_url,
                             status=result_status,
+                            waiting_for=waiting_for or [],
                         ),
                     }
                 )
@@ -582,6 +594,7 @@ class RunStore:
             evidence_count=len(evidence_types),
             evidence_types=evidence_types,
             completed_at=record.finished_at,
+            waiting_for=result.waiting_for,
         )
 
     def _read_record(self, run_id: str) -> TaskRunRecord:

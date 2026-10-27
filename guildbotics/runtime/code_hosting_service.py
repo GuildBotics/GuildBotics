@@ -298,3 +298,8 @@ class CodeHostingService(ABC):
     async def refresh_pull_request(self, task: Task) -> Task | None:
         """Re-read a pull request candidate immediately before it is dispatched."""
         raise NotImplementedError
+
+    async def can_receive_work(self, url: str) -> bool:
+        """Whether the current conversation dispatches this PR to the member,
+        without drafting it or recording a patrol action."""
+        raise NotImplementedError
