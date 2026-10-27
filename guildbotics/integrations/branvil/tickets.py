@@ -11,10 +11,11 @@ order. Edits keep the comment's author, creation time and workflow metadata.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from logging import Logger
-from typing import Any
+from typing import IO, Any
 
 from guildbotics.entities import Person, Service, Task, Team
 from guildbotics.integrations.branvil.api import (
@@ -25,6 +26,7 @@ from guildbotics.integrations.branvil.api import (
     username,
 )
 from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_attachments import referred, too_large
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
@@ -41,6 +43,7 @@ from guildbotics.runtime.port import (
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadPage,
@@ -59,6 +62,8 @@ from guildbotics.utils.i18n_tool import t
 
 #: The lanes whose tickets are a member's work.
 _LANES = (Task.READY, Task.IN_PROGRESS)
+#: The collection of a ticket each of its resources but itself is read from.
+_COLLECTIONS = {"ticket_comments": "comments", "ticket_attachments": "attachments"}
 
 
 class BranvilTicketService(BranvilApi, TicketService):
@@ -78,13 +83,13 @@ class BranvilTicketService(BranvilApi, TicketService):
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
         item = self.item(subject, "ticket")
-        if resource == "ticket_comments":
+        if resource != "tickets":
             return await self.page(
                 resource,
-                f"{item.api}/comments",
+                f"{item.api}/{_COLLECTIONS[resource]}",
                 conditions,
                 continuation,
-                self.comment_of,
+                self.comment_of if resource == "ticket_comments" else _attachment,
             )
         data = await self.get(item.api)
         ticket = Ticket(
@@ -103,6 +108,23 @@ class BranvilTicketService(BranvilApi, TicketService):
             blocks=[self._relative(entry) for entry in data["blocks"]],
         )
         return ReadPage.of(resource, [ticket], target=self.target(item, data))
+
+    @asynccontextmanager
+    async def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AsyncIterator[tuple[Attachment, IO[bytes]]]:
+        """An attachment of the ticket's repository, which is one of the
+        ticket's only while its body or a comment refers to it."""
+        item = self.item(url, "ticket")
+        found = referred(
+            map(_attachment, await self.items(f"{item.api}/attachments")),
+            url,
+            attachment_id,
+            limit,
+        )
+        path = f"/repos/{segment(item.place)}/attachments/{segment(attachment_id)}"
+        async with self.download(path, limit, too_large(found, limit)) as content:
+            yield found, content
 
     async def comment(
         self, url: str, body: str, *, status: WorkflowStatus | None = None
@@ -405,4 +427,16 @@ def _timestamp(moment: datetime) -> str:
     """``moment`` as Branvil writes times: UTC, to the millisecond."""
     return (
         moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    )
+
+
+def _attachment(attachment: dict[str, Any]) -> Attachment:
+    """An attachment as Branvil lists one for a ticket, without the address
+    it is read from with a session."""
+    return Attachment(
+        id=str(attachment["id"]),
+        name=str(attachment["name"]),
+        media_type=str(attachment["media_type"]),
+        size=int(attachment["size"]),
+        referenced_by=[str(where) for where in attachment["referenced_by"]],
     )

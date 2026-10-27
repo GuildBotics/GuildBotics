@@ -219,7 +219,7 @@ service's API.
 | port | responsibility | called by |
 | --- | --- | --- |
 | `CodeHostingService` | repositories (git remote, default branch, push credential and scope, commit URL), pull requests (reads and writes, conversation comments, reviews, inline comments, replies, reactions), CI (readiness, failed logs, artifacts), repository information, the pull request patrol, the pull requests that refer to a ticket | `member pr / repo-info / git`, task completion, the patrol |
-| `TicketService` | tickets (reads and writes, a created one put in the board's new lane, comments, reactions) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
+| `TicketService` | tickets (reads and writes, a created one put in the board's new lane, comments, reactions, the files their bodies and comments refer to) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
 | `ChatService` | the chat: identity, history, posts and replies, reactions | `member chat`, the chat workflow |
 | `EventListener` | receiving the chat, one connection at a time | the chat receiving runner |
 
@@ -250,7 +250,7 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
 - **References.** Tickets and pull requests are named by their URLs; a read is
   `read(resource, subject)`, the subject being the item's URL or, for repository
   information, the repository's path, which the provider checks and spells (GitHub
-  `owner/repo`). Comments, reviews, threads, CI jobs, and artifacts are opaque string
+  `owner/repo`). Comments, reviews, threads, CI jobs, artifacts, and attachments are opaque string
   ids that mean something only together with their item's URL. A work target is
   `{kind: ticket | pull_request, url, title, label}`, `label` being the short reference
   the service shows it by (GitHub `#12`); shared code never builds one from a number. A
@@ -259,7 +259,8 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
 - **Failures.** `ServiceError` (a message fit for the user, never what the service
   answered or a credential), `ServiceNotFound` (not there, or not this service's), and
   `ServiceUnsupported` (the service cannot do it at all). Optional features — reactions
-  by meaning, `request_changes`, a ticket created off the board, artifacts, failed logs,
+  by meaning, `request_changes`, a ticket created off the board, artifacts, a ticket's
+  attachments, failed logs,
   `dependency_alerts`, the pull requests of another service's ticket, a link that closes
   a ticket on a merge — raise `ServiceUnsupported` when called; an empty result means
   read and found nothing.

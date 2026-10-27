@@ -64,7 +64,7 @@ from tests.guildbotics.integrations.github_services import (
     pull_url,
     ticket_service,
 )
-from tests.guildbotics.member_services import MemberServices
+from tests.guildbotics.member_services import GuestDouble, MemberServices
 
 PULL = pull_url(7)
 ISSUE = issue_url(42)
@@ -1341,39 +1341,6 @@ async def test_artifact_download_rejects_path_traversal(monkeypatch, tmp_path):
     assert not (tmp_path / "outside.txt").exists()
 
 
-class _Guest:
-    """A command's environment as a member command sees it: what it was
-    asked to run, and what it reads on its standard input."""
-
-    def __init__(self, result: GuestResult | Exception) -> None:
-        self.result = result
-        self.runs: list[dict[str, object]] = []
-
-    def path(self, host: Path) -> str:
-        return f"/guest{host}"
-
-    def python(self, module: str, *args: str) -> list[str]:
-        return ["python", "-m", module, *args]
-
-    def remaining(self) -> float:
-        return 60.0
-
-    def run(self, argv, *, cwd, env, stdin=b"", stdout=None, stdout_limit):
-        self.runs.append(
-            {
-                "argv": list(argv),
-                "cwd": cwd,
-                "env": env,
-                "stdout_limit": stdout_limit,
-                "stdin": stdin,
-                "read": stdin.read_bytes(),
-            }
-        )
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
-
-
 @pytest.mark.asyncio
 async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     monkeypatch, tmp_path, symlinks
@@ -1383,7 +1350,7 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     host nowhere, since only the environment unpacks it."""
     archive = _artifact_zip({"report.md": b"details"})
     unpacked = {"destination": "/guest/work", "files": ["/guest/work/report.md"]}
-    guest = _Guest(GuestResult(0, json.dumps(unpacked).encode(), b""))
+    guest = GuestDouble(GuestResult(0, json.dumps(unpacked).encode(), b""))
     outside = tmp_path / "outside"
     outside.mkdir()
     (tmp_path / "work").mkdir()
@@ -1417,7 +1384,9 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
 async def test_an_artifact_the_environment_refused_fails_the_command(
     monkeypatch, tmp_path
 ):
-    guest = _Guest(GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n"))
+    guest = GuestDouble(
+        GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n")
+    )
     service = _service(_artifacts(_artifact_zip({"../x": b""}), _report()), monkeypatch)
 
     with (
@@ -1444,7 +1413,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
 ):
     """It writes its answer where the agent's code runs: one that is not
     where it unpacked fails the command, and says nothing of the host."""
-    guest = _Guest(answer)
+    guest = GuestDouble(answer)
     service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with (
@@ -1460,7 +1429,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
 async def test_what_the_environment_answers_decides_nothing_else(monkeypatch, tmp_path):
     """Fields the host decides stay the host's, whatever the answer adds."""
     answer = {"destination": "/w", "files": [], "name": "else", "id": "1"}
-    guest = _Guest(GuestResult(0, json.dumps(answer).encode(), b""))
+    guest = GuestDouble(GuestResult(0, json.dumps(answer).encode(), b""))
     service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with member_invocation_scope(MemberInvocation(guest=guest)):

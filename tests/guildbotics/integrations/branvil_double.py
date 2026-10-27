@@ -11,7 +11,9 @@ the ticket's repository defines it (``400 label_undefined``), a ticket's
 relation only to a ticket of its workspace (``400 invalid``), its move into
 ``in_progress`` only once its blockers are closed (``409 blocked``), a new pull
 request's link that closes only to a ticket of its repository (``422
-unsupported``), and an artifact only if it is a zip archive. A repository
+unsupported``), an artifact only if it is a zip archive, and an attachment
+(an image of a repository) only under its repository, listed for a ticket
+while its body or a comment holds the attachment's id. A repository
 (``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
 requests, and a ticket is always in a lane of its workspace's board: a new one in
 the lane it names, ``new`` if none, and a lane that is not one (``null``
@@ -52,6 +54,7 @@ import asyncio
 import json
 import logging
 import math
+import mimetypes
 import re
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
@@ -60,7 +63,7 @@ from hashlib import sha256
 from itertools import count
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
 import httpx
 
@@ -84,6 +87,8 @@ LANES = ("new", "ready", "in_progress", "done")
 #: The file every commit on a branch changes.
 CHANGED = "a.py"
 _START = datetime(2026, 10, 14, 10, tzinfo=UTC)
+#: How a body or a comment refers to an attachment: by its id, anywhere.
+_ATTACHMENT_ID = re.compile(r"atc_[0-9A-Za-z]{26}")
 
 
 class Refusal(Exception):
@@ -120,6 +125,8 @@ class BranvilDouble:
         #: Whether making a pull request a draft is refused.
         self.refuse_draft = False
         self.artifacts: dict[tuple[str, str], bytes] = {}
+        #: The images uploaded to the repositories, by id.
+        self.attachments: dict[str, dict[str, Any]] = {}
         #: The repositories with an upstream, and the dependency alerts its
         #: host reports for ``REPO``.
         self.upstreams = {REPO}
@@ -204,6 +211,18 @@ class BranvilDouble:
         if content[:4] not in (b"PK\x03\x04", b"PK\x05\x06"):
             raise ValueError("Branvil keeps only zip archives as artifacts.")
         self.artifacts[sha, name] = content
+
+    def add_attachment(self, name: str, content: bytes, repo: str = REPO) -> str:
+        """An image uploaded to ``repo``, as the GUI uploads one; what a body
+        or a comment writes to show it."""
+        attachment_id = f"atc_{next(self._ids):026d}"
+        self.attachments[attachment_id] = {
+            "repository": repo,
+            "name": name,
+            "media_type": mimetypes.guess_type(name)[0],
+            "content": content,
+        }
+        return f"![{name}](/api/v1/repos/{quote(repo, safe='')}/attachments/{attachment_id})"
 
     def alert(self, state: str = "open", patched: str | None = "4.17.21") -> str:
         """A dependency alert the upstream host reports for ``REPO``; its id."""
@@ -523,6 +542,10 @@ class BranvilDouble:
                 name,
             ) in self.artifacts:
                 return 200, self.artifacts[sha, name]
+            case "GET", ["attachments", attachment_id] if (
+                self.attachments.get(attachment_id, {}).get("repository") == repo
+            ):
+                return 200, self.attachments[attachment_id]["content"]
         raise _missing("/".join(rest))
 
     def _alerts(self, repo: str, alert: list[str], params: dict) -> Any:
@@ -654,6 +677,8 @@ class BranvilDouble:
                 }
             case "GET", ["comments"]:
                 return 200, self._page(self.entries[url]["comments"], params)
+            case "GET", ["attachments"]:
+                return 200, self._page(self._attachments(ticket), params)
             case "POST", ["comments"]:
                 return 201, self.comment(
                     url, MEMBER, body["body"], **body.get("meta") or {}
@@ -769,6 +794,39 @@ class BranvilDouble:
         }
         self.entries[url] = {"comments": []}
         return self.tickets[url]
+
+    def _attachments(self, ticket: dict[str, Any]) -> list[dict[str, Any]]:
+        """The attachments of the ticket's repository whose id its body or
+        comments hold, in the order of their first reference."""
+        texts = [("body", ticket["body"])] + [
+            (comment["id"], comment["body"])
+            for comment in self.entries[ticket["url"]]["comments"]
+        ]
+        found: dict[str, dict[str, Any]] = {}
+        for where, text in texts:
+            for attachment_id in _ATTACHMENT_ID.findall(text or ""):
+                attachment = self.attachments.get(attachment_id)
+                if (
+                    attachment is None
+                    or attachment["repository"] != ticket["repository"]
+                ):
+                    continue
+                listed = found.setdefault(
+                    attachment_id,
+                    {
+                        "id": attachment_id,
+                        "name": attachment["name"],
+                        "media_type": attachment["media_type"],
+                        "size": len(attachment["content"]),
+                        "url": f"/api/v1/repos/{quote(ticket['repository'], safe='')}"
+                        f"/attachments/{attachment_id}",
+                        "created_at": _START.isoformat(),
+                        "referenced_by": [],
+                    },
+                )
+                if where not in listed["referenced_by"]:
+                    listed["referenced_by"].append(where)
+        return list(found.values())
 
     def _related(self, url: str, other: str) -> None:
         """Refuse a relation of the ticket ``url`` to ``other`` unless both

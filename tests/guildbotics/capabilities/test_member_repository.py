@@ -9,6 +9,7 @@ is completed against, what each command reports -- is exercised here on
 from __future__ import annotations
 
 import io
+import json
 import re
 import subprocess
 import zipfile
@@ -20,11 +21,18 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.integrations.local import store
-from guildbotics.runtime.member_invocation import ChatSubject, Work
+from guildbotics.runtime.member_invocation import (
+    ChatSubject,
+    GuestResult,
+    MemberInvocation,
+    Work,
+    member_invocation_scope,
+)
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from tests.guildbotics.local_code_host import (
     REPOSITORY,
     TRACKER,
+    attachment,
     comment,
     item,
     local_member,
@@ -33,6 +41,7 @@ from tests.guildbotics.local_code_host import (
     ticket,
     tracker,
 )
+from tests.guildbotics.member_services import GuestDouble
 
 FOREIGN_TICKET = "https://tickets.example.com/browse/OPS-7"
 
@@ -336,6 +345,75 @@ async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
     assert (tmp_path / "out" / "report.md").read_text(encoding="utf-8") == "details"
     with pytest.raises(ServiceNotFound, match="has no artifact 'logs'"):
         await member_repository.artifact_download(member, url, "logs", tmp_path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "written"),
+    [("screen.png", "screen.png"), ("../screen.png", "screen-1"), ("", "screen-1")],
+)
+async def test_attachment_download_writes_the_file_by_its_name(
+    member, tmp_path, name, written
+):
+    """A name that is not one plain file name is not followed: the file is
+    written by its id instead, inside the destination."""
+    url = ticket(1, body=f"![screen]({attachment('screen-1', b'png', name=name)})")
+
+    result = await member_repository.attachment_download(
+        member, url, "screen-1", tmp_path / "out"
+    )
+
+    path = (tmp_path / "out" / written).resolve()
+    assert result == {
+        "id": "screen-1",
+        "name": name,
+        "media_type": "image/png",
+        "size": 3,
+        "referenced_by": ["body"],
+        "destination": str((tmp_path / "out").resolve()),
+        "files": [str(path)],
+    }
+    assert path.read_bytes() == b"png"
+    assert [found.name for found in (tmp_path / "out").rglob("*")] == [written]
+
+
+@pytest.mark.asyncio
+async def test_attachment_download_leaves_a_file_already_there(member, tmp_path):
+    url = ticket(1, body=attachment("screen-1", b"new"))
+    (tmp_path / "screen.png").write_bytes(b"mine")
+
+    with pytest.raises(MemberCapabilityError, match="already exists"):
+        await member_repository.attachment_download(member, url, "screen-1", tmp_path)
+    assert (tmp_path / "screen.png").read_bytes() == b"mine"
+
+
+@pytest.mark.asyncio
+async def test_a_command_of_an_environment_has_its_attachment_written_there(
+    member, tmp_path
+):
+    """As an artifact is: the host downloads it and the environment writes
+    it, by the name and id the host hands it."""
+    url = ticket(1, body=attachment("screen-1", b"png"))
+    written = {"destination": "/guest/out", "files": ["/guest/out/screen.png"]}
+    guest = GuestDouble(GuestResult(0, json.dumps(written).encode(), b""))
+
+    with member_invocation_scope(MemberInvocation(guest=guest)):
+        result = await member_repository.attachment_download(
+            member, url, "screen-1", tmp_path / "out"
+        )
+
+    [run] = guest.runs
+    assert run["argv"] == [
+        "python",
+        "-m",
+        "guildbotics.capabilities.artifact_archive",
+        f"/guest{tmp_path / 'out'}",
+        "screen.png",
+        "screen-1",
+    ]
+    assert run["read"] == b"png"
+    assert result["files"] == written["files"]
+    assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.asyncio

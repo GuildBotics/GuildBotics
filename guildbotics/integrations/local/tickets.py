@@ -13,10 +13,13 @@ name it so.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+import re
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 from logging import Logger
-from typing import Any
+from typing import IO, Any
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
@@ -24,6 +27,7 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
 from guildbotics.integrations.local.chat import mentions
 from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_attachments import referred
 from guildbotics.integrations.ticket_selection import (
     mention_pending,
     relevant_comments,
@@ -37,6 +41,7 @@ from guildbotics.runtime.port import (
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadPage,
@@ -75,6 +80,13 @@ class LocalTicketService(TicketService):
             raise ServiceError(t("integrations.resources.resource"))
         ref = store.locate(subject, "ticket")
         item = store.load(ref)
+        if resource == "ticket_attachments":
+            return items.page(
+                resource,
+                [attachment.model_dump() for attachment in _attachments(ref, item)],
+                conditions,
+                continuation,
+            )
         if resource == "tickets":
             others = store.items("ticket")
             parent = item["parent"]
@@ -116,6 +128,15 @@ class LocalTicketService(TicketService):
             for comment in item["comments"]
         ]
         return items.page(resource, comments, conditions, continuation)
+
+    @asynccontextmanager
+    async def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AsyncIterator[tuple[Attachment, IO[bytes]]]:
+        ref = store.locate(url, "ticket")
+        found = referred(_attachments(ref, store.load(ref)), url, attachment_id, limit)
+        with (store.attachments(ref.place) / found.id).open("rb") as content:
+            yield found, content
 
     async def comment(
         self, url: str, body: str, *, status: WorkflowStatus | None = None
@@ -338,6 +359,33 @@ class LocalTicketService(TicketService):
             done=lambda: self.move(task, "done"),
             finish_merged=finish_merged,
         )
+
+
+def _attachments(ref: store.Ref, item: dict[str, Any]) -> list[Attachment]:
+    """The tracker's attachments the ticket's body or comments write the URL
+    of, in the tracker's order."""
+    texts = [
+        ("body", item["body"]),
+        *((comment["id"], comment["body"]) for comment in item["comments"]),
+    ]
+    folder = store.attachments(ref.place)
+    found: list[Attachment] = []
+    for meta in sorted(folder.glob("*.json")) if folder.is_dir() else ():
+        # A URL whose id goes on is another attachment's.
+        written = re.compile(
+            rf"{re.escape(store.attachment_url(ref.place, meta.stem))}(?![\w-])"
+        )
+        referenced_by = [where for where, text in texts if written.search(text)]
+        if referenced_by:
+            found.append(
+                Attachment(
+                    **json.loads(meta.read_text(encoding="utf-8")),
+                    id=meta.stem,
+                    size=(folder / meta.stem).stat().st_size,
+                    referenced_by=referenced_by,
+                )
+            )
+    return found
 
 
 def _relative(url: str) -> TicketRelative:

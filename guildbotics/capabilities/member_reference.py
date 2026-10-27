@@ -88,15 +88,19 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics run repository/issue_inspect --person <person> url=<ticket_url>",
                 "Read a ticket, its comments, its lane on the board, its parent, "
-                "children, and the tickets it is blocked by or blocks, and the pull "
-                "requests that refer to it.",
+                "children, and the tickets it is blocked by or blocks, the files "
+                "attached to it (`attachments`; null with "
+                "`attachments_unavailable` saying why when they cannot be listed), "
+                "and the pull requests that refer to it.",
             ),
             (
                 "guildbotics member ticket read --person <person> --resource <name> "
                 "--subject <ticket_url> [--params <json>] [--continuation <value>]",
                 "Read one bounded page of a ticket's resource: tickets (the ticket "
-                "itself: key, tracker, repository, lane, ...), ticket_comments, or "
-                "ticket_pull_requests (the code host's pull requests that refer to "
+                "itself: key, tracker, repository, lane, ...), ticket_comments, "
+                "ticket_attachments (the files its body and comments refer to: id, "
+                "name, media_type, size, and referenced_by, `body` or a comment id), "
+                "or ticket_pull_requests (the code host's pull requests that refer to "
                 "it). Collections accept page_size (1-100). Results contain "
                 "normalized items and continuation; reuse identical conditions for the "
                 "next page. HTTP methods, headers, and GraphQL are not accepted.",
@@ -128,6 +132,13 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member ticket reaction add --person <person> --url <ticket_url> "
                 "--comment-id <id> --reaction ack|agree|celebrate|support",
                 "React to a comment of the ticket, by the id its read gave it.",
+            ),
+            (
+                "guildbotics member ticket attachment download --person <person> "
+                "--url <ticket_url> --id <attachment_id> [--dest <dir>]",
+                "Download a size-limited file the ticket refers to, by the id its "
+                "ticket_attachments read gave it, as a file of the destination named "
+                "as it was attached; remove repository files after reading.",
             ),
         ],
     ),
@@ -382,7 +393,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Inspect first: read the current ticket / PR / thread with the bundled repository inspections or member chat inspect "
     "commands before acting. Fields owned by the code host or the chat (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
-    "inspect output.",
+    "inspect output. When a ticket has attachments, such as screenshots of a "
+    "defect or a screen to build, download each one the work depends on with "
+    "`member ticket attachment download` and look at it before acting: what "
+    "it shows is part of the request, not something to guess from the text.",
     "Ground repository judgments in the repository's own guidelines: before "
     "drafting or creating a ticket for a repository, or settling a design or "
     "implementation policy for one, read its agent and contributor guidelines "

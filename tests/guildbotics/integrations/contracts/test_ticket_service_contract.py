@@ -5,9 +5,10 @@ back the same way, named by its URL and the ids its reads give; a ticket
 assigned to the member in the ready lane is a candidate, moves to the working
 lane, and is re-read as work still to do there; a created ticket is on the
 board unless asked otherwise, which a board holding every ticket refuses;
-the board's closed work is listed for the activity history. A write outside
-the configured scope -- a ticket, a comment, a reaction, a lane -- is refused
-before it is made.
+the board's closed work is listed for the activity history; the files a
+ticket refers to are listed and handed out by their ids where the service
+keeps them. A write outside the configured scope -- a ticket, a comment, a
+reaction, a lane -- is refused before it is made.
 """
 
 from __future__ import annotations
@@ -579,3 +580,67 @@ async def test_a_label_the_tracker_does_not_define_is_refused(board: Harness):
         )
 
     assert board.writes[before:] == []
+
+
+#: A picture as a human attaches one: its content is what is downloaded.
+_SCREEN = b"\x89PNG\r\n\x1a\nscreen"
+_LOG = b"GIF89alog"
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_lists_the_files_it_refers_to_and_hands_out_each_by_id(
+    board: Harness,
+):
+    url = await _ticket(board)
+    if "attachments" not in board.features:
+        with pytest.raises(ServiceUnsupported):
+            await board.tickets.read("ticket_attachments", url)
+        with pytest.raises(ServiceUnsupported):
+            async with board.tickets.attachment(url, "any", 1024):
+                pass
+        return
+    assert board.attach is not None
+    screen = board.attach("screen.png", _SCREEN)
+    log = board.attach("log.gif", _LOG)
+    # One no ticket refers to is no ticket's.
+    board.attach("unused.png", _SCREEN)
+    await board.tickets.update_ticket(
+        url,
+        body=f"The login fails:\n\n{screen}",
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state=None,
+        state_reason=None,
+    )
+    said = await board.tickets.comment(url, f"The log: {log}, and again {screen}")
+
+    page = await board.tickets.read("ticket_attachments", url)
+
+    listed = {item["name"]: item for item in page.items}
+    assert {
+        name: (item["media_type"], item["size"], item["referenced_by"])
+        for name, item in listed.items()
+    } == {
+        "screen.png": ("image/png", len(_SCREEN), ["body", said.id]),
+        "log.gif": ("image/gif", len(_LOG), [said.id]),
+    }
+    for name, content in (("screen.png", _SCREEN), ("log.gif", _LOG)):
+        async with board.tickets.attachment(url, listed[name]["id"], len(content)) as (
+            attachment,
+            downloaded,
+        ):
+            assert attachment.model_dump() == listed[name]
+            assert downloaded.read() == content
+
+    screen_id = listed["screen.png"]["id"]
+    with pytest.raises(ServiceError) as too_large:
+        async with board.tickets.attachment(url, screen_id, len(_SCREEN) - 1):
+            pass
+    assert not isinstance(too_large.value, ServiceNotFound)
+    # An id is the ticket's only while the ticket refers to it.
+    other = await _ticket(board, "Another")
+    for ticket, attachment_id in ((other, screen_id), (url, "missing")):
+        with pytest.raises(ServiceNotFound):
+            async with board.tickets.attachment(ticket, attachment_id, 1024):
+                pass

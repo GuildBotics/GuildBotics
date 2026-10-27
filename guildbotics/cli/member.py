@@ -1221,7 +1221,8 @@ def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
 
 @member.group()
 def ticket() -> None:
-    """Read, create, update, and comment on tickets, and react to their comments."""
+    """Read, create, update, and comment on tickets, react to their comments,
+    and download their attachments."""
 
 
 @member.group()
@@ -1759,6 +1760,46 @@ def artifact_download(
         person,
         lambda context: member_repository.artifact_download(
             context, target_url, name, dest
+        ),
+    )
+
+
+@ticket.group(name="attachment")
+def ticket_attachment() -> None:
+    """Attachment operations."""
+
+
+@ticket_attachment.command(name="download")
+@_read_only_member_command
+@_person_option
+@click.option("--url", "target_url", required=True, help="Ticket URL.")
+@click.option(
+    "--id",
+    "attachment_id",
+    required=True,
+    help="The id the ticket's ticket_attachments read gave the attachment.",
+)
+@click.option(
+    "--dest",
+    type=_HostPath(file_okay=False),
+    default=Path("."),
+    help=(
+        "Directory to write the file into. Defaults to the current directory. "
+        "Remove downloaded files after reading when this is inside a repository."
+    ),
+)
+@_json_format_option
+def attachment_download(
+    person: str,
+    target_url: str,
+    attachment_id: str,
+    dest: Path,
+    output_format: str,
+) -> _CommandWork:
+    return _code_hosting(
+        person,
+        lambda context: member_repository.attachment_download(
+            context, target_url, attachment_id, dest
         ),
     )
 

@@ -215,9 +215,22 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         frozenset({"ticket reaction add", "pr reaction add"}),
         _SCOPE,
     ),
-    "target_url": (SERVICE, frozenset({"pr artifact download"}), _SERVICE_READ),
+    "target_url": (
+        SERVICE,
+        frozenset({"pr artifact download", "ticket attachment download"}),
+        _SERVICE_READ,
+    ),
     "name": (SERVICE, frozenset({"pr artifact download"}), _SERVICE_READ),
-    "dest": (MEMBER, frozenset({"pr artifact download"}), _HOST_PATH),
+    "attachment_id": (
+        SERVICE,
+        frozenset({"ticket attachment download"}),
+        _SERVICE_READ,
+    ),
+    "dest": (
+        MEMBER,
+        frozenset({"pr artifact download", "ticket attachment download"}),
+        _HOST_PATH,
+    ),
     "resource": (CONTENT, frozenset({"ticket read", "pr read", "repo-info read"}), ""),
     "subject": (
         SERVICE,

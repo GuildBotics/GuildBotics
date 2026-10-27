@@ -278,6 +278,7 @@ def test_the_member_writes_to_a_service_only_through_the_chat_check():
         # Reads.
         "read_resource",
         "artifact_download",
+        "attachment_download",
         "_answered",
     }
 

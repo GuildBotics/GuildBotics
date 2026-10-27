@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from tempfile import TemporaryFile
 from typing import IO, Any
 
 from guildbotics.entities import Person, Service, Task, Team
@@ -447,16 +446,8 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         too_large = ServiceError(
             t("integrations.branvil.api.artifact_too_large", name=name, limit=limit)
         )
-        async with self.client().stream("GET", path) as response:
-            if int(response.headers.get("content-length") or 0) > limit:
-                raise too_large
-            with TemporaryFile() as archive:
-                async for chunk in response.aiter_bytes():
-                    if archive.tell() + len(chunk) > limit:
-                        raise too_large
-                    archive.write(chunk)
-                archive.seek(0)
-                yield ArtifactRef(name=name, id=f"{head}/{name}"), archive
+        async with self.download(path, limit, too_large) as archive:
+            yield ArtifactRef(name=name, id=f"{head}/{name}"), archive
 
     # -- the git remote -----------------------------------------------------
 

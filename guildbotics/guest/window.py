@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from logging import Logger
-from typing import Any
+from typing import IO, Any
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.entities import Person, Task, Team
@@ -36,6 +37,7 @@ from guildbotics.runtime.integration_factory import IntegrationFactory
 from guildbotics.runtime.port import ServiceError, WorkflowStatus
 from guildbotics.runtime.resources import (
     RESOURCE_SUBJECTS,
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadPage,
@@ -150,6 +152,11 @@ class WindowTicketService(TicketService):
             parameters,
             continuation,
         )
+
+    def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
+        raise _unavailable("Downloading a ticket's attachment")
 
     async def comment(self, url: str, body: str, **_: Any) -> CommentWritten:
         raise _unavailable("Commenting on a ticket")

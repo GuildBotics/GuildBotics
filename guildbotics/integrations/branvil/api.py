@@ -40,10 +40,11 @@ import asyncio
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any
+from tempfile import TemporaryFile
+from typing import IO, Any
 from urllib.parse import quote, unquote
 
 import httpx
@@ -408,6 +409,26 @@ class Calls:
         """What Branvil answers to a file put at ``path`` (a picture), sent
         as :meth:`call` sends a write."""
         return _json(await self.client().put(path, content=content))
+
+    @asynccontextmanager
+    async def download(
+        self, path: str, limit: int, too_large: ServiceError
+    ) -> AsyncIterator[IO[bytes]]:
+        """The file at ``path``, read to its end.
+
+        Raises:
+            ServiceError: ``too_large``, if it is above ``limit`` bytes.
+        """
+        async with self.client().stream("GET", path) as response:
+            if int(response.headers.get("content-length") or 0) > limit:
+                raise too_large
+            with TemporaryFile() as content:
+                async for chunk in response.aiter_bytes():
+                    if content.tell() + len(chunk) > limit:
+                        raise too_large
+                    content.write(chunk)
+                content.seek(0)
+                yield content
 
     async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:
         """Every item of the collection at ``path``."""

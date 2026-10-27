@@ -101,12 +101,14 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
+| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
+| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
 | [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
@@ -730,7 +732,7 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
 
 ## `guildbotics member chat`
 
@@ -1597,7 +1599,8 @@ guildbotics member task status [OPTIONS]
 
 ## `guildbotics member ticket`
 
-Read, create, update, and comment on tickets, and react to their comments.
+Read, create, update, and comment on tickets, react to their comments,
+and download their attachments.
 
 ```text
 guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
@@ -1609,11 +1612,45 @@ guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
 | [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+
+## `guildbotics member ticket attachment`
+
+Attachment operations.
+
+```text
+guildbotics member ticket attachment [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
+
+## `guildbotics member ticket attachment download`
+
+Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading.
+
+```text
+guildbotics member ticket attachment download [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Ticket URL. [required] |
+| `--id TEXT` | The id the ticket's ticket_attachments read gave the attachment. [required] |
+| `--dest DIRECTORY` | Directory to write the file into. Defaults to the current directory. Remove downloaded files after reading when this is inside a repository. [default: .] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics member ticket comment`
 
@@ -1688,7 +1725,7 @@ guildbotics member ticket reaction add [OPTIONS]
 
 ## `guildbotics member ticket read`
 
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to it). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 ```text
 guildbotics member ticket read [OPTIONS]
@@ -1697,7 +1734,7 @@ guildbotics member ticket read [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [tickets\|ticket_comments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
+| `--resource [tickets\|ticket_comments\|ticket_attachments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
 | `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |

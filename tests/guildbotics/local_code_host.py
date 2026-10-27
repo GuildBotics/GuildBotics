@@ -111,6 +111,25 @@ def ticket(number: int = 1, *, place: str = TRACKER, **fields: Any) -> str:
     return ref.url
 
 
+def attachment(
+    attachment_id: str,
+    content: bytes,
+    *,
+    name: str = "screen.png",
+    media_type: str = "image/png",
+    place: str = TRACKER,
+) -> str:
+    """Keep the file ``attachment_id`` in the tracker; the URL a ticket's body
+    or comment writes to refer to it."""
+    folder = store.attachments(place)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / attachment_id).write_bytes(content)
+    (folder / f"{attachment_id}.json").write_text(
+        json.dumps({"name": name, "media_type": media_type}), encoding="utf-8"
+    )
+    return store.attachment_url(place, attachment_id)
+
+
 def pull_request(
     number: int, head: str, *, repository: str = REPOSITORY, **fields: Any
 ) -> str:

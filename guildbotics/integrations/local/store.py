@@ -9,7 +9,10 @@ conclusion its CI finished with, when it was recorded, ``checks/<sha>``.
 
 A ticket is kept in a tracker, a path too, in ``tickets/<path, quoted>/``:
 the tracker's ``tracker.json`` (the labels it defines, and the repository its
-tickets belong to, if any) and the tickets ``<key>.json``, keyed ``T-<n>``.
+tickets belong to, if any), the tickets ``<key>.json``, keyed ``T-<n>``, and
+the files attached to them, ``attachments/<id>`` with ``attachments/<id>.json``
+(its name and media type). A ticket's body or comment attaches one by writing
+its URL, ``local://tickets/<tracker>/attachments/<id>``.
 Pull requests and tickets are numbered each in their own place (``number``).
 
 An item is addressed by ``local://code/<repository>/pulls/<n>`` or
@@ -193,6 +196,16 @@ def tracker(place: str) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ServiceNotFound(f"There is no tracker '{place}'.") from None
+
+
+def attachments(place: str) -> Path:
+    """Where the tracker keeps the files attached to its tickets."""
+    return directory("tickets", place) / "attachments"
+
+
+def attachment_url(place: str, attachment_id: str) -> str:
+    """What a ticket of the tracker writes to refer to an attachment."""
+    return f"{SCHEME}://tickets/{place}/attachments/{attachment_id}"
 
 
 def bare(repository: str) -> Path:

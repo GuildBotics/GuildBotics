@@ -12,13 +12,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from logging import Logger
-from typing import Any, Literal
+from typing import IO, Any, Literal
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.runtime.port import SemanticReaction, WorkflowStatus
 from guildbotics.runtime.resources import (
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadModel,
@@ -75,6 +77,20 @@ class TicketService(ABC):
         """Read a ticket's resource of :data:`~.resources.TICKET_RESOURCES`,
         ``subject`` being the ticket's URL (see
         :meth:`~.code_hosting_service.CodeHostingService.read`)."""
+
+    @abstractmethod
+    def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
+        """The attachment ``attachment_id`` the ticket ``url`` refers to, as
+        its ``ticket_attachments`` read lists it, with its content of at most
+        ``limit`` bytes.
+
+        Raises:
+            ServiceUnsupported: If the service keeps no attachments.
+            ServiceNotFound: If the ticket refers to no such attachment.
+            ServiceError: If it is above ``limit``.
+        """
 
     @abstractmethod
     async def comment(
