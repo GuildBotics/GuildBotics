@@ -4,3 +4,5 @@ en:
   resource: "Unsupported read resource. See member help for the supported names."
   parameters: "Invalid resource conditions. See member help for the supported parameters."
   continuation: "Invalid pagination response or continuation. Reuse the same resource, subject, and conditions."
+  attachment_missing: "%{url} refers to no attachment '%{id}'. Read its ticket_attachments for the attachments it refers to."
+  attachment_too_large: "Attachment '%{name}' is above the %{limit} byte limit. Ask a human to look at it."

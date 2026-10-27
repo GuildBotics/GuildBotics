@@ -154,6 +154,10 @@ NOT_SHARED = {
     "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (
         "a temporary GitHub Actions artifact outside shared workspace state"
     ),
+    "guildbotics/capabilities/artifact_archive.py:MAX_ATTACHMENT_BYTES": (
+        "a ticket's attachment, written to the command's working directory"
+        " outside shared workspace state"
+    ),
     "guildbotics/observability/diagnostics_store.py:DEFAULT_DIAGNOSTICS_MAX_BYTES": (
         "local/run diagnostics, which stay on this device"
     ),

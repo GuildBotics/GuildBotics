@@ -74,6 +74,17 @@ def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
     )
 
 
+#: The downloads a member command writes into a directory it names: the
+#: capability each runs, and its command line up to ``--dest``.
+_DOWNLOADS = {
+    "artifact_download": ["pr", "artifact", "download", "--person", "aiko"]
+    + ["--url", "https://example.test/pr/1", "--name", "logs"],
+    "attachment_download": ["ticket", "attachment", "download", "--person", "aiko"]
+    + ["--url", "https://example.test/tickets/1", "--id", "atc_1"],
+}
+
+
+@pytest.mark.parametrize("capability", _DOWNLOADS)
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
@@ -82,7 +93,7 @@ def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
     ],
 )
 def test_path_checks_read_from_the_commands_directory(
-    monkeypatch, tmp_path, arguments, message
+    monkeypatch, tmp_path, capability, arguments, message
 ) -> None:
     """Path options keep their checks, made against the command's directory
     rather than the process's."""
@@ -96,13 +107,13 @@ def test_path_checks_read_from_the_commands_directory(
     async def code_hosting(person, operation):
         return await operation(None)
 
-    monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
+    monkeypatch.setattr(member_module.member_repository, capability, download)
     monkeypatch.setattr(member_module, "_code_hosting", code_hosting)
-    command = ["pr", "artifact", "download", "--person", "aiko"]
-    command += ["--url", "https://example.test/pr/1", "--name", "logs", *arguments]
 
     exit_code, _stdout, stderr = _run(
-        command, MemberInvocation(task_run_id="run-1"), cwd=tmp_path
+        [*_DOWNLOADS[capability], *arguments],
+        MemberInvocation(task_run_id="run-1"),
+        cwd=tmp_path,
     )
 
     if message:
@@ -455,8 +466,9 @@ def test_a_command_of_an_environment_has_the_host_read_none_of_its_files(
     assert member_module.json.loads(from_stdin[1])["message"] == "given"
 
 
+@pytest.mark.parametrize("capability", _DOWNLOADS)
 def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capability
 ) -> None:
     """Checking one on the host would look at what the environment can
     write; what it names goes on as a name, for the environment to use."""
@@ -470,7 +482,7 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
     async def code_hosting(person, operation):
         return await operation(None)
 
-    monkeypatch.setattr(member_module.member_repository, "artifact_download", download)
+    monkeypatch.setattr(member_module.member_repository, capability, download)
     monkeypatch.setattr(member_module, "_code_hosting", code_hosting)
     looked: list[str] = []
     for name in ("stat", "lstat"):
@@ -484,9 +496,7 @@ def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
         monkeypatch.setattr(os, name, look)
 
     exit_code, _stdout, stderr = _run(
-        ["pr", "artifact", "download", "--person", "aiko"]
-        + ["--url", "https://example.test/pr/1", "--name", "logs"]
-        + ["--dest", "a-file"],
+        [*_DOWNLOADS[capability], "--dest", "a-file"],
         MemberInvocation(task_run_id="run-1", guest=SimpleNamespace()),
         cwd=tmp_path,
     )

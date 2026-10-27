@@ -2,8 +2,8 @@
 
 A provider's harness gives the code host and the tickets of one member, and
 what a contract cannot do through the ports: a branch on the remote, a new
-commit on it, an artifact of a commit, an assignment on the board, someone
-else's pull request, a human's merge. The
+commit on it, an artifact of a commit, a file to attach to tickets, an
+assignment on the board, someone else's pull request, a human's merge. The
 harness speaks as the ports do -- items by their URLs, comments and reviews by
 the ids their reads give -- and names its repository, its tracker, and a
 repository outside the member's scope by the paths its provider spells.
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import re
 import subprocess
 from collections.abc import Callable
@@ -44,7 +45,7 @@ from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations import branvil_double
 from tests.guildbotics.integrations.github_services import rendered_body
-from tests.guildbotics.local_code_host import tracker, write
+from tests.guildbotics.local_code_host import attachment, tracker, write
 
 MEMBER = "aiko"
 LOGIN = "aiko-gh"
@@ -100,6 +101,10 @@ class Harness:
     human_comment: Callable[[str, str], None]
     mention: str
     writes: list[str] = field(default_factory=list)
+    #: Keep a file ``name`` to attach to the tracker's tickets, as a human
+    #: attaching it does; what a body or a comment writes to refer to it.
+    #: ``None`` for a provider without ``attachments``.
+    attach: Callable[[str, bytes], str] | None = None
 
     async def aclose(self) -> None:
         await self.code.aclose()
@@ -200,6 +205,18 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ref = store.locate(url, "pull_request")
         write(ref, {**store.load(ref), "author": "them"})
 
+    attachments = count(1)
+
+    def attach(name: str, content: bytes) -> str:
+        url = attachment(
+            f"image-{next(attachments)}",
+            content,
+            name=name,
+            media_type=str(mimetypes.guess_type(name)[0]),
+            place=tickets_tracker,
+        )
+        return f"![{name}]({url})"
+
     def merge(url: str) -> None:
         ref = store.locate(url, "pull_request")
         pull = store.load(ref)
@@ -277,10 +294,11 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ),
         "comment-1",
         store.ref_of("ticket", tickets_tracker, 404).url,
-        frozenset({"request_changes", "artifacts", "off_board"}),
+        frozenset({"request_changes", "artifacts", "off_board", "attachments"}),
         writes=writes,
         human_comment=human_comment,
         mention=f"@{MEMBER}",
+        attach=attach,
     )
 
 
@@ -339,12 +357,13 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         ),
         double.their_comment,
         f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
-        frozenset({"request_changes", "artifacts", "dependency_alerts"}),
+        frozenset({"request_changes", "artifacts", "dependency_alerts", "attachments"}),
         writes=double.writes,
         human_comment=lambda url, body: double._entry(
             url, "comments", branvil_double.OWNER, body
         ),
         mention=f"@{MEMBER}",
+        attach=double.add_attachment,
     )
 
 

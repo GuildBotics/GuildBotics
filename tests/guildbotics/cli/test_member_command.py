@@ -503,6 +503,7 @@ def test_ci_inspection_commands_are_read_only() -> None:
     for command in (
         *(commands[group].commands["read"] for group in _READ_GROUPS.values()),
         commands["pr"].commands["artifact"].commands["download"],
+        commands["ticket"].commands["attachment"].commands["download"],
     ):
         with click.Context(command):
             assert member_module._member_command_writes() is False

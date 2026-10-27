@@ -136,6 +136,19 @@ class ThreadComment(Comment):
     reply_to_id: str | None
 
 
+class Attachment(ReadModel):
+    """A file a ticket's body or comments refer to, such as a screenshot."""
+
+    id: str
+    #: The name it was attached by; not a path.
+    name: str
+    media_type: str
+    #: Its size in bytes.
+    size: int
+    #: Where it is referred to: ``body``, or the id of a comment.
+    referenced_by: list[str]
+
+
 class TicketPullRequest(ReadModel):
     """A pull request of the code host that refers to a ticket."""
 
@@ -284,6 +297,7 @@ RESOURCES_BY_SUBJECT: dict[ReadSubject, dict[str, type[ReadModel]]] = {
     "ticket": {
         "tickets": Ticket,
         "ticket_comments": Comment,
+        "ticket_attachments": Attachment,
         "ticket_pull_requests": TicketPullRequest,
     },
     "pull_request": {
@@ -309,7 +323,7 @@ RESOURCE_SUBJECTS: dict[str, ReadSubject] = {
 }
 #: The resources the ticket service reads; the code host reads the others,
 #: the pull requests of a ticket among them.
-TICKET_RESOURCES = frozenset({"tickets", "ticket_comments"})
+TICKET_RESOURCES = frozenset({"tickets", "ticket_comments", "ticket_attachments"})
 #: The resources that are one item, read without pagination.
 DETAIL_RESOURCES = frozenset({"tickets", "pull_requests", "pull_request_readiness"})
 

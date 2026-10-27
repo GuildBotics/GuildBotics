@@ -2,11 +2,11 @@
 repositories, and the Projects V2 board they are taken from."""
 
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from functools import cached_property
 from logging import Logger
-from typing import Any, ClassVar, cast
+from typing import IO, Any, ClassVar, cast
 from urllib.parse import quote
 
 from guildbotics.entities import Person, Task, Team
@@ -50,10 +50,12 @@ from guildbotics.integrations.ticket_selection import (
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
+    ServiceUnsupported,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    Attachment,
     CommentWritten,
     Lane,
     ReactionAdded,
@@ -236,6 +238,8 @@ class GitHubTicketService(GitHubApi, TicketService):
         conditions = read_conditions(resource, parameters, continuation)
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
+        if resource == "ticket_attachments":
+            raise _no_attachments()
         item = self.item(subject, "ticket")
         with reading(resource):
             if resource == "tickets":
@@ -260,6 +264,11 @@ class GitHubTicketService(GitHubApi, TicketService):
                 return ReadPage.of(resource, [ticket], target=self.target(item, data))
             request = request_of(self, resource, subject, conditions)
             return await read_collection(self, resource, item, request, continuation)
+
+    def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
+        raise _no_attachments()
 
     async def comment(
         self, url: str, body: str, *, status: WorkflowStatus | None = None
@@ -1199,3 +1208,7 @@ def _relatives(connection: dict[str, Any]) -> list[TicketRelative]:
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
     return [str(label.get("name", "")) for label in issue.get("labels") or []]
+
+
+def _no_attachments() -> ServiceUnsupported:
+    return ServiceUnsupported(t("integrations.github.response.attachments_unsupported"))

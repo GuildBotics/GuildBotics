@@ -32,6 +32,9 @@ class DummyTicketService(TicketService):
     async def read(self, resource, subject, *, parameters=None, continuation=""):
         raise NotImplementedError
 
+    def attachment(self, url, attachment_id, limit):
+        raise NotImplementedError
+
     async def comment(self, url, body, *, status=None):
         raise NotImplementedError
 

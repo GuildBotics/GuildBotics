@@ -21,9 +21,11 @@ from pydantic import TypeAdapter, ValidationError
 
 from guildbotics.capabilities.artifact_archive import (
     MAX_ARTIFACT_BYTES,
+    MAX_ATTACHMENT_BYTES,
     ArtifactError,
     Unpacked,
     extract_artifact,
+    place_attachment,
     unpacked,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
@@ -255,8 +257,22 @@ async def artifact_download(
         raise MemberCapabilityError("Artifact name is required.")
     code = context.get_code_hosting_service()
     async with code.artifact(url, name, MAX_ARTIFACT_BYTES) as (ref, archive):
-        where = _unpack(archive, destination)
+        where = _write(archive, destination)
     return {**ref.model_dump(), **where}
+
+
+async def attachment_download(
+    context: Context, url: str, attachment_id: str, destination: Path
+) -> dict[str, Any]:
+    """Download one attachment the ticket refers to, as a file of
+    ``destination`` named as it was attached."""
+    tickets = context.get_ticket_service()
+    async with tickets.attachment(url, attachment_id, MAX_ATTACHMENT_BYTES) as (
+        attachment,
+        content,
+    ):
+        where = _write(content, destination, attachment.name, attachment.id)
+    return {**attachment.model_dump(), **where}
 
 
 async def open_pull_request_readiness(
@@ -497,32 +513,40 @@ def _validate_review_comment_location(
 _UNPACKED = TypeAdapter(Unpacked)
 
 
-def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
-    """Unpack ``archive`` where the command that asked for it reads it: on
-    the host, or, for a command of an isolated environment, in that
-    environment (:mod:`.artifact_archive`), which the host writes nothing of.
+def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked:
+    """Write ``download`` where the command that asked for it reads it:
+    unpacked as an artifact, or, given an attachment's name and id, as that
+    attachment; on the host, or, for a command of an isolated environment, in
+    that environment (:mod:`.artifact_archive`), which the host writes
+    nothing of.
 
     Raises:
-        MemberCapabilityError: When the artifact cannot be unpacked safely,
-            or the environment could not unpack it.
+        MemberCapabilityError: When it cannot be written safely, or the
+            environment could not write it.
     """
     guest = current_member_invocation().guest
     if guest is None:
         try:
-            return unpacked(destination, extract_artifact(archive, destination))
+            files = (
+                [place_attachment(download, destination, *attachment)]
+                if attachment
+                else extract_artifact(download, destination)
+            )
         except ArtifactError as exc:
             raise MemberCapabilityError(str(exc)) from exc
+        return unpacked(destination, files)
     # A process that ran out of time may still hold the copy open (on Windows
     # it cannot be deleted then); the failure is what the command reports.
-    with host_temporary_directory("guildbotics-artifact-") as held:
-        copy = Path(held) / "artifact.zip"
+    with host_temporary_directory("guildbotics-download-") as held:
+        copy = Path(held) / "download"
         with copy.open("wb") as file:
-            copyfileobj(archive, file)
+            copyfileobj(download, file)
         try:
             result = guest.run(
                 guest.python(
                     "guildbotics.capabilities.artifact_archive",
                     guest.path(destination),
+                    *attachment,
                 ),
                 cwd="/",
                 env={},
@@ -534,14 +558,14 @@ def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
     if result.returncode != 0:
         raise MemberCapabilityError(
             result.stderr.decode(errors="replace").strip()
-            or "The artifact could not be unpacked."
+            or "The download could not be written."
         )
     # What the environment wrote is its own to write: read as nothing more
-    # than where it says it unpacked.
+    # than where it says it wrote it.
     try:
         return _UNPACKED.validate_json(result.stdout)
     except ValidationError as exc:
         raise MemberCapabilityError(
-            "The environment reported the artifact unpacked in a form it cannot"
+            "The environment reported the download written in a form it cannot"
             " have been."
         ) from exc

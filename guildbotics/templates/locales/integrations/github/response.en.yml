@@ -13,3 +13,4 @@ en:
   http: "The GitHub request failed (HTTP %{status})."
   transport: "Could not complete the GitHub request. Check connectivity and retry."
   created_off_board: "%{url} was created, but it could not be put on the board: %{message}"
+  attachments_unsupported: "Files attached to a GitHub issue are not listed or downloaded: an image in an issue is only its URL in the text. Ask a human what it shows."
