@@ -154,6 +154,14 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         "",
     ),
     "status": (CONTENT, frozenset({"chat complete", "task complete"}), ""),
+    # Recipients select service reads through their own credentials. The
+    # validator bounds them to eligible teammates on the grant's work (or
+    # its host-recorded resumed PR), never an agent-supplied subject.
+    "waiting_for": (
+        SERVICE,
+        frozenset({"task complete"}),
+        "guildbotics.capabilities.waiting_for.validate_waiting_for",
+    ),
     # Git: the member's clone, worked on in the command's environment.
     "repo_path": (MEMBER, _GIT_WRITES, _HOST_PATH),
     "workspace_mode": (

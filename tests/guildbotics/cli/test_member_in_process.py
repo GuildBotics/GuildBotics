@@ -10,6 +10,7 @@ import typing
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import click
 import pytest
@@ -305,10 +306,12 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
 ) -> None:
     """A read-only command's turn holds no lease, so the guard refuses every
     write of it, these that record the run's outcome among them."""
+    close_context = AsyncMock()
+    context = SimpleNamespace(aclose=close_context)
     monkeypatch.setattr(
         member_module,
         "_resolve",
-        lambda person: (None, SimpleNamespace(person_id=person)),
+        lambda person: (context, SimpleNamespace(person_id=person)),
     )
     monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
@@ -341,6 +344,8 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in " ".join(stderr.split())
         assert list(RunStore().records()) == before
+
+    assert close_context.await_count == int(runs and kind == "ticket")
 
 
 @pytest.mark.parametrize(
