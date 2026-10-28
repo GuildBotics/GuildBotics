@@ -30,8 +30,10 @@ from guildbotics.capabilities.artifact_archive import (
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import RunStore, work_subject
+from guildbotics.entities import Service
 from guildbotics.entities.message import Message
 from guildbotics.integrations import pull_request_patrol
+from guildbotics.integrations.factory import configured_providers
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
@@ -51,7 +53,7 @@ from guildbotics.runtime.resources import (
     Readiness,
     ReviewVerdict,
 )
-from guildbotics.runtime.ticket_service import TicketService
+from guildbotics.runtime.ticket_service import CreateLane, TicketService
 from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -97,10 +99,40 @@ async def ticket_create(
     add_to_board: bool,
     labels: Sequence[str] = (),
     human_approved: bool = False,
+    *,
+    interactive: bool = False,
+    assignee: str | None = None,
+    lane: CreateLane | None = None,
+    parent: str | None = None,
+    blocked_by: Sequence[str] = (),
 ) -> dict[str, Any]:
     _require_human_approval(human_approved, "Creating a ticket")
+    assigned_name = None
+    if assignee is not None:
+        member = next(
+            (m for m in context.team.members if m.person_id == assignee), None
+        )
+        service = context.team.project.get_service_name(Service.TICKET_SERVICE)
+        provider = next(
+            p for p in configured_providers(context.team) if p.name == service
+        )
+        identity = provider.member_identity(member) if member is not None else None
+        if identity is None or not identity.names:
+            raise MemberCapabilityError(
+                t("cli.member.ticket_assignee", person=assignee)
+            )
+        assigned_name = identity.name
     created = await _tickets(context).create_ticket(
-        tracker, title, body, _cleaned(labels), add_to_board=add_to_board
+        tracker,
+        title,
+        body,
+        _cleaned(labels),
+        add_to_board=add_to_board,
+        interactive=interactive,
+        assignee=assigned_name,
+        lane=lane,
+        parent=parent,
+        blocked_by=_cleaned(blocked_by),
     )
     return created.model_dump()
 

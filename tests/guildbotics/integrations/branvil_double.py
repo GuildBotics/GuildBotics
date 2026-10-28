@@ -519,6 +519,14 @@ class BranvilDouble:
                 ticket = self._ticket(
                     repo, body["title"], body["body"], labels, _lane(body, "new")
                 )
+                ticket.update(
+                    interactive=body.get("interactive", False),
+                    parent=body.get("parent"),
+                    blocked_by=list(dict.fromkeys(body.get("blocked_by", []))),
+                    assignee={"name": body["assignee"], "assigned_at": self.now()}
+                    if body.get("assignee")
+                    else None,
+                )
                 return 201, self._view(ticket)
             case _, ["tickets", number, *more]:
                 url = f"{BASE}/{repo}/-/tickets/{number}"

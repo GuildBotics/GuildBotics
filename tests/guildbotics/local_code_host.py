@@ -102,6 +102,7 @@ def ticket(number: int = 1, *, place: str = TRACKER, **fields: Any) -> str:
             "labels": [],
             "assignees": [],
             "lane": None,
+            "interactive": False,
             "parent": None,
             "blocked_by": [],
             "created_at": store.now(),

@@ -24,3 +24,4 @@ en:
     not_checked: "Chat updates have not been checked for this input."
     new_messages: "New source-thread messages have arrived since the last check."
     required: "%{reason} Run guildbotics member chat updates --person %{person}, read its result, and reconsider the operation before retrying."
+  ticket_assignee: "No ticket-service account for roster member %{person}."

@@ -38,14 +38,14 @@ import httpx
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
-from guildbotics.integrations.factory import ServiceIntegrationFactory, PROVIDERS
+from guildbotics.integrations.factory import PROVIDERS, ServiceIntegrationFactory
 from guildbotics.integrations.github import async_client, github_utils
 from guildbotics.integrations.github.repository_scope import NODE_REPOSITORY
 from guildbotics.integrations.local import store
 from guildbotics.integrations.local.identity import username
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
+from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 from tests.guildbotics.integrations import branvil_double
 from tests.guildbotics.integrations.github_services import rendered_body
 from tests.guildbotics.local_code_host import attachment, tracker, write
@@ -280,6 +280,7 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
             "labels": [],
             "assignees": [],
             "lane": Task.READY,
+            "interactive": False,
             "parent": None,
             "blocked_by": [],
             "created_at": store.now(),
@@ -330,7 +331,9 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         ),
         "comment-1",
         store.ref_of("ticket", tickets_tracker, 404).url,
-        frozenset({"request_changes", "artifacts", "off_board", "attachments"}),
+        frozenset(
+            {"request_changes", "artifacts", "off_board", "attachments", "interactive"}
+        ),
         writes=writes,
         human_comment=human_comment,
         mention=f"@{username(MEMBER)}",
@@ -413,7 +416,15 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         ),
         double.their_comment,
         f"{branvil_double.BASE}/{branvil_double.REPO}/-/tickets/404",
-        frozenset({"request_changes", "artifacts", "dependency_alerts", "attachments"}),
+        frozenset(
+            {
+                "request_changes",
+                "artifacts",
+                "dependency_alerts",
+                "attachments",
+                "interactive",
+            }
+        ),
         writes=double.writes,
         human_comment=lambda url, body: double._entry(
             url, "comments", branvil_double.OWNER, body
@@ -964,7 +975,7 @@ class GitHubDouble:
             "html_url": f"https://github.com/{REPO}/{collection}/{number}",
             "user": {"login": self.actor},
             "labels": [{"name": name} for name in body.get("labels", [])],
-            "assignees": [],
+            "assignees": [{"login": login} for login in body.get("assignees", [])],
             "created_at": "2026-07-01T00:00:00Z",
             "updated_at": "2026-07-01T00:00:00Z",
             "closed_at": None,
@@ -1017,9 +1028,14 @@ class GitHubDouble:
             return {"addProjectV2ItemById": {"item": {"id": f"ITEM{number}"}}}
         if "updateProjectV2ItemFieldValue" in query:
             number = int(variables["item"].removeprefix("ITEM"))
-            self.board[number] = {"todo": "Todo", "working": "In Progress"}[
-                variables["opt"]
-            ]
+            if variables["field"] == "agent":
+                self.agents[number] = {"aiko": "⚙aiko", "yuki": "⚙yuki"}[
+                    variables["opt"]
+                ]
+            else:
+                self.board[number] = {"todo": "Todo", "working": "In Progress"}[
+                    variables["opt"]
+                ]
             return {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "x"}}}
         if "fields(first" in query:
             return {"node": {"fields": {"nodes": _FIELDS, "pageInfo": _LAST}}}
@@ -1205,6 +1221,14 @@ class GitHubDouble:
 
 _LAST = {"hasNextPage": False, "endCursor": None}
 _FIELDS = [
+    {
+        "id": "agent",
+        "name": "Agent",
+        "options": [
+            {"id": "aiko", "name": "⚙aiko"},
+            {"id": "yuki", "name": "⚙yuki"},
+        ],
+    },
     {
         "id": "status",
         "name": "Status",

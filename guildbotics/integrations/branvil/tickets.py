@@ -55,10 +55,12 @@ from guildbotics.runtime.resources import (
 )
 from guildbotics.runtime.ticket_service import (
     ClosedItem,
+    CreateLane,
     MoveLane,
     TicketCreated,
     TicketService,
     TicketUpdated,
+    creation_lane,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -143,19 +145,38 @@ class BranvilTicketService(BranvilApi, TicketService):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
-        """Open a ticket in the new lane of the board of its repository's
-        workspace: Branvil keeps every ticket on it.
+        """Create the ticket's complete initial state in one transaction.
+
+        Branvil keeps every ticket on its workspace's board.
 
         Raises:
             ServiceUnsupported: If not ``add_to_board``.
         """
         if not add_to_board:
             raise ServiceUnsupported(t("integrations.branvil.api.every_on_board"))
+        for related in filter(None, (parent, *blocked_by)):
+            check_path(
+                self.workspace, self.item(related, "ticket").place, provider=PROVIDER
+            )
         data = await self.call(
             "POST",
             f"/repos/{segment(self.repository(tracker))}/tickets",
-            {"title": title, "body": body, "labels": list(labels), "lane": Task.NEW},
+            {
+                "title": title,
+                "body": body,
+                "labels": list(labels),
+                "lane": creation_lane(lane, parent, blocked_by),
+                "interactive": interactive,
+                "assignee": assignee,
+                "parent": parent,
+                "blocked_by": list(blocked_by),
+            },
         )
         return TicketCreated(
             labels=list(data["labels"]), target=self.target(_ticket_item(data), data)

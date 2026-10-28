@@ -1512,8 +1512,15 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
             }
 
         async def ticket_create(
-            self, tracker, title, body, add_to_board, labels, human_approved
+            self, tracker, title, body, add_to_board, labels, human_approved, **options
         ):
+            assert options == {
+                "interactive": True,
+                "assignee": "otota",
+                "lane": "in_progress",
+                "parent": "local://tickets/demo/T-1",
+                "blocked_by": ("local://tickets/demo/T-2", "local://tickets/demo/T-3"),
+            }
             calls.append(
                 ("create", tracker, title, body, add_to_board, labels, human_approved)
             )
@@ -1570,6 +1577,17 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
             "--label",
             "priority: high",
             "--no-add-to-board",
+            "--interactive",
+            "--assignee",
+            "otota",
+            "--lane",
+            "in_progress",
+            "--parent",
+            "local://tickets/demo/T-1",
+            "--blocked-by",
+            "local://tickets/demo/T-2",
+            "--blocked-by",
+            "local://tickets/demo/T-3",
             "--human-approved",
             "--content-stdin",
         ],
@@ -1620,7 +1638,14 @@ def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
             raise ServiceError("GitHub API failed")
 
         async def ticket_create(
-            self, _tracker, _title, _body, _add_to_board, _labels, _human_approved
+            self,
+            _tracker,
+            _title,
+            _body,
+            _add_to_board,
+            _labels,
+            _human_approved,
+            **options,
         ):
             raise ServiceError("GitHub API failed")
 

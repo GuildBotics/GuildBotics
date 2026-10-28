@@ -106,6 +106,65 @@ async def test_ticket_create_off_the_board(member):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("human", [False, True])
+async def test_ticket_create_resolves_roster_assignment_and_sets_initial_state(
+    member, human
+):
+    from guildbotics.entities import Person
+
+    tracker()
+    parent, blocker = ticket(1), ticket(2)
+    assignee = Person(
+        person_id="requested",
+        name="Requested",
+        person_type="human" if human else "agent",
+    )
+    member.team.members.append(assignee)
+    result = await member_repository.ticket_create(
+        member,
+        TRACKER,
+        "Interactive",
+        "",
+        True,
+        human_approved=True,
+        interactive=True,
+        assignee=assignee.person_id,
+        lane="in_progress",
+        parent=parent,
+        blocked_by=[blocker],
+    )
+    saved = item(result["target"]["url"])
+    assert saved["assignees"] == [username(assignee.person_id)]
+    assert (
+        saved["interactive"],
+        saved["lane"],
+        saved["parent"],
+        saved["blocked_by"],
+    ) == (
+        True,
+        "in_progress",
+        parent,
+        [blocker],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticket_create_refuses_unknown_roster_member_before_writing(member):
+    tracker()
+    with pytest.raises(MemberCapabilityError, match="missing"):
+        await member_repository.ticket_create(
+            member,
+            TRACKER,
+            "Denied",
+            "",
+            True,
+            human_approved=True,
+            assignee="missing",
+        )
+    assert _tickets_kept() == []
+
+
+@pytest.mark.asyncio
 async def test_ticket_update_and_comment_report_what_they_changed(member):
     url = ticket(1, labels=["bug"])
 

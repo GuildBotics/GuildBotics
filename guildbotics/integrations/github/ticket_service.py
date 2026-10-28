@@ -66,10 +66,12 @@ from guildbotics.runtime.resources import (
 )
 from guildbotics.runtime.ticket_service import (
     ClosedItem,
+    CreateLane,
     MoveLane,
     TicketCreated,
     TicketService,
     TicketUpdated,
+    creation_lane,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -286,6 +288,11 @@ class GitHubTicketService(GitHubApi, TicketService):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
         """Open an issue in ``tracker`` and, if ``add_to_board``, add it to the
         configured Project.
@@ -294,27 +301,119 @@ class GitHubTicketService(GitHubApi, TicketService):
             ServiceError: Saying the issue was created, if it could not be
                 added to the Project: the member does not open it again.
         """
+        if interactive:
+            raise ServiceUnsupported(
+                t("integrations.github.response.interactive_unsupported")
+            )
         repository = self.repository(tracker)
+        # Validate all related write scopes and the destination before creating.
+        for related in filter(None, (parent, *blocked_by)):
+            check_path(
+                self.owner, self.item(related, "ticket").repository, provider="github"
+            )
+        initial_lane = creation_lane(lane, parent, blocked_by)
+        defined = await self._defined_labels(repository, labels)
+        assigned_member = next(
+            (
+                m
+                for m in self.team.members
+                if assignee and member_identity(m).matches(assignee)
+            ),
+            None,
+        )
+        agent = (
+            assigned_member
+            if assigned_member and assigned_member.person_type == "agent"
+            else None
+        )
+        agent_field = None
+        agent_option = None
+        if agent:
+            agent_field = (
+                (await self._fields()).get(self.FIELD_AGENT) if add_to_board else None
+            )
+            agent_option = (
+                next(
+                    (
+                        o["id"]
+                        for o in agent_field["options"]
+                        if o["name"] == get_agent_token(agent)
+                    ),
+                    None,
+                )
+                if agent_field
+                else None
+            )
+            if agent_option is None:
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.github.response.agent_unsupported",
+                        person=agent.person_id,
+                    )
+                )
+        option = None
+        if add_to_board and initial_lane != "new":
+            await self._sync_status_columns()
+            option = self.columns.get(initial_lane)
+            if option is None:
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.github.response.lane_unsupported",
+                        lane=initial_lane,
+                    )
+                )
         payload: dict[str, Any] = {"title": title, "body": body}
-        if labels:
-            payload["labels"] = await self._defined_labels(repository, labels)
+        if assignee and not agent:
+            payload["assignees"] = [assignee]
+        if defined:
+            payload["labels"] = defined
         client = await self.client()
         data = (await client.post(f"/repos/{repository}/issues", json=payload)).json()
         item = self.item(str(data["html_url"]), "ticket")
         created = TicketCreated(
             labels=_label_names(data), target=self.target(item, data)
         )
-        if add_to_board:
-            try:
-                await self._get_project_item_id(str(data["node_id"]))
-            except ServiceError as exc:
-                raise ServiceError(
-                    t(
-                        "integrations.github.response.created_off_board",
-                        url=created.target.url,
-                        message=str(exc),
+        try:
+            if parent or blocked_by:
+                await self.update_ticket(
+                    created.target.url,
+                    body=None,
+                    title=None,
+                    add_labels=(),
+                    remove_labels=(),
+                    state=None,
+                    state_reason=None,
+                    parent=parent,
+                    add_blocked_by=blocked_by,
+                )
+            if add_to_board:
+                project = await self._project_node()
+                project_item = await self._get_project_item_id(str(data["node_id"]))
+                # A newly added item has no Status, hence is not actionable.
+                # Apply Agent before the final Status exposes it to patrol.
+                fields = []
+                if agent_field:
+                    fields.append((agent_field["id"], agent_option))
+                if option:
+                    fields.append((self._status_field_id, option))
+                for field, value in fields:
+                    await self.graphql(
+                        UPDATE_PROJECT_ITEM_STATUS,
+                        {
+                            "proj": project,
+                            "item": project_item,
+                            "field": field,
+                            "opt": value,
+                        },
                     )
-                ) from exc
+        except ServiceError as exc:
+            raise ServiceError(
+                t(
+                    "integrations.github.response.created_off_board",
+                    url=created.target.url,
+                    message=str(exc),
+                )
+            ) from exc
         return created
 
     async def update_ticket(

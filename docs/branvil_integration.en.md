@@ -294,3 +294,11 @@ things:
   for it, which then needs **Dependabot alerts: Read-only** and access to the
   repository (a GitHub App's added permission approved on its installation). A
   repository without an upstream has no alerts and refuses the read as unsupported.
+
+### Initial ticket state
+
+Ticket creation sends interactive mode, assignee, lane, parent and blockers in
+one request. The server commits them together; patrol never observes a partially
+configured ticket. Interactive tickets and their descendants are excluded from
+patrol. Without an explicit lane, a ticket with a parent or blockers starts in
+`ready`; other tickets start in `new`.
