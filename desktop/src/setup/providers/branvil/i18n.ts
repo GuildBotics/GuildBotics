@@ -4,6 +4,10 @@ export const branvil = {
   en: {
     setup: {
       branvil: {
+        nav: {
+          label: "Branvil",
+          openInBrowser: "Open Branvil in the system browser",
+        },
         baseUrl: "Base URL",
         baseUrlHint:
           "Where Branvil is reached, the same on every machine. On a machine other than the Hub, GuildBotics forwards it. The connection is the same in every workspace.",
@@ -94,6 +98,10 @@ export const branvil = {
   ja: {
     setup: {
       branvil: {
+        nav: {
+          label: "Branvil",
+          openInBrowser: "Branvil をシステムのブラウザで開く",
+        },
         baseUrl: "ベース URL",
         baseUrlHint:
           "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは GuildBotics が転送します。接続はすべてのワークスペースで共通です。",
