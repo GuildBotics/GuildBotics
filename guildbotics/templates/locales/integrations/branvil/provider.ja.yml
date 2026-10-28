@@ -3,7 +3,7 @@ ja:
   workspace: "ワークスペース %{workspace} を読み取りました。"
   access: "Branvil がメンバーのトークンをメンバー本人のものとして受け付けました。"
   owner: "人間のメンバーは Branvil のオーナー %{owner} で、GuildBotics の接続はその権限を持っています。"
-  not_owner: "人間のメンバーの Branvil 名 '%{name}' は Branvil のオーナー '%{owner}' ではありません。メンバーをもう一度保存してオーナーの名前にしてください。"
+  not_owner: "人間のメンバーの Branvil のアカウント名 '%{name}' は、オーナーのアカウント名 '%{owner}' と一致しません。メンバーをもう一度保存して、オーナーのアカウントに対応付けてください。"
   ci_load_failed: "Branvil の CI ランナーが %{archive} を読み込めませんでした: %{detail}"
   ci_load_lost: "Branvil の CI ランナーが %{archive} を読み込んでいる間に Branvil が再起動したため、読み込みの結果がわかりません。もう一度読み込んでください。"
   ci_load_superseded: "%{archive} の読み込みの終わりを確かめる前に Branvil の CI ランナーで別の image の操作が始まったため、読み込みの結果がわかりません。もう一度読み込んでください。"

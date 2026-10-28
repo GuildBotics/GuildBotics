@@ -6,4 +6,4 @@ en:
   expired: "This connection was not started here, or it has expired."
   denied: "The connection was not allowed on Branvil's consent screen."
   not_kept: "The admin token Branvil gave could not be kept on this machine. Branvil has revoked the earlier admin token, so connect again."
-  not_agent: "Branvil's member '%{name}' is not an agent. Choose an agent, or another name."
+  not_agent: "Branvil account '%{name}' belongs to the owner or a runner and cannot be used by an AI member. Choose another account."
