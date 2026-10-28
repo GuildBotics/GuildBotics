@@ -90,6 +90,7 @@ from guildbotics.runtime.resources import (
     ReadSubject,
     ReviewVerdict,
 )
+from guildbotics.runtime.ticket_service import CreateLane
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
     PreparedOneShotSync,
@@ -1343,6 +1344,26 @@ def ticket_comment(
         " every ticket refuses --no-add-to-board."
     ),
 )
+@click.option(
+    "--interactive",
+    is_flag=True,
+    help="Create for interactive work; unsupported providers refuse it.",
+)
+@click.option(
+    "--assignee",
+    help="Assignee's person_id from the member context roster, including humans.",
+)
+@click.option(
+    "--lane",
+    type=click.Choice(["new", "ready", "in_progress"]),
+    help="Initial lane; defaults to ready with a parent or blockers, new otherwise.",
+)
+@click.option("--parent", help="Parent ticket URL.")
+@click.option(
+    "--blocked-by",
+    multiple=True,
+    help="Blocking ticket URL. Repeat for several blockers.",
+)
 @_human_approved_option
 @_json_format_option
 def ticket_create(
@@ -1351,6 +1372,11 @@ def ticket_create(
     title: str,
     labels: tuple[str, ...],
     add_to_board: bool,
+    interactive: bool,
+    assignee: str | None,
+    lane: CreateLane | None,
+    parent: str | None,
+    blocked_by: tuple[str, ...],
     human_approved: bool,
     output_format: str,
 ) -> _CommandWork:
@@ -1359,7 +1385,18 @@ def ticket_create(
     return _code_hosting(
         person,
         lambda context: member_repository.ticket_create(
-            context, tracker, title, body, add_to_board, labels, human_approved
+            context,
+            tracker,
+            title,
+            body,
+            add_to_board,
+            labels,
+            human_approved,
+            interactive=interactive,
+            assignee=assignee,
+            lane=lane,
+            parent=parent,
+            blocked_by=blocked_by,
         ),
         evidence="issue_create",
         then=record_member_issue_create_event,

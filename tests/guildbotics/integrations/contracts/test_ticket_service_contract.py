@@ -66,6 +66,174 @@ async def _ticket(board: Harness, title: str = "Fix login") -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("relation", ["none", "parent", "blocker", "both"])
+@pytest.mark.parametrize("lane", [None, "new", "ready", "in_progress"])
+async def test_creation_sets_assignment_relations_and_initial_lane(
+    board, relation, lane
+):
+    parent, blocker = await _ticket(board, "Parent"), await _ticket(board, "Blocker")
+    # Starting a ticket requires its blockers to have finished.
+    await board.tickets.update_ticket(
+        blocker,
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state="closed",
+        state_reason="completed",
+    )
+    parent_url = parent if relation in {"parent", "both"} else None
+    blockers = [blocker] if relation in {"blocker", "both"} else []
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Created complete",
+        "",
+        [LABEL],
+        assignee=name,
+        lane=lane,
+        parent=parent_url,
+        blocked_by=blockers,
+    )
+    ticket = await _read(board, created.target.url)
+    expected_lane = lane or ("ready" if parent_url or blockers else "new")
+    assert ticket["lane"] == expected_lane
+    assert ticket["assignees"] == [name]
+    assert ticket["labels"] == [LABEL]
+    assert (ticket["parent"] or {}).get("url") == parent_url
+    assert [item["url"] for item in ticket["blocked_by"]] == blockers
+    selected = [task.url for task in await board.tickets.candidates()]
+    assert (created.target.url in selected) == (expected_lane != "new")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("related", [False, True])
+@pytest.mark.parametrize("lane", [None, "ready", "in_progress"])
+async def test_interactive_creation_is_excluded_from_patrol_or_refused_before_writes(
+    board, related, lane
+):
+    parent = await _ticket(board, "Parent") if related else None
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    before = len(board.writes)
+    if "interactive" not in board.features:
+        with pytest.raises(ServiceUnsupported):
+            await board.tickets.create_ticket(
+                board.tracker,
+                "Interactive",
+                "",
+                [],
+                interactive=True,
+                assignee=name,
+                parent=parent,
+                lane=lane,
+            )
+        assert board.writes[before:] == []
+        return
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Interactive",
+        "",
+        [],
+        interactive=True,
+        assignee=name,
+        parent=parent,
+        lane=lane,
+    )
+    assert (await _read(board, created.target.url))["lane"] == (
+        lane or ("ready" if parent else "new")
+    )
+    assert await board.tickets.candidates() == []
+    # Descendants inherit the interactive exclusion too.
+    child = await board.tickets.create_ticket(
+        board.tracker,
+        "Child",
+        "",
+        [],
+        assignee=name,
+        parent=created.target.url,
+    )
+    assert await board.tickets.candidates() == []
+    assert (
+        await board.tickets.refresh(
+            Task(
+                url=child.target.url, id=child.target.url, title="Child", description=""
+            )
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", ["parent", "blocked_by"])
+async def test_creation_checks_all_related_write_scopes_before_creating(
+    board, relation
+):
+    before = len(board.writes)
+    options = {
+        relation: board.theirs.url if relation == "parent" else [board.theirs.url]
+    }
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await board.tickets.create_ticket(board.tracker, "Denied", "", [], **options)
+    assert board.writes[before:] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_index", [0, 1])
+async def test_creation_can_assign_human_members(board, member_index):
+    member = board.team.members[member_index]
+    member.person_type = "human"
+    name = PROVIDERS[board.name].member_identity(member).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Human assignment",
+        "",
+        [],
+        assignee=name,
+        lane="ready",
+    )
+    assert (await _read(board, created.target.url))["assignees"] == [name]
+
+
+@pytest.mark.asyncio
+async def test_github_exposes_status_only_after_relations_and_agent_assignment(
+    board, monkeypatch
+):
+    if board.name != "github":
+        return
+    parent, blocker = await _ticket(board, "Parent"), await _ticket(board, "Blocker")
+    graphql = board.tickets.graphql
+    observed = []
+
+    async def traced(query, variables):
+        if "updateProjectV2ItemFieldValue" in query and variables["field"] == "status":
+            number = variables["item"].removeprefix("ITEM")
+            url = f"https://github.com/{board.repository}/issues/{number}"
+            ticket = await _read(board, url)
+            assert ticket["lane"] == "new"
+            assert ticket["assignees"] == [
+                PROVIDERS[board.name].member_identity(board.team.members[0]).name
+            ]
+            assert ticket["parent"]["url"] == parent
+            assert [b["url"] for b in ticket["blocked_by"]] == [blocker]
+            assert url not in [t.url for t in await board.tickets.candidates()]
+            observed.append(url)
+        return await graphql(query, variables)
+
+    monkeypatch.setattr(board.tickets, "graphql", traced)
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Complete before ready",
+        "",
+        [],
+        assignee=name,
+        parent=parent,
+        blocked_by=[blocker],
+    )
+    assert observed == [created.target.url]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("uppercase", [False, True])
 async def test_unassigned_mentions_are_answered_once_without_taking_the_ticket(
     board: Harness,

@@ -112,10 +112,15 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member ticket create --person <person> --tracker <tracker> "
                 "--title <title> --content-file <file> [--label <name> ...] "
-                "[--add-to-board|--no-add-to-board] --human-approved",
+                "[--add-to-board|--no-add-to-board] [--interactive] [--assignee <person_id>] "
+                "[--lane new|ready|in_progress] [--parent <ticket_url>] "
+                "[--blocked-by <ticket_url> ...] --human-approved",
                 "Open a follow-up ticket a human asked for, in the tracker a ticket's "
                 "read names (`tracker`); a board that keeps every ticket refuses "
-                "`--no-add-to-board`.",
+                "`--no-add-to-board`. Creation settings are covered by the human's approval. "
+                "The lane defaults to ready with a parent or blockers, new otherwise; "
+                "interactive work starting now uses --interactive --assignee <person_id> "
+                "--lane in_progress. Unsupported providers refuse --interactive.",
             ),
             (
                 "guildbotics member ticket update --person <person> --url <ticket_url> "
@@ -564,7 +569,13 @@ _CROSS_CUTTING_RULES: list[str] = [
     "the tickets it is blocked by are closed: the patrol does not start a blocked ticket, "
     "and a service may refuse either. Assignees and the "
     "lane are read-only on purpose, because who takes a ticket is assigned by a human on "
-    "the board; PR state, draft, and base are read-only for the same reason (the "
+    "the board. The exception is ticket creation: --human-approved covers the initial "
+    "assignee (any roster member, including humans), lane, interactive mode, parent, "
+    "and blockers requested in the conversation. Creating a ticket never authorizes "
+    "changing the assignment or lane of an existing ticket. "
+    "例外として、作成時の担当者 (人を含む名簿のメンバー)、レーン、対話指定、親、依存先の指定は "
+    "--human-approved の承認に含まれる。既存チケットの担当者とレーンの変更は承認しない。 "
+    "PR state, draft, and base are read-only for the same reason (the "
     "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
     "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "

@@ -31,6 +31,14 @@ from guildbotics.runtime.resources import (
 
 #: A lane a ticket is moved to.
 MoveLane = Literal["ready", "in_progress", "done"]
+CreateLane = Literal["new", "ready", "in_progress"]
+
+
+def creation_lane(
+    lane: CreateLane | None, parent: str | None, blocked_by: Sequence[str]
+) -> CreateLane:
+    """Resolve the initial lane before a ticket becomes visible to patrol."""
+    return lane if lane is not None else "ready" if parent or blocked_by else "new"
 
 
 class TicketCreated(ReadModel):
@@ -108,13 +116,22 @@ class TicketService(ABC):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
-        """Open a ticket in ``tracker``, in the board's new lane unless not
-        ``add_to_board``; labels are the tracker's own, never new ones.
+        """Open a ticket with its assignment, mode and relations already set.
+
+        ``assignee`` is a service actor name. The default lane is ready with
+        a parent or blockers, new otherwise, regardless of ``interactive``.
+        Providers without atomic creation set the lane last, keeping partial
+        work outside patrol's candidates. Labels are the tracker's own.
 
         Raises:
             ServiceUnsupported: If not ``add_to_board`` and the board holds
-                every ticket.
+                every ticket, or if ``interactive`` is unsupported.
         """
 
     @abstractmethod

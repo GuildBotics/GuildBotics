@@ -259,7 +259,15 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
     "state": (CONTENT, frozenset({"ticket update"}), ""),
     "state_reason": (CONTENT, frozenset({"ticket update"}), ""),
     # The tickets a ticket is related to: each is checked against the scope.
-    "parent": (SERVICE, frozenset({"ticket update"}), _SCOPE),
+    "parent": (SERVICE, frozenset({"ticket create", "ticket update"}), _SCOPE),
+    "blocked_by": (SERVICE, frozenset({"ticket create"}), _SCOPE),
+    "assignee": (
+        SERVICE,
+        frozenset({"ticket create"}),
+        "guildbotics.capabilities.member_repository.ticket_create",
+    ),
+    "interactive": (CONTENT, frozenset({"ticket create"}), ""),
+    "lane": (CONTENT, frozenset({"ticket create"}), ""),
     "add_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "remove_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "closes_issue": (CONTENT, frozenset({"pr create", "pr update"}), ""),

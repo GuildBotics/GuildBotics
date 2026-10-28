@@ -51,10 +51,12 @@ from guildbotics.runtime.resources import (
 )
 from guildbotics.runtime.ticket_service import (
     ClosedItem,
+    CreateLane,
     MoveLane,
     TicketCreated,
     TicketService,
     TicketUpdated,
+    creation_lane,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -155,15 +157,24 @@ class LocalTicketService(TicketService):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
         defined = _defined_labels(tracker, labels)
+        initial_parent = self._related(parent) if parent else None
+        blockers = list(dict.fromkeys(map(self._related, blocked_by)))
         ref, number = store.new_ref("ticket", tracker)
         item = {
             **items.new_item(number, title, body, member_identity(self.person).name),
             "labels": defined,
-            "lane": Task.NEW if add_to_board else None,
-            "parent": None,
-            "blocked_by": [],
+            "lane": creation_lane(lane, parent, blocked_by) if add_to_board else None,
+            "interactive": interactive,
+            "assignees": [assignee] if assignee else [],
+            "parent": initial_parent,
+            "blocked_by": blockers,
         }
         store.save(self.scope, ref, item)
         return TicketCreated(labels=defined, target=items.target(ref, item))
@@ -288,12 +299,28 @@ class LocalTicketService(TicketService):
         check_path(self.scope, ref.place, provider="local")
         return ref.url
 
+    def _interactive(self, item: dict[str, Any]) -> bool:
+        """A ticket inherits its interactive parent's exclusion from patrol."""
+        seen: set[str] = set()
+        while True:
+            if item["interactive"]:
+                return True
+            parent = item["parent"]
+            if not parent or parent in seen:
+                return False
+            seen.add(parent)
+            item = store.load(store.locate(parent, "ticket"))
+
     async def _work(
         self, ref: store.Ref, item: dict[str, Any], *, finish_merged: bool = True
     ) -> Task | None:
         me = member_identity(self.person).name
         lane = item["lane"]
-        if item["state"] != "open" or not in_scope(self.scope, ref.place):
+        if (
+            item["state"] != "open"
+            or not in_scope(self.scope, ref.place)
+            or self._interactive(item)
+        ):
             return None
         assigned = me in item["assignees"]
         if assigned and (

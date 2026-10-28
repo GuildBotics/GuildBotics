@@ -1671,7 +1671,7 @@ guildbotics member ticket comment [OPTIONS]
 
 ## `guildbotics member ticket create`
 
-Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`.
+Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
 
 ```text
 guildbotics member ticket create [OPTIONS]
@@ -1686,6 +1686,11 @@ guildbotics member ticket create [OPTIONS]
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--label TEXT` | Label already defined in the tracker. Repeat for several labels. |
 | `--add-to-board / --no-add-to-board` | Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board. [default: add-to-board] |
+| `--interactive` | Create for interactive work; unsupported providers refuse it. |
+| `--assignee TEXT` | Assignee's person_id from the member context roster, including humans. |
+| `--lane [new\|ready\|in_progress]` | Initial lane; defaults to ready with a parent or blockers, new otherwise. |
+| `--parent TEXT` | Parent ticket URL. |
+| `--blocked-by TEXT` | Blocking ticket URL. Repeat for several blockers. |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

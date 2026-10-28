@@ -24,3 +24,4 @@ ja:
     not_checked: "この入力に対する新着確認がまだ行われていません。"
     new_messages: "前回の確認後に元のスレッドへ新着メッセージが届いています。"
     required: "%{reason} guildbotics member chat updates --person %{person} を実行し、結果を読んで操作内容を再検討してから再試行してください。"
+  ticket_assignee: "名簿のメンバー %{person} にチケットサービスのアカウントがありません。"
