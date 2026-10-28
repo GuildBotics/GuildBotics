@@ -21,6 +21,7 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.local import items, store
+from guildbotics.integrations.local.identity import member_identity
 from guildbotics.integrations.pull_request_patrol import (
     FEEDBACK,
     REVIEW,
@@ -32,7 +33,7 @@ from guildbotics.integrations.pull_request_patrol import (
     pull_request_work,
 )
 from guildbotics.integrations.readiness import Freshness, readiness_of
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
     CodeHostingService,
@@ -145,6 +146,8 @@ class LocalCodeHostingService(CodeHostingService):
             "assignees": item["assignees"],
             "labels": item["labels"],
             "author_type": self._author_type(item["author"]),
+            "author": item["author"],
+            "requested_reviewers": item["reviewers"],
             "head": item["head"],
             "head_repository": item["head_repository"],
             "head_sha": _head_sha(item),
@@ -218,7 +221,11 @@ class LocalCodeHostingService(CodeHostingService):
         return {**self._comment(comment), "reply_to_id": comment["in_reply_to"]}
 
     def _author_type(self, author: str) -> str:
-        return Message.ASSISTANT if author == self.person.person_id else Message.USER
+        return (
+            Message.ASSISTANT
+            if author == member_identity(self.person).name
+            else Message.USER
+        )
 
     async def identity(self, *, check: bool = False) -> dict[str, str]:
         return {}
@@ -229,7 +236,9 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, body: str, *, status: WorkflowStatus | None = None
     ) -> CommentWritten:
         ref = store.locate(url, "pull_request")
-        return items.comment(self.scope, ref, self.person.person_id, body, status)
+        return items.comment(
+            self.scope, ref, member_identity(self.person).name, body, status
+        )
 
     async def create_pull_request(
         self,
@@ -256,7 +265,9 @@ class LocalCodeHostingService(CodeHostingService):
             links = [_linked(ticket, repository) for ticket in tickets]
             ref, number = store.new_ref("pull_request", repository)
             item = {
-                **items.new_item(number, title, body, self.person.person_id),
+                **items.new_item(
+                    number, title, body, member_identity(self.person).name
+                ),
                 "head": head,
                 "head_repository": repository,
                 "base": base,
@@ -301,11 +312,18 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> ReviewSubmitted:
         ref, item = _at_head(url, head)
         review = items.entry(
-            item, "review", self.person.person_id, body, verdict=verdict, commit=head
+            item,
+            "review",
+            member_identity(self.person).name,
+            body,
+            verdict=verdict,
+            commit=head,
         )
         item["reviews"].append(review)
         # A review answers the member's review request, as on every code host.
-        item["reviewers"] = [r for r in item["reviewers"] if r != self.person.person_id]
+        item["reviewers"] = [
+            r for r in item["reviewers"] if r != member_identity(self.person).name
+        ]
         store.save(self.scope, ref, item)
         return ReviewSubmitted(
             verdict=verdict, commit=head, url=None, target=items.target(ref, item)
@@ -326,7 +344,7 @@ class LocalCodeHostingService(CodeHostingService):
         comment = items.entry(
             item,
             "inline",
-            self.person.person_id,
+            member_identity(self.person).name,
             body,
             path=path,
             line=line,
@@ -364,7 +382,7 @@ class LocalCodeHostingService(CodeHostingService):
         reply = items.entry(
             item,
             "inline",
-            self.person.person_id,
+            member_identity(self.person).name,
             body,
             **{key: root[key] for key in ("path", "line", "side", "commit")},
             in_reply_to=reply_to,
@@ -382,7 +400,9 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, target_id: str, reaction: SemanticReaction
     ) -> ReactionAdded:
         ref = store.locate(url, "pull_request")
-        return items.react(self.scope, ref, self.person.person_id, target_id, reaction)
+        return items.react(
+            self.scope, ref, member_identity(self.person).name, target_id, reaction
+        )
 
     async def readiness(
         self,
@@ -511,11 +531,14 @@ class LocalCodeHostingService(CodeHostingService):
 
     async def can_receive_work(self, url: str) -> bool:
         ref = store.locate(url, "pull_request")
-        return pull_request_work(
-            _snapshot(ref, store.load(ref)), self.person.person_id
+        return in_scope(self.scope, ref.place) and pull_request_work(
+            _snapshot(ref, store.load(ref)), member_identity(self.person).name
         ) in {FEEDBACK, REVIEW}
 
     async def _patrol(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
+        if not in_scope(self.scope, ref.place):
+            return None
+
         async def draft() -> None:
             pull = store.load(ref)
             pull["draft"] = True
@@ -524,7 +547,7 @@ class LocalCodeHostingService(CodeHostingService):
         return await patrol(
             self,
             _snapshot(ref, item),
-            self.person.person_id,
+            member_identity(self.person).name,
             provider="local",
             person_id=self.person.person_id,
             draft=draft,

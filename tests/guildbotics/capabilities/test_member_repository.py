@@ -20,6 +20,7 @@ from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local import store
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
@@ -133,7 +134,7 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
     assert commented == {
         "id": "comment-1",
         "url": None,
-        "author": "aiko",
+        "author": username("aiko"),
         "created_at": commented["created_at"],
         "target": target,
     }
@@ -244,7 +245,7 @@ async def test_pr_reaction_reacts_to_each_kind_of_entry(member, entry_id, key):
 
     assert result == {"reaction": "ack", "id": entry_id}
     [reacted] = item(url)[key]
-    assert reacted["reactions"] == [{"author": "aiko", "reaction": "ack"}]
+    assert reacted["reactions"] == [{"author": username("aiko"), "reaction": "ack"}]
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,9 @@ async def test_ticket_reaction_reacts_to_a_comment_of_the_ticket(member):
 
     assert result == {"reaction": "celebrate", "id": "comment-2"}
     [reacted] = item(url)["comments"]
-    assert reacted["reactions"] == [{"author": "aiko", "reaction": "celebrate"}]
+    assert reacted["reactions"] == [
+        {"author": username("aiko"), "reaction": "celebrate"}
+    ]
 
 
 @pytest.mark.asyncio

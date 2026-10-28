@@ -7,6 +7,7 @@ from typing import Any
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Service
+from guildbotics.integrations.factory import configured_providers
 from guildbotics.runtime.context import Context
 from guildbotics.utils.person_profile import build_member_communication_style
 
@@ -42,6 +43,22 @@ async def member_context(
         "communication_style": build_member_communication_style(person),
         **identity,
         "credential_status": credential_status,
+        "roster": [
+            {
+                "person_id": member.person_id,
+                "name": member.name,
+                "person_type": member.person_type,
+                "services": {
+                    provider.name: {
+                        "names": list(public_identity.names),
+                        "mention": public_identity.mention,
+                    }
+                    for provider in configured_providers(context.team)
+                    if (public_identity := provider.member_identity(member)).names
+                },
+            }
+            for member in context.team.members
+        ],
         "memory": MemberMemoryService(person).load_context_memory(),
         # The full member command surface and cross-cutting rules. This is
         # the same reference printed by ``guildbotics member help`` and is

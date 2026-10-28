@@ -24,8 +24,8 @@ from guildbotics.integrations.branvil.api import (
     BranvilItem,
     interactive,
     segment,
-    username,
 )
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_attachments import referred, too_large
 from guildbotics.integrations.ticket_selection import (
@@ -44,6 +44,7 @@ from guildbotics.runtime.port import (
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    ActorName,
     Attachment,
     CommentWritten,
     ReactionAdded,
@@ -100,7 +101,9 @@ class BranvilTicketService(BranvilApi, TicketService):
             repository=item.place,
             body=str(data.get("body") or ""),
             state=str(data["state"]),
-            assignees=[str(data["assignee"]["name"])] if data["assignee"] else [],
+            assignees=[ActorName(str(data["assignee"]["name"]))]
+            if data["assignee"]
+            else [],
             labels=list(data.get("labels") or []),
             lane=data["lane"] if self._on_board(data) else None,
             parent=data["parent"] and self._relative(data["parent"]),
@@ -320,7 +323,7 @@ class BranvilTicketService(BranvilApi, TicketService):
         An interactive card, or one of an interactive ancestor, is none: a
         human works on it with an agent, so no trigger selects it.
         """
-        me = username(self.person).casefold()
+        me = member_identity(self.person).name
         assigned = bool(card["assignee"]) and card["assignee"]["name"].casefold() == me
         if not (
             me

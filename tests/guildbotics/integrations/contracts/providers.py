@@ -29,6 +29,7 @@ import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cached_property
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -37,10 +38,12 @@ import httpx
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.integrations.factory import ServiceIntegrationFactory
+from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+from guildbotics.integrations.factory import ServiceIntegrationFactory, PROVIDERS
 from guildbotics.integrations.github import async_client, github_utils
 from guildbotics.integrations.github.repository_scope import NODE_REPOSITORY
 from guildbotics.integrations.local import store
+from guildbotics.integrations.local.identity import username
 from guildbotics.runtime.code_hosting_service import CodeHostingService
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations import branvil_double
@@ -48,6 +51,8 @@ from tests.guildbotics.integrations.github_services import rendered_body
 from tests.guildbotics.local_code_host import attachment, tracker, write
 
 MEMBER = "aiko"
+OTHER = "yuki"
+BRANVIL_LOGIN = "aiko-bv"
 LOGIN = "aiko-gh"
 API = "https://api.github.com"
 #: A ticket URL of no provider of the factory.
@@ -106,7 +111,30 @@ class Harness:
     #: ``None`` for a provider without ``attachments``.
     attach: Callable[[str, bytes], str] | None = None
 
+    request_review: Callable[[str, Person], None] | None = None
+    assign_to: Callable[[str, Person], None] | None = None
+
+    @property
+    def team(self) -> Team:
+        return self.tickets.team
+
+    @cached_property
+    def other_code(self) -> CodeHostingService:
+        return ServiceIntegrationFactory().create_code_hosting_service(
+            logging.getLogger(__name__), self.team.members[1], self.team
+        )
+
+    @cached_property
+    def other_tickets(self) -> TicketService:
+        return ServiceIntegrationFactory().create_ticket_service(
+            logging.getLogger(__name__), self.team.members[1], self.team
+        )
+
     async def aclose(self) -> None:
+        if "other_code" in self.__dict__:
+            await self.other_code.aclose()
+        if "other_tickets" in self.__dict__:
+            await self.other_tickets.aclose()
         await self.code.aclose()
         await self.tickets.aclose()
 
@@ -124,7 +152,8 @@ def _services(
         person_id=MEMBER,
         name="Aiko",
         person_type="agent",
-        account_info={"github_username": LOGIN, "branvil_username": MEMBER},
+        account_info={"github_username": LOGIN, "branvil_username": BRANVIL_LOGIN},
+        routine_commands=[TICKET_WORKFLOW_COMMAND],
     )
     project = Project(
         name="demo",
@@ -133,7 +162,14 @@ def _services(
             "ticket_service": {"name": name, key: scope, **board},
         },
     )
-    team = Team(project=project, members=[person])
+    other = Person(
+        person_id=OTHER,
+        name="Yuki",
+        person_type="agent",
+        routine_commands=[TICKET_WORKFLOW_COMMAND],
+        account_info={"github_username": "yuki-gh[bot]", "branvil_username": "yuki-bv"},
+    )
+    team = Team(project=project, members=[person, other])
     factory = ServiceIntegrationFactory()
     logger = logging.getLogger(__name__)
     return (
@@ -297,7 +333,22 @@ def _local(tmp_path: Path, monkeypatch) -> Harness:
         frozenset({"request_changes", "artifacts", "off_board", "attachments"}),
         writes=writes,
         human_comment=human_comment,
-        mention=f"@{MEMBER}",
+        mention=f"@{username(MEMBER)}",
+        request_review=lambda url, person: write(
+            store.locate(url, "pull_request"),
+            {
+                **store.load(store.locate(url, "pull_request")),
+                "reviewers": [username(person.person_id)],
+            },
+        ),
+        assign_to=lambda url, person: write(
+            store.locate(url, "ticket"),
+            {
+                **store.load(store.locate(url, "ticket")),
+                "assignees": [username(person.person_id)],
+                "lane": "ready",
+            },
+        ),
         attach=attach,
     )
 
@@ -326,6 +377,11 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
     branvil_double.serve(double, monkeypatch)
     monkeypatch.setenv(f"{MEMBER.upper()}_BRANVIL_TOKEN", branvil_double.TOKEN)
     code, tickets = _services("branvil", branvil_double.SCOPE, key="workspace")
+    for person in code.team.members:
+        name = PROVIDERS["branvil"].member_identity(person).name
+        double.member(name, "agent")
+        double.issue(name, "cli", f"test-{name}")
+        monkeypatch.setenv(f"{person.person_id.upper()}_BRANVIL_TOKEN", f"test-{name}")
 
     def advance_base() -> None:
         double.advance("main")
@@ -344,7 +400,7 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         advance_base,
         lambda required: False,
         double.branches.pop,
-        double.assign,
+        lambda url: double.assign(url, name=BRANVIL_LOGIN),
         double.add_artifact,
         double.make_theirs,
         double.merge,
@@ -362,7 +418,13 @@ def _branvil(tmp_path: Path, monkeypatch) -> Harness:
         human_comment=lambda url, body: double._entry(
             url, "comments", branvil_double.OWNER, body
         ),
-        mention=f"@{MEMBER}",
+        mention=f"@{BRANVIL_LOGIN}",
+        request_review=lambda url, person: double.pulls[url].update(
+            reviewers=[PROVIDERS["branvil"].member_identity(person).name]
+        ),
+        assign_to=lambda url, person: double.assign(
+            url, name=PROVIDERS["branvil"].member_identity(person).name
+        ),
         attach=double.add_attachment,
     )
 
@@ -432,7 +494,13 @@ def _github(tmp_path: Path, monkeypatch) -> Harness:
         frozenset({"request_changes", "artifacts", "dependency_alerts", "off_board"}),
         writes=double.writes,
         human_comment=human_comment,
-        mention=f"@{LOGIN}",
+        mention=PROVIDERS["github"].member_identity(code.team.members[0]).mention,
+        request_review=lambda url, person: double.items[
+            int(url.rsplit("/", 1)[1])
+        ].update(
+            requested_reviewers=[{"login": person.account_info["github_username"]}]
+        ),
+        assign_to=lambda url, person: double.assign_agent(url, person),
     )
 
 
@@ -442,7 +510,11 @@ def serve(double: GitHubDouble, monkeypatch) -> None:
 
     async def create(person, base_url, owner):
         client = async_client.get_async_client(
-            base_url, github_utils.GitHubTokenAuth("token"), owner
+            base_url,
+            github_utils.GitHubTokenAuth(
+                person.account_info.get("github_username", person.person_id)
+            ),
+            owner,
         )
         client._transport = httpx.MockTransport(double.respond)
         client._mounts = {}
@@ -471,6 +543,8 @@ class GitHubDouble:
     address of its own."""
 
     def __init__(self) -> None:
+        self.actor = LOGIN
+        self.agents: dict[int, str] = {}
         self.writes: list[str] = []
         self.items: dict[int, dict[str, Any]] = {}
         self.comments: dict[int, dict[str, Any]] = {}
@@ -528,6 +602,7 @@ class GitHubDouble:
             self.items[int(number)].update(state="closed", closed_at=_CLOSED_AT)
 
     def respond(self, request: httpx.Request) -> httpx.Response:
+        self.actor = request.headers["authorization"].split(" ", 1)[1]
         path = request.url.path
         body = json.loads(request.content) if request.content else {}
         if request.method != "GET" and (
@@ -539,34 +614,12 @@ class GitHubDouble:
         if path == "/rate_limit":
             return httpx.Response(200, json={"resources": {}})
         if path == "/search/issues":
-            assert (
-                request.url.params["q"]
-                == f"is:issue is:open user:{OWNER} mentions:{LOGIN}"
-            )
-            found = [
-                item
-                for item in self.items.values()
-                if "pull_request" not in item
-                and item["state"] == "open"
-                and any(
-                    f"@{LOGIN}" in (entry["body"] or "").casefold()
-                    for entry in [
-                        item,
-                        *[
-                            comment
-                            for comment in self.comments.values()
-                            if comment["issue_url"].endswith(
-                                f"/issues/{item['number']}"
-                            )
-                        ],
-                    ]
-                )
-            ]
+            query = request.url.params["q"]
             return httpx.Response(
                 200,
                 json={
-                    "items": found,
-                    "total_count": len(found),
+                    "items": self._search(query),
+                    "total_count": len(self._search(query)),
                     "incomplete_results": False,
                 },
             )
@@ -589,6 +642,63 @@ class GitHubDouble:
         if isinstance(answer, httpx.Response):
             return answer
         return httpx.Response(201 if request.method == "POST" else 200, json=answer)
+
+    def assign_agent(self, url: str, person: Person) -> None:
+        number = int(url.rsplit("/", 1)[1])
+        self.agents[number] = PROVIDERS["github"].member_identity(person).mention
+        self.board[number] = "Todo"
+
+    def _search(self, query: str) -> list[dict[str, Any]]:
+        found = []
+        for item in self.items.values():
+            if item["state"] != "open":
+                continue
+            number = item["number"]
+            if "is:pr" in query:
+                if "head" not in item or item["draft"]:
+                    continue
+                role, login = query.rsplit(" ", 1)[1].split(":", 1)
+
+                def matches(actor):
+                    return (
+                        actor.removesuffix("[bot]").casefold()
+                        == login.removesuffix("[bot]").casefold()
+                    )
+
+                qualifies = {
+                    "author": matches(item["user"]["login"]),
+                    "review-requested": any(
+                        matches(user["login"])
+                        for user in item.get("requested_reviewers", [])
+                    ),
+                    "reviewed-by": any(
+                        matches(review["user"]["login"])
+                        and review["pull_request_url"].endswith(f"/pulls/{number}")
+                        for review in self.reviews.values()
+                    ),
+                    "commenter": any(
+                        matches(comment["user"]["login"]) and comment["issue"] == number
+                        for comment in self.comments.values()
+                    ),
+                }
+                if qualifies[role]:
+                    found.append(item)
+            elif "head" not in item:
+                mention = (
+                    query.rsplit("mentions:", 1)[1]
+                    if "mentions:" in query
+                    else query.split('"')[1]
+                )
+                needle = "@" + mention if "mentions:" in query else mention
+                if any(
+                    needle.casefold() in (entry["body"] or "").casefold()
+                    for entry in [
+                        item,
+                        *[c for c in self.comments.values() if c["issue"] == number],
+                    ]
+                ):
+                    found.append(item)
+        return found
 
     def _theirs(self, method: str, route: str) -> httpx.Response:
         """Another owner's repository: readable, and holding one issue."""
@@ -732,7 +842,16 @@ class GitHubDouble:
             self.review_comments[reply["id"]] = reply
             return reply
         if re.fullmatch(r"/pulls/\d+/files", route):
-            return []
+            return [
+                {
+                    "filename": "changed.py",
+                    "status": "added",
+                    "additions": 1,
+                    "deletions": 0,
+                    "changes": 1,
+                    "patch": "@@ -0,0 +1 @@\n+fixed",
+                }
+            ]
         if match := re.fullmatch(r"/branches/(.+)", route):
             sha = self.branches.get(match.group(1))
             return None if sha is None else {"commit": {"sha": sha}}
@@ -824,6 +943,11 @@ class GitHubDouble:
             "submitted_at": "2026-07-02T00:00:00Z",
         }
         self.reviews[review["id"]] = review
+        self.items[number]["requested_reviewers"] = [
+            user
+            for user in self.items[number].get("requested_reviewers", [])
+            if user["login"] != self.actor
+        ]
         return review
 
     def _new(self, kind: str, body: dict) -> dict[str, Any]:
@@ -838,7 +962,7 @@ class GitHubDouble:
             "body_html": rendered_body(body.get("body") or ""),
             "state": "open",
             "html_url": f"https://github.com/{REPO}/{collection}/{number}",
-            "user": {"login": LOGIN},
+            "user": {"login": self.actor},
             "labels": [{"name": name} for name in body.get("labels", [])],
             "assignees": [],
             "created_at": "2026-07-01T00:00:00Z",
@@ -869,7 +993,7 @@ class GitHubDouble:
             "node_id": f"NODE_C{entry_id}",
             "body": body.get("body", ""),
             "body_html": rendered_body(body.get("body") or ""),
-            "user": {"login": LOGIN},
+            "user": {"login": self.actor},
             "created_at": "2026-07-02T00:00:00Z",
             "html_url": f"https://github.com/{REPO}#{entry_id}",
             **fields,
@@ -877,6 +1001,8 @@ class GitHubDouble:
 
     def _graphql(self, body: dict) -> dict[str, Any]:
         query, variables = body["query"], body.get("variables") or {}
+        if "pullRequest(number" in query:
+            return self._pull_graph(variables["number"], query, variables)
         if query == NODE_REPOSITORY:
             theirs = variables["id"] in {_THEIR_NODE, _THEIR_COMMENT}
             owner, name = (THEIRS if theirs else REPO).split("/")
@@ -909,6 +1035,9 @@ class GitHubDouble:
                     {
                         "project": {"id": "PROJECT"},
                         "fieldValueByName": {"name": status} if status else None,
+                        "agent": {"name": self.agents[number]}
+                        if number in self.agents
+                        else None,
                     }
                 ]
             )
@@ -931,6 +1060,104 @@ class GitHubDouble:
             }
         raise AssertionError(f"unexpected GraphQL: {query}")
 
+    def _pull_graph(self, number: int, query: str, variables: dict) -> dict:
+        item = self.items[number]
+        comments = [c for c in self.comments.values() if c["issue"] == number]
+        reviews = [
+            r
+            for r in self.reviews.values()
+            if r["pull_request_url"].endswith(f"/pulls/{number}")
+        ]
+        inline = [
+            c
+            for c in self.review_comments.values()
+            if c["pull_request_url"].endswith(f"/pulls/{number}")
+        ]
+
+        def author(entry):
+            return {"login": entry["user"]["login"].removesuffix("[bot]")}
+
+        def graph_comment(entry):
+            reply = entry.get("in_reply_to_id")
+            return {
+                "databaseId": entry["id"],
+                "body": entry["body"],
+                "createdAt": entry["created_at"],
+                "url": entry["html_url"],
+                "author": author(entry),
+                "replyTo": None if reply is None else {"databaseId": reply},
+            }
+
+        threads = []
+        for root in inline:
+            if root["in_reply_to_id"] is not None:
+                continue
+            entries = [root, *[c for c in inline if c["in_reply_to_id"] == root["id"]]]
+            threads.append(
+                {
+                    "id": f"THREAD{root['id']}",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [graph_comment(c) for c in entries],
+                        "pageInfo": _LAST,
+                    },
+                    "participants": {"nodes": [{"author": author(c)} for c in entries]},
+                    "latest": {
+                        "nodes": [
+                            {
+                                "author": author(entries[-1]),
+                                "createdAt": entries[-1]["created_at"],
+                            }
+                        ]
+                    },
+                }
+            )
+        node = {
+            "id": item["node_id"],
+            "number": number,
+            "url": item["html_url"],
+            "title": item["title"],
+            "body": item["body"],
+            "state": item["state"].upper(),
+            "isDraft": item["draft"],
+            "createdAt": item["created_at"],
+            "headRefOid": item["head"]["sha"],
+            "author": author(item),
+            "reviewRequests": {
+                "nodes": [
+                    {
+                        "requestedReviewer": {
+                            "login": user["login"].removesuffix("[bot]")
+                        }
+                    }
+                    for user in item.get("requested_reviewers", [])
+                ]
+            },
+            "reviews": {
+                "nodes": [
+                    {
+                        "author": author(r),
+                        "state": r["state"],
+                        "body": r["body"],
+                        "submittedAt": r["submitted_at"],
+                        "commit": {"oid": r["commit_id"]},
+                    }
+                    for r in reviews
+                ]
+            },
+            "comments": {"nodes": [graph_comment(c) for c in comments]},
+            "reviewThreads": {"nodes": threads, "pageInfo": _LAST},
+        }
+        result = {"repository": {"pullRequest": node}}
+        if "node" in variables:
+            thread = next(t for t in threads if t["id"] == variables["node"])
+            result["node"] = {
+                "pullRequest": {"id": item["node_id"]},
+                "comments": thread["comments"],
+            }
+        return result
+
     def _project(self) -> list[dict[str, Any]]:
         nodes = []
         for number, status in self.board.items():
@@ -938,9 +1165,16 @@ class GitHubDouble:
             nodes.append(
                 {
                     "fieldValues": {
-                        "nodes": [{"field": {"name": "Status"}, "name": status}]
-                        if status
-                        else []
+                        "nodes": (
+                            [{"field": {"name": "Status"}, "name": status}]
+                            if status
+                            else []
+                        )
+                        + (
+                            [{"field": {"name": "Agent"}, "name": self.agents[number]}]
+                            if number in self.agents
+                            else []
+                        ),
                     },
                     "content": {
                         "__typename": "Issue",

@@ -51,6 +51,7 @@ import httpx
 
 from guildbotics.entities import Person, Service, Team
 from guildbotics.entities.message import Message
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.repository_scope import check_path, refuse, valid_path
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.member_invocation import current_member_invocation
@@ -565,7 +566,7 @@ class BranvilApi(Calls):
             raise ServiceError(t("integrations.branvil.api.username_missing"))
         me = await self.get("/me")
         name = str(me.get("name") or "")
-        if name.casefold() != username(self.person).casefold():
+        if not member_identity(self.person).matches(name):
             record_auth_failure(self.person.person_id, "identity_mismatch")
             raise ServiceError(
                 t(
@@ -639,7 +640,7 @@ class BranvilApi(Calls):
     def author_type(self, author: object) -> str:
         if not author:
             return ""
-        mine = str(author).casefold() == username(self.person).casefold()
+        mine = member_identity(self.person).matches(str(author))
         return Message.ASSISTANT if mine else Message.USER
 
     def message(self, comment: dict[str, Any]) -> Message:
@@ -650,7 +651,7 @@ class BranvilApi(Calls):
             (
                 member.name
                 for member in self.team.members
-                if author and username(member).casefold() == author.casefold()
+                if author and member_identity(member).matches(author)
             ),
             "",
         )
@@ -674,7 +675,11 @@ class BranvilApi(Calls):
 
     def mentions(self, text: str, name: str | None = None) -> bool:
         """Whether ``text`` mentions ``name``, the member by default."""
-        name = username(self.person) if name is None else name
+        name = (
+            member_identity(self.person).mention.removeprefix("@")
+            if name is None
+            else name
+        )
         return bool(name) and (
             re.search(
                 # A name may hold a dot, but a sentence's dot ends it.
@@ -687,8 +692,9 @@ class BranvilApi(Calls):
 
     def mentions_member(self, data: dict[str, Any]) -> bool:
         """Whether a stored ticket or comment mentions this member."""
-        me = username(self.person).casefold()
-        return any(name.casefold() == me for name in data["mentions"])
+        return any(
+            member_identity(self.person).matches(name) for name in data["mentions"]
+        )
 
     async def post_comment(
         self, item: BranvilItem, body: str, status: WorkflowStatus | None

@@ -15,6 +15,7 @@ from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local import store
 from guildbotics.integrations.local.chat import LocalChatService, channel_path
+from guildbotics.integrations.local.identity import username
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.runtime.port import ServiceError, ServiceUnavailable, WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
@@ -244,7 +245,7 @@ async def test_mention_work_keeps_the_assignee_and_lane_and_has_its_own_session(
 
     assert seen[0].work.kind == "ticket_mention"
     assert moves == []
-    assert (item(url)["lane"], item(url)["assignees"]) == (lane, ["yuki"])
+    assert (item(url)["lane"], item(url)["assignees"]) == (lane, [username("yuki")])
     assert await selector.refresh(context.person, candidate) is None
 
 

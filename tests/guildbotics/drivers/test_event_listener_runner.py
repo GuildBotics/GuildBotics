@@ -25,6 +25,7 @@ from guildbotics.integrations.event_listener import EventListener
 from guildbotics.integrations.factory import ServiceIntegrationFactory
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.local.chat import LocalChatService
+from guildbotics.integrations.local.identity import username
 from guildbotics.runtime.chat_service import ChatEvent
 from guildbotics.runtime.port import WorkflowStatus
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
@@ -256,7 +257,7 @@ async def test_a_message_goes_round_to_the_members_reply_on_the_local_chat(
     assert [json.loads(t["unprocessed_messages"])[0]["content"] for t in turns] == [
         "@alice please summarize"
     ]
-    replies = [line for line in lines("C1") if line["author"] == "alice"]
+    replies = [line for line in lines("C1") if line["author"] == username("alice")]
     assert [(r["text"], r["thread_id"]) for r in replies] == [
         ("Here is the summary.", asked.message_id)
     ]

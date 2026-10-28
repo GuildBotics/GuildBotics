@@ -443,6 +443,22 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         assert "{chat_channel_id}" in body and "{chat_thread_id}" in body
 
 
+def test_review_verdict_finishes_done_and_waits_use_the_public_roster():
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_ticket", language)
+        reviewer = next(line for line in body.splitlines() if line.startswith("7. "))
+        assert "task complete --status done" in reviewer
+        assert "task complete --status asking" not in reviewer
+        assert "conditions in step 13" not in body
+        assert "手順 13 の条件" not in body
+        for number in (6, 13, 15):
+            line = next(
+                line for line in body.splitlines() if line.startswith(f"{number}. ")
+            )
+            assert "roster" in line or "名簿" in line
+            assert "person_id" in line
+
+
 def test_issue_comment_contract_not_in_chat_prompt():
     """The Issue comment contract is specific to handle_ticket and
     must NOT leak into handle_chat_event."""

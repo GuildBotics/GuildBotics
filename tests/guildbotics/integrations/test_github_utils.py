@@ -13,8 +13,8 @@ from guildbotics.integrations.github.github_utils import (
     create_github_app_jwt,
     get_author_type,
     get_person_name,
-    normalize_login,
 )
+from guildbotics.integrations.github.identity import normalize_login
 
 
 def _app_member() -> Person:

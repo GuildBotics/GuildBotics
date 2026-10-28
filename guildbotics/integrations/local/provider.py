@@ -9,11 +9,13 @@ with besides a hosted provider.
 
 from guildbotics.integrations.local.chat import LocalChatListener, LocalChatService
 from guildbotics.integrations.local.code_hosting import LocalCodeHostingService
+from guildbotics.integrations.local.identity import member_identity
 from guildbotics.integrations.local.tickets import LocalTicketService
 from guildbotics.integrations.provider import Chat, Provider
 
 LOCAL = Provider(
     name="local",
+    member_identity=member_identity,
     code_hosting_service=lambda logger, person, team: LocalCodeHostingService(
         person, team
     ),

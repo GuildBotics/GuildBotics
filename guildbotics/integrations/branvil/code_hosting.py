@@ -25,6 +25,7 @@ from guildbotics.integrations.branvil.api import (
     segment,
     username,
 )
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.pull_request_patrol import (
     FEEDBACK,
@@ -148,6 +149,8 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             "assignees": [],
             "labels": list(data.get("labels") or []),
             "author_type": self.author_type(data.get("author")),
+            "author": str(data.get("author") or ""),
+            "requested_reviewers": list(data.get("reviewers") or []),
             "head": str(data["head"]),
             "head_repository": str(data["head_repository"]),
             "head_sha": str(data.get("head_sha") or ""),
@@ -516,10 +519,12 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
 
     async def can_receive_work(self, url: str) -> bool:
         item = self.item(url, "pull_request")
+        if not in_scope(self.workspace, item.place):
+            return False
         pull = await self.get(item.api)
         if not pull.get("head_sha"):
             return False
-        me = username(self.person).casefold()
+        me = member_identity(self.person).name
         if _name(pull) == me and await self._interactive(pull):
             return False
         activity = await self.get(f"{item.api}/activity")
@@ -534,7 +539,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         if not pull.get("head_sha"):
             return None  # the head branch is gone: there is nothing to work on
         item = _pull_item(pull)
-        me = username(self.person).casefold()
+        me = member_identity(self.person).name
         task = await patrol(
             self,
             self._snapshot(item, pull, activity),

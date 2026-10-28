@@ -1567,7 +1567,7 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 ## `guildbotics member task complete`
 
-Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, --waiting-for names members whose patrol receives the request; when all are active agents, record the stop without a chat notice. Without it, the run waits for a human.
+Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1576,7 +1576,7 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--waiting-for TEXT` | Member whose patrol will receive the request (repeatable; asking/blocked only). |
+| `--waiting-for TEXT` | Next member to act, by the context roster's person_id (repeatable; asking/blocked only). |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |

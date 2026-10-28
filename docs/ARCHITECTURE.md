@@ -174,6 +174,15 @@ Trust rules that follow from this shape:
 - The workflow does not trust the agent's natural-language stdout as the result. Only
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
+- A reviewer finishes with `done` after submitting a verdict, including request
+  changes. An author uses `asking` only when a reply is needed to continue.
+  For `asking` or `blocked`, `--waiting-for` records the next member's roster
+  person id. Validation checks the targets of the run's recorded comments, not
+  its entry point: a ticket run can ask a reviewer on its PR. An agent must be
+  reachable by the patrol on at least one such target; a human member is
+  accepted without a patrol or credentials. Only waits entirely for active
+  agents suppress the owner notification. When no recipient is named, the CLI
+  explicitly reports that the owner will be notified.
 - Ticket completion with `status=done` resolves the pull requests the run wrote to (run
   evidence), the ticket PR, and the code host's PRs that refer to the ticket
   (`ticket_pull_requests`), each only when the member authored it (the patrol resumes a
@@ -247,6 +256,14 @@ flowchart LR
 
 What every port shares (`runtime/port.py`, `runtime/resources.py`):
 
+- **People.** Ticket assignees, PR authors and requested reviewers, and comment,
+  review and thread authors use `ActorName`: a service account name, not a
+  GuildBotics person id. Each provider's descriptor exposes a credential-free
+  `member_identity(person)` with its public names (including API aliases) and
+  mention spelling. The patrol and author classification use that same identity.
+  `member context` publishes the team roster so agents can resolve these names
+  and address a teammate without guessing an id from an account name. The local
+  reference provider deliberately gives members names different from their ids.
 - **References.** Tickets and pull requests are named by their URLs; a read is
   `read(resource, subject)`, the subject being the item's URL or, for repository
   information, the repository's path, which the provider checks and spells (GitHub

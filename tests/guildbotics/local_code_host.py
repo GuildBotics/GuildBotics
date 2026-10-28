@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from typing import Any
 
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.local import store
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local.code_hosting import LocalCodeHostingService
 from guildbotics.integrations.local.tickets import LocalTicketService
 from tests.guildbotics.member_services import MemberServices
@@ -182,5 +184,25 @@ def item(url: str) -> dict[str, Any]:
 def write(ref: store.Ref, item: dict[str, Any]) -> None:
     """Put ``item`` where ``ref`` keeps it, as someone editing the files would:
     no member writes it, so no member's scope applies."""
+
+    def name(value: str) -> str:
+        return value if value.casefold().startswith("local-") else username(value)
+
+    def names(value: Any) -> Any:
+        if isinstance(value, list):
+            return [names(entry) for entry in value]
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: name(entry)
+            if key == "author"
+            else [name(actor) for actor in entry]
+            if key in {"assignees", "reviewers"}
+            else re.sub(r"@([\w-]+)", lambda match: "@" + name(match[1]), entry)
+            if key == "body"
+            else names(entry)
+            for key, entry in value.items()
+        }
+
     ref.path.parent.mkdir(parents=True, exist_ok=True)
-    ref.path.write_text(json.dumps(item), encoding="utf-8")
+    ref.path.write_text(json.dumps(names(item)), encoding="utf-8")
