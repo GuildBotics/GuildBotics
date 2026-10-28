@@ -501,8 +501,9 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
     # -- the pull request patrol --------------------------------------------
 
     async def pull_request_candidates(self) -> list[Task]:
-        """Every open, ready PR in the scope that involves the member, oldest
-        update first, that asks something of it."""
+        """Every open, ready PR in the scope that involves the member and asks
+        something of it, in Branvil's order: what waits for least once the
+        member's work is done comes first."""
         entries = await self.items("/pulls", involves="me", state="open", draft="false")
         return [
             task
