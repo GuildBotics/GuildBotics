@@ -36,6 +36,7 @@ import {
 import {
   dismissSystemAlert,
   getConfigStatus,
+  getProjectConfig,
   getSystemAlerts,
   getWorkspaceDevices,
   getWorkspaceServiceOwner,
@@ -104,6 +105,7 @@ vi.mock("./api/client", async (importOriginal) => {
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
+      services: {},
       github_enabled: false,
       github_project_url: "",
       has_google_api_key: false,
@@ -170,6 +172,17 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("places the Branvil browser entry immediately below setup", async () => {
+    const config = await getProjectConfig();
+    vi.mocked(getProjectConfig).mockResolvedValueOnce({
+      ...config,
+      services: { code_hosting_service: { name: "branvil" } },
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    const entry = await screen.findByRole("button", { name: t()("setup.branvil.nav.label") });
+    expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(entry);
+  });
   it("renders the shared workspace and input-store refusal once", async () => {
     const status = await getConfigStatus();
     vi.mocked(getConfigStatus).mockResolvedValue({

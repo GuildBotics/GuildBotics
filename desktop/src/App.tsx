@@ -99,6 +99,7 @@ import {
   type TranscriptSettingsStatus,
 } from "./api/client";
 import { useServiceProviders } from "./setup/providers";
+import { BranvilNavItem } from "./setup/providers/branvil/BranvilNavItem";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { openExternal } from "./openExternal";
 import { SetupPage } from "./setup/SetupPage";
@@ -204,6 +205,7 @@ export function App() {
           <GuardedNavLink className="nav-item" to="/setup">
             <Settings size={18} /> {t("app.nav.setup")}
           </GuardedNavLink>
+          {configured ? <BranvilNavItem /> : null}
         </nav>
         <Select
           className="sidebar-language"

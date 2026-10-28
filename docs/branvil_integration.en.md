@@ -140,6 +140,10 @@ No machine issues them again.
 
 **Open Branvil**, next to the connection, opens Branvil's GUI in the system browser from
 any machine: GuildBotics asks Branvil for a single-use entry link with the admin token.
+The **Branvil** item below **Setup** in the sidebar opens it the same way, with an
+external-link icon. It appears when the saved code host or ticket service uses Branvil;
+saving the integration settings updates its visibility immediately. If opening fails,
+the reason appears below the item.
 
 ## Set up the members
 
