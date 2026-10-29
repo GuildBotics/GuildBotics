@@ -33,6 +33,10 @@ REPOSITORY_ROOT = PACKAGE_ROOT.parent
 
 #: ``(module path, enclosing function) -> completion event that route records``
 TRACE_ROOTS: dict[tuple[str, str], str] = {
+    (
+        "guildbotics/drivers/ticket_selector.py",
+        "_hand_over_at_review_limit",
+    ): "review_limit.finished",
     # A command the Desktop runs, its assistants' included;
     # ``_run_command_traced`` publishes the boundary on the event bus, which
     # records it into the same diagnostics store.
@@ -117,6 +121,7 @@ def test_declared_completion_events_can_end_a_trace() -> None:
 #: root delegates its boundary to one of these, so this is the population that
 #: has to survive a cancelled run.
 COMMAND_BOUNDARIES: set[tuple[str, str]] = {
+    ("guildbotics/drivers/ticket_selector.py", "_hand_over_at_review_limit"),
     # Chat dispatch, the scheduler's commands and ``guildbotics run``.
     ("guildbotics/drivers/utils.py", "command_boundary"),
     # A command the Desktop runs, its assistants' included.

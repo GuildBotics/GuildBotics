@@ -263,8 +263,9 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.
   After a member has reviewed 3 heads, automatic re-review not driven by a request
-  stops when a head that member has never reviewed is pushed: the patrol makes the
-  pull request a draft and says so on it. Statements and thread replies on an already reviewed head still
+  stops when a head that member has never reviewed is pushed: the host ticket selector makes the
+  pull request a draft during candidate selection, records it in Activity, and
+  announces it on the PR and in the reviewer’s `notify_work_stops: true` chat channels. Statements and thread replies on an already reviewed head still
   start a run after the limit, including heads restored by force push or reviewed
   before the count restarted. Explicit review requests remain outside the limit.
   Mark it ready for review to go on; every reviewer's count starts over.

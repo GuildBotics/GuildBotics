@@ -139,6 +139,39 @@ def _title(
     return str(_session(lifecycle, records).title)
 
 
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_review_limit_is_activity_without_an_agent_run_or_session(language):
+    set_language(language)
+    try:
+        url = "https://code.example/acme/team/demo/pulls/7"
+        history = _history(
+            [],
+            [
+                _event(
+                    "pull_request.review_limit",
+                    "2026-07-01T10:01:00+00:00",
+                    payload={
+                        "action": "draft",
+                        "reason": "review_limit",
+                        "pull_request": {
+                            "url": url,
+                            "label": "!7",
+                            "title": "Fix login",
+                        },
+                        "comment_url": url + "#comment-1",
+                    },
+                )
+            ],
+        )
+        assert history.sessions == []
+        [event] = history.events
+        assert event.type == "pr_draft"
+        assert event.title == "PR !7 " + t("app_api.activity_events.review_limit")
+        assert event.detail == "Fix login" and event.url == url
+    finally:
+        set_language("en")
+
+
 def test_completed_chat_session_titled_by_summary_first_line() -> None:
     title = _title(
         _lifecycle(status="succeeded", summary="請求プランの質問に回答\n詳細は省略")

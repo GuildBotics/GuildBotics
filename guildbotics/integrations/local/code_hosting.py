@@ -62,6 +62,7 @@ from guildbotics.runtime.resources import (
     ReviewVerdict,
     read_conditions,
 )
+from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.i18n_tool import t
 
 #: The one job of a head's CI, and its one attempt.
@@ -517,6 +518,19 @@ class LocalCodeHostingService(CodeHostingService):
 
     # -- the pull request patrol --------------------------------------------
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        ref = store.locate(url, "pull_request")
+        check_path(self.scope, ref.place, provider="local")
+        # No await inside the file transaction: other processes and threads
+        # observe the winner before deciding whether they changed the PR.
+        with held_lock(ref.path.with_suffix(".lock")):
+            pull = store.load(ref)
+            if pull["draft"] or pull["state"] != "open":
+                return False
+            pull["draft"] = True
+            store.save(self.scope, ref, pull)
+            return True
+
     async def pull_request_candidates(self) -> list[Task]:
         return [
             task
@@ -539,18 +553,12 @@ class LocalCodeHostingService(CodeHostingService):
         if not in_scope(self.scope, ref.place):
             return None
 
-        async def draft() -> None:
-            pull = store.load(ref)
-            pull["draft"] = True
-            store.save(self.scope, ref, pull)
-
         return await patrol(
             self,
             _snapshot(ref, item),
             member_identity(self.person).name,
             provider="local",
             person_id=self.person.person_id,
-            draft=draft,
         )
 
 

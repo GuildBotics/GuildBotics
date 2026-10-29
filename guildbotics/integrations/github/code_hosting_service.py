@@ -10,7 +10,12 @@ from urllib.parse import urlparse
 
 from guildbotics.entities import Task
 from guildbotics.integrations.github.actions_client import GitHubActionsClient
-from guildbotics.integrations.github.api import INLINE, GitHubItem, number_of
+from guildbotics.integrations.github.api import (
+    INLINE,
+    GitHubItem,
+    GraphQLUnprocessable,
+    number_of,
+)
 from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_github_token,
@@ -452,6 +457,24 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     #   Pull request patrol                                              #
     # ------------------------------------------------------------------ #
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        self.check_push(item.repository)
+        pull = await self.fetch(item)
+        if pull["draft"] or pull["state"] != "open":
+            return False
+        try:
+            await self.graphql(
+                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": pull["node_id"]}
+            )
+        except GraphQLUnprocessable:
+            # GitHub refuses converting an already draft PR. If another
+            # caller won after the read, this call made no transition.
+            if (await self.fetch(item))["draft"]:
+                return False
+            raise
+        return True
+
     async def pull_request_candidates(self) -> list[Task]:
         """Every open PR that asks something of the member, oldest update first."""
         candidates: list[Task] = []
@@ -466,8 +489,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         return await self._pull_request_work(task.pull_request_url)
 
     async def _pull_request_work(self, url: str) -> Task | None:
-        """What the PR asks of the member now; one at the re-review limit is
-        handed over instead."""
+        """What the PR asks of the member now, including review-limit decisions."""
         pull = await self._patrol_snapshot(url)
         return await patrol(
             self,
@@ -475,9 +497,6 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             member_identity(self.person).name,
             provider="github",
             person_id=self.person.person_id,
-            draft=lambda: self.graphql(
-                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": pull.id}
-            ),
         )
 
     async def can_receive_work(self, url: str) -> bool:

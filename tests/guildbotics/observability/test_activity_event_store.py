@@ -11,6 +11,11 @@ from guildbotics.observability.activity_event_store import (
 def test_is_domain_activity_event() -> None:
     assert is_domain_activity_event("repository.push") is True
     assert is_domain_activity_event("workflow.completed") is True
+    assert is_domain_activity_event("pull_request.review_limit") is True
+    assert is_domain_activity_event("review_limit.started") is False
+    assert is_domain_activity_event("review_limit.finished") is False
+    assert is_domain_activity_event("review_limit.failed") is False
+    assert is_domain_activity_event("review_limit.deferred") is False
     # A run's lifecycle is one shared record per run, not its boundary events:
     # those would be read once per command on every device, for nothing the
     # record does not already say.

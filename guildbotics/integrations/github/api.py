@@ -355,6 +355,10 @@ class GitHubApi:
         return str(found["node_id"])
 
 
+class GraphQLUnprocessable(ServiceError):
+    """GitHub rejected the operation because its preconditions do not hold."""
+
+
 def graphql_error(errors: Any) -> ServiceError:
     """What GraphQL ``errors`` say, as the ports' failure."""
     kinds = {item.get("type") for item in errors or [] if isinstance(item, dict)}
@@ -364,6 +368,8 @@ def graphql_error(errors: Any) -> ServiceError:
         return ServiceError(t("integrations.github.response.forbidden"))
     if "NOT_FOUND" in kinds:
         return ServiceNotFound(t("integrations.github.response.not_found"))
+    if "UNPROCESSABLE" in kinds:
+        return GraphQLUnprocessable(t("integrations.github.response.response"))
     return ServiceError(t("integrations.github.response.response"))
 
 

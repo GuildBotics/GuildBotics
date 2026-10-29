@@ -19,8 +19,10 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
+from guildbotics.capabilities.review_limits import record_review_limit
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.work_stops import (
+    StopReason,
     WorkStop,
     completed_stop,
     notify_work_stop,
@@ -44,7 +46,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
     WorkflowSource,
 )
-from guildbotics.utils.correlation import require_trace, set_attributes
+from guildbotics.utils.correlation import require_trace, set_attributes, trace_scope
 from guildbotics.utils.i18n_tool import t
 
 TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
@@ -68,7 +70,13 @@ class TicketSelector:
                 if _has_code_host(context)
                 else []
             )
-            return [*pull_requests, *await context.get_ticket_service().candidates()]
+            actionable = []
+            for task in pull_requests:
+                if task.trigger_reason == pull_request_patrol.REVIEW_LIMIT:
+                    await self._hand_over_at_review_limit(context, task)
+                else:
+                    actionable.append(task)
+            return [*actionable, *await context.get_ticket_service().candidates()]
         finally:
             await context.aclose()
 
@@ -84,6 +92,9 @@ class TicketSelector:
                 else context.get_ticket_service().refresh(candidate)
             )
             if task is None:
+                return None
+            if task.trigger_reason == pull_request_patrol.REVIEW_LIMIT:
+                await self._hand_over_at_review_limit(context, task)
                 return None
             return self._invocation(person, task)
         finally:
@@ -103,10 +114,94 @@ class TicketSelector:
             What ``run_workflow`` returned, or ``None`` when there is no work.
         """
         candidates = await self.candidates(person)
-        invocation = await self.refresh(person, candidates[0]) if candidates else None
-        if invocation is None:
-            return None
-        return await self.run(person, invocation, run_workflow)
+        for candidate in candidates:
+            invocation = await self.refresh(person, candidate)
+            if invocation is not None:
+                return await self.run(person, invocation, run_workflow)
+        return None
+
+    async def _hand_over_at_review_limit(self, context: Context, task: Task) -> None:
+        """Settle one decision in its own trace, regardless of the caller's.
+
+        This is host selection work, never an agent turn: it takes no member
+        lease or TaskRun. The provider's conversion elects the one caller
+        allowed to announce it. An unavailable service defers silently;
+        other conversion failures announce failure, then leave selection
+        free to continue to the next real task.
+        """
+        with trace_scope(
+            "review_limit",
+            person_id=context.person.person_id,
+            command=pull_request_patrol.REVIEW_LIMIT,
+            attributes=task.trace_attributes(),
+        ) as trace:
+            try:
+                record_review_limit(task, "review_limit.started")
+                code = context.get_code_hosting_service()
+                assert task.pull_request_url
+                error = None
+                try:
+                    converted = await code.convert_pull_request_to_draft(
+                        task.pull_request_url
+                    )
+                except Exception as exc:
+                    # The hand-over remains autonomous even when a manual
+                    # command caused the selection of an unrelated PR.
+                    if failure_status(exc, "routine") == "deferred":
+                        raise
+                    error = exc
+                else:
+                    if not converted:
+                        record_review_limit(task, "review_limit.finished")
+                        return
+                reason: StopReason = "failed" if error else "review_limit"
+                notice_key = (
+                    "review_limit_draft_failed" if error else "review_limit_reached"
+                )
+                written = None
+                comment_error: BaseException | None = None
+                try:
+                    written = await code.comment(
+                        task.pull_request_url,
+                        t(
+                            f"integrations.pull_request_patrol.{notice_key}",
+                            count=pull_request_patrol.MAX_REVIEW_ROUNDS,
+                        ),
+                        status=WorkflowStatus(
+                            reason=reason,
+                            person_id=context.person.person_id,
+                            run_id=trace.trace_id,
+                            subject=task.pull_request_url,
+                        ),
+                    )
+                except BaseException as exc:
+                    comment_error = exc
+                comment_url = (written.url or "") if written else ""
+                if error is None:
+                    record_review_limit(
+                        task,
+                        "pull_request.review_limit",
+                        comment_url=comment_url,
+                        comment_error=comment_error,
+                    )
+                if comment_error is not None and not isinstance(
+                    comment_error, Exception
+                ):
+                    raise comment_error
+                await notify_work_stop(
+                    context, WorkStop.of(task, reason, trace.trace_id, comment_url)
+                )
+                if error is not None:
+                    raise error
+            except BaseException as exc:
+                if failure_status(exc, "routine") == "deferred":
+                    record_review_limit(task, "review_limit.deferred", error=exc)
+                else:
+                    record_review_limit(task, "review_limit.failed", error=exc)
+                if not isinstance(exc, Exception):
+                    raise
+            else:
+                record_review_limit(task, "review_limit.finished")
 
     async def run(
         self,

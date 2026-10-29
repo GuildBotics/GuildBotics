@@ -183,6 +183,10 @@ class Unauthorized(ServiceError):
     """Branvil took the token for nobody's."""
 
 
+class Conflict(ServiceError):
+    """Branvil refused a conflicting update, such as a stale revision."""
+
+
 def _failure(response: httpx.Response) -> ServiceError:
     """What Branvil's error answer means, in words fit for the user."""
     try:
@@ -205,7 +209,12 @@ def _failure(response: httpx.Response) -> ServiceError:
         )
     if code == "invalid_cursor":
         return ServiceError(t("integrations.resources.continuation"))
-    return ServiceError(
+    error_type = (
+        Conflict
+        if status == httpx.codes.CONFLICT and code == "conflict"
+        else ServiceError
+    )
+    return error_type(
         t(
             "integrations.branvil.api.refused",
             operation=f"{response.request.method} {response.request.url.path}",

@@ -595,7 +595,9 @@ _CROSS_CUTTING_RULES: list[str] = [
     "例外として、作成時の担当者 (人を含む名簿のメンバー)、レーン、対話指定、親、依存先の指定は "
     "--human-approved の承認に含まれる。既存チケットの担当者とレーンの変更は承認しない。 "
     "PR state, draft, and base are read-only for the same reason (the "
-    "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
+    "host ticket selector makes a PR a draft at the automatic re-review limit, "
+    "records it in Activity and announces it on the PR and in the reviewer's "
+    "work-stop chat channels; only a "
     "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "
     "`--content-file <file>`. Create a dedicated directory exclusively, outside the "

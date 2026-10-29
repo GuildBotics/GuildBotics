@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
+from guildbotics.utils.i18n_tool import t
 
 type ActivityEventType = Literal[
     "pr_create",
     "pr_merge",
     "pr_closed",
+    "pr_draft",
     "push",
     "issue_create",
     "issue_resolve",
@@ -24,6 +26,9 @@ def classify_event(
     target_kind = str(attributes.get("target.kind") or "").lower()
     pull_request = payload.get("pull_request")
     ticket = payload.get("ticket")
+
+    if event_type == "pull_request.review_limit":
+        return "pr_draft"
 
     if event_type == SYNC_UPDATE_REJECTED:
         return "sync_rejected"
@@ -73,6 +78,7 @@ def event_label(
         "pr_create": "PR",
         "pr_merge": "PR",
         "pr_closed": "PR",
+        "pr_draft": "PR",
         "issue_create": "Ticket",
         "issue_resolve": "Ticket",
         "external": "Event",
@@ -81,6 +87,7 @@ def event_label(
         "pr_create": "Created",
         "pr_merge": "Merged",
         "pr_closed": "Closed",
+        "pr_draft": t("app_api.activity_events.review_limit"),
         "issue_create": "Created",
         "issue_resolve": "Resolved",
         "external": "",

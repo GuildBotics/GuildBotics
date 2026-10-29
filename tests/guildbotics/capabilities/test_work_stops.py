@@ -135,7 +135,7 @@ def events(monkeypatch) -> list[dict]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
-@pytest.mark.parametrize("reason", ["asking", "blocked", "failed"])
+@pytest.mark.parametrize("reason", work_stops.STOP_REASONS)
 async def test_the_notice_is_posted_once_only_in_selected_channels(
     events, notice_language, reason
 ):
@@ -358,11 +358,11 @@ _COMPLETIONS_WAITING = {
 }
 #: Every status a run leaves, and whether its stop is announced: a failure the
 #: run said on its item waits for a person; a rate limit and the checks resume
-#: the work on their own, and a review limit is announced on the PR itself.
+#: the work on their own; a review limit hands the PR to a human without a run.
 _STATUSES_ANNOUNCED = {
     "failed": True,
     "rate_limited": False,
-    "review_limit": False,
+    "review_limit": True,
     "awaiting_checks": False,
     "checks_settled": False,
     "asking": True,
@@ -376,7 +376,7 @@ def test_every_completion_and_status_is_classified():
     assert set(_STATUSES_ANNOUNCED) == set(get_args(WorkflowStatusReason))
     assert {status for status, waits in _COMPLETIONS_WAITING.items() if waits} | {
         "failed"
-    } == set(work_stops.STOP_REASONS)
+    } == set(work_stops.COMPLETED_STOP_REASONS)
     assert {
         status for status, announced in _STATUSES_ANNOUNCED.items() if announced
     } == set(work_stops.STOP_REASONS)

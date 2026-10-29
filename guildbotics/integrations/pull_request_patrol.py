@@ -23,8 +23,9 @@ only those the member took part in). Re-reviews not driven by a request stop
 after :data:`MAX_REVIEW_ROUNDS` reviewed heads (``REVIEW_LIMIT``), but only
 when the current head has never been reviewed by the member. Statements and
 thread replies on an already reviewed head still reach the member, including
-a head restored by force push. At the limit the code host makes the PR a
-draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
+a head restored by force push. At the limit the patrol returns a decision
+(``REVIEW_LIMIT``); the host's ticket selector hands the PR to a human by
+making it a draft, recording it and announcing it. Rounds are
 counted from the last time a human marked the PR ready for review, as the code
 host records it, so every reviewer starts a new count; nothing else is stored.
 A review-limit notice by any member also counts as that point, so a PR
@@ -49,14 +50,14 @@ every earlier hold.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
 PR into their own hands, and the code host leaves drafts out of the patrol
-before any snapshot is loaded. Besides humans, only the code host changes it,
-and only to hand a PR over at the review limit; a member's turn cannot.
+before any snapshot is loaded. Besides humans, only the host ticket selector
+changes it through the code-host port, to hand a PR over at the review limit;
+a member's turn cannot.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from guildbotics.entities import Task
@@ -362,10 +363,9 @@ async def patrol(
     *,
     provider: str,
     person_id: str,
-    draft: Callable[[], Awaitable[object]],
 ) -> Task | None:
-    """The task *pr* is for the member *me*; one at the re-review limit is
-    handed over instead (:func:`hand_over_at_review_limit`). Only the checks
+    """The task *pr* is for the member *me*, including a review-limit decision
+    for the ticket selector to settle. This function never writes. Only the checks
     role reads the code host beyond the snapshot, and only for a PR whose
     member awaits its checks at the head the snapshot has. While the member
     awaits them, whatever the PR asks of it resumes the awaited work, so a
@@ -378,7 +378,6 @@ async def patrol(
         me: The member's name, in the form the snapshot's names are in.
         provider: The provider's name, as the task records it.
         person_id: The member.
-        draft: Makes the PR a draft.
     """
     work = pull_request_work(pr, me)
     awaited = _awaited_checks(pr, me)
@@ -386,9 +385,6 @@ async def patrol(
         if awaited is None or not await _checks_settled(code, pr, awaited):
             return None
         work = CHECKS
-    if work == REVIEW_LIMIT:
-        await hand_over_at_review_limit(code, pr.url, person_id, draft)
-        return None
     return Task(
         provider=provider,
         label=pr.label,
@@ -409,45 +405,6 @@ async def patrol(
             )
             if awaited is not None
             else None
-        ),
-    )
-
-
-async def hand_over_at_review_limit(
-    code: CodeHostingService,
-    url: str,
-    person_id: str,
-    draft: Callable[[], Awaitable[object]],
-) -> None:
-    """Make the PR a draft, then say on it that automatic re-review stopped.
-
-    The notice tells the human that the PR is theirs until they mark it
-    ready for review, so it is posted only once the PR is a draft. When
-    the conversion fails, a failure notice takes its place: it holds the
-    PR until someone acts on it, and the rounds stay as they are.
-    """
-    reason: WorkflowStatusReason = REVIEW_LIMIT_REASON
-    try:
-        await draft()
-    except Exception as exc:
-        _LOGGER.warning(f"Could not convert {url} to a draft: {exc}")
-        reason = "failed"
-    notice = (
-        t(
-            "integrations.pull_request_patrol.review_limit_reached",
-            count=MAX_REVIEW_ROUNDS,
-        )
-        if reason == REVIEW_LIMIT_REASON
-        else t(
-            "integrations.pull_request_patrol.review_limit_draft_failed",
-            count=MAX_REVIEW_ROUNDS,
-        )
-    )
-    await code.comment(
-        url,
-        notice,
-        status=WorkflowStatus(
-            reason=reason, person_id=person_id, run_id="", subject=url
         ),
     )
 
