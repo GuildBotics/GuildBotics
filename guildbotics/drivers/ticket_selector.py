@@ -155,16 +155,18 @@ class TicketSelector:
                         record_review_limit(task, "review_limit.finished")
                         return
                 reason: StopReason = "failed" if error else "review_limit"
-                notice_key = (
-                    "review_limit_draft_failed" if error else "review_limit_reached"
-                )
                 written = None
                 comment_error: BaseException | None = None
                 try:
                     written = await code.comment(
                         task.pull_request_url,
                         t(
-                            f"integrations.pull_request_patrol.{notice_key}",
+                            "integrations.pull_request_patrol.review_limit_draft_failed",
+                            count=pull_request_patrol.MAX_REVIEW_ROUNDS,
+                        )
+                        if error
+                        else t(
+                            "integrations.pull_request_patrol.review_limit_reached",
                             count=pull_request_patrol.MAX_REVIEW_ROUNDS,
                         ),
                         status=WorkflowStatus(
