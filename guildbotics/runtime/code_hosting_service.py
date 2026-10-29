@@ -291,8 +291,9 @@ class CodeHostingService(ABC):
 
     async def pull_request_candidates(self) -> list[Task]:
         """The open pull requests that ask something of the member, in patrol
-        order. One past the automatic re-review limit is handed to a human
-        instead."""
+        order. At the automatic re-review limit, a head the member has never
+        reviewed is handed to a human instead. Statements and thread replies
+        on an already reviewed head still reach the member."""
         raise NotImplementedError
 
     async def refresh_pull_request(self, task: Task) -> Task | None:
