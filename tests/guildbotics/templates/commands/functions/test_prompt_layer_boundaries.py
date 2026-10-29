@@ -459,6 +459,22 @@ def test_review_verdict_finishes_done_and_waits_use_the_public_roster():
             assert "person_id" in line
 
 
+def test_reviewer_runs_only_its_own_checks_and_not_the_ci_again():
+    for language, own, ci in (
+        (
+            "en",
+            "breaking the changed behavior on purpose",
+            "do not rerun what the repository's CI runs",
+        ),
+        ("ja", "わざと壊してテストが落ちることの確認", "リポジトリの CI が流す検査"),
+    ):
+        body = _prompt_body("handle_ticket", language)
+        reviewer = next(line for line in body.splitlines() if line.startswith("7. "))
+        assert own in reviewer, language
+        assert ci in reviewer, language
+        assert "relevant checks" not in reviewer and "関連する検査" not in reviewer
+
+
 def test_issue_comment_contract_not_in_chat_prompt():
     """The Issue comment contract is specific to handle_ticket and
     must NOT leak into handle_chat_event."""
