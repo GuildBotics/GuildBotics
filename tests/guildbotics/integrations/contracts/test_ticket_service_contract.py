@@ -66,6 +66,126 @@ async def _ticket(board: Harness, title: str = "Fix login") -> str:
 
 
 @pytest.mark.asyncio
+async def test_tracker_search_filters_title_body_state_label_and_pages(board):
+    created = []
+    for title, body, labels in [
+        ("Needle Alpha", "secondword", [LABEL]),
+        ("needle Beta secondword", "", [LABEL]),
+        ("Needle Gamma", "SECONDWORD", [LABEL]),
+        ("Needle missing term", "", [LABEL]),
+        ("Needle without label", "secondword", []),
+    ]:
+        created.append(
+            (
+                await board.tickets.create_ticket(
+                    board.tracker, title, body, labels, lane="ready"
+                )
+            ).target.url
+        )
+    await board.tickets.update_ticket(
+        created[2],
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state="closed",
+        state_reason="completed",
+    )
+    # Neither pull requests nor comment text are ticket title/body matches.
+    board.branch("search-decoy")
+    await board.code.create_pull_request(
+        board.repository,
+        "search-decoy",
+        "main",
+        "Needle secondword",
+        "",
+        tickets=[],
+        draft=False,
+    )
+    await board.tickets.comment(created[3], "secondword")
+    conditions = {
+        "text": "  NEEDLE\tsecondword ",
+        "state": "all",
+        "label": LABEL,
+        "page_size": 1,
+    }
+    found, continuation = [], ""
+    while True:
+        page = await board.tickets.read(
+            "tracker_tickets",
+            board.tracker,
+            parameters=conditions,
+            continuation=continuation,
+        )
+        assert page.target is None
+        assert len(page.items) == 1
+        found.extend(page.items)
+        if page.continuation is None:
+            break
+        continuation = page.continuation
+    assert [item["url"] for item in found] == created[:3]
+    assert [item["state"] for item in found] == ["open", "open", "closed"]
+    for item in found:
+        assert item["kind"] == "ticket"
+        assert item["key"] and item["label"] and item["title"]
+        assert item["labels"] == [LABEL]
+        assert item["lane"] in {"ready", "done"}
+        assert datetime.fromisoformat(item["updated_at"])
+        assert "body" not in item
+    for state, expected in [("open", created[:2]), ("closed", created[2:3])]:
+        page = await board.tickets.read(
+            "tracker_tickets",
+            board.tracker,
+            parameters={**conditions, "page_size": 100, "state": state},
+        )
+        assert [item["url"] for item in page.items] == expected
+    page = await board.tickets.read(
+        "tracker_tickets",
+        board.tracker,
+        parameters={"text": "nothing-matches", "state": "all"},
+    )
+    assert page.items == [] and page.continuation is None
+    # Empty text lists the tracker, and the default state is open.
+    page = await board.tickets.read("tracker_tickets", board.tracker)
+    assert [item["url"] for item in page.items] == [
+        created[0],
+        created[1],
+        created[3],
+        created[4],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tracker_search_rejects_a_url_as_subject_and_invalid_continuation(board):
+    with pytest.raises(ServiceError):
+        await board.tickets.read("tracker_tickets", board.theirs.url)
+    with pytest.raises(ServiceError):
+        await board.tickets.read(
+            "tracker_tickets", board.tracker, continuation="https://invalid.test/page"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"state": "invalid"},
+        {"page_size": 0},
+        {"page_size": 101},
+        {"text": 3},
+        {"label": []},
+        {"node": "a-thread"},
+        {"q": "raw"},
+    ],
+)
+async def test_tracker_search_rejects_invalid_conditions(board, parameters):
+    with pytest.raises(ServiceError):
+        await board.tickets.read(
+            "tracker_tickets", board.tracker, parameters=parameters
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("relation", ["none", "parent", "blocker", "both"])
 @pytest.mark.parametrize("lane", [None, "new", "ready", "in_progress"])
 async def test_creation_sets_assignment_relations_and_initial_lane(

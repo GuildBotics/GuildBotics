@@ -51,6 +51,7 @@ from guildbotics.runtime.resources import (
     ReadPage,
     Ticket,
     TicketRelative,
+    TicketSummary,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
@@ -86,6 +87,24 @@ class BranvilTicketService(BranvilApi, TicketService):
         conditions = read_conditions(resource, parameters, continuation)
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
+        if resource == "tracker_tickets":
+            return await self.page(
+                resource,
+                f"/repos/{segment(self.repository(subject))}/tickets",
+                conditions,
+                continuation,
+                lambda data: TicketSummary(
+                    **self.target(_ticket_item(data), data).model_dump(),
+                    key=str(data["key"]),
+                    state=data["state"],
+                    lane=data["lane"] if self._on_board(data) else None,
+                    labels=data["labels"],
+                    updated_at=data["updated_at"],
+                ),
+                q=conditions["text"],
+                state=conditions["state"],
+                **({"label": conditions["label"]} if conditions["label"] else {}),
+            )
         item = self.item(subject, "ticket")
         if resource != "tickets":
             return await self.page(

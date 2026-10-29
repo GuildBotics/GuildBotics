@@ -1254,7 +1254,7 @@ def _add_read_command(group: click.Group, kind: ReadSubject) -> None:
         required=True,
         help=(
             "What the resource is part of: the ticket's or pull request's URL,"
-            " or the repository's path."
+            " or the tracker/repository path (tracker_tickets searches a tracker)."
         ),
     )
     @click.option(

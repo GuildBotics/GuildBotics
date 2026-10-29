@@ -56,6 +56,15 @@ class PageQuery(ReadModel):
     node: str = Field(default="", max_length=256)
 
 
+class TicketSearchQuery(ReadModel):
+    """Tickets of a tracker, with every whitespace-separated term required."""
+
+    text: str = Field(default="", max_length=256)
+    state: Literal["open", "closed", "all"] = "open"
+    label: str = Field(default="", max_length=256)
+    page_size: int = Field(default=30, ge=1, le=100)
+
+
 WorkKind = Literal["ticket", "pull_request"]
 
 
@@ -80,6 +89,16 @@ class TicketRelative(WorkTarget):
     """A ticket another ticket is related to, with its state."""
 
     state: str
+
+
+class TicketSummary(WorkTarget):
+    """One search result, without the ticket's unbounded body or relations."""
+
+    key: str
+    state: str
+    lane: Lane | None
+    labels: list[str]
+    updated_at: str
 
 
 class Ticket(WorkTarget):
@@ -299,6 +318,8 @@ ReadSubject = Literal["ticket", "pull_request", "repository"]
 #: Every resource, by what it is part of, with the schema of one of its items.
 RESOURCES_BY_SUBJECT: dict[ReadSubject, dict[str, type[ReadModel]]] = {
     "ticket": {
+        # Unlike the detail resources, this subject is a tracker path.
+        "tracker_tickets": TicketSummary,
         "tickets": Ticket,
         "ticket_comments": Comment,
         "ticket_attachments": Attachment,
@@ -327,7 +348,9 @@ RESOURCE_SUBJECTS: dict[str, ReadSubject] = {
 }
 #: The resources the ticket service reads; the code host reads the others,
 #: the pull requests of a ticket among them.
-TICKET_RESOURCES = frozenset({"tickets", "ticket_comments", "ticket_attachments"})
+TICKET_RESOURCES = frozenset(
+    {"tracker_tickets", "tickets", "ticket_comments", "ticket_attachments"}
+)
 #: The resources that are one item, read without pagination.
 DETAIL_RESOURCES = frozenset({"tickets", "pull_requests", "pull_request_readiness"})
 
@@ -374,9 +397,10 @@ def read_conditions(
 
     dependency_alerts follows DependencyAlertQuery: with an ``id`` it reads
     that one alert, with no other condition and no continuation. Readiness
-    accepts failed_logs and log_tail_bytes. Other collections take page_size
-    (1-100), and thread comments also the ``node`` id of their thread. One
-    item is read without conditions or continuation.
+    accepts failed_logs and log_tail_bytes. tracker_tickets follows
+    TicketSearchQuery with a tracker path as its subject. Other collections
+    take page_size (1-100), and thread comments also the ``node`` id of their
+    thread. One item is read without conditions or continuation.
 
     Raises:
         ServiceError: If the read is not one a service answers.
@@ -389,6 +413,8 @@ def read_conditions(
     try:
         if not isinstance(given, dict):
             raise ValueError
+        if resource == "tracker_tickets":
+            return TicketSearchQuery.model_validate(given).model_dump()
         if resource == "dependency_alerts":
             query = DependencyAlertQuery.model_validate(given)
             if query.id and (query.model_fields_set != {"id"} or continuation):

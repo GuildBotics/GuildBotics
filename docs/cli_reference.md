@@ -1427,7 +1427,7 @@ guildbotics member pr read [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--resource [pull_requests\|pull_request_comments\|pull_request_reviews\|pull_request_files\|pull_request_threads\|review_thread_comments\|pull_request_readiness]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1542,7 +1542,7 @@ guildbotics member repo-info read [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--resource [dependency_alerts]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1730,7 +1730,7 @@ guildbotics member ticket reaction add [OPTIONS]
 
 ## `guildbotics member ticket read`
 
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 ```text
 guildbotics member ticket read [OPTIONS]
@@ -1739,8 +1739,8 @@ guildbotics member ticket read [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [tickets\|ticket_comments\|ticket_attachments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--resource [tracker_tickets\|tickets\|ticket_comments\|ticket_attachments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |

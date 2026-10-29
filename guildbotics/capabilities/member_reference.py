@@ -95,13 +95,16 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member ticket read --person <person> --resource <name> "
-                "--subject <ticket_url> [--params <json>] [--continuation <value>]",
+                "--subject <ticket_url_or_tracker> [--params <json>] [--continuation <value>]",
                 "Read one bounded page of a ticket's resource: tickets (the ticket "
                 "itself: key, tracker, repository, lane, ...), ticket_comments, "
                 "ticket_attachments (the files its body and comments refer to: id, "
                 "name, media_type, size, and referenced_by, `body` or a comment id), "
                 "or ticket_pull_requests (the code host's pull requests that refer to "
-                "it). Collections accept page_size (1-100). Results contain "
+                "it), or tracker_tickets (subject: tracker path; conditions: text "
+                "with all whitespace-separated terms in title/body, state "
+                "open|closed|all, label, page_size; items: URL, key, title, state, "
+                "lane, labels, updated_at). Collections accept page_size (1-100). Results contain "
                 "normalized items and continuation; reuse identical conditions for the "
                 "next page. HTTP methods, headers, and GraphQL are not accepted.",
             ),
@@ -417,8 +420,18 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "procedure below before editing.",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
     'code change. When one fails, never stop at "unrelated to this change": '
-    "identify the cause, write the issue draft it deserves, and hand that draft to "
-    "the requester for a decision instead of registering it or fixing it yourself.",
+    "identify the cause and follow the ticket-search procedure below before "
+    "drafting an issue. Do not register or fix an unrelated issue yourself.",
+    "Before drafting or proposing a new ticket, including a draft for a failed "
+    "check, search the same tracker with `member ticket read --resource "
+    'tracker_tickets --subject <tracker> --params \'{"text":"<terms>","state":"all"}\'`. '
+    "Use appropriate terms and follow every continuation with identical conditions. "
+    "A failed or incomplete search is not no matches. If an open ticket covers "
+    "the same issue, do not present a draft: comment there with the new findings "
+    "and tell the requester its URL. If only a closed ticket matches, do not "
+    "reopen it or comment on it: present a complete new draft and reference the "
+    "closed ticket in Related. If no ticket matches, present the draft as before. "
+    "Ticket creation still requires a human's explicit approval.",
     "Inside a workflow or delegated command's isolated environment, the turn ends "
     "with your final answer, and whatever still runs in the environment stops with "
     "it: the completion notice of a background job never arrives. Run a long "

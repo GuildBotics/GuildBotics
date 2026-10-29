@@ -626,11 +626,14 @@ class GitHubDouble:
             return httpx.Response(200, json={"resources": {}})
         if path == "/search/issues":
             query = request.url.params["q"]
+            results = self._search(query)
+            size = int(request.url.params.get("per_page", "30"))
+            start = (int(request.url.params.get("page", "1")) - 1) * size
             return httpx.Response(
                 200,
                 json={
-                    "items": self._search(query),
-                    "total_count": len(self._search(query)),
+                    "items": results[start : start + size],
+                    "total_count": len(results),
                     "incomplete_results": False,
                 },
             )
@@ -660,6 +663,26 @@ class GitHubDouble:
         self.board[number] = "Todo"
 
     def _search(self, query: str) -> list[dict[str, Any]]:
+        if "in:title,body" in query:
+            # This branch models the provider's fixed tracker-search request.
+            quoted = r'"(?:[^"\\]|\\.)*"'
+            label = re.search(r"label:(" + quoted + r")", query)
+            terms_query = query[: label.start()] if label else query
+            terms = [
+                json.loads(term).casefold() for term in re.findall(quoted, terms_query)
+            ]
+            return [
+                item
+                for item in self.items.values()
+                if "head" not in item
+                and ("is:open" not in query or item["state"] == "open")
+                and ("is:closed" not in query or item["state"] == "closed")
+                and (not label or {"name": json.loads(label[1])} in item["labels"])
+                and all(
+                    term in f"{item['title']}\n{item['body'] or ''}".casefold()
+                    for term in terms
+                )
+            ]
         found = []
         for item in self.items.values():
             if item["state"] != "open":

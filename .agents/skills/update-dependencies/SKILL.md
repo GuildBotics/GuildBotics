@@ -287,8 +287,15 @@ Fix failures caused by this update, or restore the affected tool's pin or
 leave the affected alert open (section 3) with the associated changes, then
 rerun the affected checks
 on the final patch. Follow
-AGENTS.md when diagnosing pre-existing failures: put its complete Issue draft
-in the PR or final report, without publishing an Issue or waiting for a reply.
+AGENTS.md when diagnosing pre-existing failures: before writing an Issue draft,
+search the same tracker using `member ticket read --resource tracker_tickets`
+with `state: all`, following every continuation with identical conditions.
+A failed or incomplete search is not no matches. If an open ticket covers the
+issue, comment there with the new findings and report its URL instead of a
+draft. If only a closed ticket matches, do not reopen or comment on it;
+reference it in Related in a complete new draft. If none matches, prepare the
+draft as before. Put any needed complete draft in the PR or final report,
+without publishing an Issue or waiting for a reply.
 If checks cannot run in the available environment, preserve the patch and
 record the exact unperformed checks and reason in the PR.
 
