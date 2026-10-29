@@ -83,7 +83,8 @@ class TicketService(ABC):
         continuation: str = "",
     ) -> ReadPage:
         """Read a ticket's resource of :data:`~.resources.TICKET_RESOURCES`,
-        ``subject`` being the ticket's URL (see
+        ``subject`` being the ticket's URL, or the tracker path for
+        ``tracker_tickets`` (see
         :meth:`~.code_hosting_service.CodeHostingService.read`)."""
 
     @abstractmethod

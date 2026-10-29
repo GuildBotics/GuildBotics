@@ -528,6 +528,27 @@ class BranvilDouble:
                     else None,
                 )
                 return 201, self._view(ticket)
+            case "GET", ["tickets"]:
+                words = params.get("q", "").casefold().split()
+                return 200, self._page(
+                    [
+                        self._view(ticket)
+                        for ticket in self.tickets.values()
+                        if ticket["repository"] == repo
+                        and (
+                            params.get("state", "open") == "all"
+                            or ticket["state"] == params.get("state", "open")
+                        )
+                        and (
+                            "label" not in params or params["label"] in ticket["labels"]
+                        )
+                        and all(
+                            word in (ticket["title"] + "\n" + ticket["body"]).casefold()
+                            for word in words
+                        )
+                    ],
+                    params,
+                )
             case _, ["tickets", number, *more]:
                 url = f"{BASE}/{repo}/-/tickets/{number}"
                 if url not in self.tickets:
@@ -813,6 +834,7 @@ class BranvilDouble:
             "parent": None,
             "blocked_by": [],
             "created_at": self.now(),
+            "updated_at": self.now(),
             "closed_at": None,
         }
         self.entries[url] = {"comments": []}

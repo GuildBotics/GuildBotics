@@ -27,6 +27,7 @@ from guildbotics.integrations.github.reads import (
     read_collection,
     reading,
     request_of,
+    search_tickets,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
@@ -62,6 +63,7 @@ from guildbotics.runtime.resources import (
     ReadPage,
     Ticket,
     TicketRelative,
+    TicketSummary,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
@@ -245,6 +247,32 @@ class GitHubTicketService(GitHubApi, TicketService):
             raise ServiceError(t("integrations.resources.resource"))
         if resource == "ticket_attachments":
             raise _no_attachments()
+        if resource == "tracker_tickets":
+            repository = self.repository(subject)
+            with reading(resource):
+                found, next_page = await search_tickets(
+                    self,
+                    repository,
+                    conditions,
+                    request_of(self, resource, subject, conditions),
+                    continuation,
+                )
+                summaries = []
+                for data in found:
+                    item = self.item(data["html_url"], "ticket")
+                    if item.repository.casefold() != repository.casefold():
+                        raise ValueError("Issue outside the searched tracker")
+                    summaries.append(
+                        TicketSummary(
+                            **self.target(item, data).model_dump(),
+                            key=str(item.number),
+                            state=data["state"],
+                            lane=await self._lane(await self._place(item)),
+                            labels=_label_names(data),
+                            updated_at=data["updated_at"],
+                        )
+                    )
+                return ReadPage.of(resource, summaries, continuation=next_page)
         item = self.item(subject, "ticket")
         with reading(resource):
             if resource == "tickets":

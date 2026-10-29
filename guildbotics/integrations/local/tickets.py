@@ -27,7 +27,7 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.local import items, store
 from guildbotics.integrations.local.chat import mentions
 from guildbotics.integrations.local.identity import member_identity
-from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.repository_scope import check_path, in_scope, valid_path
 from guildbotics.integrations.ticket_attachments import referred
 from guildbotics.integrations.ticket_selection import (
     mention_pending,
@@ -38,6 +38,7 @@ from guildbotics.integrations.ticket_selection import (
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
+    ServiceNotFound,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import (
@@ -81,6 +82,32 @@ class LocalTicketService(TicketService):
         conditions = read_conditions(resource, parameters, continuation)
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
+        if resource == "tracker_tickets":
+            if not valid_path(subject):
+                raise ServiceNotFound(f"There is no tracker '{subject}'.")
+            store.tracker(subject)
+            terms = conditions["text"].casefold().split()
+            found = [
+                {
+                    **items.target(ref, entry).model_dump(),
+                    "key": ref.name,
+                    "state": entry["state"],
+                    "lane": entry["lane"],
+                    "labels": entry["labels"],
+                    "updated_at": entry["updated_at"],
+                }
+                for ref, entry in store.items("ticket", subject)
+                if (
+                    conditions["state"] == "all"
+                    or entry["state"] == conditions["state"]
+                )
+                and (not conditions["label"] or conditions["label"] in entry["labels"])
+                and all(
+                    term in f"{entry['title']}\n{entry['body']}".casefold()
+                    for term in terms
+                )
+            ]
+            return items.page(resource, found, conditions, continuation)
         ref = store.locate(subject, "ticket")
         item = store.load(ref)
         if resource == "ticket_attachments":

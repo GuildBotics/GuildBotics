@@ -41,6 +41,7 @@ from guildbotics.utils.i18n_tool import t
 
 _CURSOR_LIMIT = 2048
 _CONTINUATION_LIMIT = 8192
+_SEARCH_LIMIT = 1000
 #: The REST route of each collection of an item.
 _REST = {
     "ticket_comments": "{conversation}/comments",
@@ -62,6 +63,7 @@ _VERDICTS = {
     "DISMISSED": "dismissed",
 }
 _PERMISSIONS = {
+    "tracker_tickets": "Issues / Projects",
     "dependency_alerts": "Dependabot alerts",
     "tickets": "Issues / Projects",
     "ticket_comments": "Issues",
@@ -259,6 +261,54 @@ def pull_request(
         "draft": bool(data.get("draft")),
         "changed_files": data.get("changed_files"),
     }
+
+
+async def search_tickets(
+    api: GitHubApi,
+    repository: str,
+    conditions: dict[str, Any],
+    request: dict[str, Any],
+    continuation: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Search issues only, refusing incomplete answers and the 1000-hit ceiling."""
+    cursor = _cursor(continuation, request) if continuation else "1"
+    if not re.fullmatch(r"[1-9][0-9]{0,3}", cursor):
+        raise ServiceError(t("integrations.resources.continuation"))
+    page, size = int(cursor), conditions["page_size"]
+    if (page - 1) * size >= _SEARCH_LIMIT:
+        raise ServiceError(t("integrations.resources.continuation"))
+    query = [f"repo:{repository}", "is:issue", "in:title,body"]
+    if conditions["state"] != "all":
+        query.append(f"is:{conditions['state']}")
+    # Quoting keeps user text from introducing search qualifiers/operators.
+    query.extend(
+        json.dumps(term, ensure_ascii=False) for term in conditions["text"].split()
+    )
+    if conditions["label"]:
+        query.append("label:" + json.dumps(conditions["label"], ensure_ascii=False))
+    client = await api.client()
+    response = await client.get(
+        "/search/issues",
+        params={
+            "q": " ".join(query),
+            "per_page": size,
+            "page": page,
+            "sort": "created",
+            "order": "asc",
+        },
+        follow_redirects=False,
+        extensions={"max_response_bytes": MAX_PAGE_BYTES},
+    )
+    data = response.json()
+    if data["incomplete_results"] or data["total_count"] > _SEARCH_LIMIT:
+        raise ServiceError(t("integrations.github.response.search_incomplete"))
+    found = data["items"]
+    if not isinstance(found, list) or any("pull_request" in item for item in found):
+        raise ValueError("Unexpected issue search")
+    more = page * size < data["total_count"]
+    if more and len(found) != size:
+        raise ValueError("Incomplete issue search page")
+    return found, _encode(str(page + 1), request) if more else None
 
 
 async def read_alerts(

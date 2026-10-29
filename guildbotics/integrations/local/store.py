@@ -159,6 +159,7 @@ def save(scope: str, ref: Ref, item: dict[str, Any]) -> None:
         ServiceError: If its repository or tracker is outside ``scope``.
     """
     check_path(scope, ref.place, provider="local")
+    item["updated_at"] = now()
     ref.path.parent.mkdir(parents=True, exist_ok=True)
     ref.path.write_text(json.dumps(item, ensure_ascii=False, indent=2), "utf-8")
 
