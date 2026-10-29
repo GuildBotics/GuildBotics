@@ -47,6 +47,12 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
     ): "bounded: one size-limited page with a condition-bound continuation",
     (
         "guildbotics/integrations/github/reads.py",
+        "search_tickets",
+        "client.get",
+        "'/search/issues'",
+    ): "bounded: one size-limited search page with a condition-bound continuation; incomplete results and totals above 1000 fail",
+    (
+        "guildbotics/integrations/github/reads.py",
         "read_alerts",
         "client.get",
         "path",
