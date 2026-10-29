@@ -145,13 +145,20 @@ directory; do not run those binaries or store credentials in the evidence.
 For a failed tool, restore its pin to the PR base version and its associated
 changes, or ask the human to decide when the remedy is unclear. Diagnose
 pre-existing failures under AGENTS.md: before writing an Issue draft, search
-the same tracker using `member ticket read --resource tracker_tickets` with
-`state: all`, following every continuation with identical conditions. A failed
-or incomplete search is not no matches. If an open ticket covers the issue,
+the same tracker using
+`member ticket read --resource tracker_tickets --subject <tracker>
+--params '{"text":"<terms>","state":"all"}'`. Search with a few short term
+sets (component or command plus symptom), including synonyms and
+English/Japanese variants, rather than one long phrase: `text` requires all
+terms to match. Follow every continuation with identical conditions for each
+term set. A failed or incomplete search is not no matches. If an open ticket covers the issue,
 comment there with the new findings and report its URL instead of a draft.
 If only a closed ticket matches, do not reopen or comment on it; reference it
-in Related in a complete new draft. If none matches, prepare the draft as
-before. Do not publish an Issue without human authorization. After changing a pin, adapter,
+in Related in a complete new draft. If no open match was found and the search
+fails or is incomplete, still present the complete draft, stating the
+conditions tried and that duplicates could not be ruled out; reference any
+closed match in Related. If a completed search finds no match, prepare the
+draft as before. Do not publish an Issue without human authorization. After changing a pin, adapter,
 or build recipe, rebuild and rerun affected checks with fresh approval on
 the final configuration. A prior passing result is not evidence for that revision.
 
