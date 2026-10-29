@@ -20,8 +20,11 @@ Reviewer role (``pull_request_review``): the member is a requested reviewer,
 new commits landed after the member's last review, or, once the member has
 spoken on the PR, there is a statement the member has not answered (threads
 only those the member took part in). Re-reviews not driven by a request stop
-after :data:`MAX_REVIEW_ROUNDS` rounds (``REVIEW_LIMIT``): the code host makes
-the PR a draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
+after :data:`MAX_REVIEW_ROUNDS` reviewed heads (``REVIEW_LIMIT``), but only
+when the current head has never been reviewed by the member. Statements and
+thread replies on an already reviewed head still reach the member, including
+a head restored by force push. At the limit the code host makes the PR a
+draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
 counted from the last time a human marked the PR ready for review, as the code
 host records it, so every reviewer starts a new count; nothing else is stored.
 A review-limit notice by any member also counts as that point, so a PR
@@ -280,7 +283,9 @@ def _review_work(pr: PullRequest, me: str) -> str | None:
         or (_last_spoken_at(pr, me) and _has_unanswered_statement(pr, me))
     ):
         return None
-    return REVIEW if len(review_rounds(pr, me)) < MAX_REVIEW_ROUNDS else REVIEW_LIMIT
+    if pr.head_oid not in reviewed and len(review_rounds(pr, me)) >= MAX_REVIEW_ROUNDS:
+        return REVIEW_LIMIT
+    return REVIEW
 
 
 def pull_request_work(pr: PullRequest, me: str) -> str | None:
