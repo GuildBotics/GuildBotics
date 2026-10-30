@@ -56,19 +56,26 @@ if ($Action -eq 'install') {
 }
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) {
-    # Stopping the task ends only the process it started, so the loop and its
-    # ssh would outlive it. Collect the whole tree, parents first.
-    $processes = @(Get-CimInstance Win32_Process)
-    $tree = @($processes | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($existing.Actions[0].Arguments) })
-    $layer = $tree
-    while ($layer) {
-        $layer = @($processes | Where-Object { $layer.ProcessId -contains $_.ParentProcessId })
-        $tree += $layer
-    }
     Stop-ScheduledTask -TaskName $taskName
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    # The loop goes before its ssh, so that it starts no ssh after them.
-    $tree | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # Stopping the task ends only the process it started, so its loop and ssh
+    # would outlive it. They end a generation at a time: each is gone before
+    # its children are listed, so none can start a child after the list. The
+    # last argument, the encoded loop, is in the console's and the loop's
+    # command lines alike.
+    $loop = ($existing.Actions[0].Arguments -split ' ')[-1]
+    $generation = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($loop) })
+    while ($generation) {
+        $generation | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Wait-Process -Id $generation.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+        $ended = Get-Date
+        # A child starts while its parent runs; any other process naming the
+        # parent's ID names an earlier or later holder of that ID.
+        $generation = @(Get-CimInstance Win32_Process | Where-Object {
+            $child = $_
+            $parent = $generation | Where-Object ProcessId -eq $child.ParentProcessId
+            $parent -and $parent.CreationDate -le $child.CreationDate -and $child.CreationDate -lt $ended })
+    }
 }
 if ($Action -eq 'uninstall') { return }
 # Encode arguments as PowerShell literals, without evaluating any user text.

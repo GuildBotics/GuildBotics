@@ -25,19 +25,48 @@ function Get-ScheduledTask {
         [pscustomobject]@{ TaskName=$TaskName; State='Running'; Actions=@($action) }
     }
 }
-# The task's console (101), its loop (102) and ssh (103), listed children
-# first, and another PowerShell with its ssh.
+function New-HFProcess($id, $parent, $command, $created) {
+    [pscustomobject]@{ ProcessId=$id; ParentProcessId=$parent; CommandLine=$command; CreationDate=$created }
+}
+# Each registration runs the task's console (101), its loop (102) and ssh
+# (103), listed children first, beside another PowerShell with its ssh, and a
+# process older than 103 still naming its long-gone parent by 103's ID (108).
+function Reset-HFProcesses {
+    $earlier = (Get-Date).AddMinutes(-1)
+    $argument = $global:HFregistration.Action.Argument
+    $loop = 'powershell.exe -NoProfile -NonInteractive ' + $argument.Substring($argument.IndexOf('-EncodedCommand'))
+    $global:HFspawned = $false
+    $global:HFprocesses = @(
+        (New-HFProcess 103 102 'ssh.exe' $earlier),
+        (New-HFProcess 102 101 $loop $earlier),
+        (New-HFProcess 101 1 ('conhost.exe ' + $argument) $earlier),
+        (New-HFProcess 104 1 $null $earlier),
+        (New-HFProcess 105 104 'ssh.exe' $earlier),
+        (New-HFProcess 108 103 'explorer.exe' $earlier.AddMinutes(-1)))
+}
 function Get-CimInstance {
     param($ClassName)
-    $task = 'conhost.exe ' + $global:HFregistration.Action.Argument
-    [pscustomobject]@{ ProcessId=103; ParentProcessId=102; CommandLine='ssh.exe' }
-    [pscustomobject]@{ ProcessId=102; ParentProcessId=101; CommandLine='powershell.exe' }
-    [pscustomobject]@{ ProcessId=101; ParentProcessId=1; CommandLine=$task }
-    [pscustomobject]@{ ProcessId=104; ParentProcessId=1; CommandLine=$null }
-    [pscustomobject]@{ ProcessId=105; ParentProcessId=104; CommandLine='ssh.exe' }
+    $global:HFprocesses
+    if (-not $global:HFspawned) {
+        # The loop starts another ssh (106) right after the first listing; a
+        # later process reuses the loop's ID as its parent (107).
+        $global:HFspawned = $true
+        $global:HFprocesses += New-HFProcess 106 102 'ssh.exe' (Get-Date).AddSeconds(-1)
+        $global:HFprocesses += New-HFProcess 107 102 'reused' (Get-Date).AddMinutes(1)
+    }
 }
-function Stop-Process { param($Id, [switch]$Force, $ErrorAction) $global:HFcalls += "kill $Id" }
-function Stop-ScheduledTask { param($TaskName) $global:HFcalls += 'stop' }
+function Stop-Process {
+    param($Id, [switch]$Force, $ErrorAction)
+    $global:HFcalls += "kill $Id"
+    $global:HFprocesses = @($global:HFprocesses | Where-Object ProcessId -ne $Id)
+}
+function Wait-Process { param($Id, $Timeout, $ErrorAction) $global:HFcalls += 'wait' }
+function Stop-ScheduledTask {
+    param($TaskName)
+    $global:HFcalls += 'stop'
+    # Ends the console it started (101), leaving the loop running.
+    $global:HFprocesses = @($global:HFprocesses | Where-Object ProcessId -ne 101)
+}
 function Unregister-ScheduledTask {
     param($TaskName, [switch]$Confirm)
     $global:HFcalls += 'unregister'; $global:HFexists = $false
@@ -57,6 +86,7 @@ function Register-ScheduledTask {
     param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force)
     $global:HFregistration = [pscustomobject]$PSBoundParameters
     $global:HFexists = $true; $global:HFcalls += 'register'
+    Reset-HFProcesses
 }
 function Start-ScheduledTask { param($TaskName) $global:HFcalls += 'start' }
 function Get-ScheduledTaskInfo { param($TaskName) $global:HFcalls += 'status'; [pscustomobject]@{LastTaskResult=0} }
@@ -144,9 +174,12 @@ $written = Test-Path -LiteralPath $env:LOCALAPPDATA
     assert initial["Settings"]["ExecutionTimeLimit"]["Ticks"] == 0
     assert initial["Settings"]["MultipleInstances"] == "IgnoreNew"
     assert initial["Settings"]["RestartInterval"]["TotalSeconds"] == 60
-    # Replacing and removing end the task's tree, parents first, and nothing
-    # else; once removed, there is nothing left to stop.
-    kills = ["kill 101", "kill 102", "kill 103"]
+    # Replacing and removing end what the task left, found by its loop even
+    # after its console ended, a generation at a time, each gone before its
+    # children are listed: the ssh started after the first listing ends too,
+    # while processes naming a reused ID and the other PowerShell's do not.
+    # Once removed, there is nothing left to stop.
+    kills = ["kill 102", "wait", "kill 103", "kill 106", "wait"]
     replace = ["stop", "unregister", *kills, "register", "start"]
     assert result["calls"] == [
         "register",
