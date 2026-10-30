@@ -29,7 +29,7 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 ```text
 Hub のマシン                                ほかのマシン
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ GuildBotics (forwards)       │
+│ branvil serve                │            │ OpenSSH (OS user service)    │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
 │ GuildBotics                  │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
@@ -37,13 +37,10 @@ Hub のマシン                                ほかのマシン
 
 - Branvil は GuildBotics の Hub を置くマシンで 1 つだけ動かし、loopback でだけ待ち受けます。
 - すべてのマシンが同じベース URL（既定 `http://127.0.0.1:7878`）で Branvil に届きます。
-  Hub のマシンでは Branvil そのものです。ほかのマシンでは、GuildBotics（Desktop か
-  `guildbotics start` のサービス）が、動いているあいだ、Hub 同期と同じ SSH 接続でそのローカル
-  ポートを Hub へ転送します。そのマシンでほかに動かすものはありません。GuildBotics が動いていない
-  あいだ（`git` や Branvil の GUI を使うとき）は、`branvil tunnel --via <hub>` が代わりに
-  転送します。先にポートを取ったほうが転送し、もう一方は待ちます。ポートが空けば、GuildBotics は
-  10 秒以内に引き継ぎます。転送するのは、ベース URL が loopback（`127.0.0.1` か `localhost`）の
-  ときだけです。
+  Hub のマシンでは Branvil そのものです。ほかのマシンでは、下記の
+  [SSH 転送サービス](#hub-以外のマシンで-ssh-転送を設定する)を一度設定します。OpenSSH が
+  ログイン時に起動し、1 本の接続で loopback のポートを転送します。GuildBotics や Branvil の
+  クライアントとは独立して動くので、GuildBotics を閉じてもブラウザ、git、CLI から使えます。
 - どのマシンでも同じベース URL であることで、記録した URL がどこでも有効になります。チケットは
   `{base}/{repository}/-/tickets/{n}`、pull request は `{base}/{repository}/-/pulls/{n}` で、
   GuildBotics の Branvil への接続が持つベース URL は 1 つです。リポジトリはチケット（`#1`）を
@@ -82,7 +79,7 @@ Hub 以外のマシンの SSH の転送越しでは、接続を拒む Branvil �
 
 Branvil の README に従って、次を行います。
 
-1. Hub のマシンで Branvil を動かす。ほかのマシンでは、GuildBotics が動いていればほかに要るものはない。
+1. Hub のマシンで Branvil を動かす。ほかのマシンでは、下記の SSH 転送を設定する。
    `branvil init` は Branvil のオーナー（Branvil を使うただ一人の人）を作ります。これが
    GuildBotics の人間のメンバーです。オーナーは何でもでき、マージし、Branvil の GUI を使います。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
@@ -91,6 +88,79 @@ Branvil の README に従って、次を行います。
    チケットだけです。ワークスペースは GuildBotics からも作れます（下記）。
 
 メンバーとそのトークンは Branvil で作りません。GuildBotics が作ります。
+
+## Hub 以外のマシンで SSH 転送を設定する
+
+Hub 以外の各マシンで、チェックアウトに同梱されたスクリプトを実行します。必要なのは
+OpenSSH と OS のサービス管理だけで、Python や GuildBotics の CLI は使いません。
+Hub 自体は、利用者の SSH 鍵で接続できれば追加設定はありません。
+
+1. 手動や OS のサービスで `branvil tunnel` を動かしていれば止める。
+2. `ssh my-hub` で一度接続し、確認済みのホスト鍵を受け入れる。`my-hub` は自分の SSH 設定の
+   別名か `[user@]host` に置き換える。鍵やホスト名は既存の OpenSSH の設定を使う。
+   そのホストの項目に **`LocalForward` を書かない**。通常の `ssh my-hub` もサービスと
+   ポートを取り合うためである。
+3. パスフレーズのない鍵か、ssh-agent に読み込み済みの鍵を使う。Hub 同期用に作られた
+   `~/.ssh/id_ed25519`（パスフレーズなし）があれば、そのまま使える。サービスは
+   `BatchMode=yes` と厳密なホスト鍵確認を使い、入力を求めない。Windows では OpenSSH
+   クライアントを有効にし、agent を使うなら OpenSSH Authentication Agent サービスも有効にする。
+4. 次のコマンドで登録し、状態を確認する。
+
+macOS（launchd のユーザーエージェント）と Linux（systemd のユーザーサービス）:
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878
+sh scripts/hub-forward.sh status
+# 更新は、必要なすべてのポートを指定して install をもう一度実行する。
+sh scripts/hub-forward.sh uninstall
+```
+
+Linux のユーザーサービスには、ログインシェルの `SSH_AUTH_SOCK` は渡りません。
+`--agent-socket` の指定がなければ agent を使わないため、パスフレーズのない鍵が必要です。
+agent を使う場合は、その**固定の絶対パス**を指定します。
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
+```
+
+スクリプトがサービスの環境変数 `SSH_AUTH_SOCK` に設定します。ログインのたびに socket の
+パスが変わる agent では、新しいパスで登録し直すか、固定パスを設定してください。
+macOS では、OS が launchd に渡す agent を使います。
+
+Windows（タスクスケジューラー、Windows PowerShell 5.1。管理者権限は不要）:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port 7878
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
+# 更新は -Port "7878,12345" のように、必要な全ポートを指定して install する。
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
+```
+
+実行ポリシーの指定は、この実行に限って署名なしのスクリプトを許可します。タスクはログイン中だけ、
+コンソールを表示せずに動きます。`%LOCALAPPDATA%\hub-forward` に置く小さな PowerShell の
+ループが、ssh の失敗時も 15 秒あけて起動し直します。実行時間の上限はありません。
+削除時にはこのファイルも消します。macOS の定義は
+`~/Library/LaunchAgents/local.hub-forward.plist`（ssh のエラーは
+`~/Library/Logs/hub-forward.log`）、Linux の定義は
+`${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service`（ログは
+`journalctl --user -u hub-forward.service`）です。SSH 設定、鍵、known_hosts は変更しません。
+サービスはユーザーごとに 1 つです。install は Hub とポート一覧を丸ごと置き換えます。
+複数ポートは POSIX で `--port` を繰り返し、PowerShell では `-Port "7878,12345"` と指定します。
+
+転送はすべて `127.0.0.1` だけで待ち受け、Hub の `127.0.0.1` の同じポートにつなぎます。
+切断は SSH の keepalive で検出して張り直します。Linux と Windows は終了から 15 秒あけ、
+macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えないよう抑制します。status は OS の
+プロセスやタスクと終了結果の確認であり、Branvil 自体の疎通確認ではありません。Windows では
+タスクが実行中でも SSH の再試行待ちの場合があります。Branvil も確かめるには、ブラウザで
+`http://127.0.0.1:7878` を開いてください。
+
+バックエンドを Hub に集約するまでは、GuildBotics 自身の転送も残ります。サービスが先に
+ポートを取ればバックエンドは待ちます。バックエンドが先に使っている場合、サービスの ssh は
+`ExitOnForwardFailure=yes` で終了し、間隔をあけて再試行します。状態確認では停止中や
+再起動中に見えても、その間はバックエンド経由で Branvil に届きます。バックエンドの転送を
+止めれば、サービスが次の再試行で引き継ぎます。同じポートの転送サービスを複数動かさないでください。
+GuildBotics サーバーのポートは固定後にクライアントのインストーラーが追加します。
+スクリプト自体はアプリの名前や既定ポートを持ちません。
 
 複数の GuildBotics のワークスペースで 1 つの Branvil を使えます。Branvil への接続と、メンバーごとの
 エージェントとトークンは、すべてのワークスペースで共有するメンバーのアイデンティティの側に

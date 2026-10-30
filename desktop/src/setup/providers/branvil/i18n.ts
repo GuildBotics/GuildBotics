@@ -10,7 +10,7 @@ export const branvil = {
         },
         baseUrl: "Base URL",
         baseUrlHint:
-          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, GuildBotics forwards it. The connection is the same in every workspace.",
+          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, set up the SSH forwarding service with scripts/hub-forward.sh (macOS/Linux) or scripts/hub-forward.ps1 (Windows). The connection is the same in every workspace.",
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         workspace: "Workspace",
         workspaceHint:
@@ -73,7 +73,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil is not reachable",
           description:
-            "Branvil did not answer at {{target}}. On a machine other than the Hub, check that the Branvil tunnel is running.",
+            "Branvil did not answer at {{target}}. On a machine other than the Hub, check the SSH forwarding service with scripts/hub-forward.sh status (macOS/Linux) or powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status (Windows).",
         },
         branvil_access: {
           title: "Branvil refused the member's token",
@@ -104,7 +104,7 @@ export const branvil = {
         },
         baseUrl: "ベース URL",
         baseUrlHint:
-          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは GuildBotics が転送します。接続はすべてのワークスペースで共通です。",
+          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは scripts/hub-forward.sh（macOS/Linux）か scripts/hub-forward.ps1（Windows）で SSH 転送サービスを設定します。接続はすべてのワークスペースで共通です。",
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         workspace: "ワークスペース",
         workspaceHint:
@@ -167,7 +167,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil に届きません",
           description:
-            "{{target}} の Branvil が応答しませんでした。Hub 以外のマシンでは、Branvil のトンネルが動いているか確認してください。",
+            "{{target}} の Branvil が応答しませんでした。Hub 以外のマシンでは、scripts/hub-forward.sh status（macOS/Linux）または powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status（Windows）で SSH 転送サービスを確認してください。",
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",

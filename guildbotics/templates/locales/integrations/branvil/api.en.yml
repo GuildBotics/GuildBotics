@@ -6,7 +6,7 @@ en:
   label_undefined: "A label is not defined in the repository. %{message} Ask a human to add the label instead of introducing a new one."
   refused: "Branvil refused %{operation} (%{status} %{code}): %{message}"
   timeout: "Branvil at %{base_url} did not answer in time. Retry later."
-  unreachable: "Branvil is not reachable at %{base_url}. On a machine other than the Hub, check that the Branvil tunnel is running."
+  unreachable: "Branvil is not reachable at %{base_url}. On a machine other than the Hub, check the SSH forwarding service with scripts/hub-forward.sh status (macOS/Linux) or powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status (Windows)."
   not_branvil: "The service at %{base_url} is not Branvil's API v1."
   invalid: "Branvil returned an invalid response."
   token_missing: "The member has no Branvil token (%{name}) on this machine. Save the member to issue one, or fetch it from the Hub under Credentials on this machine."
