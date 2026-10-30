@@ -179,7 +179,8 @@ include_external_packages = true
 # host: the entries (cli, app_api), execution control (drivers), the
 # workspace's setup, the isolated environment itself (microVM, credential
 # gateway, the window's host side, member broker), member capabilities, the
-# provider integrations, and the records, sync, Hub and Secret distribution.
+# provider integrations, the client-side Git primitives (local_git), and the
+# records, sync, Hub and Secret distribution.
 # shared: what the guest runs and the host reads alike -- the command
 # machinery, the brains and catalogs, the Context and its ports, the domain
 # models and the utilities. Shared code imports neither the host nor the
@@ -193,7 +194,7 @@ exhaustive = true
 exhaustive_ignores = ["_version"]
 layers = [
   "guest",
-  "cli : app_api : drivers : setup : environment : capabilities : integrations : observability : sync : hub : secrets : workspace",
+  "cli : app_api : drivers : setup : environment : capabilities : integrations : observability : sync : hub : secrets : workspace : local_git",
   "commands : intelligences : runtime : loader : entities : utils",
 ]
 
@@ -217,6 +218,7 @@ layers = [
   "integrations",
   "sync | secrets",
   "workspace | observability | hub",
+  "local_git",
 ]
 
 # Below the layers above, the records and storage, the Hub, and the sync and

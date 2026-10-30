@@ -1764,10 +1764,15 @@ async def test_member_mode_git_is_refused_outside_a_command(member, operation):
         await calls[operation](member.service)
 
 
-def test_member_git_starts_processes_only_through_subprocess_run() -> None:
+@pytest.mark.parametrize("module", [member_git, member_git.LocalGit.__module__])
+def test_member_git_starts_processes_only_through_subprocess_run(module) -> None:
     """The population ``host_git`` records: the host starts no git of member
     git's any other way (GitPython included)."""
-    tree = ast.parse(Path(member_git.__file__).read_text(encoding="utf-8"))
+    import importlib
+
+    if isinstance(module, str):
+        module = importlib.import_module(module)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
     imported = {
         alias.name
         for node in ast.walk(tree)
@@ -1797,7 +1802,7 @@ def test_member_git_starts_processes_only_through_subprocess_run() -> None:
             )
         )
     }
-    assert used == {"run", "TimeoutExpired"}
+    assert used == (set() if module is member_git else {"run", "TimeoutExpired"})
 
 
 def _hook(repo_path: Path, name: str, script: str) -> None:
@@ -2234,6 +2239,99 @@ async def test_push_current_workspace_of_a_branch_without_commits_is_refused(
 
     with pytest.raises(MemberCapabilityError, match="'empty' has no commit to push"):
         await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["push", "publish", "up_to_date"])
+async def test_current_workspace_exchanges_bundles_and_reports_readiness(
+    member, tmp_path, worker_git_seed, host_git, operation
+):
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    base = repo.head.commit.hexsha
+    pr_url = member.pull_request(7, "main")
+    remote = member.remote()
+    # All fetched remote branches return, but local refs and tags stay local.
+    remote.git.update_ref("refs/heads/other", base)
+    repo.git.update_ref("refs/remotes/origin/deleted", base)
+    repo.create_tag("local-tag")
+    remote.create_tag("remote-tag")
+    if operation == "publish":
+        (repo_path / "README.md").write_text("published\n", encoding="utf-8")
+        repo.git.add("README.md")
+        result = await member.service.publish_current_workspace(
+            repo_path, "bundle publication", cwd=repo_path
+        )
+    else:
+        if operation == "push":
+            repo.index.commit("bundle publication")
+        result = await member.service.push(
+            repo_path, workspace_mode="current", cwd=repo_path
+        )
+
+    sha = repo.head.commit.hexsha
+    assert remote.commit("main").hexsha == sha
+    assert repo.commit("origin/main").hexsha == sha
+    assert repo.commit("origin/other").hexsha == base
+    assert repo.commit("origin/deleted").hexsha == base
+    assert [tag.name for tag in repo.tags] == ["local-tag"]
+    assert [tag.name for tag in remote.tags] == ["remote-tag"]
+    assert result.pushed is (operation != "up_to_date")
+    assert result.pull_requests == [
+        {"url": pr_url, "readiness": "ready", "completion_blockers": []}
+    ]
+    # Neither side fetches the other's repository path.
+    fetches = [call for call in host_git if "fetch" in call.args]
+    assert fetches
+    for call in fetches:
+        assert call.cwd != repo_path
+        if "--" in call.args:
+            assert call.args[call.args.index("--") + 1].endswith(".bundle")
+    assert any(call.cwd == repo_path and "unbundle" in call.args for call in host_git)
+    if operation != "up_to_date":
+        assert any(
+            call.cwd == repo_path and "create" in call.args and "bundle" in call.args
+            for call in host_git
+        )
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
+@pytest.mark.asyncio
+async def test_current_workspace_retries_a_bundle_with_missing_prerequisites(
+    member, tmp_path, worker_git_seed, monkeypatch
+):
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    missing = repo.index.commit("prerequisite absent from host").hexsha
+    sha = repo.index.commit("tip").hexsha
+    create = member_git.LocalGit.branch_bundle
+    requests = []
+    headers = []
+
+    def with_missing_prerequisite(user, branch, known, bundle):
+        requests.append(set(known))
+        # Model a prerequisite the host advertised but no longer holds.
+        result = create(
+            user, branch, [missing] if len(requests) == 1 else known, bundle
+        )
+        headers.append(bundle.read_bytes().split(b"\n\n", 1)[0])
+        return result
+
+    monkeypatch.setattr(member_git.LocalGit, "branch_bundle", with_missing_prerequisite)
+    result = await member.service.push(
+        repo_path, workspace_mode="current", cwd=repo_path
+    )
+
+    assert result.pushed
+    assert member.remote().commit("main").hexsha == sha
+    assert repo.commit("origin/main").hexsha == sha
+    assert len(requests) == 2
+    assert requests[0]
+    assert requests[1] == set()
+    assert f"-{missing} ".encode() in headers[0]
+    assert not any(line.startswith(b"-") for line in headers[1].splitlines())
 
 
 def _in_environment(monkeypatch, tmp_path, settings) -> None:
