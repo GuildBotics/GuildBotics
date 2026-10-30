@@ -121,6 +121,9 @@ NOT_SHARED = {
     "guildbotics/capabilities/member_git.py:MAX_GIT_BUNDLE_BYTES": (
         "history a member's clone sends the host, into a temporary file"
     ),
+    "guildbotics/capabilities/member_git.py:MAX_GIT_SHOW_BYTES": (
+        "one default-branch object read into a bounded member result"
+    ),
     "guildbotics/capabilities/member_git.py:_MAX_GIT_OUTPUT_BYTES": (
         "what the host reads back from git run in a member's clone"
     ),

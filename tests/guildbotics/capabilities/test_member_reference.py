@@ -127,13 +127,17 @@ def test_reference_grounds_repository_judgments_in_guidelines():
     text = capability_reference_text()
     # Issue #381: drafting an issue for a repository or settling a design or
     # implementation policy for one must be grounded in that repository's own
-    # guidelines, with the origin default branch version canonical so a stale
-    # checkout is never trusted.
+    # guidelines. Read the current default branch as the member, with or without
+    # a checkout, so a stale checkout and the user's credentials are never required.
     assert "AGENTS.md" in text
-    assert "origin default branch is canonical" in text
-    assert "git fetch origin" in text
-    assert "git show origin/<default-branch>:<file>" in text
-    assert "create a checkout first with `member git prepare`" in text
+    assert "current default branch is canonical" in text
+    assert "guildbotics member git show --person <person> --repo <repository>" in text
+    assert "--path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md" in text
+    assert "with or without a checkout" in text
+    assert "do not rely on possibly stale working-tree files" in text
+    assert "git fetch origin" not in text
+    assert "git show origin/<default-branch>:<file>" not in text
+    assert "create a checkout first" not in text
 
 
 def test_reference_states_pr_work_record_contract():

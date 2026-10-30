@@ -45,6 +45,18 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "stage and branch with plain git yourself",
         [
             (
+                "guildbotics member git show --person <person> --repo <repository> "
+                "--path <path> [--path <path> ...]",
+                "Read literal paths on the code host's current default branch, without "
+                "a checkout. Files return UTF-8 content; directories (including '.') "
+                "return immediate entry names and kinds. Missing paths return kind "
+                "missing; binary or oversized objects omit content with status binary "
+                "or too_large. Results include default_branch and commit; output is "
+                "bounded by the member result limit. Uses the member credential on "
+                "the host, both interactively and inside a command, without a lease "
+                "or approval.",
+            ),
+            (
                 "guildbotics member git prepare --person <person> "
                 "(--issue-url <url> [--pr-url <url> | --repo <repository>] | --pr-url <url> "
                 "| --repo <repository> --branch <name>)",
@@ -418,11 +430,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "drafting or creating a ticket for a repository, or settling a design or "
     "implementation policy for one, read its agent and contributor guidelines "
     "(AGENTS.md, CLAUDE.md, CONTRIBUTING, or equivalents) and align the outcome "
-    "with them. The version on the origin default branch is canonical: with an "
-    "existing checkout, run `git fetch origin` and read `git show "
-    "origin/<default-branch>:<file>` instead of trusting possibly stale "
-    "working-tree files; without one, create a checkout first with `member git "
-    "prepare` (its output reports the default branch).",
+    "with them. The version on the code host's current default branch is canonical: "
+    "read it with `guildbotics member git show --person <person> "
+    "--repo <repository> --path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md`. "
+    "Use `--path .` to discover other guideline names and repeat --path to read "
+    "several at once. This works with or without a checkout and reports the "
+    "default branch and commit read; do not rely on possibly stale working-tree files.",
     "When addressing PR review feedback, follow the Handling review feedback "
     "procedure below before editing.",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
