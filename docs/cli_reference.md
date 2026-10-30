@@ -109,7 +109,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -1617,7 +1617,7 @@ guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
 
 ## `guildbotics member ticket attachment`
 
@@ -1748,7 +1748,7 @@ guildbotics member ticket read [OPTIONS]
 
 ## `guildbotics member ticket update`
 
-Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent.
+Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。
 
 ```text
 guildbotics member ticket update [OPTIONS]
@@ -1761,6 +1761,7 @@ guildbotics member ticket update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the ticket title. |
+| `--interactive / --no-interactive` | Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it. |
 | `--add-label TEXT` | Add a label already defined in the tracker. Repeat for several labels. |
 | `--remove-label TEXT` | Remove a label from the ticket. Repeat for several labels. |
 | `--state [open\|closed]` | Close or reopen the ticket; requires --human-approved. |

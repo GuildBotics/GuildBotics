@@ -30,6 +30,7 @@ from guildbotics.runtime.member_invocation import (
     member_invocation_scope,
 )
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
+from guildbotics.utils.i18n_tool import get_language, set_language, t
 from tests.guildbotics.local_code_host import (
     REPOSITORY,
     TRACKER,
@@ -103,6 +104,59 @@ async def test_ticket_create_off_the_board(member):
     )
 
     assert item(result["target"]["url"])["lane"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize(
+    "operation, options, action_key",
+    [
+        ("create", {}, "ticket_create"),
+        ("update", {"state": "open"}, "ticket_state"),
+        ("update", {"state": "closed"}, "ticket_state"),
+        ("update", {"interactive": True}, "ticket_interactive"),
+        ("update", {"interactive": False}, "ticket_interactive"),
+    ],
+)
+async def test_ticket_approval_is_localized_before_service_access(
+    member, monkeypatch, language, operation, options, action_key
+):
+    url = ticket(1)
+    original_language = get_language()
+
+    async def invoke(approved):
+        if operation == "create":
+            return await member_repository.ticket_create(
+                member, TRACKER, "Created", "", True, human_approved=approved
+            )
+        return await member_repository.ticket_update(
+            member, url, human_approved=approved, **options
+        )
+
+    def forbidden(_context):
+        pytest.fail("Approval must be checked before accessing the ticket service")
+
+    try:
+        set_language(language)
+        action = t(f"cli.member.{action_key}", state=options.get("state", ""))
+        assert action != f"cli.member.{action_key}"
+        expected = t("cli.member.human_approval_required", action=action)
+        assert "--human-approved" in expected
+        assert (
+            "人の依頼" in expected
+            if language == "ja"
+            else "human instruction" in expected
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(member_repository, "_tickets", forbidden)
+            with pytest.raises(MemberCapabilityError) as error:
+                await invoke(False)
+        assert str(error.value) == expected
+        if language == "ja":
+            assert "requires a human" not in str(error.value)
+        assert (await invoke(True))["target"]["kind"] == "ticket"
+    finally:
+        set_language(original_language)
 
 
 @pytest.mark.asyncio
@@ -189,6 +243,8 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
         "state_changed": True,
         "labels": [],
         "target": target,
+        "interactive": False,
+        "interactive_ancestor": None,
     }
     assert commented == {
         "id": "comment-1",
@@ -198,6 +254,24 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
         "target": target,
     }
     assert [c["body"] for c in item(url)["comments"]] == ["Closing."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_ticket_interactive_update_requires_human_approval(member, enabled):
+    url = ticket(1, interactive=not enabled)
+    before = item(url)
+    with pytest.raises(MemberCapabilityError, match="human instruction"):
+        await member_repository.ticket_update(
+            member, url, interactive=enabled, title="Must not change"
+        )
+    assert item(url) == before
+    updated = await member_repository.ticket_update(
+        member, url, interactive=enabled, human_approved=True
+    )
+    assert updated["interactive"] is enabled
+    assert item(url)["interactive"] is enabled
+    assert updated["interactive_ancestor"] is None
 
 
 @pytest.mark.asyncio

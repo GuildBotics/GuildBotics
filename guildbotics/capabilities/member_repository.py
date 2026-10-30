@@ -106,7 +106,7 @@ async def ticket_create(
     parent: str | None = None,
     blocked_by: Sequence[str] = (),
 ) -> dict[str, Any]:
-    _require_human_approval(human_approved, "Creating a ticket")
+    _require_human_approval(human_approved, t("cli.member.ticket_create"))
     assigned_name = None
     if assignee is not None:
         member = next(
@@ -150,10 +150,13 @@ async def ticket_update(
     parent: str | None = None,
     add_blocked_by: Sequence[str] = (),
     remove_blocked_by: Sequence[str] = (),
+    interactive: bool | None = None,
 ) -> dict[str, Any]:
+    if interactive is not None:
+        _require_human_approval(human_approved, t("cli.member.ticket_interactive"))
     if state is not None:
         _require_human_approval(
-            human_approved, f"Changing the ticket state to '{state}'"
+            human_approved, t("cli.member.ticket_state", state=state)
         )
     add_labels, remove_labels = _cleaned(add_labels), _cleaned(remove_labels)
     add_blocked_by, remove_blocked_by = (
@@ -165,12 +168,10 @@ async def ticket_update(
         and title is None
         and state is None
         and parent is None
+        and interactive is None
         and not (add_labels or remove_labels or add_blocked_by or remove_blocked_by)
     ):
-        raise MemberCapabilityError(
-            "ticket update needs at least one of body, title, labels, state, "
-            "parent, or blockers."
-        )
+        raise MemberCapabilityError(t("cli.member.ticket_update_empty"))
     updated = await _tickets(context).update_ticket(
         url,
         body=body,
@@ -182,6 +183,7 @@ async def ticket_update(
         parent=parent,
         add_blocked_by=add_blocked_by,
         remove_blocked_by=remove_blocked_by,
+        interactive=interactive,
     )
     return updated.model_dump()
 
@@ -501,14 +503,13 @@ def _cleaned(labels: Sequence[str]) -> list[str]:
 def _require_human_approval(human_approved: bool, action: str) -> None:
     """Guard the writes that stay a human decision.
 
-    Opening and closing tickets shape the team's backlog, so the member may only
-    perform them on a human's instruction or approval. The flag is the member's
-    attestation that such an instruction exists in the originating conversation.
+    Creating tickets and changing their state or interactive mode are human
+    decisions. The flag attests that a human instruction or approval exists
+    in the originating conversation.
     """
     if not human_approved:
         raise MemberCapabilityError(
-            f"{action} requires a human instruction or approval. "
-            "Ask the human first, then re-run with --human-approved."
+            t("cli.member.human_approval_required", action=action)
         )
 
 

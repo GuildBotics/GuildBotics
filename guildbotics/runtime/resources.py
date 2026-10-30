@@ -124,6 +124,11 @@ class Ticket(WorkTarget):
     blocked_by: list[TicketRelative]
     #: The tickets this one must be closed before.
     blocks: list[TicketRelative]
+    #: The ticket's own interactive setting. An ancestor can keep it
+    #: interactive even when this is false.
+    interactive: bool
+    #: URL of the nearest interactive ancestor, if any.
+    interactive_ancestor: str | None
 
 
 class PullRequest(WorkTarget):

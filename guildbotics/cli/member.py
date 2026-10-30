@@ -1409,6 +1409,12 @@ def ticket_create(
 @_optional_content_stdin_option
 @click.option("--title", default=None, help="Replace the ticket title.")
 @click.option(
+    "--interactive/--no-interactive",
+    default=None,
+    help="Set or clear this ticket's interactive mode; requires --human-approved. "
+    "An interactive ancestor still keeps it interactive. Unsupported providers refuse it.",
+)
+@click.option(
     "--add-label",
     "add_labels",
     multiple=True,
@@ -1455,6 +1461,7 @@ def ticket_update(
     issue_url: str,
     content_stdin: bool,
     title: str | None,
+    interactive: bool | None,
     add_labels: tuple[str, ...],
     remove_labels: tuple[str, ...],
     state: str | None,
@@ -1470,6 +1477,7 @@ def ticket_update(
     if not (
         content_stdin
         or title is not None
+        or interactive is not None
         or add_labels
         or remove_labels
         or state
@@ -1477,11 +1485,7 @@ def ticket_update(
         or add_blocked_by
         or remove_blocked_by
     ):
-        raise click.UsageError(
-            "ticket update needs --content-stdin/--content-file, --title, --add-label, "
-            "--remove-label, --state, --parent, --add-blocked-by, or "
-            "--remove-blocked-by."
-        )
+        raise click.UsageError(t("cli.member.ticket_update_options"))
     body = _read_stdin("ticket body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
     return _code_hosting(
@@ -1499,6 +1503,7 @@ def ticket_update(
             parent=parent,
             add_blocked_by=add_blocked_by,
             remove_blocked_by=remove_blocked_by,
+            interactive=interactive,
         ),
         evidence="issue_update",
         then=record_member_issue_close_event,

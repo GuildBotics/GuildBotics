@@ -1585,6 +1585,8 @@ async def test_a_ticket_reads_its_lane_on_the_configured_board(
             children=[],
             blocked_by=[],
             blocks=[],
+            interactive=False,
+            interactive_ancestor=None,
         ).model_dump()
     ]
     [lookup] = [b for b in github.documents() if "projectItems" in b["query"]]

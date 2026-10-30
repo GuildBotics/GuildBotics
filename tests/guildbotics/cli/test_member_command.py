@@ -2929,6 +2929,45 @@ def test_member_issue_update_passes_the_relations(monkeypatch, options, relation
     assert {key: calls[key] for key in relations} == relations
 
 
+@pytest.mark.parametrize(
+    "flag, enabled", [("--interactive", True), ("--no-interactive", False)]
+)
+@pytest.mark.parametrize("approved", [False, True])
+def test_member_issue_update_interactive_flags_require_approval(
+    monkeypatch, flag, enabled, approved
+):
+    from tests.guildbotics.local_code_host import item, local_member, ticket
+
+    context = local_member()
+    url = ticket(1, interactive=not enabled)
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda identifier: (context, context.person),
+    )
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "ticket",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            url,
+            flag,
+            *(["--human-approved"] if approved else []),
+        ],
+    )
+    if approved:
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["interactive"] is enabled
+        assert item(url)["interactive"] is enabled
+    else:
+        assert result.exit_code != 0
+        assert "human instruction" in result.output
+        assert item(url)["interactive"] is not enabled
+
+
 def test_member_issue_update_rejects_state_reason_without_close():
     result = CliRunner().invoke(
         member_module.member,
@@ -3072,6 +3111,7 @@ def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
     assert activity_calls[0][0] is person
@@ -3136,6 +3176,7 @@ def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
 
@@ -3202,6 +3243,7 @@ def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""

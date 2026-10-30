@@ -121,10 +121,12 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 @pytest.mark.asyncio
 async def test_issue_inspect_reads_a_local_ticket_and_the_prs_that_refer_to_it():
     member = local_member()
+    parent = ticket(4, interactive=True)
     screen = attachment("screen-1", b"PNG!")
     url = ticket(
         1,
         title="Login",
+        parent=parent,
         comments=[comment("someone", f"it fails: ![screen]({screen})", id="c-1")],
     )
     pr = pull_request(2, "ticket/T-1", tickets=[{"url": url, "closes": False}])
@@ -133,6 +135,8 @@ async def test_issue_inspect_reads_a_local_ticket_and_the_prs_that_refer_to_it()
     result = json.loads(await command("issue_inspect").main(member, url))
 
     assert (result["url"], result["key"], result["title"]) == (url, "T-1", "Login")
+    assert result["interactive"] is False
+    assert result["interactive_ancestor"] == parent
     assert [c["body"] for c in result["comments"]] == [f"it fails: ![screen]({screen})"]
     assert result["attachments"] == [
         {

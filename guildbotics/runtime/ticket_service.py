@@ -52,6 +52,8 @@ class TicketUpdated(ReadModel):
     state_changed: bool
     labels: list[str]
     target: WorkTarget
+    interactive: bool
+    interactive_ancestor: str | None
 
 
 class ClosedItem(ReadModel):
@@ -149,6 +151,7 @@ class TicketService(ABC):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
         """Change a ticket; a label is added or removed without touching the
         labels others set meanwhile, and removing one it does not carry
@@ -158,7 +161,16 @@ class TicketService(ABC):
         way: ``parent`` is the ticket it becomes a part of (``""`` makes it
         part of none, ``None`` keeps it), and ``add_blocked_by`` /
         ``remove_blocked_by`` change the tickets it is blocked by. A ticket's
-        children and the tickets it blocks change by updating those tickets."""
+        children and the tickets it blocks change by updating those tickets.
+
+        ``interactive=None`` keeps the setting; false clears only this
+        ticket's own setting. The result includes the nearest interactive
+        ancestor, which keeps the ticket interactive regardless of its own
+        setting.
+
+        Raises:
+            ServiceUnsupported: If ``interactive`` is specified but unsupported.
+        """
 
     @abstractmethod
     async def add_reaction(

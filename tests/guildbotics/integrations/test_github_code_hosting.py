@@ -1664,6 +1664,8 @@ async def test_ticket_update_patches_only_the_body(monkeypatch):
         "state_changed": False,
         "labels": ["cli"],
         "target": _target(ISSUE, "issue 42").model_dump(),
+        "interactive": False,
+        "interactive_ancestor": None,
     }
     assert github.bodies("PATCH", f"/repos/{REPO}/issues/42") == [
         {"body": "Updated body"}

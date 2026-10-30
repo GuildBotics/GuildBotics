@@ -98,6 +98,19 @@ and `new` otherwise, with or without `--interactive`. An ordinary assigned
 ticket in `ready` need not be interactive. Providers that do not support
 interactive tickets refuse `--interactive` before creating anything.
 
+When the user asks to work on an existing ticket interactively, use
+`member ticket update --person <person_id> --url <ticket_url> --interactive
+--human-approved`. When they ask to return it to automatic patrol, use
+`--no-interactive --human-approved`. Keep its assignee and lane unchanged.
+Read and report the result: `interactive` is the ticket's own setting, and
+an `interactive_ancestor` URL means it remains interactive through inheritance
+even after `--no-interactive`. Unsupported providers refuse either flag.
+
+既存のチケットを対話で進めるよう人が依頼したら、
+`ticket update --interactive --human-approved` を使う。自動巡回へ戻す依頼には
+`--no-interactive --human-approved` を使い、担当者とレーンは変えない。
+`interactive_ancestor` があれば、自身の指定を解除しても対話のままであることを伝える。
+
 ## Definition of Done
 
 Before sending your final interactive reply, complete the standard work procedure from the member capabilities in the user's current repository: verification of code changes, the requested publishing steps (commit, push, PR, comments, replies, or reactions), and memory maintenance.
