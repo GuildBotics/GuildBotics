@@ -954,7 +954,33 @@ async def _chat_complete(
 
 @member.group()
 def git() -> None:
-    """Prepare, commit, push, and publish member git workspaces."""
+    """Read repositories and prepare, commit, push, and publish member workspaces."""
+
+
+@git.command(name="show")
+@_read_only_member_command
+@_person_option
+@click.option("--repo", required=True, help="Repository path of the code host.")
+@click.option(
+    "--path",
+    "paths",
+    multiple=True,
+    required=True,
+    help="Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root.",
+)
+@_json_format_option
+def git_show(
+    person: str, repo: str, paths: tuple[str, ...], output_format: str
+) -> _CommandWork:
+    return _git_show(person, repo, paths)
+
+
+async def _git_show(person: str, repo: str, paths: tuple[str, ...]) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    try:
+        return await _git_service(context, member_person).show(repo, paths)
+    finally:
+        await context.aclose()
 
 
 @git.command(name="prepare")

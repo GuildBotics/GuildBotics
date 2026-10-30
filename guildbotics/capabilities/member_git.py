@@ -1,4 +1,4 @@
-"""Commit, push, and prepare the repositories a member works in.
+"""Read, commit, push, and prepare the repositories a member works in.
 
 A member's clone (``--workspace-mode member``) is written by the command's
 turns, and a repository decides what its git runs: hooks, filters, where a
@@ -9,6 +9,9 @@ none to run it. The member's credential is only used on the host, against a
 repository of the host's own per repository of the code host that no
 environment mounts, and toward the URL the code host gives it. The two exchange history as git bundles:
 data, which the host takes only under the branch it checked.
+
+Reading the default branch needs no clone or command environment: the host
+fetches into that same private repository and reads immutable git objects.
 
 The repository open in the user's own session (``--workspace-mode current``)
 is theirs: its commit runs on the host, under their configuration and hooks.
@@ -26,6 +29,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -48,6 +52,7 @@ from guildbotics.runtime.member_invocation import (
     current_member_invocation,
 )
 from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.resources import MAX_PAGE_BYTES
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import (
@@ -71,6 +76,8 @@ _FETCH_REFSPECS = ("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tag
 #: The references a clone is given of the host's repository.
 _SHARED_REFS = ("refs/remotes/origin/", "refs/tags/")
 _PUBLISHED_REFS = "refs/guildbotics/published/"
+#: Leave room for metadata and worst-case JSON escaping of object contents.
+MAX_GIT_SHOW_BYTES = MAX_PAGE_BYTES // 8
 #: Git operations that can be pending even when status is clean.
 _GIT_IDLE = (
     "for state in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD MERGE_AUTOSTASH "
@@ -371,6 +378,56 @@ class _Origin:
             self.git("rev-parse", "--verify", f"refs/heads/{branch}").stdout
         )
 
+    def show_path(self, commit: str, path: str) -> dict[str, Any]:
+        """Read a literal path at one immutable commit, without checking it out."""
+        if path == ".":
+            name = f"{commit}^{{tree}}"
+            kind = "directory"
+        else:
+            listed = self.git(
+                "--literal-pathspecs", "ls-tree", "-z", commit, "--", path
+            ).stdout
+            if not listed:
+                return {"path": path, "kind": "missing"}
+            header, _ = listed.rstrip(b"\0").split(b"\t", 1)
+            mode, _, oid = header.decode().split()
+            name = _object_name(oid.encode())
+            kind = _tree_kind(mode)
+        item: dict[str, Any] = {"path": path, "kind": kind}
+        if kind == "submodule":
+            return {**item, "commit": name}
+        size = int(self.git("cat-file", "-s", name).stdout)
+        item["size"] = size
+        if size > MAX_GIT_SHOW_BYTES:
+            return {**item, "status": "too_large"}
+        if kind == "directory":
+            entries = []
+            for entry in self.git("ls-tree", "-z", name).stdout.split(b"\0"):
+                if entry:
+                    header, filename = entry.split(b"\t", 1)
+                    entries.append(
+                        {
+                            "name": filename.decode(errors="replace"),
+                            "kind": _tree_kind(header.split()[0].decode()),
+                        }
+                    )
+            return {**item, "status": "ok", "entries": entries}
+        content = self.git("cat-file", "blob", name).stdout
+        try:
+            decoded = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return {**item, "status": "binary"}
+        if b"\0" in content:
+            return {**item, "status": "binary"}
+        return {**item, "status": "ok", "content": decoded}
+
+
+def _tree_kind(mode: str) -> str:
+    """The kind of a git tree entry; links are never followed."""
+    return {"040000": "directory", "120000": "symlink", "160000": "submodule"}.get(
+        mode, "file"
+    )
+
 
 class MemberGitWorkspaceService:
     def __init__(
@@ -402,6 +459,66 @@ class MemberGitWorkspaceService:
     @property
     def code(self) -> CodeHostingService:
         return self._code()
+
+    async def show(self, repository: str, paths: Iterable[str]) -> dict[str, Any]:
+        """Read the code host's default branch using only the host's repository."""
+        if not valid_path(repository):
+            raise MemberCapabilityError(f"Invalid repository: {repository!r}")
+        paths = list(paths)
+        for path in paths:
+            if (
+                not path
+                or PurePosixPath(path).is_absolute()
+                or ".." in PurePosixPath(path).parts
+                or "\\" in path
+                or "\0" in path
+            ):
+                raise MemberCapabilityError(t("capabilities.member_git.invalid_path"))
+        paths = [str(PurePosixPath(path)) for path in paths]
+        # Reserve enough metadata space even if every requested object is omitted.
+        if (
+            not paths
+            or len(json.dumps([repository, paths])) + 128 * len(paths)
+            > MAX_PAGE_BYTES // 4
+        ):
+            raise MemberCapabilityError(t("capabilities.member_git.show_request_large"))
+        deadline = current_member_invocation().deadline
+        deadline = deadline if deadline is not None else time.monotonic() + 300
+
+        def remaining() -> float:
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise MemberCapabilityError(t("capabilities.member_git.show_timeout"))
+            return seconds
+
+        branch = await self.code.default_branch(repository)
+        credential = await self.code.git_credential()
+        with self._locked(self.host_root, remaining()):
+            self._branch_name(remaining, branch)
+            origin = await self._origin(self.host_root, repository, remaining)
+            origin.fetch(credential)
+            commit = _object_name(
+                origin.git(
+                    "rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"
+                ).stdout
+            )
+            result: dict[str, Any] = {
+                "repository": repository,
+                "default_branch": branch,
+                "commit": commit,
+                "items": [],
+            }
+            used = len(json.dumps(result))
+            for path in paths:
+                item = origin.show_path(commit, path)
+                size = len(json.dumps(item))
+                if used + size > MAX_PAGE_BYTES // 2:
+                    item.pop("content", None)
+                    item.pop("entries", None)
+                    item["status"] = "too_large"
+                used += len(json.dumps(item)) + 2
+                result["items"].append(item)
+        return result
 
     async def prepare(
         self,

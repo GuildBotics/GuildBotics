@@ -301,7 +301,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 - `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace の Desktop Local API が利用可能なら実行を委譲し、それ以外は手元で実行する。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
-- `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
+- `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（show/prepare/commit/push/publish）、`ticket`（read/create/update/comment/reaction）、`pr`（read/create/update/comment/review/review-comment/reply/reaction/artifact）、`repo-info`（read）、`task`（complete/status）、`context`、`help`
 - `start` と Desktop Service は共通の OS advisory lock
   `~/.guildbotics/data/run/service.lock` を使い、background service
   （scheduler worker / event listener）の machine-wide な二重起動を防ぐ。

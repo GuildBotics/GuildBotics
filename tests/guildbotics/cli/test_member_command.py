@@ -502,6 +502,7 @@ def test_ci_inspection_commands_are_read_only() -> None:
     commands = member_module.member.commands
 
     for command in (
+        commands["git"].commands["show"],
         *(commands[group].commands["read"] for group in _READ_GROUPS.values()),
         commands["pr"].commands["artifact"].commands["download"],
         commands["ticket"].commands["attachment"].commands["download"],
@@ -2031,6 +2032,54 @@ def test_member_git_prepare_names_the_repository_of_a_ticket_with_repo(monkeypat
     assert calls == [
         {"issue_url": ticket_url, "pr_url": None, "repo": "acme/widget", "branch": None}
     ]
+    assert context.closed
+
+
+def test_member_git_show_interactively_reads_without_checkout_or_lease(
+    monkeypatch, tmp_path, worker_git_seed
+):
+    from guildbotics.capabilities import member_git
+    from guildbotics.integrations.local import store
+    from tests.guildbotics.local_code_host import REPOSITORY, local_team
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    context = FakeContext(person)
+    context.team = local_team(person)
+    worker_git_seed.copy(worker_git_seed.member_remote, store.bare(REPOSITORY))
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", lambda _: (context, person)
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a read must not prepare sync or check chat freshness")
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", forbidden)
+    monkeypatch.setattr(member_git, "ensure_chat_current", forbidden)
+    # No guest, work context, lease, or checkout, as in a normal interactive session.
+    with member_invocation_scope(MemberInvocation()):
+        result = CliRunner().invoke(
+            member_module.member,
+            [
+                "git",
+                "show",
+                "--person",
+                "aiko",
+                "--repo",
+                REPOSITORY,
+                "--path",
+                "README.md",
+                "--path",
+                ".",
+                "--path",
+                "AGENTS.md",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["default_branch"] == "main"
+    assert payload["items"][0]["content"] == "initial\n"
+    assert payload["items"][1]["kind"] == "directory"
+    assert payload["items"][2]["kind"] == "missing"
     assert context.closed
 
 

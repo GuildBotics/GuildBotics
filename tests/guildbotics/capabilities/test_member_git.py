@@ -12,6 +12,7 @@ Every process the host itself starts goes through ``subprocess.run``
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import os
 import shutil
@@ -412,6 +413,161 @@ def _advance(remote: Path, tmp_path: Path, content: str) -> str:
 
 
 # -- commit ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_show_reads_fresh_default_branch_without_guest_or_checkout(
+    member: _Member, tmp_path, host_git, monkeypatch
+):
+    def forbidden(*args, **kwargs):
+        pytest.fail("reading requires neither a guest nor permission to write")
+
+    monkeypatch.setattr(member.service, "_guest", forbidden)
+    monkeypatch.setattr(member_git, "ensure_chat_current", forbidden)
+    first = await member.service.show(REPOSITORY, ["README.md", "absent", "."])
+    assert first["default_branch"] == "main"
+    assert first["items"][0]["content"] == "initial\n"
+    assert first["items"][1] == {"path": "absent", "kind": "missing"}
+    assert first["items"][2]["entries"] == [{"name": "README.md", "kind": "file"}]
+    sha = _advance(member.remotes["owner"], tmp_path, "new")
+    second = await member.service.show(REPOSITORY, ["README.md"])
+    assert second["commit"] == sha != first["commit"]
+    assert second["items"][0]["content"] == "new"
+    assert not list(member.service.workspace_root.iterdir())
+    calls = [c for c in host_git if "fetch" in c.args]
+    assert len(calls) == 2
+    assert all(c.cwd == member.origin() for c in calls)
+    assert all(c.env["GIT_CONFIG_VALUE_0"] == "" for c in calls)
+    assert member.guest.runs == []
+
+
+@pytest.mark.asyncio
+async def test_show_uses_changed_default_branch_and_ignores_checkout(
+    member: _Member, tmp_path
+):
+    await member.prepare()
+    with member.stage(content="local changes"):
+        pass
+    first = await member.service.show(REPOSITORY, ["README.md"])
+    with member.remote() as remote:
+        remote.git.branch("release/next", "main")
+        remote.git.symbolic_ref("HEAD", "refs/heads/release/next")
+    result = await member.service.show(REPOSITORY, ["README.md"])
+    assert result["default_branch"] == "release/next"
+    assert result["commit"] == first["commit"]
+    assert result["items"][0]["content"] == "initial\n"
+    assert (member.clone / "README.md").read_text() == "local changes"
+
+
+@pytest.mark.asyncio
+async def test_show_failed_fetch_does_not_report_missing(member, monkeypatch):
+    def failed(*args):
+        raise MemberCapabilityError("fetch failed")
+
+    monkeypatch.setattr(member_git._Origin, "fetch", failed)
+    with pytest.raises(MemberCapabilityError, match="fetch failed"):
+        await member.service.show(REPOSITORY, ["absent"])
+
+
+@pytest.mark.asyncio
+async def test_show_respects_invocation_deadline(member):
+    with member_invocation_scope(MemberInvocation(deadline=0)):
+        with pytest.raises(MemberCapabilityError):
+            await member.service.show(REPOSITORY, ["."])
+
+
+@pytest.mark.asyncio
+async def test_show_literal_paths_binary_limits_and_link_kinds(
+    member: _Member, tmp_path
+):
+    source = tmp_path / "source"
+    with git.Repo.clone_from(member.remotes["owner"], source) as repo:
+        (source / "dir").mkdir()
+        for name, data in {
+            "dir/規約.md": "規約\n".encode(),
+            "literal*": b"literal",
+            "literal-other": b"other",
+            "-option": b"dash",
+            "empty": b"",
+            "nul": b"text\0data",
+            "invalid": b"\xff",
+            "large": b"x" * (member_git.MAX_GIT_SHOW_BYTES + 1),
+            "boundary": b"x" * member_git.MAX_GIT_SHOW_BYTES,
+        }.items():
+            (source / name).write_bytes(data)
+        repo.git.add(A=True)
+        # Write links through the index so this works on Windows without symlink rights.
+        target = tmp_path / "link-target"
+        target.write_bytes(b"/outside")
+        link = repo.git.hash_object("-w", str(target))
+        repo.git.update_index("--add", "--cacheinfo", f"120000,{link},link")
+        repo.git.update_index(
+            "--add", "--cacheinfo", f"160000,{repo.head.commit.hexsha},module"
+        )
+        sha = repo.index.commit(
+            "objects", author=git.Actor("Test", "test@example.com")
+        ).hexsha
+        repo.git.push("origin", "main")
+    paths = [
+        "dir",
+        "dir/規約.md",
+        "literal*",
+        "-option",
+        "empty",
+        "nul",
+        "invalid",
+        "large",
+        "boundary",
+        "link",
+        "module",
+    ]
+    result = await member.service.show(REPOSITORY, paths)
+    items = {item["path"]: item for item in result["items"]}
+    assert result["commit"] == sha
+    assert items["dir"]["entries"] == [{"name": "規約.md", "kind": "file"}]
+    assert items["dir/規約.md"]["content"] == "規約\n"
+    assert items["literal*"]["content"] == "literal"
+    assert items["-option"]["content"] == "dash"
+    assert items["empty"]["content"] == ""
+    for name in ("nul", "invalid"):
+        assert items[name]["status"] == "binary" and "content" not in items[name]
+    assert items["large"]["status"] == "too_large"
+    assert "content" not in items["large"]
+    assert len(items["boundary"]["content"]) == member_git.MAX_GIT_SHOW_BYTES
+    assert (items["link"]["kind"], items["link"]["content"]) == ("symlink", "/outside")
+    assert items["module"]["kind"] == "submodule"
+    repeated = await member.service.show(REPOSITORY, ["boundary"] * 20)
+    assert len(json.dumps(repeated).encode()) < member_git.MAX_PAGE_BYTES
+    assert any(i["status"] == "too_large" for i in repeated["items"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path", ["", "/etc/passwd", "../outside", "dir/../outside", "a\\b", "a\0b"]
+)
+async def test_show_refuses_paths_outside_the_repository(member, path, host_git):
+    with pytest.raises(MemberCapabilityError):
+        await member.service.show(REPOSITORY, [path])
+    assert host_git == []
+
+
+@pytest.mark.asyncio
+async def test_show_refuses_unbounded_requests(member, host_git):
+    for paths in ([], ["."] * member_git.MAX_PAGE_BYTES):
+        with pytest.raises(MemberCapabilityError):
+            await member.service.show(REPOSITORY, paths)
+    assert host_git == []
+
+
+@pytest.mark.asyncio
+async def test_show_omits_large_trees_and_blobs_before_reading_contents(
+    member, monkeypatch, host_git
+):
+    monkeypatch.setattr(member_git, "MAX_GIT_SHOW_BYTES", 1)
+    result = await member.service.show(REPOSITORY, [".", "README.md"])
+    assert [i["status"] for i in result["items"]] == ["too_large", "too_large"]
+    assert all("entries" not in i and "content" not in i for i in result["items"])
+    assert not any("blob" in call.args for call in host_git)
 
 
 @pytest.mark.asyncio

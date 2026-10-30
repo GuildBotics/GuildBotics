@@ -70,11 +70,12 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
 | [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
+| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
+| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
@@ -726,7 +727,7 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
+| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
@@ -1011,7 +1012,7 @@ guildbotics member context [OPTIONS]
 
 ## `guildbotics member git`
 
-Prepare, commit, push, and publish member git workspaces.
+Read repositories and prepare, commit, push, and publish member workspaces.
 
 ```text
 guildbotics member git [OPTIONS] COMMAND [ARGS]...
@@ -1027,6 +1028,7 @@ guildbotics member git [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
+| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
 
 ## `guildbotics member git commit`
 
@@ -1103,6 +1105,22 @@ guildbotics member git push [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member git show`
+
+Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
+
+```text
+guildbotics member git show [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--repo TEXT` | Repository path of the code host. [required] |
+| `--path TEXT` | Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

@@ -1,3 +1,6 @@
 en:
+  invalid_path: "Use a repository-relative path without parent traversal, backslashes, or NUL bytes."
+  show_request_large: "Specify at least one path and keep the path list within the member result limit."
+  show_timeout: "Reading the default branch ran out of time."
   work_required: "Preparing a member checkout requires the running command's work context."
   checkout_reassigned: "This checkout is no longer assigned to this work. Run member git prepare for this work and use the returned repo_path."

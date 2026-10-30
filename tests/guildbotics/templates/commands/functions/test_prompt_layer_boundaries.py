@@ -225,9 +225,8 @@ def test_prompts_do_not_restate_member_reference_contracts():
         "machine_outputs",
         "memory record --pr",
         # The guideline-check contract (origin default branch is canonical,
-        # read via git fetch/show) lives in the member reference only.
-        "git fetch origin",
-        "git show origin",
+        # read through the member credential) lives in the reference only.
+        "member git show",
     )
     bodies = {
         (name, language): _prompt_body(name, language)
@@ -241,6 +240,19 @@ def test_prompts_do_not_restate_member_reference_contracts():
     for key, body in bodies.items():
         for sentinel in sentinels:
             assert sentinel not in body, (key, sentinel)
+
+
+def test_guidelines_use_member_git_show_without_a_checkout():
+    reference = capability_reference_text()
+    assert "member git show --person <person>" in reference
+    assert "--path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md" in reference
+    assert "with or without a checkout" in reference
+    for path in _agent_facing_files():
+        text = path.read_text(encoding="utf-8")
+        assert "git fetch origin" not in text, path
+        assert "git show origin/" not in text, path
+    assert "git fetch origin" not in reference
+    assert "git show origin/" not in reference
 
 
 @pytest.mark.parametrize(

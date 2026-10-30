@@ -118,6 +118,7 @@ CLIENTS = {
 #: ``(module, function)`` of every use of a member's credential for git, in
 #: any module: the code host hands it out (``git_credential``).
 TOKEN_USES = {
+    ("capabilities/member_git.py", "show"): "fetch only; a read",
     ("capabilities/member_git.py", "prepare"): "fetch only; a read",
     ("capabilities/member_git.py", "push"): "checked",
 }

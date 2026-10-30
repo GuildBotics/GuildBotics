@@ -15,11 +15,15 @@ from __future__ import annotations
 import io
 import asyncio
 import zipfile
+from pathlib import Path
+from unittest.mock import AsyncMock
 
+import git
 import pytest
 import pytest_asyncio
 
 from guildbotics.entities.message import Message
+from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.port import (
@@ -652,3 +656,43 @@ async def test_the_git_remote_names_its_repository_and_its_open_pull_requests(
     assert await code.open_pull_requests(host.repository, "other") == []
     head = await code.pull_request_head(created.target.url)
     assert (head.repository, head.branch) == (host.repository, "feature")
+
+
+@pytest.mark.asyncio
+async def test_member_show_reads_default_branch_for_every_provider(
+    host: Harness, tmp_path: Path, monkeypatch
+):
+    # Each provider supplies its branch and credential; only transport is a local remote.
+    source = tmp_path / "show-source"
+    remote = tmp_path / "show.git"
+    with git.Repo.init(source, initial_branch="main") as repo:
+        (source / "AGENTS.md").write_text("current guidelines\n", encoding="utf-8")
+        (source / "docs").mkdir()
+        (source / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+        repo.git.add(A=True)
+        commit = repo.index.commit(
+            "guidelines", author=git.Actor("Test", "test@example.com")
+        )
+        with git.Repo.clone_from(source, remote, bare=True):
+            pass
+    clone_url = AsyncMock(return_value=remote.as_uri())
+    monkeypatch.setattr(host.code, "clone_url", clone_url)
+    credential = AsyncMock(wraps=host.code.git_credential)
+    monkeypatch.setattr(host.code, "git_credential", credential)
+    service = MemberGitWorkspaceService(
+        host.code.person, host.team, lambda: host.code, lambda: host.tickets
+    )
+    result = await service.show(
+        host.repository, ["AGENTS.md", "docs", ".", "CLAUDE.md"]
+    )
+    assert (result["default_branch"], result["commit"]) == ("main", commit.hexsha)
+    assert result["items"][0]["content"] == "current guidelines\n"
+    assert result["items"][1]["entries"] == [{"name": "guide.md", "kind": "file"}]
+    assert result["items"][2]["entries"] == [
+        {"name": "AGENTS.md", "kind": "file"},
+        {"name": "docs", "kind": "directory"},
+    ]
+    assert result["items"][3] == {"path": "CLAUDE.md", "kind": "missing"}
+    clone_url.assert_awaited_once_with(host.repository)
+    credential.assert_awaited_once_with()
+    assert not service.workspace_root.exists()
