@@ -83,6 +83,15 @@ NOT_SHARED = {
     "guildbotics/app_api/command_input_files.py:MAX_COMMAND_INPUT_FILE_BYTES": (
         "a temporary upload outside the workspace"
     ),
+    "guildbotics/app_api/auth.py:_MAX_STATE_BYTES": (
+        "a local app's consent state, held in memory and handed back in its redirect"
+    ),
+    "guildbotics/app_api/command_input_files.py:_NAME_CHARS": (
+        "the name an uploaded command input keeps in the machine-local inputs"
+    ),
+    "guildbotics/app_api/handoff.py:MAX_DOWNLOAD_BYTES": (
+        "a download read from the exchange directory, outside the workspace"
+    ),
     "guildbotics/hub/secret_stream.py:MAX_HEADER_BYTES": (
         "one header line of the SSH stream secret values travel on, which is "
         "never written to a file"

@@ -1,4 +1,4 @@
-import { connected, providerOperation } from "../../../api/client";
+import { providerOperation } from "../../../api/client";
 
 /** Where Branvil is reached unless connected elsewhere: the same on every
  * machine, through Branvil's tunnel on those other than the Hub. */
@@ -32,7 +32,7 @@ function operation<T>(name: string, body: object = {}): Promise<T> {
 
 /** Start connecting to the Branvil at ``baseUrl``, on its owner's consent. */
 export function startConnection(baseUrl: string): Promise<ConsentStarted> {
-  return operation("connect", { base_url: baseUrl, callback_base_url: connected().base });
+  return operation("connect", { base_url: baseUrl });
 }
 
 export function getConnection(state = ""): Promise<Connection> {

@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { readStackContext, test } from "./stack-context";
 
 // Journey ④: Command editor against the REAL backend.
 //
@@ -78,10 +78,10 @@ test("creates, edits and saves a shared command, and says why it cannot run here
     );
   });
   await expect(message).toHaveValue(
-    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
+    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\][a-f0-9]{8}-clipboard\.png$/,
   );
   const pastedImage = await message.inputValue();
-  const storedPath = pastedImage.match(/[/\\](session-[^/\\]+)[/\\]([a-f0-9]+\.png)$/);
+  const storedPath = pastedImage.match(/[/\\](session-[^/\\]+)[/\\]([a-f0-9]{8}-clipboard\.png)$/);
   expect(storedPath).not.toBeNull();
   const [, session, name] = storedPath as RegExpMatchArray;
   const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", session, name);

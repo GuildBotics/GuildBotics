@@ -5,14 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Bootstrap } from "./Bootstrap";
 import {
   BackendClosedError,
-  canRestartApp,
+  backendEntry,
   getBootstrapLog,
   letQuitsThrough,
-  onBackendClosed,
   restartApp,
-  startBackend,
 } from "./api/backend";
 import i18n from "./i18n";
+import { replacePage } from "./session/pageNavigation";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import "./i18n";
 
@@ -20,22 +19,14 @@ const t = i18n.getFixedT("en");
 
 vi.mock("./api/backend", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api/backend")>()),
-  getBootstrapLog: vi.fn(async () => null),
-  startBackend: vi.fn(async () => undefined),
-  onBackendClosed: vi.fn(() => () => undefined),
-  letQuitsThrough: vi.fn(() => () => undefined),
-  canRestartApp: vi.fn(() => false),
-  restartApp: vi.fn(async () => undefined),
+  backendEntry: vi.fn(),
+  getBootstrapLog: vi.fn(),
+  letQuitsThrough: vi.fn(),
+  restartApp: vi.fn(),
 }));
+vi.mock("./session/pageNavigation", () => ({ replacePage: vi.fn() }));
 
-vi.mock("./App", () => ({
-  App: () => <div>App Mock Loaded</div>,
-}));
-
-const startBackendMock = vi.mocked(startBackend);
-const getBootstrapLogMock = vi.mocked(getBootstrapLog);
-const onBackendClosedMock = vi.mocked(onBackendClosed);
-const canRestartAppMock = vi.mocked(canRestartApp);
+const backendEntryMock = vi.mocked(backendEntry);
 
 function renderBootstrap() {
   return render(
@@ -45,167 +36,101 @@ function renderBootstrap() {
   );
 }
 
+/** A promise settled by the test. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("Bootstrap", () => {
   beforeEach(() => {
-    startBackendMock.mockReset();
-    getBootstrapLogMock.mockReset().mockResolvedValue(null);
-    canRestartAppMock.mockReturnValue(false);
-    vi.mocked(letQuitsThrough).mockClear();
+    vi.mocked(getBootstrapLog).mockResolvedValue(null);
+    vi.mocked(letQuitsThrough).mockReturnValue(() => undefined);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    window.history.replaceState(null, "", "/");
   });
 
-  it("shows the loading indicator while the backend starts", async () => {
-    let resolveStart: () => void = () => {};
-    startBackendMock.mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveStart = resolve;
-      }),
-    );
+  it("waits for the backend, then goes to the server's page through the entry link", async () => {
+    window.history.replaceState(null, "", "/bootstrap.html?next=/quick.html");
+    const entry = deferred<string>();
+    backendEntryMock.mockReturnValue(entry.promise);
 
     renderBootstrap();
 
     expect(screen.getByText(t("app.loading.title"))).toBeInTheDocument();
-    expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
-
-    resolveStart();
-    await screen.findByText("App Mock Loaded");
-  });
-
-  it("renders the App when startBackend resolves", async () => {
-    startBackendMock.mockResolvedValue(undefined);
-
-    renderBootstrap();
-
-    expect(await screen.findByText("App Mock Loaded")).toBeInTheDocument();
-    expect(screen.queryByText(t("app.loading.title"))).not.toBeInTheDocument();
-  });
-
-  it("shows an error alert with a retry button when startBackend fails", async () => {
-    startBackendMock.mockRejectedValue(new Error("backend exploded"));
-    getBootstrapLogMock.mockResolvedValue({
-      path: "/logs/bootstrap.log",
-      tail: "sidecar stderr",
-    });
-
-    renderBootstrap();
-
-    expect(await screen.findByText(t("app.loading.failed"))).toBeInTheDocument();
-    expect(screen.getByText(/backend exploded/)).toBeInTheDocument();
-    expect(screen.getByText(/\/logs\/bootstrap\.log/)).toBeInTheDocument();
-    expect(screen.getByText("sidecar stderr")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: t("app.loading.retry") })).toBeInTheDocument();
-    expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
-  });
-
-  it("returns to loading on retry and can then succeed", async () => {
-    const user = userEvent.setup();
-    startBackendMock.mockRejectedValueOnce(new Error("first failure"));
-
-    renderBootstrap();
-
-    const retry = await screen.findByRole("button", { name: t("app.loading.retry") });
-
-    let resolveRetry: () => void = () => {};
-    startBackendMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveRetry = resolve;
-      }),
+    expect(backendEntryMock).toHaveBeenCalledWith("/quick.html");
+    entry.resolve("http://127.0.0.1:8765/-/enter?next=/quick.html#code");
+    await waitFor(() =>
+      expect(replacePage).toHaveBeenCalledWith(
+        "http://127.0.0.1:8765/-/enter?next=/quick.html#code",
+      ),
     );
-
-    await user.click(retry);
-
-    expect(await screen.findByText(t("app.loading.title"))).toBeInTheDocument();
-    expect(screen.queryByText(t("app.loading.failed"))).not.toBeInTheDocument();
-
-    resolveRetry();
-
-    expect(await screen.findByText("App Mock Loaded")).toBeInTheDocument();
   });
 
-  it("lets quits through only while the App, which guards them, is not shown", async () => {
-    const stopLetting = vi.fn();
-    vi.mocked(letQuitsThrough).mockReturnValue(stopLetting);
-    let finishStart: () => void = () => {};
-    startBackendMock.mockReturnValue(
-      new Promise<void>((resolve) => {
-        finishStart = resolve;
-      }),
-    );
+  it("opens the App when no page is named", () => {
+    window.history.replaceState(null, "", "/bootstrap.html");
+    backendEntryMock.mockReturnValue(new Promise(() => undefined));
 
     renderBootstrap();
+
+    expect(backendEntryMock).toHaveBeenCalledWith("/");
+  });
+
+  it("lets quits through, since nothing here can be cut off", () => {
+    const stop = vi.fn();
+    vi.mocked(letQuitsThrough).mockReturnValue(stop);
+    backendEntryMock.mockReturnValue(new Promise(() => undefined));
+
+    const view = renderBootstrap();
     expect(letQuitsThrough).toHaveBeenCalledTimes(1);
-    expect(stopLetting).not.toHaveBeenCalled();
 
-    finishStart();
-    await screen.findByText("App Mock Loaded");
-    expect(stopLetting).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the App for the failure screen once the backend stops", async () => {
-    let close: (error: BackendClosedError) => void = () => {};
-    const stopWatching = vi.fn();
-    onBackendClosedMock.mockImplementation((listener) => {
-      close = listener;
-      return stopWatching;
+  it("shows why the backend closed, with the startup log and a restart", async () => {
+    backendEntryMock.mockRejectedValue(new BackendClosedError({ reason: "timeout", detail: "45" }));
+    vi.mocked(getBootstrapLog).mockResolvedValue({
+      path: "/logs/bootstrap.log",
+      tail: "boot failed at step 3",
     });
-    getBootstrapLogMock.mockResolvedValue({ path: "/logs/bootstrap.log", tail: "exited" });
-
-    const { unmount } = renderBootstrap();
-    await screen.findByText("App Mock Loaded");
-    close(new BackendClosedError({ reason: "exited", detail: "code 137" }));
-
-    expect(await screen.findByText(t("app.loading.stopped"))).toBeInTheDocument();
-    expect(
-      screen.getByText(t("app.loading.reasons.exited", { detail: "code 137" })),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("App Mock Loaded")).not.toBeInTheDocument();
-    unmount();
-    expect(stopWatching).toHaveBeenCalled();
-  });
-
-  it("offers to restart the app in Desktop, where retrying cannot bring the backend back", async () => {
     const user = userEvent.setup();
-    canRestartAppMock.mockReturnValue(true);
-    startBackendMock.mockRejectedValue(new BackendClosedError({ reason: "timeout", detail: "45" }));
 
     renderBootstrap();
 
+    expect(await screen.findByText(t("app.loading.closed"))).toBeInTheDocument();
     expect(
-      await screen.findByText(t("app.loading.reasons.timeout", { detail: "45" })),
+      screen.getByText(t("app.loading.reasons.timeout", { detail: "45" })),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t("app.loading.retry") })).not.toBeInTheDocument();
+    expect(await screen.findByText("/logs/bootstrap.log")).toBeInTheDocument();
+    expect(screen.getByText("boot failed at step 3")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: t("app.loading.restart") }));
     expect(restartApp).toHaveBeenCalled();
+    expect(replacePage).not.toHaveBeenCalled();
   });
 
-  it("does not update state after unmount when startBackend resolves late", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    let resolveStart: () => void = () => {};
-    startBackendMock.mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveStart = resolve;
-      }),
-    );
+  it("shows a failure that is not the host's closure as it is", async () => {
+    backendEntryMock.mockRejectedValue(new Error("command backend_entry not found"));
 
-    const { unmount } = renderBootstrap();
-    expect(screen.getByText(t("app.loading.title"))).toBeInTheDocument();
+    renderBootstrap();
 
-    unmount();
-    resolveStart();
+    expect(await screen.findByText("Error: command backend_entry not found")).toBeInTheDocument();
+  });
 
-    // Allow the resolved promise microtask + any scheduled work to flush.
-    await waitFor(() => {
-      expect(startBackendMock).toHaveBeenCalledTimes(1);
-    });
+  it("does not leave a page that was closed meanwhile", async () => {
+    const entry = deferred<string>();
+    backendEntryMock.mockReturnValue(entry.promise);
 
-    expect(
-      errorSpy.mock.calls.some((call) =>
-        String(call[0]).includes("state update on an unmounted component"),
-      ),
-    ).toBe(false);
-    errorSpy.mockRestore();
+    const view = renderBootstrap();
+    view.unmount();
+    entry.resolve("http://127.0.0.1:8765/-/enter#code");
+    await entry.promise;
+
+    expect(replacePage).not.toHaveBeenCalled();
   });
 });

@@ -575,6 +575,37 @@ snapshot expires. Completed
 work is kept in shared TaskRun records so a service restart does not accept the
 same input again after the result has been pushed.
 
+### Use It from a Browser
+
+The backend serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765`. The desktop app's windows show these same screens, so a browser alone can do everything they do, except what runs outside a window (the global hotkeys and the quick-run window, the tray, and controlling the app's quit).
+
+**On the machine where the backend runs**:
+
+```bash
+guildbotics open
+```
+
+The browser opens with a single-use entry link that expires after 60 seconds. There is no sign-in screen: the OS user who can read `~/.guildbotics/data/server/<port>/owner.token` is the owner. A session lasts 30 days; when it has expired, run `guildbotics open` again.
+
+**In a browser on another machine**: forward the port over SSH (the forwarding script in [Share a Workspace Across Machines](#share-a-workspace-across-machines), or `ssh -L 8765:127.0.0.1:8765 <Hub>`), print an entry link on the Hub, and paste it into your browser:
+
+```bash
+ssh <Hub> guildbotics open --print
+```
+
+**Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain (connecting the same machine again revokes its previous token).
+
+In a browser, a few parts of the screens differ:
+
+- There is no "Browse" for folders: type the path on the server machine (a workspace can also be picked from the registered ones)
+- Commands cannot be opened in an external editor; edit them in the screen's editor
+- A file dropped on a command's input is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped)
+- The AI CLI tools' skill status and forced update are not shown
+- Settings labelled "this machine" (keeping it awake, sync, ...) are the server machine's
+- What runs produce (files in the exchange folder `~/Documents/GuildBotics`) can be downloaded from the list under a command's result
+
+**Port**: the backend listens on the fixed port 8765. If another program uses that port, the backend does not start. To run two backends on one machine (a development and a released desktop app, for example), set `GUILDBOTICS_SERVER_PORT` to another port where one of them starts; the server, the CLI, and the desktop app all read it.
+
 ### Account-Related Environment Variables
 
 **LLM API keys**:

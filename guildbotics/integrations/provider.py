@@ -24,6 +24,7 @@ from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCred
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.local_api import base_url, server_port
 
 
 class ProviderCheck(BaseModel):
@@ -237,6 +238,8 @@ class Page:
     html: str = ""
     redirect: str = ""
     status_code: int = 200
+    #: The one origin a form on the page may post to, besides this server.
+    form_action: str = ""
 
 
 _PAGE = """<!doctype html>
@@ -270,9 +273,15 @@ def message_page(*paragraphs: str, status_code: int = 200) -> Page:
 
 
 def page_path(provider: str, page: str) -> str:
-    """Where a provider's page is served: a page is opened by a browser, which
-    carries no session token."""
+    """Where a provider's page is served: a page is opened by a browser coming
+    back from another site, which carries no session cookie."""
     return f"/providers/{provider}/pages/{page}"
+
+
+def page_url(provider: str, page: str) -> str:
+    """A provider's page as a browser reaches this server: on its fixed
+    loopback port, forwarded there from any other machine."""
+    return base_url(server_port()) + page_path(provider, page)
 
 
 @dataclass(frozen=True)

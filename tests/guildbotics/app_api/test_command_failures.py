@@ -10,9 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 import requests
-from fastapi.testclient import TestClient
 
-from guildbotics.app_api.api import TOKEN_HEADER, create_app
+from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.drivers import command_runner
@@ -33,6 +32,7 @@ from guildbotics.intelligences.brains.factory import (
     BrainConfig,
 )
 from guildbotics.utils.i18n_tool import set_language, t
+from tests.guildbotics.app_api.owner import owner_client
 from tests.guildbotics.members import write_member
 from tests.guildbotics.slot_mappings import use_brain_slots, use_model_slots
 
@@ -145,7 +145,7 @@ def command_api(tmp_path, monkeypatch, language):
 
     monkeypatch.setattr(command_runner, "run_in_environment", in_process)
     runtime = AppRuntime(EventBus())
-    state.client = TestClient(create_app(session_token="test", runtime=runtime))
+    state.client = owner_client(create_app(runtime=runtime))
     state.cwd = str(tmp_path)
     return state
 
@@ -198,7 +198,6 @@ def test_anticipated_failure_reaches_desktop(
     monkeypatch.setattr(requests, "get", fetch)
     response = command_api.client.post(
         "/commands/run",
-        headers={TOKEN_HEADER: "test"},
         json={
             "command": command,
             "args": args,
@@ -242,7 +241,6 @@ def _raise(error):
 def test_python_body_type_error_remains_a_defect(command_api):
     response = command_api.client.post(
         "/commands/run",
-        headers={TOKEN_HEADER: "test"},
         json={"command": "defect", "person": "aiko", "cwd": command_api.cwd},
     )
     assert response.status_code == 500

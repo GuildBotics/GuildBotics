@@ -279,7 +279,6 @@ class AppRuntime:
         #: Every accepted manual run, read-only ones included: the workspace
         #: does not switch under any of them.
         self._accepted_command_ids: set[str] = set()
-        self.on_workspace_changed: Callable[[Path], None] | None = None
         #: The directory of the files the Desktop hands its commands, which
         #: they read; none when this runtime hands over none.
         self.command_inputs: Callable[[], Path | None] = lambda: None
@@ -408,13 +407,13 @@ class AppRuntime:
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)
-        if self.on_workspace_changed is not None:
-            self.on_workspace_changed(workspace)
         self._load_workspace_env()
         self._diagnostics_store.start_system_session(self._system_service_run_id)
         self._diagnostics_store.start_maintenance()
         self._workspace_sync.activate()
         self.workspace_problem = ""
+        # Every open screen, in any window or browser tab, reads it again.
+        self.event_bus.publish_event("workspace.changed", {"workspace": str(workspace)})
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:

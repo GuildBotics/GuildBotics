@@ -11,6 +11,7 @@ from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.sync import activation, current_sync_manager
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
+from tests.guildbotics.app_api.owner import owner_client
 
 
 @contextmanager
@@ -21,7 +22,7 @@ def workspace_sync_client() -> Iterator[TestClient]:
     lifespan (diagnostics maintenance and other unrelated services).
     """
     runtime = AppRuntime(EventBus())
-    client = TestClient(create_app(session_token="secret", runtime=runtime))
+    client = owner_client(create_app(runtime=runtime))
     service = runtime.workspace_sync_service
     try:
         yield client

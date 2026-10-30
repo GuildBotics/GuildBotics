@@ -1,6 +1,6 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { readStackContext, test } from "./stack-context";
 
 // Journey ③: Service Runtime against the REAL backend.
 //

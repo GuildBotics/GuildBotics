@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import IO, Literal
 from uuid import uuid4
 
@@ -46,17 +46,13 @@ from guildbotics.utils.safe_paths import (
 #: from the sync boundary's limits.
 MAX_COMMAND_INPUT_FILE_BYTES = 20 * 1024 * 1024
 
+#: The longest name an upload keeps: file systems limit a name to 255 bytes,
+#: and a character takes up to four of them.
+_NAME_CHARS = 60
 _CLEANUP_LOCK_NAME = ".cleanup.lock"
 _LOCK_RETRY_SECONDS = 0.01
 _SESSION_DIRECTORY_PREFIX = "session-"
 _SESSION_LOCK_NAME = ".session.lock"
-
-_IMAGE_SUFFIXES = {
-    "image/gif": ".gif",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
 
 InputPathKind = Literal["file", "directory", "missing"]
 GrantScope = Literal["document", "device"]
@@ -124,7 +120,7 @@ class CommandInputFileStore:
         return self._directory
 
     def save(self, upload_file: UploadFile) -> Path:
-        """Save an image in the active App API session directory."""
+        """Save an uploaded file in the active App API session directory."""
         return save_command_input_file(self._session_directory(), upload_file)
 
     def copy(self, source: Path) -> Path:
@@ -160,22 +156,24 @@ class CommandInputFileStore:
 
 
 def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
-    """Persist a pasted image and return its absolute path.
+    """Persist an uploaded file -- a pasted image, or a file a browser dropped,
+    which cannot hand over a path -- and return its absolute path.
+
+    Like a copy, it keeps its name behind a short random prefix.
 
     Args:
         directory: App API session directory for command inputs.
-        upload_file: Image received from the Desktop clipboard.
+        upload_file: The file the screen sent.
 
     Returns:
         Absolute path to the persisted file.
 
     Raises:
-        ValueError: If the upload is not a supported image or exceeds the limit.
+        ValueError: If the upload exceeds the limit.
     """
-    content_type = (upload_file.content_type or "").lower()
-    suffix = _IMAGE_SUFFIXES.get(content_type)
-    if suffix is None:
-        raise ValueError("Only PNG, JPEG, GIF, and WebP images are supported.")
+    # Either separator: the name is the screen's, of a file on any machine.
+    # Its end is what says what the file is; the start goes when it is long.
+    name = PureWindowsPath(upload_file.filename or "").name.strip()[-_NAME_CHARS:]
 
     def write(output: IO[bytes]) -> int:
         size = 0
@@ -185,7 +183,9 @@ def save_command_input_file(directory: Path, upload_file: UploadFile) -> Path:
             output.write(chunk)
         return size
 
-    return _write_command_input_file(directory, f"{uuid4().hex}{suffix}", write)
+    return _write_command_input_file(
+        directory, f"{uuid4().hex[:8]}-{name or 'file'}", write
+    )
 
 
 def copy_command_input_file(directory: Path, source: Path) -> Path:

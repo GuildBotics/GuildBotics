@@ -1,7 +1,9 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
-import { InfoCallout, RequiredLabel, isTauriRuntime } from "./formParts";
+import { InfoCallout, RequiredLabel } from "./formParts";
+import { isTauriRuntime } from "../desktopWindow";
+import { ServerMachineBadge, useServerMachineLabel, useServerPathHint } from "../serverMachine";
 import {
   Avatar,
   FileButton,
@@ -17,6 +19,7 @@ import {
   Group,
   HoverCard,
   Indicator,
+  Menu,
   Modal,
   MultiSelect,
   NumberInput,
@@ -48,6 +51,7 @@ import {
   Eraser,
   Folder,
   FolderOpen,
+  History,
   Plus,
   Save,
   Trash2,
@@ -91,6 +95,7 @@ import {
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
+  getRegisteredWorkspaces,
   getIntelligenceConfig,
   getLlmProviders,
   type LlmProviderInfo,
@@ -128,7 +133,6 @@ import {
   getCliAgentSkillStatuses,
   restartBackend,
 } from "../api/backend";
-import { announceWorkspaceChange } from "../appEvents";
 import {
   cliAgentLabelFromConfig,
   cliAgentNameFromConfig,
@@ -244,6 +248,7 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
  */
 function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const status = useQuery({
     queryKey: ["agent-environment-status"],
     queryFn: getAgentEnvironmentStatus,
@@ -271,7 +276,7 @@ function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabl
       maw={420}
     >
       <Badge color="danger" variant="light" style={{ flexShrink: 0 }}>
-        {t("setup.members.blockedHere")}
+        {t("setup.members.blockedHere", { machine })}
       </Badge>
     </Tooltip>
   );
@@ -645,8 +650,6 @@ export function SetupPage() {
       queryClient.refetchQueries({ queryKey: ["team"] }),
     ]);
     await queryClient.refetchQueries({ queryKey: ["project-config"] });
-    // The quick run window has its own cache and never reloads.
-    await announceWorkspaceChange();
     setSaveState("saved");
   };
   const startWorkspaceSwitch = (workspace: string, alreadySwitched = false) => {
@@ -990,7 +993,10 @@ function SetupSectionNav({
       {groups.map((group) =>
         group.sections.length === 0 ? null : (
           <div className="setup-nav-group" key={group.labelKey}>
-            <div className="nav-label">{t(group.labelKey)}</div>
+            <Group className="nav-label" gap={6}>
+              {t(group.labelKey)}
+              {group.machine ? <ServerMachineBadge /> : null}
+            </Group>
             {group.sections.map((value) => (
               <button
                 className={`setup-nav-item ${active === value ? "active" : ""}`}
@@ -1048,7 +1054,7 @@ function ProjectSection({
       />
       <Stack mt="md">
         <Stack gap="xs">
-          <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+          <WorkspacePicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
           <Group>
             <CloneFromHubButton
               destination={form.values.workspaceDir}
@@ -1178,6 +1184,7 @@ function IntelligenceSection({
   providers: LlmProviderInfo[];
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const selectedTool = tools.find((tool) => tool.name === form.values.cliAgent);
   // The advanced editor writes different files from the basic settings above
@@ -1216,6 +1223,9 @@ function IntelligenceSection({
   const skillStatuses = useQuery({
     queryKey: ["cli-agent-skill-statuses"],
     queryFn: getCliAgentSkillStatuses,
+    // Skills live in each machine's harness: the server sees none of a
+    // browser's machine, so only a Desktop window shows them.
+    enabled: isTauriRuntime(),
   });
   const forceSkillUpdate = useMutation({
     mutationFn: forceUpdateCliAgentSkill,
@@ -1343,6 +1353,9 @@ function IntelligenceSection({
               isActive={(tool) => form.values.cliAgent === tool.name}
               onSelect={(tool) => form.setFieldValue("cliAgent", tool.name)}
               renderExtra={(agent) => {
+                if (!isTauriRuntime()) {
+                  return null;
+                }
                 const status = (skillStatuses.data?.agents ?? []).find(
                   (s) => s.agent === agent.name,
                 );
@@ -1423,7 +1436,9 @@ function IntelligenceSection({
             {persisted && selectedTool ? (
               <Group justify="space-between" mt="xs">
                 <Badge color={cliToolStatusColor(selectedTool)} variant="light">
-                  {t(`setup.intelligence.environment.${cliToolStatusKey(selectedTool)}`)}
+                  {t(`setup.intelligence.environment.${cliToolStatusKey(selectedTool)}`, {
+                    machine,
+                  })}
                 </Badge>
                 <Anchor component={Link} to="/setup?section=environment" size="sm">
                   {t("setup.intelligence.openEnvironment")}
@@ -1493,6 +1508,7 @@ function AgentEnvironmentSection({
   status?: AgentEnvironmentStatusResponse;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["intelligence-config", "team"],
@@ -1568,7 +1584,7 @@ function AgentEnvironmentSection({
     <Card withBorder radius="md" p="lg">
       <PanelHeader
         title={t("setup.agentEnvironment.title")}
-        subtitle={t("setup.agentEnvironment.subtitle")}
+        subtitle={t("setup.agentEnvironment.subtitle", { machine })}
         save={
           draft
             ? {
@@ -1584,6 +1600,7 @@ function AgentEnvironmentSection({
           title={t("setup.agentEnvironment.currentDevice.title")}
           description={t("setup.agentEnvironment.currentDevice.description")}
           badge={t("setup.agentEnvironment.scope.device")}
+          device
         />
         <AgentEnvironmentCard focusElement={focusElement} />
 
@@ -1626,6 +1643,7 @@ function AgentEnvironmentSection({
               title={t("setup.agentEnvironment.device.title")}
               description={t("setup.agentEnvironment.device.description")}
               badge={t("setup.agentEnvironment.scope.device")}
+              device
             />
             <DeviceAccessCard
               local={draft.local}
@@ -1651,16 +1669,20 @@ function EnvironmentScopeHeader({
   title,
   description,
   badge,
+  device = false,
 }: {
   title: string;
   description: string;
   badge: string;
+  /** Whether the scope is the server machine's own, which the header names. */
+  device?: boolean;
 }) {
   return (
     <div>
       <Group gap="xs">
         <Title order={4}>{title}</Title>
         <Badge variant="light">{badge}</Badge>
+        {device ? <ServerMachineBadge /> : null}
       </Group>
       <Text size="sm" c="dimmed">
         {description}
@@ -1945,6 +1967,7 @@ function DefaultCliAgentCards({
   personId?: string;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const turns = useCliAgentLastTurns(Boolean(personId));
   return (
     <div className="option-card-grid">
@@ -1955,7 +1978,7 @@ function DefaultCliAgentCards({
           active={isActive(tool)}
           enabled={tool.provisioned}
           statusColor={cliToolStatusColor(tool)}
-          statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+          statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`, { machine })}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={onSelect ? () => onSelect(tool) : undefined}
           extra={renderExtra?.(tool)}
@@ -2007,6 +2030,7 @@ function IntelligenceEditor({
   onTeamCliAgentChange?: (val: string) => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const providerDefaults = useMemo(() => providerDefaultsMap(providers), [providers]);
   const isLlmProvider = (provider: string) =>
@@ -2858,7 +2882,9 @@ function IntelligenceEditor({
                             <Group gap="xs" wrap="nowrap">
                               {tool ? (
                                 <Badge color={cliToolStatusColor(tool)} variant="light">
-                                  {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+                                  {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`, {
+                                    machine,
+                                  })}
                                 </Badge>
                               ) : null}
                               {!isCliSlotLocked(slotKey) ? (
@@ -3027,6 +3053,7 @@ function MembersSection({
   initialSlot?: string;
 }) {
   const { t, i18n } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
   const changedSaveHintId = useId();
@@ -4263,7 +4290,7 @@ function MembersSection({
                     }
                     description={
                       formMode === "edit" || joiningPersonId !== null
-                        ? t("setup.members.personIdFixed")
+                        ? t("setup.members.personIdFixed", { machine })
                         : personIdHolder !== undefined
                           ? t("setup.members.personIdFixedByAccount", {
                               provider: personIdHolder.title,
@@ -5073,20 +5100,21 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
         </Text>
       ) : null}
       <div className="command-script-path">
-        <Anchor
-          href={localFileHref(option.path)}
-          size="sm"
-          title={option.path}
-          onClick={(event) => {
-            if (!isTauriRuntime()) {
-              return;
-            }
-            event.preventDefault();
-            void openLocalFile(option.path).catch(console.error);
-          }}
-        >
-          {option.path}
-        </Anchor>
+        {/* The commands screen opens the workspace's own commands only. */}
+        {option.source === "workspace" ? (
+          <Anchor
+            component={Link}
+            to={`/commands?${new URLSearchParams({ command: option.command })}`}
+            size="sm"
+            title={option.path}
+          >
+            {option.path}
+          </Anchor>
+        ) : (
+          <Text component="span" size="sm" title={option.path}>
+            {option.path}
+          </Text>
+        )}
         <Tooltip label={t("commands.copyScriptPath")}>
           <ActionIcon
             aria-label={t("commands.copyScriptPath")}
@@ -5118,6 +5146,7 @@ function MemberDiagnosticsPanel({
   onRun: () => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const sectionLabel = useDiagnosticSectionLabel();
   if (formMode !== "edit" || !personId) {
     return (
@@ -5183,12 +5212,12 @@ function MemberDiagnosticsPanel({
                 {sectionLabel(check.section)}
                 {check.target ? ` / ${check.target}` : ""}
               </Text>
-              {diagnosticDescription(t, check) ? (
-                <Text size="sm">{diagnosticDescription(t, check)}</Text>
+              {diagnosticDescription(t, check, machine) ? (
+                <Text size="sm">{diagnosticDescription(t, check, machine)}</Text>
               ) : null}
-              {diagnosticDetail(t, check) ? (
+              {diagnosticDetail(t, check, machine) ? (
                 <Text size="xs" c="dimmed" mt={6}>
-                  {diagnosticDetail(t, check)}
+                  {diagnosticDetail(t, check, machine)}
                 </Text>
               ) : null}
             </Alert>
@@ -5254,7 +5283,7 @@ function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
   });
 }
 
-function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
+function diagnosticDescription(t: TFunction, check: DiagnosticCheck, machine: string) {
   const namespace =
     check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
   // Why the provider refused the call, when the backend could tell.
@@ -5264,14 +5293,15 @@ function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
   return t(keys, {
     defaultValue: check.status === "ok" ? "" : check.message,
     ...diagnosticValues(check),
+    machine,
   });
 }
 
-function diagnosticDetail(t: TFunction, check: DiagnosticCheck) {
+function diagnosticDetail(t: TFunction, check: DiagnosticCheck, machine: string) {
   if (check.status === "ok") {
     return "";
   }
-  const description = diagnosticDescription(t, check);
+  const description = diagnosticDescription(t, check, machine);
   return description && description !== check.message ? check.message : "";
 }
 
@@ -5338,24 +5368,52 @@ function SectionSaveControl({ state, saving, onSave }: SectionSave) {
   );
 }
 
-function FolderPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+/**
+ * The workspace folder, a path on the server machine. Typing does not switch:
+ * the path is taken on Enter or when the field is left, so no partial path
+ * is ever opened as a workspace. The registered workspaces are offered too,
+ * so a browser on another machine need not type the server's paths.
+ */
+function WorkspacePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
   const { t } = useTranslation();
+  const serverPathHint = useServerPathHint();
+  const [draft, setDraft] = useState(value);
+  // A workspace taken elsewhere (a copy, a dismissed switch) replaces the draft.
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setDraft(value);
+  }
   const [picking, setPicking] = useState(false);
+  const registered = useQuery({
+    queryKey: ["registered-workspaces"],
+    queryFn: getRegisteredWorkspaces,
+  });
+  const take = (next: string) => {
+    setDraft(next);
+    if (next.trim() !== value.trim()) {
+      onChange(next);
+    }
+  };
   const pickDirectory = async () => {
     setPicking(true);
     try {
-      if (!isTauriRuntime()) {
-        return;
-      }
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false });
       if (typeof selected === "string") {
-        onChange(selected);
+        take(selected);
       }
     } finally {
       setPicking(false);
     }
   };
+  const workspaces = (registered.data ?? []).filter((path) => path !== value);
   return (
     <Group align="flex-end" wrap="nowrap">
       <TextInput
@@ -5363,19 +5421,49 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (value: st
         aria-label={t("setup.project.workspace")}
         aria-required
         leftSection={<Folder size={16} />}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        description={t("setup.project.workspaceDescription")}
+        value={draft}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={(event) => take(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            take(event.currentTarget.value);
+          }
+        }}
+        description={
+          isTauriRuntime()
+            ? t("setup.project.workspaceDescription")
+            : `${serverPathHint} ${t("setup.project.workspaceDescription")}`
+        }
         flex={1}
       />
-      <Button
-        leftSection={<FolderOpen size={16} />}
-        loading={picking}
-        onClick={pickDirectory}
-        variant="default"
-      >
-        {t("setup.project.choose")}
-      </Button>
+      <Menu position="bottom-end" disabled={workspaces.length === 0}>
+        <Menu.Target>
+          <Button
+            leftSection={<History size={16} />}
+            variant="default"
+            disabled={workspaces.length === 0}
+          >
+            {t("setup.project.registered")}
+          </Button>
+        </Menu.Target>
+        <Menu.Dropdown>
+          {workspaces.map((path) => (
+            <Menu.Item key={path} onClick={() => take(path)}>
+              {path}
+            </Menu.Item>
+          ))}
+        </Menu.Dropdown>
+      </Menu>
+      {isTauriRuntime() ? (
+        <Button
+          leftSection={<FolderOpen size={16} />}
+          loading={picking}
+          onClick={pickDirectory}
+          variant="default"
+        >
+          {t("setup.project.choose")}
+        </Button>
+      ) : null}
     </Group>
   );
 }
@@ -6256,20 +6344,6 @@ function newDraftId(): string {
   return crypto.randomUUID?.() ?? `schedule-${Date.now()}-${Math.random()}`;
 }
 
-async function openLocalFile(path: string) {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  const { open } = await import("@tauri-apps/plugin-shell");
-  await open(path);
-}
-
-function localFileHref(path: string) {
-  const normalizedPath = path.replace(/\\/g, "/");
-  const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
-  return encodeURI(`${prefix}${normalizedPath}`);
-}
-
 function resolveConfigDir(workspaceDir: string): string {
   return joinPath(workspaceDir, ".guildbotics/config");
 }
@@ -6284,6 +6358,7 @@ function ScenarioDiagnosticsSummary({
   loading: boolean;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const sectionLabel = useDiagnosticSectionLabel();
   if (loading) {
     return (
@@ -6327,10 +6402,10 @@ function ScenarioDiagnosticsSummary({
             {sectionLabel(check.section)}
             {check.person_id ? ` / ${check.person_id}` : ""}
           </Text>
-          <Text size="sm">{diagnosticDescription(t, check)}</Text>
-          {diagnosticDetail(t, check) ? (
+          <Text size="sm">{diagnosticDescription(t, check, machine)}</Text>
+          {diagnosticDetail(t, check, machine) ? (
             <Text size="xs" c="dimmed" mt={6}>
-              {diagnosticDetail(t, check)}
+              {diagnosticDetail(t, check, machine)}
             </Text>
           ) : null}
           {check.target ? (

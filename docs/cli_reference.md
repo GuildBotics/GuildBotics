@@ -18,6 +18,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | Command | Summary |
 | --- | --- |
 | [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
+| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
 | [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
@@ -111,6 +112,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
 | [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
 | [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -144,18 +146,36 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
+| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
 | [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
+
+## `guildbotics connect`
+
+Connect this machine's CLI to the GuildBotics server.
+
+For a machine that reaches the server through SSH forwarding: the owner
+allows this machine on the server's consent screen, and the token it is
+given is kept in this machine's OS keychain.
+
+```text
+guildbotics connect [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics diagnostics`
 
@@ -1789,6 +1809,21 @@ guildbotics member ticket update [OPTIONS]
 | `--remove-blocked-by TEXT` | URL of a ticket this one is no longer blocked by. Repeat for several tickets. |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics open`
+
+Open the GuildBotics screens in the browser.
+
+The browser enters with a single-use link that expires after 60 seconds.
+
+```text
+guildbotics open [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--print` | Print the link instead of opening it, to paste into a browser on another machine. |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics run`

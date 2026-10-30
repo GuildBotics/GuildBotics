@@ -39,11 +39,13 @@ def _configure_windows_standard_streams() -> None:
     context_settings=CLI_CONTEXT_SETTINGS,
     lazy_commands={
         "diagnostics": "guildbotics.cli.diagnostics:diagnostics",
+        "connect": "guildbotics.cli.server:connect",
         "environment": "guildbotics.cli.environment:environment",
         "git-credential": "guildbotics.cli.git_credential:git_credential",
         "hub": "guildbotics.cli.hub:hub",
         "kill": "guildbotics.cli.service:kill",
         "member": "guildbotics.cli.member:member",
+        "open": "guildbotics.cli.server:open_screens",
         "run": "guildbotics.cli.run:run",
         "secrets": "guildbotics.cli.secrets:secrets",
         "start": "guildbotics.cli.service:start",

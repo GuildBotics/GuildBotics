@@ -30,6 +30,7 @@ from guildbotics.utils.fileio import (
 )
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
+from guildbotics.utils.local_api import PORT_ENV
 from tests.git_seed import WorkerGitSeed
 from tests.guildbotics.command_environment_doubles import (  # noqa: F401
     commands_in_process,
@@ -453,6 +454,9 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # both are set wherever a test points the home directory somewhere.
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    # The machine's server port is machine state too: a test's server and its
+    # clients use the default one, under this home.
+    monkeypatch.delenv(PORT_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

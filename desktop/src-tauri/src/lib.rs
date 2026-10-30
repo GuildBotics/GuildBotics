@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -6,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, RunEvent};
+use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -14,34 +15,46 @@ mod hotkeys;
 mod tray;
 
 /// Holds the Local API sidecar process and the one connection state every
-/// request to it, from this host or the frontend, takes its destination from.
+/// request to it from this host, and every window's way into its UI, waits on.
 ///
 /// The sidecar is spawned once per app process and torn down when the app
 /// exits, so a closed/reopened window reuses the same backend instead of
-/// starting a second one. It binds a port of its own choosing, so it never
-/// collides with a sidecar orphaned by a previous force-quit.
+/// starting a second one. It listens on a fixed port, so whatever already
+/// holds that port keeps it from starting.
 struct BackendState {
-    token: String,
+    port: u16,
+    /// The file through which the server on `port` hands its owner token to
+    /// whoever can read it.
+    owner_token: PathBuf,
     connection: Mutex<Connection>,
     boot_log_path: PathBuf,
     sidecar: Mutex<Option<Sidecar>>,
+    /// Each window's bundled bootstrap page, by window label, which it returns
+    /// to when the connection closes: the page that asked for its way in.
+    bootstrap_pages: Mutex<HashMap<String, tauri::Url>>,
 }
 
-/// Where the sidecar can be reached. Only its own port notice makes it
+/// Whether the sidecar can be reached. Only its own port notice makes it
 /// `Ready`, and `Closed` is final: the sidecar starts again only with the app.
 #[derive(Clone, Debug, PartialEq)]
 enum Connection {
     Starting,
-    Ready(u16),
+    Ready,
     Closed(Closure),
 }
 
-/// Why the connection closed: a reason code the frontend puts into words, and
-/// the technical detail behind it.
+/// Why a window cannot enter the backend's UI: a reason code the bootstrap
+/// page puts into words, and the technical detail behind it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 struct Closure {
     reason: &'static str,
     detail: String,
+}
+
+/// Where the bootstrap page sends its window: a fresh entry link.
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct Entry {
+    url: String,
 }
 
 fn closed(reason: &'static str, detail: impl Into<String>) -> Connection {
@@ -51,31 +64,81 @@ fn closed(reason: &'static str, detail: impl Into<String>) -> Connection {
     })
 }
 
-/// The one stdout line through which the sidecar announces the port it bound;
-/// `PORT_NOTICE_PREFIX` in `guildbotics/app_api/server.py`.
+/// The one stdout line through which the sidecar announces that it listens on
+/// its port; `PORT_NOTICE_PREFIX` in `guildbotics/app_api/server.py`.
 const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 /// Matches the frontend's former health deadline: the first launch after an
 /// install has the OS check every bundled library before the sidecar binds.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
-const BACKEND_CLOSED_EVENT: &str = "backend-closed";
+/// The port the backend listens on unless `SERVER_PORT_ENV` names another;
+/// `DEFAULT_PORT` and `PORT_ENV` in `guildbotics/utils/local_api.py`.
+const DEFAULT_SERVER_PORT: u16 = 8765;
+const SERVER_PORT_ENV: &str = "GUILDBOTICS_SERVER_PORT";
+
+/// The port the backend listens on, read the way the server reads it.
+fn server_port(configured: Option<String>) -> Result<u16, String> {
+    let raw = configured.unwrap_or_default();
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(DEFAULT_SERVER_PORT);
+    }
+    Some(raw)
+        .filter(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|digits| digits.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or_else(|| format!("{SERVER_PORT_ENV} must name a TCP port, not {raw:?}"))
+}
+
+/// `get_machine_state_path("server", str(port), "owner.token")` on the
+/// server's side.
+fn owner_token_path(home: &Path, port: u16) -> PathBuf {
+    home.join(".guildbotics")
+        .join("data")
+        .join("server")
+        .join(port.to_string())
+        .join("owner.token")
+}
+
+/// The owner token in the server's owner token file.
+fn read_owner_token(path: &Path) -> io::Result<String> {
+    let text = fs::read_to_string(path)?;
+    let token = text.trim();
+    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} holds no token", path.display()),
+        ));
+    }
+    Ok(token.to_owned())
+}
+
+/// The capability `capabilities/default.json` grants the bundled UI, granted
+/// to the UI the backend serves: a remote origin to Tauri. The bootstrap
+/// page's own commands stay with the bundled page.
+fn backend_capability(port: u16) -> String {
+    let mut capability: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/default.json"))
+            .expect("capabilities/default.json is JSON");
+    capability["identifier"] = "backend".into();
+    capability["local"] = false.into();
+    capability["remote"] = serde_json::json!({ "urls": [format!("http://127.0.0.1:{port}/*")] });
+    capability.to_string()
+}
 
 impl Connection {
     /// The connection after one stdout line, or `None` for plain log output.
     ///
     /// A line may arrive with its `\r` and `\n` split apart, so terminators
-    /// are not part of the notice.
-    fn after_stdout(&self, line: &[u8]) -> Option<Connection> {
+    /// are not part of the notice. A notice for any port but `port` does not
+    /// say that this sidecar holds `port`.
+    fn after_stdout(&self, line: &[u8], port: u16) -> Option<Connection> {
         let line = String::from_utf8_lossy(line);
         let notice = line
             .trim_end_matches(['\r', '\n'])
             .strip_prefix(PORT_NOTICE_PREFIX)?;
-        let port = Some(notice)
-            .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-            .and_then(|digits| digits.parse::<u16>().ok())
-            .filter(|port| *port != 0);
-        Some(match (self, port) {
-            (Connection::Starting, Some(port)) => Connection::Ready(port),
-            (Connection::Starting, None) => closed("invalid_notice", notice),
+        Some(match self {
+            Connection::Starting if notice == port.to_string() => Connection::Ready,
+            Connection::Starting => closed("invalid_notice", notice),
             _ => closed("duplicate_notice", ""),
         })
     }
@@ -87,13 +150,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl BackendState {
-    fn port(&self) -> Option<u16> {
-        match *lock(&self.connection) {
-            Connection::Ready(port) => Some(port),
-            _ => None,
-        }
-    }
-
     /// Apply one transition unless the connection is already closed; the
     /// reason, when this one closed it.
     fn advance(&self, next: impl FnOnce(&Connection) -> Connection) -> Option<Closure> {
@@ -108,8 +164,8 @@ impl BackendState {
         }
     }
 
-    /// `advance`, where closing stops a sidecar that may still run and tells
-    /// every window, so no path keeps the old destination.
+    /// `advance`, where closing stops a sidecar that may still run and sends
+    /// every window back to its bootstrap page, which shows why.
     fn update(&self, app: &tauri::AppHandle, next: impl FnOnce(&Connection) -> Connection) {
         if let Some(closure) = self.advance(next) {
             if let Some(sidecar) = lock(&self.sidecar).take() {
@@ -119,7 +175,11 @@ impl BackendState {
                 &self.boot_log_path,
                 format!("backend closed: {} {}", closure.reason, closure.detail).as_bytes(),
             );
-            let _ = app.emit(BACKEND_CLOSED_EVENT, closure);
+            for (label, page) in lock(&self.bootstrap_pages).iter() {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.navigate(page.clone());
+                }
+            }
         }
     }
 }
@@ -186,14 +246,41 @@ const CLI_AGENTS: [CliAgent; 5] = [
 const GUILDBOTICS_SKILL: &str = include_str!("../../../skills/guildbotics/SKILL.md");
 const MANAGED_SKILL_METADATA: &str = ".guildbotics-managed.json";
 
-/// The sidecar's port and token once it announced the port, `null` while it
-/// starts, or why it is gone.
+/// A fresh entry link into the backend's UI at `next` once the sidecar
+/// listens, `null` while it starts, or why there is none. An entry link works
+/// once, so every call asks for its own.
 #[tauri::command]
-fn backend_info(state: tauri::State<'_, BackendState>) -> Result<serde_json::Value, Closure> {
-    match &*lock(&state.connection) {
-        Connection::Starting => Ok(serde_json::Value::Null),
-        Connection::Ready(port) => Ok(serde_json::json!({ "port": port, "token": state.token })),
-        Connection::Closed(closure) => Err(closure.clone()),
+async fn backend_entry(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    next: String,
+) -> Result<Option<Entry>, Closure> {
+    if let Ok(page) = webview.url() {
+        let state = app.state::<BackendState>();
+        lock(&state.bootstrap_pages).insert(webview.label().to_owned(), page);
+    }
+    tauri::async_runtime::spawn_blocking(move || backend_entry_for(&app.state(), &next))
+        .await
+        .unwrap_or_else(|error| Err(entry_failed(error)))
+}
+
+fn backend_entry_for(state: &BackendState, next: &str) -> Result<Option<Entry>, Closure> {
+    let connection = lock(&state.connection).clone();
+    match connection {
+        Connection::Starting => Ok(None),
+        Connection::Ready => request_entry_link(state, next)
+            .map(|url| Some(Entry { url }))
+            .map_err(entry_failed),
+        Connection::Closed(closure) => Err(closure),
+    }
+}
+
+/// A backend that listens but hands out no entry link keeps running: it may
+/// run work, and restarting the app stops it in order.
+fn entry_failed(error: impl ToString) -> Closure {
+    Closure {
+        reason: "entry_failed",
+        detail: error.to_string(),
     }
 }
 
@@ -282,14 +369,24 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
     Ok(cli_agent_skill_status(&home, agent))
 }
 
-/// One request to the Local API over loopback: the status code and the body.
-/// Fails with `NotConnected`, sending nothing, unless the sidecar announced
-/// its port and is still running.
-fn backend_request(state: &BackendState, method: &str, path: &str) -> io::Result<(u16, String)> {
-    let port = state
-        .port()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "the backend is not running"))?;
-    let token = &state.token;
+/// One request to the Local API over loopback as the owner, with a JSON
+/// `body`: the status code and the response body. Fails with `NotConnected`,
+/// sending nothing, unless this host's own sidecar announced that it listens
+/// on the port and is still running, so the owner token goes to nothing else.
+fn backend_request(
+    state: &BackendState,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> io::Result<(u16, String)> {
+    if *lock(&state.connection) != Connection::Ready {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "the backend is not running",
+        ));
+    }
+    let port = state.port;
+    let token = read_owner_token(&state.owner_token)?;
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::from(([127, 0, 0, 1], port)),
         BACKEND_REQUEST_TIMEOUT,
@@ -299,8 +396,10 @@ fn backend_request(state: &BackendState, method: &str, path: &str) -> io::Result
     write!(
         stream,
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-         X-GuildBotics-Session-Token: {token}\r\n\
-         Content-Length: 0\r\nConnection: close\r\n\r\n"
+         Authorization: Bearer {token}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
     )?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
@@ -313,6 +412,28 @@ fn backend_request(state: &BackendState, method: &str, path: &str) -> io::Result
     Ok((status, body.to_owned()))
 }
 
+/// Ask the backend for an entry link that starts a session in a window and
+/// leads it to `next`, a path on the backend's own origin.
+fn request_entry_link(state: &BackendState, next: &str) -> io::Result<String> {
+    if !next.starts_with('/') || next.starts_with("//") || next.starts_with("/\\") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a path on the backend's origin: {next:?}"),
+        ));
+    }
+    let body = serde_json::json!({ "next": next }).to_string();
+    let (status, body) = backend_request(state, "POST", "/api/session/links", &body)?;
+    if status != 201 {
+        return Err(io::Error::other(format!(
+            "unexpected entry link response: {status}"
+        )));
+    }
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|link| Some(link.get("url")?.as_str()?.to_owned()))
+        .ok_or_else(|| io::Error::other("the backend did not return an entry link"))
+}
+
 /// Ask the Local API to exit through its own shutdown path, so its teardown
 /// (scheduler stop, sync deactivation, session finish) runs before it goes.
 ///
@@ -320,7 +441,7 @@ fn backend_request(state: &BackendState, method: &str, path: &str) -> io::Result
 /// that long rather than keeping a number of its own, which would go stale the
 /// moment the teardown gained a step and cut an orderly teardown short.
 fn request_backend_shutdown(state: &BackendState) -> io::Result<Duration> {
-    let (status, body) = backend_request(state, "POST", "/shutdown")?;
+    let (status, body) = backend_request(state, "POST", "/api/shutdown", "")?;
     if status != 202 {
         return Err(io::Error::other(format!(
             "unexpected shutdown response: {status}"
@@ -338,7 +459,7 @@ fn request_backend_shutdown(state: &BackendState) -> io::Result<Duration> {
 /// A backend that never announced its port or has gone runs nothing.
 #[cfg(any(target_os = "macos", test))]
 fn backend_has_active_work(state: &BackendState) -> bool {
-    match backend_request(state, "GET", "/scheduler/status") {
+    match backend_request(state, "GET", "/api/scheduler/status", "") {
         Ok((200, body)) => serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|status| status.get("has_active_work")?.as_bool())
@@ -842,17 +963,28 @@ mod tests {
             .expect("known AI CLI tool")
     }
 
-    fn connected(connection: Connection, token: &str) -> BackendState {
-        BackendState {
-            token: token.to_owned(),
+    const TOKEN: &str = "gbt_0123456789abcdef_secret";
+
+    /// A backend state on `port` whose owner token file holds `token`, and the
+    /// home directory that keeps the file.
+    fn connected(connection: Connection, port: u16, token: &str) -> (TestDir, BackendState) {
+        let home = TestDir::new().expect("home");
+        let owner_token = owner_token_path(home.path(), port);
+        fs::create_dir_all(owner_token.parent().expect("parent")).expect("server directory");
+        fs::write(&owner_token, format!("{token}\n")).expect("owner token");
+        let state = BackendState {
+            port,
+            owner_token,
             connection: Mutex::new(connection),
             boot_log_path: PathBuf::new(),
             sidecar: Mutex::new(None),
-        }
+            bootstrap_pages: Mutex::default(),
+        };
+        (home, state)
     }
 
-    fn ready(port: u16, token: &str) -> BackendState {
-        connected(Connection::Ready(port), token)
+    fn ready(port: u16) -> (TestDir, BackendState) {
+        connected(Connection::Ready, port, TOKEN)
     }
 
     /// A loopback port nothing listens on.
@@ -862,33 +994,63 @@ mod tests {
     }
 
     #[test]
-    fn only_the_first_well_formed_notice_makes_the_connection_ready() {
+    fn the_server_port_is_read_the_way_the_server_reads_it() {
+        for (configured, port) in [
+            (None, DEFAULT_SERVER_PORT),
+            (Some(""), DEFAULT_SERVER_PORT),
+            (Some(" "), DEFAULT_SERVER_PORT),
+            (Some("8877"), 8877),
+            (Some(" 8877\n"), 8877),
+        ] {
+            assert_eq!(
+                server_port(configured.map(str::to_owned)),
+                Ok(port),
+                "{configured:?}"
+            );
+        }
+        for configured in ["0", "65536", "+8765", "87a5", "-1"] {
+            assert!(
+                server_port(Some(configured.to_owned())).is_err(),
+                "{configured}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_owner_token_file_is_the_one_the_server_on_the_port_writes() {
+        assert_eq!(
+            owner_token_path(Path::new("/home/aiko"), 8877),
+            Path::new("/home/aiko/.guildbotics/data/server/8877/owner.token")
+        );
+    }
+
+    #[test]
+    fn only_the_first_notice_for_the_requested_port_makes_the_connection_ready() {
         let starting = Connection::Starting;
         for line in [
             "GUILDBOTICS_APP_API_PORT=8765\n",
             "GUILDBOTICS_APP_API_PORT=8765\r",
         ] {
             assert_eq!(
-                starting.after_stdout(line.as_bytes()),
-                Some(Connection::Ready(8765))
+                starting.after_stdout(line.as_bytes(), 8765),
+                Some(Connection::Ready)
             );
         }
-        let ready = Connection::Ready(8765);
         assert_eq!(
-            ready.after_stdout(b"GUILDBOTICS_APP_API_PORT=8765\n"),
+            Connection::Ready.after_stdout(b"GUILDBOTICS_APP_API_PORT=8765\n", 8765),
             Some(closed("duplicate_notice", ""))
         );
         for line in [
+            "GUILDBOTICS_APP_API_PORT=8877\n",
             "GUILDBOTICS_APP_API_PORT=\n",
             "GUILDBOTICS_APP_API_PORT=0\n",
-            "GUILDBOTICS_APP_API_PORT=65536\n",
+            "GUILDBOTICS_APP_API_PORT=08765\n",
             "GUILDBOTICS_APP_API_PORT=+8765\n",
             "GUILDBOTICS_APP_API_PORT=8765 \n",
-            "GUILDBOTICS_APP_API_PORT=87a5\n",
         ] {
             assert!(
                 matches!(
-                    starting.after_stdout(line.as_bytes()),
+                    starting.after_stdout(line.as_bytes(), 8765),
                     Some(Connection::Closed(Closure {
                         reason: "invalid_notice",
                         ..
@@ -901,21 +1063,20 @@ mod tests {
 
     #[test]
     fn a_closed_connection_stays_closed() {
-        let state = connected(Connection::Starting, "token");
-        assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
-        assert_eq!(state.port(), Some(8765));
+        let (_home, state) = connected(Connection::Starting, 8765, TOKEN);
+        assert_eq!(state.advance(|_| Connection::Ready), None);
         let first = state.advance(|_| closed("exited", "code 1"));
         assert_eq!(first.map(|closure| closure.reason), Some("exited"));
-        assert_eq!(state.advance(|_| Connection::Ready(8765)), None);
+        assert_eq!(state.advance(|_| Connection::Ready), None);
         assert_eq!(state.advance(|_| closed("timeout", "45")), None);
-        assert_eq!(state.port(), None);
+        assert_eq!(*lock(&state.connection), closed("exited", "code 1"));
     }
 
     #[test]
     fn other_stdout_lines_are_log_output() {
         for line in ["\n", "INFO started\n", " GUILDBOTICS_APP_API_PORT=8765\n"] {
             assert_eq!(
-                Connection::Starting.after_stdout(line.as_bytes()),
+                Connection::Starting.after_stdout(line.as_bytes(), 8765),
                 None,
                 "{line}"
             );
@@ -925,14 +1086,15 @@ mod tests {
     #[test]
     fn nothing_is_sent_until_the_backend_announced_its_port() {
         for connection in [Connection::Starting, closed("exited", "code 1")] {
-            let state = connected(connection, "session-token");
+            let (_home, state) = connected(connection, closed_port(), TOKEN);
             let error = request_backend_shutdown(&state).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::NotConnected);
             assert!(!backend_has_active_work(&state));
         }
     }
 
-    /// Serve one canned HTTP response and hand back the request that came in.
+    /// Serve one canned HTTP response and hand back the request that came in,
+    /// its body included.
     fn serve_once(response: &'static str) -> (u16, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
@@ -943,31 +1105,57 @@ mod tests {
             while !request.ends_with("\r\n\r\n") {
                 reader.read_line(&mut request).expect("read");
             }
+            let length = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|length| length.parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).expect("body");
             stream.write_all(response.as_bytes()).expect("write");
-            request
+            request + &String::from_utf8(body).expect("utf-8 body")
         });
         (port, server)
     }
 
+    /// Requests that carry the owner token carry nothing else that authenticates.
+    fn assert_owner_request(request: &str, start: &str, port: u16) {
+        assert!(request.starts_with(start), "{request}");
+        assert!(request.contains(&format!("\r\nHost: 127.0.0.1:{port}\r\n")));
+        assert!(request.contains(&format!("\r\nAuthorization: Bearer {TOKEN}\r\n")));
+        assert!(!request.contains("X-GuildBotics-Session-Token"));
+    }
+
     #[test]
-    fn shutdown_request_posts_the_session_token() {
+    fn shutdown_request_posts_with_the_owner_token() {
         let (port, server) =
             serve_once("HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":60.5}");
 
-        let budget = request_backend_shutdown(&ready(port, "session-token")).expect("accepted");
+        let budget = request_backend_shutdown(&ready(port).1).expect("accepted");
 
         assert_eq!(budget, Duration::from_millis(60_500));
-
         let request = server.join().expect("server");
-        assert!(request.starts_with("POST /shutdown HTTP/1.1\r\n"));
-        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+        assert_owner_request(&request, "POST /api/shutdown HTTP/1.1\r\n", port);
+    }
+
+    #[test]
+    fn nothing_is_sent_without_a_readable_owner_token() {
+        for token in ["", "two\r\nlines"] {
+            let (_home, state) = connected(Connection::Ready, closed_port(), token);
+            let error = request_backend_shutdown(&state).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{token:?}");
+        }
+        let (_home, state) = ready(closed_port());
+        fs::remove_file(&state.owner_token).expect("remove");
+        let error = request_backend_shutdown(&state).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
     fn shutdown_request_fails_unless_the_backend_accepts_it() {
         let (port, server) = serve_once("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
 
-        let error = request_backend_shutdown(&ready(port, "stale")).unwrap_err();
+        let error = request_backend_shutdown(&ready(port).1).unwrap_err();
 
         server.join().expect("server");
         assert!(error.to_string().contains("401"));
@@ -979,11 +1167,10 @@ mod tests {
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"has_active_work\":false}",
         );
 
-        assert!(!backend_has_active_work(&ready(port, "session-token")));
+        assert!(!backend_has_active_work(&ready(port).1));
 
         let request = server.join().expect("server");
-        assert!(request.starts_with("GET /scheduler/status HTTP/1.1\r\n"));
-        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+        assert_owner_request(&request, "GET /api/scheduler/status HTTP/1.1\r\n", port);
     }
 
     #[test]
@@ -995,10 +1182,10 @@ mod tests {
             "HTTP/1.1 401 Unauthorized\r\n\r\n{\"has_active_work\":false}",
         ] {
             let (port, server) = serve_once(response);
-            assert!(backend_has_active_work(&ready(port, "token")), "{response}");
+            assert!(backend_has_active_work(&ready(port).1), "{response}");
             server.join().expect("server");
         }
-        assert!(backend_has_active_work(&ready(closed_port(), "token")));
+        assert!(backend_has_active_work(&ready(closed_port()).1));
     }
 
     #[test]
@@ -1010,7 +1197,7 @@ mod tests {
         ] {
             let (port, server) = serve_once(response);
             assert!(
-                request_backend_shutdown(&ready(port, "token")).is_err(),
+                request_backend_shutdown(&ready(port).1).is_err(),
                 "{response}"
             );
             server.join().expect("server");
@@ -1019,7 +1206,93 @@ mod tests {
 
     #[test]
     fn shutdown_request_fails_when_nothing_listens() {
-        assert!(request_backend_shutdown(&ready(closed_port(), "token")).is_err());
+        assert!(request_backend_shutdown(&ready(closed_port()).1).is_err());
+    }
+
+    #[test]
+    fn an_entry_link_is_asked_for_each_time_with_the_owner_token() {
+        let link = "http://127.0.0.1:8765/-/enter?next=%2Fquick.html#code";
+        let (port, server) = serve_once(
+            "HTTP/1.1 201 Created\r\n\r\n{\"url\":\"http://127.0.0.1:8765/-/enter?next=%2Fquick.html#code\",\"expires_at\":\"2026-10-30T00:01:00Z\"}",
+        );
+
+        let entry = backend_entry_for(&ready(port).1, "/quick.html");
+
+        assert_eq!(entry, Ok(Some(Entry { url: link.into() })));
+        let request = server.join().expect("server");
+        assert_owner_request(&request, "POST /api/session/links HTTP/1.1\r\n", port);
+        assert!(request.contains("\r\nContent-Type: application/json\r\n"));
+        assert!(
+            request.ends_with("\r\n\r\n{\"next\":\"/quick.html\"}"),
+            "{request}"
+        );
+    }
+
+    #[test]
+    fn there_is_no_entry_while_the_backend_starts_and_none_once_it_closed() {
+        let (_home, starting) = connected(Connection::Starting, closed_port(), TOKEN);
+        assert_eq!(backend_entry_for(&starting, "/"), Ok(None));
+
+        let (_home, gone) = connected(closed("exited", "code 1"), closed_port(), TOKEN);
+        assert_eq!(
+            backend_entry_for(&gone, "/"),
+            Err(Closure {
+                reason: "exited",
+                detail: "code 1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_entry_leads_only_to_a_path_on_the_backends_origin() {
+        let (_home, state) = ready(closed_port());
+        for next in ["", "quick.html", "//evil.example/", "/\\evil.example/"] {
+            let error = request_entry_link(&state, next).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{next}");
+        }
+    }
+
+    #[test]
+    fn an_entry_fails_unless_the_backend_creates_a_link() {
+        for response in [
+            "HTTP/1.1 400 Bad Request\r\n\r\n{\"detail\":\"invalid\"}",
+            "HTTP/1.1 201 Created\r\n\r\n{}",
+            "HTTP/1.1 201 Created\r\n\r\nnot json",
+        ] {
+            let (port, server) = serve_once(response);
+            let entry = backend_entry_for(&ready(port).1, "/");
+            server.join().expect("server");
+            assert!(
+                matches!(
+                    entry,
+                    Err(Closure {
+                        reason: "entry_failed",
+                        ..
+                    })
+                ),
+                "{response}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_backend_ui_gets_what_the_bundled_ui_gets_on_its_own_origin_only() {
+        use tauri::ipc::RuntimeCapability;
+        use tauri::utils::acl::capability::CapabilityFile;
+
+        let parse = |text: &str| match text.build() {
+            CapabilityFile::Capability(capability) => capability,
+            _ => unreachable!("one capability"),
+        };
+        let bundled = parse(include_str!("../capabilities/default.json"));
+        let backend = parse(&backend_capability(8877));
+
+        assert_eq!(backend.identifier, "backend");
+        assert!(!backend.local);
+        let remote = backend.remote.expect("remote");
+        assert_eq!(remote.urls, ["http://127.0.0.1:8877/*"]);
+        assert_eq!(backend.windows, bundled.windows);
+        assert_eq!(backend.permissions, bundled.permissions);
     }
 
     #[test]
@@ -1539,8 +1812,6 @@ fn fit_main_window(window: &tauri::WebviewWindow) {
 }
 
 pub fn run() {
-    let token = uuid::Uuid::new_v4().to_string();
-
     tauri::Builder::default()
         // `tray::build` installs the app menu: the default one quits through
         // `terminate:`, which no quit guard gets to see.
@@ -1550,7 +1821,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(hotkeys::plugin())
         .invoke_handler(tauri::generate_handler![
-            backend_info,
+            backend_entry,
             restart_app,
             bootstrap_log,
             cli_agent_skill_statuses,
@@ -1561,12 +1832,11 @@ pub fn run() {
             hotkeys::hide_quick_window,
             hotkeys::clipboard_watch_supported,
             hotkeys::poll_clipboard,
-            hotkeys::show_main_window,
             hotkeys::open_main_window,
             tray::set_tray_labels,
             tray::quit_app,
         ])
-        .setup(move |app| {
+        .setup(|app| {
             app.manage(hotkeys::HotkeyState::default());
             hotkeys::init(app.handle());
             app.manage(tray::TrayState::default());
@@ -1581,6 +1851,10 @@ pub fn run() {
                 fit_main_window(&window);
             }
 
+            let port = server_port(std::env::var(SERVER_PORT_ENV).ok())?;
+            // In `tauri dev` the bundled pages and the UI they enter are both
+            // served by the Vite dev server (`build.devUrl`), a local origin.
+            app.add_capability(backend_capability(port))?;
             let boot_log_path = app.path().app_log_dir()?.join("bootstrap.log");
             let _ = append_boot_log(&boot_log_path, b"--- GuildBotics backend start ---");
             let command = app
@@ -1591,29 +1865,21 @@ pub fn run() {
                 .env(
                     "GUILDBOTICS_APP_API_PARENT_PID",
                     std::process::id().to_string(),
-                )
-                // Handed over through the environment, never argv: on a
-                // shared host `ps` exposes another user's command line.
-                .env("GUILDBOTICS_APP_API_TOKEN", &token);
-            // In `tauri dev` the webview is served from the Vite dev server
-            // (`build.devUrl` in tauri.conf.json), so API requests carry that
-            // origin instead of tauri://localhost.
-            #[cfg(debug_assertions)]
-            let command = command.env(
-                "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
-                "http://127.0.0.1:1420",
-            );
+                );
             // Managed before the spawn: the sidecar's first line can arrive
             // before this closure returns.
             app.manage(BackendState {
-                token,
+                port,
+                owner_token: owner_token_path(&home_dir()?, port),
                 connection: Mutex::new(Connection::Starting),
                 boot_log_path: boot_log_path.clone(),
                 sidecar: Mutex::new(None),
+                bootstrap_pages: Mutex::default(),
             });
             let handle = app.handle().clone();
             let state = app.state::<BackendState>();
-            match command.args(["--host", "127.0.0.1", "--port", "0"]).spawn() {
+            // The sidecar reads the same port from the environment it inherits.
+            match command.spawn() {
                 Ok((mut rx, child)) => {
                     let (running, exited) = mpsc::channel::<()>();
                     *lock(&state.sidecar) = Some(Sidecar { child, exited });
@@ -1628,10 +1894,12 @@ pub fn run() {
                             match event {
                                 CommandEvent::Stdout(bytes) => {
                                     state.update(&events, |connection| {
-                                        connection.after_stdout(&bytes).unwrap_or_else(|| {
-                                            let _ = append_boot_log(&boot_log_path, &bytes);
-                                            connection.clone()
-                                        })
+                                        connection.after_stdout(&bytes, state.port).unwrap_or_else(
+                                            || {
+                                                let _ = append_boot_log(&boot_log_path, &bytes);
+                                                connection.clone()
+                                            },
+                                        )
                                     })
                                 }
                                 CommandEvent::Stderr(bytes) => {

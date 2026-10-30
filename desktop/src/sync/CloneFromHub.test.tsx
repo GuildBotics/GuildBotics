@@ -26,6 +26,7 @@ vi.mock("../api/client", async () => {
     getWorkspaceSyncStatus: vi.fn(),
     inspectHub: vi.fn(),
     trustHub: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
   };
 });
 
@@ -141,11 +142,13 @@ describe("taking a copy from a hub", () => {
 
     const current = await screen.findByText("1f0a0000-0000-7000-8000-00000000000a");
     expect(
-      await within(current.parentElement!).findByText(t("sync.clone.current")),
+      await within(current.parentElement!).findByText(
+        t("sync.clone.current", { machine: "studio" }),
+      ),
     ).toBeInTheDocument();
     const other = screen.getByText("1f0a0000-0000-7000-8000-00000000000b");
     expect(
-      within(other.parentElement!).queryByText(t("sync.clone.current")),
+      within(other.parentElement!).queryByText(t("sync.clone.current", { machine: "studio" })),
     ).not.toBeInTheDocument();
   });
 

@@ -387,6 +387,174 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the backend_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-backend-entry",
+          "markdownDescription": "Enables the backend_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the bootstrap_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-bootstrap-log",
+          "markdownDescription": "Enables the bootstrap_log command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cli_agent_skill_statuses command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cli-agent-skill-statuses",
+          "markdownDescription": "Enables the cli_agent_skill_statuses command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clipboard_watch_supported command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clipboard-watch-supported",
+          "markdownDescription": "Enables the clipboard_watch_supported command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the force_update_cli_agent_skill command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-force-update-cli-agent-skill",
+          "markdownDescription": "Enables the force_update_cli_agent_skill command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hide_quick_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hide-quick-window",
+          "markdownDescription": "Enables the hide_quick_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_main_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-main-window",
+          "markdownDescription": "Enables the open_main_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the poll_clipboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-poll-clipboard",
+          "markdownDescription": "Enables the poll_clipboard command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the quit_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-quit-app",
+          "markdownDescription": "Enables the quit_app command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restart_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restart-app",
+          "markdownDescription": "Enables the restart_app command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resume_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resume-hotkeys",
+          "markdownDescription": "Enables the resume_hotkeys command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_tray_labels command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-tray-labels",
+          "markdownDescription": "Enables the set_tray_labels command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the suspend_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-suspend-hotkeys",
+          "markdownDescription": "Enables the suspend_hotkeys command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sync_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-hotkeys",
+          "markdownDescription": "Enables the sync_hotkeys command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the backend_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-backend-entry",
+          "markdownDescription": "Denies the backend_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the bootstrap_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-bootstrap-log",
+          "markdownDescription": "Denies the bootstrap_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cli_agent_skill_statuses command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cli-agent-skill-statuses",
+          "markdownDescription": "Denies the cli_agent_skill_statuses command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clipboard_watch_supported command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clipboard-watch-supported",
+          "markdownDescription": "Denies the clipboard_watch_supported command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the force_update_cli_agent_skill command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-force-update-cli-agent-skill",
+          "markdownDescription": "Denies the force_update_cli_agent_skill command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hide_quick_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hide-quick-window",
+          "markdownDescription": "Denies the hide_quick_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_main_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-main-window",
+          "markdownDescription": "Denies the open_main_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the poll_clipboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-poll-clipboard",
+          "markdownDescription": "Denies the poll_clipboard command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the quit_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-quit-app",
+          "markdownDescription": "Denies the quit_app command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restart_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restart-app",
+          "markdownDescription": "Denies the restart_app command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resume_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resume-hotkeys",
+          "markdownDescription": "Denies the resume_hotkeys command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_tray_labels command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-tray-labels",
+          "markdownDescription": "Denies the set_tray_labels command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the suspend_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-suspend-hotkeys",
+          "markdownDescription": "Denies the suspend_hotkeys command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_hotkeys command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-hotkeys",
+          "markdownDescription": "Denies the sync_hotkeys command without any pre-configured scope."
+        },
+        {
           "description": "No features are enabled by default, as we believe\nthe clipboard can be inherently dangerous and it is \napplication specific if read and/or write access is needed.\n\nClipboard interaction needs to be explicitly enabled.\n",
           "type": "string",
           "const": "clipboard-manager:default",

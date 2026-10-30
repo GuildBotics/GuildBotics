@@ -1,0 +1,8 @@
+en:
+  unreachable: "This machine has no credential that the GuildBotics server on this port accepts, or nothing proves to be that server there. On the server machine, start GuildBotics; on another machine, forward the port to the server and run `guildbotics connect` first."
+  refused: "The GuildBotics server refused the request: %{reason}"
+  consent: "Allow this machine on the consent screen in your browser. If it did not open, open this address:\n%{url}"
+  callback_received: "GuildBotics received the answer. You can close this page."
+  consent_timeout: "No answer came from the consent screen in time. Run `guildbotics connect` again."
+  denied: "The consent screen did not allow this machine."
+  connected: "This machine's CLI is connected to the GuildBotics server."

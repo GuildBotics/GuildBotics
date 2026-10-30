@@ -1,17 +1,24 @@
+import type { ClientRequest } from "node:http";
 import { resolve } from "node:path";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type HttpProxy } from "vite";
+
+// The backend `vite dev` stands in front of: the pages come from Vite (with
+// HMR) and every `/api` request, the event stream included, from the backend.
+const BACKEND = `http://127.0.0.1:${process.env.GUILDBOTICS_SERVER_PORT ?? 8765}`;
 
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   build: {
     rolldownOptions: {
-      // `quick.html` is the hotkey-triggered quick run window.
+      // `quick.html` is the hotkey-triggered quick run window; `bootstrap.html`
+      // is the bundled page a Desktop window shows until the backend is up.
       input: {
         main: resolve(import.meta.dirname, "index.html"),
         quick: resolve(import.meta.dirname, "quick.html"),
+        bootstrap: resolve(import.meta.dirname, "bootstrap.html"),
       },
       output: {
         // A single group whose `name` decides per module: returning `null`
@@ -28,6 +35,9 @@ export default defineConfig({
     watch: {
       ignored: ["**/src-tauri/target/**"],
     },
+    proxy: {
+      "/api": { target: BACKEND, changeOrigin: true, ws: true, configure: asBackendOrigin },
+    },
   },
   test: {
     environment: "jsdom",
@@ -43,6 +53,20 @@ export default defineConfig({
     exclude: ["node_modules", "dist", ".idea", ".git", ".cache", "e2e/**"],
   },
 });
+
+/**
+ * The backend accepts a request carrying `Origin` only from its own origin, and
+ * the pages here come from the dev server's: the proxy speaks as the backend.
+ */
+function asBackendOrigin(proxy: HttpProxy.ProxyServer) {
+  const rewrite = (request: ClientRequest) => {
+    if (request.getHeader("origin")) {
+      request.setHeader("origin", BACKEND);
+    }
+  };
+  proxy.on("proxyReq", rewrite);
+  proxy.on("proxyReqWs", rewrite);
+}
 
 function vendorChunkName(id: string): string | null {
   if (!id.includes("node_modules")) {

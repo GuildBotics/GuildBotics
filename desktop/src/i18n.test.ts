@@ -219,14 +219,16 @@ describe("i18n resources", () => {
     const en = i18n.getFixedT("en");
     const ja = i18n.getFixedT("ja");
 
-    expect(en("setup.intelligence.lastTurn.noRecord")).toBe(
-      "No run record available on this machine",
+    expect(en("setup.intelligence.lastTurn.noRecord", { machine: "studio" })).toBe(
+      "No run record available on studio",
     );
     expect(en("setup.intelligence.lastTurn.modelNotReported")).toBe("Model name not reported");
     expect(en("setup.intelligence.lastTurn.defaultModelNotReported")).toBe(
       "Default selection (model name not reported)",
     );
-    expect(ja("setup.intelligence.lastTurn.noRecord")).toBe("このマシンに実行記録がありません");
+    expect(ja("setup.intelligence.lastTurn.noRecord", { machine: "studio" })).toBe(
+      "studio に実行記録がありません",
+    );
     expect(ja("setup.intelligence.lastTurn.modelNotReported")).toBe(
       "モデル名を取得できませんでした",
     );

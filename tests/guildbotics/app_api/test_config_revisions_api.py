@@ -22,7 +22,6 @@ HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
 HTTP_UNPROCESSABLE_ENTITY = 422
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 PROJECT = "team/project.yml"
 CLI_MAPPING = "intelligences/cli_agent_mapping.yml"
 
@@ -52,13 +51,10 @@ def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete
         for p in config_dir.rglob("*")
         if p.is_file()
     }
-    response = client.get(
-        "/config/intelligences", headers=AUTH_HEADERS, params={"person_id": person_id}
-    )
+    response = client.get("/config/intelligences", params={"person_id": person_id})
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     response = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "person_id": person_id,
@@ -94,18 +90,18 @@ def test_a_member_stored_under_no_valid_id_is_listed_and_can_be_removed(
     identity = identity_members_dir() / stored_name / IDENTITY_FILE
     # The rest of the team loads without it.
     assert YamlTeamLoader(str(config_dir / "team")).load().members == []
-    listing = client.get("/team", headers=AUTH_HEADERS)
+    listing = client.get("/team")
     assert stored_name in [p["person_id"] for p in listing.json()["members"]]
     assert str(identity) in listing.json()["problem"]
-    read = client.get(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
+    read = client.get(f"/config/members/{stored_name}")
     assert read.status_code == HTTP_OK
     assert read.json()["person_id"] == stored_name
 
-    response = client.delete(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
+    response = client.delete(f"/config/members/{stored_name}")
 
     assert response.status_code == HTTP_OK
     assert not member.exists()
-    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+    assert client.get("/team").json().get("problem", "") == ""
 
 
 def test_an_identity_naming_another_member_is_repaired_by_saving_it(client, config_dir):
@@ -118,17 +114,16 @@ def test_an_identity_naming_another_member_is_repaired_by_saving_it(client, conf
     with pytest.raises(MemberConfigError) as error:
         YamlTeamLoader(str(config_dir / "team")).load()
     assert error.value.filename == str(identity)
-    read = client.get("/config/members/alice", headers=AUTH_HEADERS)
+    read = client.get("/config/members/alice")
 
     response = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, read.json()["revisions"]),
     )
 
     assert response.status_code == HTTP_OK
     assert safe_load(identity.read_text(encoding="utf-8"))["person_id"] == "alice"
-    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+    assert client.get("/team").json().get("problem", "") == ""
 
 
 @pytest.mark.parametrize("action", ["save", "remove"])
@@ -156,29 +151,28 @@ def test_invalid_member_data_remains_listed_and_repairable(
         else identity_members_dir() / "broken" / IDENTITY_FILE
     )
     path.write_text(content, encoding="utf-8")
-    listing = client.get("/team", headers=AUTH_HEADERS)
+    listing = client.get("/team")
     assert listing.status_code == HTTP_OK
     assert "broken" in [p["person_id"] for p in listing.json()["members"]]
     assert str(path) in listing.json()["problem"]
-    read = client.get("/config/members/broken", headers=AUTH_HEADERS)
+    read = client.get("/config/members/broken")
     assert read.status_code == HTTP_OK
     if action == "save":
         response = client.put(
             "/config/members/broken",
-            headers=AUTH_HEADERS,
             json=_member_payload(
                 config_dir, read.json()["revisions"], person_id="broken"
             ),
         )
     else:
-        response = client.delete("/config/members/broken", headers=AUTH_HEADERS)
+        response = client.delete("/config/members/broken")
     assert response.status_code == HTTP_OK
-    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+    assert client.get("/team").json().get("problem", "") == ""
 
 
 def test_directories_without_member_config_are_not_runtime_members(client, config_dir):
     (config_dir / "team/members/alice.bak").mkdir(parents=True)
-    listing = client.get("/team", headers=AUTH_HEADERS)
+    listing = client.get("/team")
     assert listing.status_code == HTTP_OK
     assert listing.json().get("problem", "") == ""
     assert listing.json()["members"] == []
@@ -198,7 +192,7 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
     store = identity_secret_store()
     store.set("ALICE_BAK_SLACK_BOT_TOKEN", "fake-shared-token")
     before = store.location.read_bytes()
-    listing = client.get("/team", headers=AUTH_HEADERS)
+    listing = client.get("/team")
     assert listing.status_code == HTTP_OK
     assert str(other / IDENTITY_FILE) in listing.json()["problem"]
 
@@ -208,15 +202,15 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
     with monkeypatch.context() as guarded:
         for operation in ("get", "set", "rename", "delete", "keys"):
             guarded.setattr(KeyringSecretStore, operation, unexpected)
-        read = client.get("/config/members/alice-bak", headers=AUTH_HEADERS)
+        read = client.get("/config/members/alice-bak")
         assert read.status_code == HTTP_OK
         assert read.json()["accounts"]["slack"]["has_bot_token"] is False
         assert read.json()["secret_env_keys"] == {}
-        response = client.delete("/identities/alice_bak", headers=AUTH_HEADERS)
+        response = client.delete("/identities/alice_bak")
         assert response.status_code == HTTP_OK
     assert store.location.read_bytes() == before
     assert store.get("ALICE_BAK_SLACK_BOT_TOKEN") == "fake-shared-token"
-    assert client.get("/team", headers=AUTH_HEADERS).json()["problem"] == ""
+    assert client.get("/team").json()["problem"] == ""
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])
@@ -243,7 +237,7 @@ def test_candidate_namespace_conflict_offers_a_different_id(
     previous = i18n.get("locale")
     i18n.set("locale", language)
     try:
-        response = client.post("/config/members", headers=AUTH_HEADERS, json=payload)
+        response = client.post("/config/members", json=payload)
         assert response.status_code == HTTP_BAD_REQUEST
         assert response.json()["code"] == "person_env_prefix_conflict"
         assert response.json()["message"] == t(
@@ -260,7 +254,7 @@ def test_candidate_namespace_conflict_offers_a_different_id(
 def test_repair_read_requires_an_actual_stored_member(client, config_dir, name):
     directory = config_dir / "team/members" / name
     directory.mkdir(parents=True)
-    response = client.get(f"/config/members/{name}", headers=AUTH_HEADERS)
+    response = client.get(f"/config/members/{name}")
     assert response.status_code == HTTP_BAD_REQUEST
     assert not list(directory.iterdir())
 
@@ -270,7 +264,6 @@ def config_dir(client: TestClient, workspace: Path) -> Path:
     path = workspace / ".guildbotics/config"
     response = client.post(
         "/config/init",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(path),
             "language": "en",
@@ -332,7 +325,7 @@ def _intelligence_payload(
 def test_a_project_read_reports_the_revision_of_every_file_it_used(
     client: TestClient, config_dir: Path
 ) -> None:
-    payload = client.get("/config/project", headers=AUTH_HEADERS).json()
+    payload = client.get("/config/project").json()
 
     assert set(payload["revisions"]) == {
         PROJECT,
@@ -344,11 +337,10 @@ def test_a_project_read_reports_the_revision_of_every_file_it_used(
 def test_a_project_save_at_the_reported_revisions_applies(
     client: TestClient, config_dir: Path
 ) -> None:
-    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    revisions = client.get("/config/project").json()["revisions"]
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, revisions, description="Renamed"),
     )
 
@@ -361,13 +353,12 @@ def test_a_project_save_from_a_stale_screen_keeps_the_newer_content(
     client: TestClient, config_dir: Path
 ) -> None:
     """The case synchronization makes ordinary: another machine got there first."""
-    stale = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    stale = client.get("/config/project").json()["revisions"]
     arrived = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(
             config_dir,
-            client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"],
+            client.get("/config/project").json()["revisions"],
             description="From the other machine",
         ),
     )
@@ -375,7 +366,6 @@ def test_a_project_save_from_a_stale_screen_keeps_the_newer_content(
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, stale, description="From the stale screen"),
     )
 
@@ -390,24 +380,22 @@ def test_a_project_save_from_a_stale_screen_keeps_the_newer_content(
 def test_a_refusal_reports_the_revisions_to_reload_with(
     client: TestClient, config_dir: Path
 ) -> None:
-    stale = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    stale = client.get("/config/project").json()["revisions"]
     client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(
             config_dir,
-            client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"],
+            client.get("/config/project").json()["revisions"],
             description="From the other machine",
         ),
     )
 
     refused = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, stale, description="From the stale screen"),
     ).json()
 
-    current = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    current = client.get("/config/project").json()["revisions"]
     assert refused["context"]["revisions"] == current
 
 
@@ -415,12 +403,11 @@ def test_a_stale_file_the_user_never_edited_still_refuses_the_save(
     client: TestClient, config_dir: Path
 ) -> None:
     """The project screen saves three files, so any of them can be superseded."""
-    stale = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    stale = client.get("/config/project").json()["revisions"]
     (config_dir / CLI_MAPPING).write_text("default: claude\n", encoding="utf-8")
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, stale, description="From the stale screen"),
     )
 
@@ -436,7 +423,6 @@ def test_first_time_setup_saves_without_revisions(
     """Sending no revisions applies the save: there is nothing to be stale against."""
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, {}, description="Renamed"),
     )
 
@@ -450,7 +436,6 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
 ) -> None:
     created = client.post(
         "/config/members",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "person_type": "",
@@ -466,20 +451,16 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
     identity = "team/members/alice/identity.yml"
     member = "team/members/alice/member.yml"
 
-    stale = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
-        "revisions"
-    ]
+    stale = client.get("/config/members/alice").json()["revisions"]
     assert set(stale) == {identity, member}
     applied = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, stale, person_name="From the other machine"),
     )
     assert applied.status_code == HTTP_OK
 
     response = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, stale, person_name="From the stale screen"),
     )
 
@@ -494,9 +475,7 @@ def test_a_member_read_reports_its_revision_and_a_stale_save_is_refused(
 def test_an_intelligence_read_covers_the_whole_directory_it_reconciles(
     client: TestClient, config_dir: Path
 ) -> None:
-    revisions = client.get("/config/intelligences", headers=AUTH_HEADERS).json()[
-        "revisions"
-    ]
+    revisions = client.get("/config/intelligences").json()["revisions"]
 
     assert revisions
     assert all(path.startswith("intelligences/") for path in revisions)
@@ -506,14 +485,13 @@ def test_an_intelligence_read_covers_the_whole_directory_it_reconciles(
 def test_an_intelligence_save_is_refused_when_the_directory_moved(
     client: TestClient, config_dir: Path
 ) -> None:
-    read = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+    read = client.get("/config/intelligences").json()
     (config_dir / "intelligences/model_mapping.yml").write_text(
         "default: gpt-4o\n", encoding="utf-8"
     )
 
     response = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json=_intelligence_payload(config_dir, read, read["revisions"]),
     )
 
@@ -529,14 +507,13 @@ def test_an_intelligence_save_is_refused_when_a_file_was_added_to_the_directory(
 ) -> None:
     """The screen prunes what it did not read, so a file it never saw is not
     something it may quietly delete."""
-    read = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+    read = client.get("/config/intelligences").json()
     added = config_dir / "intelligences/models/openai/o9.yml"
     added.parent.mkdir(parents=True, exist_ok=True)
     added.write_text("model_class: x\n", encoding="utf-8")
 
     response = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json=_intelligence_payload(config_dir, read, read["revisions"]),
     )
 
@@ -552,7 +529,6 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
     an empty expectation would apply the save without any comparison at all."""
     client.post(
         "/config/members",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "person_type": "",
@@ -564,9 +540,7 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
             "speaking_style": "concise",
         },
     )
-    read = client.get(
-        "/config/intelligences?person_id=alice", headers=AUTH_HEADERS
-    ).json()
+    read = client.get("/config/intelligences?person_id=alice").json()
     assert read["revisions"]
     override = config_dir / "team/members/alice/intelligences"
     override.mkdir(parents=True)
@@ -574,7 +548,6 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
 
     response = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json=_intelligence_payload(
             config_dir,
             read,
@@ -594,25 +567,19 @@ def test_an_intelligence_save_reports_where_its_directory_now_stands(
 ) -> None:
     """The advanced editor stays open, so its second save needs this rather than
     the revisions the screen was loaded with."""
-    read = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+    read = client.get("/config/intelligences").json()
 
     written = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json=_intelligence_payload(config_dir, read, read["revisions"]),
     ).json()
 
     assert (
         written["revisions"]
-        == (
-            client.get("/config/intelligences", headers=AUTH_HEADERS).json()[
-                "revisions"
-            ]
-        )
+        == (client.get("/config/intelligences").json()["revisions"])
     )
     again = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json=_intelligence_payload(config_dir, read, written["revisions"]),
     )
     assert again.status_code == HTTP_OK
@@ -623,18 +590,14 @@ def test_a_save_reports_where_the_files_it_wrote_now_stand(
 ) -> None:
     """The screen stays open, so its next save needs this rather than the
     revisions it was loaded with."""
-    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    revisions = client.get("/config/project").json()["revisions"]
 
     written = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, revisions, description="Renamed"),
     ).json()
 
-    assert (
-        written["revisions"]
-        == (client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"])
-    )
+    assert written["revisions"] == (client.get("/config/project").json()["revisions"])
     assert written["revisions"][PROJECT] != revisions[PROJECT]
 
 
@@ -643,16 +606,14 @@ def test_saving_twice_from_the_same_screen_is_not_a_conflict(
 ) -> None:
     """A screen colliding with its own previous save would report a conflict
     with another machine where there is none, and discard the second edit."""
-    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    revisions = client.get("/config/project").json()["revisions"]
 
     first = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, revisions, description="First"),
     )
     second = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(
             config_dir, first.json()["revisions"], description="Second"
         ),
@@ -670,7 +631,6 @@ def test_a_member_save_reports_both_files_it_wrote(
     save, so the revisions a following save needs are of both."""
     client.post(
         "/config/members",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "person_type": "",
@@ -682,13 +642,10 @@ def test_a_member_save_reports_both_files_it_wrote(
             "speaking_style": "concise",
         },
     )
-    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
-        "revisions"
-    ]
+    revisions = client.get("/config/members/alice").json()["revisions"]
 
     written = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, revisions, person_name="Saved once"),
     ).json()
 
@@ -698,7 +655,6 @@ def test_a_member_save_reports_both_files_it_wrote(
     }
     again = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(
             config_dir, written["revisions"], person_name="Saved twice"
         ),
@@ -710,13 +666,10 @@ def test_a_member_keeps_its_id(client: TestClient, config_dir: Path) -> None:
     """Other workspaces, perhaps on other machines, name the member by its ID,
     so a save under another ID is refused rather than taken for a rename."""
     write_member(config_dir, {"person_id": "alice", "name": "Alice"})
-    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
-        "revisions"
-    ]
+    revisions = client.get("/config/members/alice").json()["revisions"]
 
     response = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, revisions, person_id="alice2"),
     )
 
@@ -731,13 +684,12 @@ def test_a_file_created_after_the_read_is_not_overwritten_unseen(
     """An absent file is a revision of its own: something that appears between
     the read and the save is a change like any other."""
     (config_dir / CLI_MAPPING).unlink()
-    revisions = client.get("/config/project", headers=AUTH_HEADERS).json()["revisions"]
+    revisions = client.get("/config/project").json()["revisions"]
     assert revisions[CLI_MAPPING] == ""
     (config_dir / CLI_MAPPING).write_text("default: claude\n", encoding="utf-8")
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(
             config_dir, revisions, description="From the stale screen"
         ),
@@ -752,7 +704,6 @@ def test_a_revision_naming_something_outside_config_is_a_bad_request(
 ) -> None:
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json=_project_payload(config_dir, {"../state/workspace.json": "abc"}),
     )
 
@@ -802,11 +753,10 @@ def test_a_member_read_never_hands_out_a_revision_newer_than_its_content(
         patched.setattr(
             SimplePersonSetupService, "read_person_config", read_then_changed
         )
-        form = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+        form = client.get("/config/members/alice").json()
 
     response = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(config_dir, form["revisions"]),
     )
 
@@ -828,9 +778,7 @@ def test_a_member_save_answers_with_the_revisions_it_wrote(
     from guildbotics.utils.fileio import get_identity_config_dir
 
     write_member(config_dir, {"person_id": "alice", "name": "Alice", "is_active": True})
-    revisions = client.get("/config/members/alice", headers=AUTH_HEADERS).json()[
-        "revisions"
-    ]
+    revisions = client.get("/config/members/alice").json()["revisions"]
     write = api_module.apply_config_write
     locked = get_identity_config_dir() if changed == "identity" else config_dir
 
@@ -844,14 +792,12 @@ def test_a_member_save_answers_with_the_revisions_it_wrote(
         patched.setattr(api_module, "apply_config_write", then_changed)
         saved = client.put(
             "/config/members/alice",
-            headers=AUTH_HEADERS,
             json=_member_payload(config_dir, revisions, person_name="Saved"),
         )
     assert saved.status_code == HTTP_OK
 
     again = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json=_member_payload(
             config_dir, saved.json()["revisions"], person_name="Again"
         ),
@@ -879,7 +825,7 @@ def test_a_member_deletion_answers_with_what_it_left(
 
     with monkeypatch.context() as patched:
         patched.setattr(api_module, "apply_config_write", then_recreated)
-        deleted = client.delete("/identities/alice", headers=AUTH_HEADERS)
+        deleted = client.delete("/identities/alice")
 
     assert deleted.status_code == HTTP_OK
     assert deleted.json()["revisions"]["team/members/alice/member.yml"] == ""

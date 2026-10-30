@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn(async () => "/Users/me/"
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   evaluateGrant: vi.fn(),
+  getServerMachineName: vi.fn(async () => "studio"),
 }));
 
 const t = i18n.getFixedT("en");
@@ -151,7 +152,7 @@ function userOnFakeClock() {
 }
 
 describe("directory access cards", () => {
-  it("lists documents and, for this device, PATH directories, added paths, denies, and what stays closed", () => {
+  it("lists documents and, for this device, PATH directories, added paths, denies, and what stays closed", async () => {
     render(
       <Harness
         shared={{ documents: [{ path: "Documents", access: "read" }] }}
@@ -167,7 +168,12 @@ describe("directory access cards", () => {
 
     const documents = screen.getByTestId("grants:document");
     expect(documents).toHaveTextContent("Documents");
-    expect(documents).toHaveTextContent(t("setup.intelligence.grants.presentHere"));
+    // Presence is on the server's machine, which the badge names.
+    await waitFor(() =>
+      expect(documents).toHaveTextContent(
+        t("setup.intelligence.grants.presentHere", { machine: "studio" }),
+      ),
+    );
     expect(
       within(documents).getByRole("combobox", {
         name: t("setup.intelligence.grants.accessFor", { path: "Documents" }),
@@ -176,7 +182,9 @@ describe("directory access cards", () => {
     const device = screen.getByTestId("grants:device");
     expect(device).toHaveTextContent(".cache/uv");
     // A path this device lacks is marked on its row, where it can be fixed.
-    expect(device).toHaveTextContent(`/opt/nowhere${t("setup.intelligence.grants.absentHere")}`);
+    expect(device).toHaveTextContent(
+      `/opt/nowhere${t("setup.intelligence.grants.absentHere", { machine: "studio" })}`,
+    );
     expect(device).toHaveTextContent("/opt/homebrew/etc");
     expect(device).toHaveTextContent(`$HOME/.ssh${t("setup.intelligence.deviceAccess.builtin")}`);
   });
@@ -297,6 +305,19 @@ describe("directory access cards", () => {
     expect(onShared).toHaveBeenLastCalledWith({
       documents: [{ path: "Documents", access: "read_write" }],
     });
+  });
+
+  it("offers no folder dialog in the browser, where the server path is typed", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const device = within(screen.getByTestId("grants:device"));
+    const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+
+    expect(
+      screen.queryByRole("button", { name: t("setup.intelligence.grants.choose") }),
+    ).not.toBeInTheDocument();
+    await user.type(path, ".cache/pnpm");
+    expect(path).toHaveValue(".cache/pnpm");
   });
 
   it("picks a shared document directory inside the home and shows it relative to it", async () => {

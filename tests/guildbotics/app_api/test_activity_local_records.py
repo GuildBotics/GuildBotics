@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from guildbotics.app_api.activity_history import run_subject_id
 from guildbotics.app_api.api import create_app
@@ -22,6 +21,7 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime.member_invocation import ChatSubject
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.app_api.owner import owner_client
 from tests.guildbotics.local_code_host import local_member, pull_request, ticket
 
 
@@ -130,10 +130,9 @@ async def test_local_targets_push_and_chat_reach_activity_and_execution_titles(
                 )
             runs.finish_record(run_id, status="succeeded")
     now = datetime.now(UTC)
-    client = TestClient(create_app(session_token="test", runtime=runtime))
+    client = owner_client(create_app(runtime=runtime))
     response = client.get(
         "/activity/history",
-        headers={"X-GuildBotics-Session-Token": "test"},
         params={
             "start": (now - timedelta(days=1)).isoformat(),
             "end": (now + timedelta(days=1)).isoformat(),

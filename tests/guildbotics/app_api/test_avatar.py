@@ -12,8 +12,15 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
+from guildbotics.utils.local_api import API_PREFIX
 from guildbotics.utils.person_id import identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from tests.guildbotics.app_api.owner import (
+    ORIGIN,
+    browser_client,
+    owner_client,
+    owner_token,
+)
 from tests.guildbotics.app_api.provider_doubles import (
     answer,
     form_of,
@@ -28,7 +35,6 @@ from tests.guildbotics.integrations.branvil_double import (
     serve,
 )
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 PNG = b"\x89PNG\r\n\x1a\nimage"
 
 
@@ -69,11 +75,11 @@ def test_workspace(tmp_path: Path) -> Path:
 @pytest.fixture
 def client(test_workspace: Path) -> TestClient:
     runtime = RuntimeStub(test_workspace)
-    return TestClient(create_app(session_token="secret", runtime=runtime))
+    return owner_client(create_app(runtime=runtime))
 
 
 def test_get_avatar_not_found(client: TestClient) -> None:
-    response = client.get("/config/members/alice/avatar", headers=AUTH_HEADERS)
+    response = client.get("/config/members/alice/avatar")
     assert response.status_code == 404
     assert response.json()["code"] == "avatar_not_found"
 
@@ -82,33 +88,39 @@ def test_get_avatar_found(client: TestClient, test_workspace: Path) -> None:
     avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
 
-    response = client.get("/config/members/alice/avatar", headers=AUTH_HEADERS)
+    response = client.get("/config/members/alice/avatar")
     assert response.status_code == 200
     assert response.content == b"fake image data"
     assert response.headers.get("Cache-Control") == "no-cache"
 
 
-def test_get_avatar_with_query_token(client: TestClient, test_workspace: Path) -> None:
-    # <img> tags cannot send custom headers, so the token is accepted via query.
+def test_get_avatar_is_served_to_a_browser_session(test_workspace: Path) -> None:
+    # An <img> tag sends no header of its own, but it sends the session cookie.
     avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
+    app = create_app(runtime=RuntimeStub(test_workspace))
 
-    response = client.get("/config/members/alice/avatar?token=secret")
+    response = browser_client(app).get("/config/members/alice/avatar")
     assert response.status_code == 200
     assert response.content == b"fake image data"
 
 
-def test_get_avatar_rejects_missing_token(
-    client: TestClient, test_workspace: Path
+def test_get_avatar_rejects_a_request_without_a_credential(
+    test_workspace: Path,
 ) -> None:
     avatar_file = identity_members_dir() / "alice/avatar.png"
     avatar_file.write_bytes(b"fake image data")
+    app = create_app(runtime=RuntimeStub(test_workspace))
+    anonymous = TestClient(app, base_url=ORIGIN + API_PREFIX)
 
-    response = client.get("/config/members/alice/avatar")
+    response = anonymous.get("/config/members/alice/avatar")
     assert response.status_code == 401
-    assert response.json()["code"] == "invalid_session_token"
+    assert response.json()["code"] == "unauthorized"
 
-    response = client.get("/config/members/alice/avatar?token=wrong")
+    # The token in the query, which the image used to carry, is no credential.
+    response = anonymous.get(
+        "/config/members/alice/avatar", params={"token": owner_token(app)}
+    )
     assert response.status_code == 401
 
 
@@ -116,9 +128,7 @@ def test_post_avatar_upload(client: TestClient, test_workspace: Path) -> None:
     file_data = b"uploaded image content"
     files = {"file": ("avatar.png", io.BytesIO(file_data), "image/png")}
 
-    response = client.post(
-        "/config/members/alice/avatar", files=files, headers=AUTH_HEADERS
-    )
+    response = client.post("/config/members/alice/avatar", files=files)
     assert response.status_code == 200
 
     saved_avatar = identity_members_dir() / "alice/avatar.png"
@@ -134,9 +144,7 @@ def test_post_avatar_upload_rejects_large_file(client: TestClient) -> None:
     oversized = b"x" * (MAX_AVATAR_BYTES + 1)
     files = {"file": ("avatar.png", io.BytesIO(oversized), "image/png")}
 
-    response = client.post(
-        "/config/members/alice/avatar", files=files, headers=AUTH_HEADERS
-    )
+    response = client.post("/config/members/alice/avatar", files=files)
     assert response.status_code == 400
     assert response.json()["code"] == "avatar_invalid"
 
@@ -181,12 +189,9 @@ def test_a_new_avatar_is_handed_to_the_members_branvil_account(
             response = client.post(
                 "/config/members/alice/avatar",
                 files={"file": ("avatar.png", io.BytesIO(PNG), "image/png")},
-                headers=AUTH_HEADERS,
             )
         else:
-            response = client.post(
-                "/config/members/alice/avatar/github", headers=AUTH_HEADERS
-            )
+            response = client.post("/config/members/alice/avatar/github")
 
     assert response.status_code == 200, response.text
     assert double.avatars == {MEMBER: PNG}
@@ -232,9 +237,7 @@ def test_import_avatar_from_github(app_client, workspace, web) -> None:
         }
     )
 
-    response = app_client.post(
-        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/github")
 
     assert response.status_code == 200
     assert [str(request.url) for request in requests] == [
@@ -261,7 +264,7 @@ def test_import_avatar_from_github_needs_the_members_username(
 
     response = app_client.post(
         "/config/members/alice/avatar/github",
-        headers={**AUTH_HEADERS, "X-GuildBotics-Language": language},
+        headers={"X-GuildBotics-Language": language},
     )
 
     assert response.status_code == 400
@@ -283,9 +286,7 @@ def test_a_provider_failure_is_reported_without_its_detail(
 
     web({"api.github.com/users/alice-git": boom})
 
-    response = app_client.post(
-        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/github")
 
     assert response.status_code == 500
     assert response.json() == {
@@ -301,9 +302,7 @@ def test_import_avatar_from_a_provider_without_avatars_is_not_found(
 ) -> None:
     write_member(workspace, "alice", "account_info:\n  github_username: alice-git\n")
 
-    response = app_client.post(
-        f"/config/members/alice/avatar/{provider}", headers=AUTH_HEADERS
-    )
+    response = app_client.post(f"/config/members/alice/avatar/{provider}")
 
     assert response.status_code == 404
     assert response.json()["code"] == "avatar_provider_unknown"
@@ -311,9 +310,7 @@ def test_import_avatar_from_a_provider_without_avatars_is_not_found(
 
 
 def test_import_avatar_for_an_unknownwrite_member(app_client, workspace) -> None:
-    response = app_client.post(
-        "/config/members/ghost/avatar/github", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/ghost/avatar/github")
 
     assert response.status_code == 400
     assert response.json()["code"] == "person_not_found"
@@ -340,9 +337,7 @@ def test_import_avatar_from_slack_by_the_members_user_id(
         }
     )
 
-    response = app_client.post(
-        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/slack")
 
     assert response.status_code == 200
     assert requests[0].headers["Authorization"] == "Bearer xoxb-alice-token"
@@ -370,7 +365,7 @@ def test_import_avatar_from_slack_for_a_bot_asks_who_the_token_is(
         }
     )
 
-    response = app_client.post("/config/members/bob/avatar/slack", headers=AUTH_HEADERS)
+    response = app_client.post("/config/members/bob/avatar/slack")
 
     assert response.status_code == 200
     assert [request.url.path for request in requests] == [
@@ -408,9 +403,7 @@ def test_import_avatar_from_slack_for_a_human_uses_another_members_token(
         }
     )
 
-    response = app_client.post(
-        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/slack")
 
     assert response.status_code == 200
     assert requests[0].headers["Authorization"] == "Bearer xoxb-bob-token"
@@ -440,9 +433,7 @@ def test_import_avatar_from_slack_env_var_wins_over_keychain(
         }
     )
 
-    response = app_client.post(
-        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/slack")
 
     assert response.status_code == 200
     assert requests[0].headers["Authorization"] == "Bearer xoxb-env-token"
@@ -465,7 +456,7 @@ def test_import_avatar_from_slack_missing_scope(app_client, workspace, web) -> N
 
     response = app_client.post(
         "/config/members/alice/avatar/slack",
-        headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+        headers={"X-GuildBotics-Language": "ja"},
     )
 
     assert response.status_code == 400
@@ -485,9 +476,7 @@ def test_import_avatar_from_slack_needs_a_bot_token(
     monkeypatch.delenv("ALICE_SLACK_BOT_TOKEN", raising=False)
     requests = web({})
 
-    response = app_client.post(
-        "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/slack")
 
     assert response.status_code == 400
     assert response.json() == {
@@ -522,9 +511,7 @@ def test_slack_avatar_never_reads_or_uses_colliding_member_token(
     monkeypatch.setattr(KeyringSecretStore, "get", guarded_get)
     requests = web({})
 
-    response = app_client.post(
-        f"/config/members/{requested}/avatar/slack", headers=AUTH_HEADERS
-    )
+    response = app_client.post(f"/config/members/{requested}/avatar/slack")
 
     # The saved team cannot be read while two members share a secret prefix,
     # so no member's avatar is imported until the collision is repaired.
@@ -550,9 +537,7 @@ def test_an_imported_avatar_is_refused_when_it_is_too_large(
         }
     )
 
-    response = app_client.post(
-        "/config/members/alice/avatar/github", headers=AUTH_HEADERS
-    )
+    response = app_client.post("/config/members/alice/avatar/github")
 
     assert response.status_code != 200
     assert not _avatar(workspace, "alice").exists()

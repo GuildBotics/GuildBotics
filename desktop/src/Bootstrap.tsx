@@ -1,65 +1,56 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Button, Center, Loader, Stack, Text, Title } from "@mantine/core";
-import { HashRouter } from "react-router";
 import { useTranslation } from "react-i18next";
 
-import { App } from "./App";
 import {
   BackendClosedError,
-  canRestartApp,
+  backendEntry,
   getBootstrapLog,
   letQuitsThrough,
-  onBackendClosed,
   restartApp,
-  startBackend,
 } from "./api/backend";
+import { replacePage } from "./session/pageNavigation";
 
 type BootStatus =
-  | { state: "loading" }
-  | { state: "ready" }
-  | {
-      state: "error";
-      title: "failed" | "stopped";
-      error: unknown;
-      logPath: string;
-      logTail: string;
-    };
+  { state: "loading" } | { state: "error"; error: unknown; logPath: string; logTail: string };
 
+/**
+ * The bundled page a Desktop window opens first (`bootstrap.html?next=<page>`):
+ * it waits for the backend the host starts, then goes to the server's `next`
+ * page through an entry link. The host brings the window back here when the
+ * backend closes, and the page then shows why, with the startup log.
+ */
 export function Bootstrap() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<BootStatus>({ state: "loading" });
 
-  const connect = useCallback(() => {
-    setStatus({ state: "loading" });
-    void connectBackend(setStatus);
-  }, []);
+  // Nothing runs here that a quit could cut off.
+  useEffect(letQuitsThrough, []);
 
   useEffect(() => {
     let active = true;
-    const update = (next: BootStatus) => {
-      if (active) {
-        setStatus(next);
-      }
-    };
-    // The backend starts again only with the app, so its exit ends this session.
-    const stopWatching = onBackendClosed((error) => void showFailure("stopped", error, update));
-    void connectBackend(update);
+    const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+    backendEntry(next).then(
+      (url) => {
+        if (active) {
+          replacePage(url);
+        }
+      },
+      async (error: unknown) => {
+        const update = (logPath = "", logTail = "") => {
+          if (active) {
+            setStatus({ state: "error", error, logPath, logTail });
+          }
+        };
+        update();
+        const log = await getBootstrapLog().catch(() => null);
+        update(log?.path, log?.tail);
+      },
+    );
     return () => {
       active = false;
-      stopWatching();
     };
   }, []);
-
-  const showingApp = status.state === "ready";
-  useEffect(() => (showingApp ? undefined : letQuitsThrough()), [showingApp]);
-
-  if (showingApp) {
-    return (
-      <HashRouter>
-        <App />
-      </HashRouter>
-    );
-  }
 
   return (
     <Center className="app-bootstrap">
@@ -69,7 +60,7 @@ export function Bootstrap() {
           <Title order={3}>{t("app.loading.title")}</Title>
         </Stack>
       ) : (
-        <Alert color="danger" title={t(`app.loading.${status.title}`)} maw={520}>
+        <Alert color="danger" title={t("app.loading.closed")} maw={520}>
           <Stack gap="sm">
             <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
               {status.error instanceof BackendClosedError
@@ -84,44 +75,12 @@ export function Bootstrap() {
               </Text>
             ) : null}
             {status.logTail ? <pre className="command-output">{status.logTail}</pre> : null}
-            {canRestartApp() ? (
-              <Button variant="light" onClick={() => void restartApp()}>
-                {t("app.loading.restart")}
-              </Button>
-            ) : (
-              <Button variant="light" onClick={connect}>
-                {t("app.loading.retry")}
-              </Button>
-            )}
+            <Button variant="light" onClick={() => void restartApp()}>
+              {t("app.loading.restart")}
+            </Button>
           </Stack>
         </Alert>
       )}
     </Center>
   );
-}
-
-async function connectBackend(update: (status: BootStatus) => void) {
-  try {
-    await startBackend();
-    update({ state: "ready" });
-  } catch (error) {
-    await showFailure("failed", error, update);
-  }
-}
-
-async function showFailure(
-  title: "failed" | "stopped",
-  error: unknown,
-  update: (status: BootStatus) => void,
-) {
-  // Leave the App at once: its screens cannot reach the backend any more.
-  update({ state: "error", title, error, logPath: "", logTail: "" });
-  const log = await getBootstrapLog().catch(() => null);
-  update({
-    state: "error",
-    title,
-    error,
-    logPath: log?.path ?? "",
-    logTail: log?.tail ?? "",
-  });
 }

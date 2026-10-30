@@ -48,6 +48,7 @@ from guildbotics.intelligences.cli_agents import (
     ExecutableInfo,
 )
 from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.app_api.owner import owner_client
 
 
 def _executable(path: Path) -> Path:
@@ -522,8 +523,6 @@ def test_preview_includes_existing_shared_grants_and_local_denies(
 def test_the_sandbox_endpoints_answer_from_this_device(
     monkeypatch, tmp_path: Path
 ) -> None:
-    from fastapi.testclient import TestClient
-
     from guildbotics.app_api import api as api_module
     from guildbotics.app_api.api import create_app
     from guildbotics.app_api.events import EventBus
@@ -554,7 +553,6 @@ def test_the_sandbox_endpoints_answer_from_this_device(
             scope=scope, path=path, access=access, valid=True
         ),
     )
-    headers = {"X-GuildBotics-Session-Token": "secret"}
 
     monkeypatch.setattr(
         api_module,
@@ -567,18 +565,16 @@ def test_the_sandbox_endpoints_answer_from_this_device(
         ),
     )
 
-    with TestClient(create_app(session_token="secret", runtime=runtime)) as client:
-        status = client.get("/intelligences/agent-environment", headers=headers)
-        images = client.get("/intelligences/agent-environment/images", headers=headers)
+    with owner_client(create_app(runtime=runtime)) as client:
+        status = client.get("/intelligences/agent-environment")
+        images = client.get("/intelligences/agent-environment/images")
         evaluation = client.get(
             "/intelligences/grant-evaluation",
             params={"scope": "deny", "path": "/opt/x"},
-            headers=headers,
         )
         bad_scope = client.get(
             "/intelligences/grant-evaluation",
             params={"scope": "other", "path": "x"},
-            headers=headers,
         )
 
     assert status.json()["platform"] == "darwin"

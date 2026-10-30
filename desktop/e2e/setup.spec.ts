@@ -1,9 +1,9 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { readStackContext, test } from "./stack-context";
 
 // Journey ①: first-run setup happy path against the REAL backend.
 //
@@ -135,7 +135,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   const saveMember = async () => {
     const saved = page.waitForResponse(
       (response) =>
-        new URL(response.url()).pathname === "/config/members/local-agent" &&
+        new URL(response.url()).pathname === "/api/config/members/local-agent" &&
         response.request().method() === "PUT",
     );
     await page.getByRole("button", { name: "Save changes", exact: true }).click();

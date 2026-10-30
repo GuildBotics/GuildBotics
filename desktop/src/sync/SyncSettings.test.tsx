@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import {
   inspectHub,
   previewWorkspaceSync,
   renameThisDevice,
+  getServerMachineName,
   transferWorkspaceServiceOwner,
   trustHub,
   type HubConnection,
@@ -46,6 +47,7 @@ vi.mock("../api/client", async () => {
     inspectHub: vi.fn(),
     previewWorkspaceSync: vi.fn(),
     renameThisDevice: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
     transferWorkspaceServiceOwner: vi.fn(),
     trustHub: vi.fn(),
   };
@@ -280,7 +282,11 @@ describe("saying where the hub is", () => {
     vi.mocked(inspectHub).mockResolvedValue(connection({ endpoint: "", is_local: true }));
     renderSettings();
 
-    await user.click(await screen.findByRole("button", { name: t("sync.connect.useLocal") }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: t("sync.connect.useLocal", { machine: "studio" }),
+      }),
+    );
 
     expect(inspectHub).toHaveBeenCalledWith({ endpoint: "" });
     expect(
@@ -293,7 +299,7 @@ describe("saying where the hub is", () => {
 
     expect(await screen.findByLabelText(t("sync.connect.endpoint"))).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: t("sync.connect.useLocal") }),
+      screen.queryByRole("button", { name: t("sync.connect.useLocal", { machine: "studio" }) }),
     ).not.toBeInTheDocument();
   });
 });
@@ -475,6 +481,9 @@ describe("devices", () => {
       ],
     });
     vi.mocked(renameThisDevice).mockResolvedValue({ device_id: "d1", devices: [] });
+    vi.mocked(getServerMachineName)
+      .mockResolvedValueOnce("mac-studio")
+      .mockResolvedValue("Work laptop");
     renderSettings();
 
     expect(await screen.findByText("win-desktop")).toBeInTheDocument();
@@ -492,6 +501,12 @@ describe("devices", () => {
     await user.click(screen.getByRole("button", { name: t("sync.devices.renameAction") }));
 
     expect(renameThisDevice).toHaveBeenCalledWith("Work laptop");
+    // The server machine's name, which "this machine" texts show, follows the rename.
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(t("app.serverMachine.tooltip", { machine: "Work laptop" })),
+      ).toBeInTheDocument(),
+    );
   });
 });
 
@@ -537,7 +552,9 @@ describe("service ownership", () => {
     });
     renderSettings();
 
-    await user.click(await screen.findByRole("button", { name: t("sync.owner.takeOver") }));
+    await user.click(
+      await screen.findByRole("button", { name: t("sync.owner.takeOver", { name: "mac-studio" }) }),
+    );
     expect(await screen.findByText(t("sync.owner.confirmWarning"))).toBeInTheDocument();
     expect(transferWorkspaceServiceOwner).not.toHaveBeenCalled();
 

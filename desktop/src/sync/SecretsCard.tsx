@@ -25,6 +25,7 @@ import {
   type WorkspaceSecretState,
   type WorkspaceSecrets,
 } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { RequestErrorAlert } from "./RequestErrorAlert";
 import { SECRETS_REFETCH_MS, secretAlert, secretTone, secretsQueryKey } from "./secretState";
 
@@ -42,6 +43,7 @@ const MOVED = new Set(["sent", "fetched"]);
  */
 export function SecretsCard({ scope }: { scope: SyncScope }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const queryKey = secretsQueryKey(scope);
   const secrets = useQuery({
@@ -101,7 +103,7 @@ export function SecretsCard({ scope }: { scope: SyncScope }) {
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
-        <Title order={4}>{t(`sync.secrets.title.${scope}`)}</Title>
+        <Title order={4}>{t(`sync.secrets.title.${scope}`, { machine })}</Title>
         <Text c="dimmed" size="sm">
           {t(`sync.secrets.scope.${scope}`)} {t("sync.secrets.body")}
         </Text>

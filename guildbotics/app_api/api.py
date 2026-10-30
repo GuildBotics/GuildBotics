@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, cast
+from urllib.parse import quote
 
 from fastapi import (
     Depends,
     FastAPI,
     File,
-    Header,
     Query,
     Request,
     Response,
@@ -23,7 +22,6 @@ from fastapi import (
 from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -33,10 +31,27 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from guildbotics.app_api import decisions, hub_secrets
+from guildbotics.app_api import decisions, handoff, hub_secrets, ui
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_images,
     evaluate_grant,
+)
+from guildbotics.app_api.auth import (
+    LANGUAGE_HEADER,
+    SECURITY_HEADERS,
+    SESSION_SECONDS,
+    AppToken,
+    AppTokenRequest,
+    AuthorizationRequest,
+    AuthorizationResponse,
+    EntryLink,
+    EntryLinkRequest,
+    Guard,
+    ProofRequest,
+    ProofResponse,
+    ServerAuth,
+    SessionRequest,
+    SessionResponse,
 )
 from guildbotics.app_api.command_input_files import (
     CommandInputFileStore,
@@ -96,8 +111,6 @@ from guildbotics.app_api.models import (
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
-    LocalApiProofRequest,
-    LocalApiProofResponse,
     MemoryEventsResponse,
     ProjectConfigResponse,
     ProjectConfigUpdateRequest,
@@ -177,12 +190,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.local_api import (
-    PROOF_PATH,
-    TOKEN_HEADER,
-    TOKEN_SUBPROTOCOL,
-    local_api_proof,
-)
+from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH, server_port
 from guildbotics.utils.person_id import (
     MemberConfigError,
     MemberDirectoryName,
@@ -198,22 +206,12 @@ from guildbotics.utils.workspace_state import (
 )
 from guildbotics.workspace.config_repository import ConfigWriteReceipt
 
-#: The header the Desktop sends naming its display language, so error
-#: sentences come back in the language the screen is in.
-LANGUAGE_HEADER = "X-GuildBotics-Language"
-
 
 def _request_language(request: Request) -> str:
     """Return the display language the request asked for, defaulting to en."""
     value = (request.headers.get(LANGUAGE_HEADER) or "").strip().lower()
     return "ja" if value.startswith("ja") else "en"
 
-
-# Origins the packaged desktop webview serves the app from. Windows uses the
-# HTTP workaround origin while the other desktop platforms use the Tauri
-# scheme. Browser-preview origins are not fixed, so the launcher injects them
-# through ``create_app(allowed_origins=...)`` instead of matching a pattern.
-TAURI_ORIGINS = ["tauri://localhost", "http://tauri.localhost"]
 
 # How long the lifespan teardown may take before the host gives up on it. The
 # backend owns this number and hands it to the host with every accepted
@@ -245,14 +243,13 @@ class AvatarMutationResponse(BaseModel):
 
 def create_app(
     *,
-    session_token: str | None = None,
-    allowed_origins: list[str] | None = None,
+    auth: ServerAuth | None = None,
     runtime: AppRuntime | None = None,
     command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
     workspace_problem: str = "",
 ) -> FastAPI:
-    token = session_token or secrets.token_urlsafe(32)
+    server_auth = auth or ServerAuth(server_port())
     app_runtime = runtime or AppRuntime(
         EventBus(),
         load_workspace_environment=restore_workspace_environment,
@@ -312,23 +309,16 @@ def create_app(
             input_file_store.close()
 
     app = FastAPI(title="GuildBotics App API", version="0.1.0", lifespan=lifespan)
-    app.state.session_token = token
+    app.state.auth = server_auth
     app.state.runtime = app_runtime
     app.state.event_bus = bus
     # The server hosting this app installs the real hook; without one (tests,
     # embedding) there is nothing to stop.
     app.state.request_shutdown = lambda: None
 
-    # Added before CORS so that CORS wraps it: the JSON error it builds travels
-    # back out through the CORS layer and carries its headers.
     app.add_middleware(_UnhandledErrorMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[*TAURI_ORIGINS, *(allowed_origins or [])],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=[TOKEN_HEADER, LANGUAGE_HEADER, "Content-Type"],
-    )
+    # Outermost: nothing runs for a request the guard refuses.
+    app.add_middleware(Guard, port=server_auth.port)
 
     error_responses: dict[int | str, dict[str, Any]] = {
         400: {"model": ApiError},
@@ -338,22 +328,16 @@ def create_app(
         500: {"model": ApiError},
     }
 
-    def require_token(
-        provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
-    ) -> None:
-        if provided != token:
-            raise AppApiError(
-                "invalid_session_token",
-                status_code=401,
-            )
-
-    # Every route takes the session token except the few on ``app`` itself,
-    # each of which says why it cannot.
-    token_required: dict[str, Any] = {
-        "dependencies": [Depends(require_token)],
-        "responses": error_responses,
-    }
-    router = _Routes(app, token_required)
+    # Every API route is the owner's except the few on ``unauthenticated``,
+    # each of which says why it cannot be.
+    router = _Routes(
+        app,
+        {
+            "dependencies": [Depends(server_auth.authenticate)],
+            "responses": error_responses,
+        },
+    )
+    unauthenticated = _Routes(app, {})
 
     @app.exception_handler(UnsafePathError)
     async def unsafe_path_handler(
@@ -478,21 +462,51 @@ def create_app(
 
     @router.get("/health")
     def health() -> HealthResponse:
+        from guildbotics.workspace.identity import ensure_device_identity
+
         return HealthResponse(
             status="ok",
             service_instance_id=system_service_run_id,
             workspace=app_runtime.get_config_status().workspace,
+            machine_name=ensure_device_identity().display_name,
         )
 
-    @app.post(PROOF_PATH)
-    def local_api_proof_of_token(
-        request: LocalApiProofRequest,
-    ) -> LocalApiProofResponse:
-        # Takes no token: a client asks this before it trusts the port enough
-        # to send one, and the answer reveals nothing a caller could reuse.
-        return LocalApiProofResponse(
-            proof=local_api_proof(token, request.nonce, system_service_run_id)
+    @unauthenticated.post(PROOF_PATH)
+    def local_api_proof(request: ProofRequest) -> ProofResponse:
+        # A client asks this before it trusts the port enough to send its
+        # token, and the answer reveals nothing a caller could reuse.
+        return server_auth.proof(request)
+
+    @router.post("/session/links", status_code=201)
+    def entry_link(request: EntryLinkRequest | None = None) -> EntryLink:
+        return server_auth.entry_link(request or EntryLinkRequest())
+
+    @unauthenticated.post("/session")
+    def start_session(request: SessionRequest, response: Response) -> SessionResponse:
+        # The entry code is the credential: a browser holds nothing else yet.
+        cookie, session = server_auth.start_session(request)
+        response.set_cookie(
+            server_auth.cookie,
+            cookie,
+            max_age=SESSION_SECONDS,
+            path="/",
+            httponly=True,
+            samesite="strict",
         )
+        return session
+
+    @router.get("/session")
+    def session(request: Request) -> SessionResponse:
+        return server_auth.session(request)
+
+    @router.post("/apps/authorizations", status_code=201)
+    def authorize_app(request: AuthorizationRequest) -> AuthorizationResponse:
+        return server_auth.authorize(request)
+
+    @unauthenticated.post("/apps/token", status_code=201)
+    def app_token(request: AppTokenRequest) -> AppToken:
+        # The consent code and the app's PKCE verifier are the credential.
+        return server_auth.app_token(request)
 
     @router.post("/shutdown", status_code=202)
     def shutdown() -> ShutdownResponse:
@@ -779,9 +793,28 @@ def create_app(
     def get_hotkeys() -> HotkeySettings:
         return load_hotkeys()
 
+    @router.get("/handoff/files")
+    def handoff_files() -> handoff.HandoffFiles:
+        return handoff.list_files()
+
+    @router.get("/handoff/files/{path:path}")
+    def handoff_file(path: str) -> Response:
+        name, content = handoff.read_file(path)
+        return Response(
+            content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"
+            },
+        )
+
     @router.put("/hotkeys")
     def put_hotkeys(request: HotkeySettings) -> HotkeySettings:
-        return save_hotkeys(request)
+        saved = save_hotkeys(request)
+        # The Desktop of this machine registers them again, whichever screen
+        # saved them.
+        bus.publish_event("hotkeys.changed")
+        return saved
 
     @router.get("/config/roles")
     def config_roles(
@@ -984,9 +1017,7 @@ def create_app(
             providers=discover_llm_providers(config_dir or get_template_path())
         )
 
-    decisions.register(
-        app, lambda: _resolve_existing_config_dir(app_runtime), token_required
-    )
+    decisions.register(router, lambda: _resolve_existing_config_dir(app_runtime))
 
     @router.get("/config/intelligences")
     def config_intelligences(
@@ -1209,9 +1240,10 @@ def create_app(
                 _operation_endpoint(operation, app_runtime.saved_team),
                 methods=["POST"],
             )
-        # A page is opened by a browser, which cannot send the session token;
-        # what the page acts on names itself in the query (the unguessable
-        # state of a registration, for one).
+        # A page is opened by a browser coming back from another site, which
+        # sends no SameSite=Strict session cookie; what the page acts on names
+        # itself in the query (the unguessable state of a registration, for
+        # one).
         for name, page in (setup.pages if setup else {}).items():
             app.add_api_route(
                 page_path(provider.name, name),
@@ -1220,22 +1252,11 @@ def create_app(
                 include_in_schema=False,
             )
 
-    @app.get(
+    @router.get(
         "/config/members/{person_id}/avatar",
         responses={**error_responses, 404: {"model": ApiError}},
     )
-    def config_member_avatar(
-        person_id: PersonId,
-        token_query: str | None = Query(default=None, alias="token"),
-        provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
-    ) -> Response:
-        # Image is loaded via a plain <img> tag, which cannot set custom
-        # headers, so the session token is also accepted as a query parameter.
-        if token not in (provided, token_query):
-            raise AppApiError(
-                "invalid_session_token",
-                status_code=401,
-            )
+    def config_member_avatar(person_id: PersonId) -> Response:
         from guildbotics.app_api.avatar import find_avatar_file
 
         avatar_path = find_avatar_file(person_id)
@@ -1312,10 +1333,11 @@ def create_app(
         await share_avatar(person_id)
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
 
-    @app.websocket("/events")
+    @app.websocket(API_PREFIX + "/events")
     async def events(websocket: WebSocket):
-        await _stream(websocket, token, bus)
+        await _stream(websocket, server_auth, bus)
 
+    ui.serve(app)
     return app
 
 
@@ -1459,13 +1481,20 @@ def _page_endpoint(
         shown = await page(request.query_params)
         if shown.redirect:
             return RedirectResponse(shown.redirect, status_code=302)
-        return HTMLResponse(shown.html, status_code=shown.status_code)
+        response = HTMLResponse(shown.html, status_code=shown.status_code)
+        if shown.form_action:
+            # The guard keeps a policy the response sets itself.
+            response.headers["Content-Security-Policy"] = SECURITY_HEADERS[
+                "content-security-policy"
+            ].replace("form-action 'self'", f"form-action 'self' {shown.form_action}")
+        return response
 
     return endpoint
 
 
 class _Routes:
-    """The app's route decorators, each adding the same route options.
+    """The app's API route decorators, each adding the API prefix and the same
+    route options.
 
     The routes are registered on the app itself: FastAPI builds the routes of
     an included ``APIRouter`` again when the app first serves a request, a cost
@@ -1479,19 +1508,17 @@ class _Routes:
     def __getattr__(self, method: str) -> Callable[..., Any]:
         register = getattr(self._app, method)
         return lambda path, *args, **kwargs: register(
-            path, *args, **self._options, **kwargs
+            API_PREFIX + path, *args, **{**self._options, **kwargs}
         )
 
 
 class _UnhandledErrorMiddleware:
-    """Answer an unhandled exception with the API's JSON error, inside CORS.
+    """Answer an unhandled exception with the API's JSON error, inside the guard.
 
     An ``Exception`` handler registered on the app is served by Starlette's
-    outermost ``ServerErrorMiddleware``, above ``CORSMiddleware``, so its
-    response reaches the browser without CORS headers: the Desktop app can then
-    only report a bare network failure, whatever the backend actually said.
-    Building the error here, below the CORS layer, keeps the reason readable in
-    the UI.
+    outermost ``ServerErrorMiddleware``, above the guard, so its response would
+    leave as plain text without the security headers. Building the error here
+    keeps the reason readable in the UI.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -1541,15 +1568,12 @@ def _error_response(
     )
 
 
-async def _stream(websocket: WebSocket, token: str, bus: EventBus) -> None:
-    # The token travels as the second offered subprotocol, never in the URL:
-    # uvicorn logs every handshake with its path and query. Selecting the fixed
-    # name keeps the token out of the response.
-    if websocket.scope.get("subprotocols") != [TOKEN_SUBPROTOCOL, token]:
+async def _stream(websocket: WebSocket, auth: ServerAuth, bus: EventBus) -> None:
+    if not auth.admits(websocket):
         await websocket.close(code=1008)
         return
 
-    await websocket.accept(subprotocol=TOKEN_SUBPROTOCOL)
+    await websocket.accept()
     queue = bus.subscribe_events()
 
     async def send() -> None:

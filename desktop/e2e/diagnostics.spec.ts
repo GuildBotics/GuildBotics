@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { readStackContext, test } from "./stack-context";
 
 test("shows usage checks from the real backend without probing missing credentials", async ({
   page,
@@ -15,7 +15,7 @@ test("shows usage checks from the real backend without probing missing credentia
   await page.goto("/#/setup?section=environment&focus=agent-environment-tool-codex");
   const row = page.locator("#agent-environment-tool-codex");
   await expect(row).toBeVisible();
-  await expect(row.getByText("No credentials saved on this device", { exact: true })).toBeVisible();
+  await expect(row.getByText(/^No credentials saved on .+$/)).toBeVisible();
   await expect(row.getByRole("button", { name: "Check again", exact: true })).toBeDisabled();
   await expect(row.getByText("Usage check succeeded", { exact: true })).toHaveCount(0);
   await expect(row.getByRole("link", { name: "Error details", exact: true })).toHaveCount(0);
@@ -130,7 +130,7 @@ test("sends a troubleshooting question through the real backend and reports the 
   await panel.getByRole("button", { name: "Send" }).click();
 
   // The wire contract this journey proves: the device's refusal comes back as
-  // the typed 502 (not an unmapped 500, not a CORS-blocked "Failed to fetch"),
+  // the typed 502 (not an unmapped 500, not a refused request),
   // and the panel shows the backend's reason for the failure, not just a
   // generic failure title. The reason differs by machine (no virtualization,
   // no runtime, no snapshot) and its wording is owned by the environment

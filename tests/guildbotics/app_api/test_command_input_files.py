@@ -25,6 +25,7 @@ from guildbotics.environment.contract import (
     ResolvedGrant,
     SharedGrants,
 )
+from tests.guildbotics.app_api.owner import owner_client
 
 
 @pytest.mark.parametrize(
@@ -132,8 +133,6 @@ def _upload(content: bytes, content_type: str = "image/png") -> UploadFile:
 def test_copy_source_disappearance_is_invalid_input_and_cleans_partial_copy(
     tmp_path, monkeypatch, language
 ):
-    from fastapi.testclient import TestClient
-
     from guildbotics.app_api.api import create_app
     from guildbotics.utils import i18n_tool
 
@@ -147,15 +146,12 @@ def test_copy_source_disappearance_is_invalid_input_and_cleans_partial_copy(
 
     monkeypatch.setattr(command_input_files, "consume_host_file", disappear)
     store = CommandInputFileStore(root=tmp_path / "inputs")
-    client = TestClient(
-        create_app(session_token="secret", command_input_file_store=store)
-    )
+    client = owner_client(create_app(command_input_file_store=store))
     previous = i18n_tool.get_language()
     i18n_tool.set_language(language)
     try:
         response = client.post(
             "/commands/input-files/copy",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"path": str(source)},
         )
         assert response.status_code == 400
@@ -415,13 +411,29 @@ def test_save_command_input_file_does_not_recreate_missing_session(
     assert not directory.exists()
 
 
-def test_save_command_input_file_rejects_unsupported_content_type(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("filename", "suffix"),
+    [
+        ("report.pdf", "-report.pdf"),
+        ("C:\\Users\\me\\notes.md", "-notes.md"),
+        ("../../escape.txt", "-escape.txt"),
+        ("", "-file"),
+        ("あ" * 200 + ".pdf", "-" + "あ" * 56 + ".pdf"),
+    ],
+)
+def test_an_uploaded_file_keeps_only_its_own_name(
+    tmp_path: Path, filename: str, suffix: str
 ) -> None:
-    with pytest.raises(ValueError, match="Only PNG"):
-        save_command_input_file(tmp_path, _upload(b"pdf", "application/pdf"))
+    upload = UploadFile(
+        BytesIO(b"content"),
+        filename=filename,
+        headers=Headers({"content-type": "application/pdf"}),
+    )
 
-    assert list(tmp_path.iterdir()) == []
+    saved = save_command_input_file(tmp_path, upload)
+
+    assert saved.parent == tmp_path and saved.name.endswith(suffix)
+    assert saved.read_bytes() == b"content"
 
 
 @pytest.mark.windows

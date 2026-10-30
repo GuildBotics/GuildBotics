@@ -20,6 +20,7 @@ import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -43,7 +44,7 @@ from guildbotics.integrations.provider import (
     SetupItems,
     html_page,
     message_page,
-    page_path,
+    page_url,
 )
 from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.i18n_tool import t
@@ -138,8 +139,8 @@ class GitHubAccount(MemberAccount):
     username: str = ""
     installation_id: int | None = None
     app_id: int | None = None
-    #: A key file the save reads; the stored key is its content.
-    private_key_path: Path | None = None
+    #: The content of the key file the form chose, which the save stores.
+    private_key: str = Field(default="", repr=False)
     #: A finished registration whose IDs and key the save stores, whatever
     #: the form says of them.
     app_registration_id: str = ""
@@ -168,7 +169,7 @@ class GitHubAccount(MemberAccount):
         }
         values = {
             "GITHUB_ACCESS_TOKEN": self.access_token,
-            "GITHUB_PRIVATE_KEY": key or self._key_file(),
+            "GITHUB_PRIVATE_KEY": key or self.private_key,
         }
         return (
             {key: value for key, value in info.items() if value},
@@ -212,17 +213,6 @@ class GitHubAccount(MemberAccount):
                 "has_access_token": has_secret("GITHUB_ACCESS_TOKEN"),
             }
         )
-
-    def _key_file(self) -> str:
-        if not self.private_key_path:
-            return ""
-        try:
-            return self.private_key_path.expanduser().read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise SetupError(
-                "github_private_key_unreadable",
-                "GitHub App private key file could not be read.",
-            ) from exc
 
 
 def _number(value: object) -> int | None:
@@ -394,9 +384,6 @@ class AppRegistrationStart(BaseModel):
     #: or the ID of the member being added.
     person_id: str = Field(min_length=1)
     organization: str = ""
-    #: This local API as the user's browser reaches it; GitHub redirects the
-    #: manifest callback there.
-    callback_base_url: str = Field(min_length=1)
 
 
 class AppRegistrationRef(BaseModel):
@@ -456,17 +443,16 @@ class AppRegistrations:
                 "invalid_github_app_name", "GitHub App name must be 1-34 characters."
             )
         self._purge_expired()
-        base = request.callback_base_url.rstrip("/")
         registration = _Registration(
             state=secrets.token_urlsafe(32),
             app_name=name,
             person_id=request.person_id,
             organization=request.organization.strip(),
-            callback_url=f"{base}{page_path(_NAME, 'app-callback')}",
+            callback_url=page_url(_NAME, "app-callback"),
             config_dir=get_workspace_config_dir(),
         )
         registration.start_url = (
-            f"{base}{page_path(_NAME, 'app-manifest')}?state={registration.state}"
+            f"{page_url(_NAME, 'app-manifest')}?state={registration.state}"
         )
         self._registrations[registration.state] = registration
         return registration.status_view()
@@ -497,7 +483,8 @@ class AppRegistrations:
         return registration.status_view()
 
     async def manifest_page(self, query: Mapping[str, str]) -> Page:
-        """A page that posts the manifest form to github.com at once."""
+        """A page whose button posts the manifest form to GitHub: the pages run
+        no script, and may post a form to GitHub only."""
         try:
             registration = self._get(query.get("state", ""))
         except SetupError as exc:
@@ -506,15 +493,17 @@ class AppRegistrations:
         manifest = app_manifest.build_app_manifest(
             registration.app_name, registration.callback_url
         )
-        return html_page(
-            f"<p>{html.escape(t('integrations.github.app_registration.redirecting'))}</p>"
-            f'<form id="manifest-form" action="{html.escape(url)}'
-            f'?state={html.escape(registration.state)}" method="post">'
-            f'<input type="hidden" name="manifest" '
-            f'value="{html.escape(json.dumps(manifest))}">'
-            f'<button type="submit">{html.escape(t("integrations.github.app_registration.submit"))}</button>'
-            "</form>"
-            '<script>document.getElementById("manifest-form").submit();</script>'
+        return replace(
+            html_page(
+                f"<p>{html.escape(t('integrations.github.app_registration.continue'))}</p>"
+                f'<form action="{html.escape(url)}'
+                f'?state={html.escape(registration.state)}" method="post">'
+                f'<input type="hidden" name="manifest" '
+                f'value="{html.escape(json.dumps(manifest))}">'
+                f'<button type="submit">{html.escape(t("integrations.github.app_registration.submit"))}</button>'
+                "</form>"
+            ),
+            form_action=app_manifest.GITHUB_URL,
         )
 
     async def callback_page(self, query: Mapping[str, str]) -> Page:

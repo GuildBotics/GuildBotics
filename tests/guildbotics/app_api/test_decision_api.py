@@ -4,7 +4,6 @@ import logging
 from http import HTTPStatus
 
 import pytest
-from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.intelligences import (
@@ -19,8 +18,7 @@ from guildbotics.intelligences.brains.factory import (
 )
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
 from guildbotics.utils.secret_store import KeyringSecretStore
-
-HEADERS = {"X-GuildBotics-Session-Token": "test"}
+from tests.guildbotics.app_api.owner import owner_client
 
 
 @pytest.fixture
@@ -31,7 +29,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "guildbotics.app_api.api._resolve_existing_config_dir", lambda _: root
     )
-    return root, TestClient(create_app(session_token="test"))
+    return root, owner_client(create_app())
 
 
 def assignment(model):
@@ -42,21 +40,18 @@ def assignment(model):
 
 def test_registration_and_deletion(configured):
     root, client = configured
-    assert not client.get("/intelligences/decisions/options", headers=HEADERS).json()[
+    assert not client.get("/intelligences/decisions/options").json()[
         "credential_present"
     ]
     response = client.post(
         "/intelligences/decisions/credential",
-        headers=HEADERS,
         json={"value": "private-test-key"},
     )
     assert response.json()["state"] == "unverified"
     assert "private-test-key" not in response.text
-    assert client.get("/intelligences/decisions/options", headers=HEADERS).json()[
-        "credential_present"
-    ]
+    assert client.get("/intelligences/decisions/options").json()["credential_present"]
     KeyringSecretStore(root).delete(JEV_KEY)
-    assert not client.get("/intelligences/decisions/options", headers=HEADERS).json()[
+    assert not client.get("/intelligences/decisions/options").json()[
         "credential_present"
     ]
 
@@ -65,7 +60,6 @@ def test_malformed_credential_never_echoes_its_input(configured):
     _, client = configured
     response = client.post(
         "/intelligences/decisions/credential",
-        headers=HEADERS,
         json={"value": ["private-credential"]},
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY

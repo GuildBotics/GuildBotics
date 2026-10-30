@@ -1,3 +1,4 @@
+import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -13,6 +14,7 @@ import {
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
+  getHandoffFiles,
   getHotkeys,
   getTeam,
   getTraceDetail,
@@ -56,6 +58,9 @@ vi.mock("./commands/CommandEditor", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: async () => () => undefined }),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
@@ -68,6 +73,8 @@ vi.mock("./api/client", async (importOriginal) => {
     applyCommandAuthoring: vi.fn(),
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
+    getHandoffFiles: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
     getHotkeys: vi.fn(),
     updateHotkeys: vi.fn(),
     getTeam: vi.fn(),
@@ -85,6 +92,7 @@ vi.mock("./api/client", async (importOriginal) => {
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getHotkeysMock = vi.mocked(getHotkeys);
+const getHandoffFilesMock = vi.mocked(getHandoffFiles);
 const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
@@ -153,10 +161,15 @@ function status(overrides: Partial<CommandFileExecutionStatus> = {}): CommandFil
 }
 
 beforeEach(() => {
+  notifications.clean();
   eventListener = null;
   window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getHotkeysMock.mockReset().mockResolvedValue({ quick_run: "", commands: {} });
+  getHandoffFilesMock
+    .mockReset()
+    .mockResolvedValue({ directory: "/Users/me/Documents/GuildBotics", files: [] });
+  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
     message: "This is possible.",
@@ -194,13 +207,14 @@ beforeEach(() => {
   });
 });
 
-async function renderPage() {
+async function renderPage(entry = "/commands") {
   const { CommandsPage } = await import("./commands/CommandsPage");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <TestMantineProvider>
+      <Notifications />
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={["/commands"]}>
+        <MemoryRouter initialEntries={[entry]}>
           <CommandsPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -272,6 +286,77 @@ describe("Command editor screen", () => {
         "Control+Alt+1",
       ),
     );
+  });
+
+  it("opens the file in an external editor only from a Desktop window", async () => {
+    const { container } = await renderPage();
+    await screen.findByLabelText("editor");
+    const bar = within(container.querySelector<HTMLElement>(".command-bar")!);
+
+    // The file is on the server machine: a browser has nothing to open it with.
+    expect(bar.queryByRole("button", { name: t("commands.openScript") })).not.toBeInTheDocument();
+    expect(bar.getByRole("button", { name: t("commands.copyScriptPath") })).toBeEnabled();
+  });
+
+  it("offers the external editor in a Desktop window", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const { container } = await renderPage();
+    await screen.findByLabelText("editor");
+    const bar = within(container.querySelector<HTMLElement>(".command-bar")!);
+
+    expect(bar.getByRole("button", { name: t("commands.openScript") })).toBeEnabled();
+  });
+
+  it("shows the command a link names", async () => {
+    listCommandFilesMock.mockResolvedValue({
+      files: [summary(), summary({ id: "weekly-id", command: "reports/weekly", label: "Weekly" })],
+    });
+    await renderPage("/commands?command=reports%2Fweekly");
+
+    await waitFor(() => expect(getCommandFileMock).toHaveBeenCalledWith("weekly-id"));
+    expect(screen.queryByText(t("commands.linkedCommandMissing.title"))).not.toBeInTheDocument();
+  });
+
+  it("says so when a link names a command the workspace does not have", async () => {
+    listCommandFilesMock.mockResolvedValue({
+      files: [summary(), summary({ id: "weekly-id", command: "reports/weekly", label: "Weekly" })],
+    });
+    await renderPage("/commands?command=workflows%2Fticket_driven_workflow");
+
+    expect(await screen.findByText(t("commands.linkedCommandMissing.title"))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t("commands.linkedCommandMissing.body", { command: "workflows/ticket_driven_workflow" }),
+      ),
+    ).toBeInTheDocument();
+    // The usual selection stays: the first command, as with no link.
+    await waitFor(() => expect(getCommandFileMock).toHaveBeenCalledWith(summary().id));
+    expect(getCommandFileMock).not.toHaveBeenCalledWith("weekly-id");
+  });
+
+  it("lists the handoff folder under the run result with a download for each file", async () => {
+    getHandoffFilesMock.mockResolvedValue({
+      directory: "/Users/me/Documents/GuildBotics",
+      files: [
+        { path: "reports/weekly report.pdf", size: 2048, modified_at: "2026-10-30T01:00:00Z" },
+      ],
+    });
+    await renderPage();
+
+    const handoff = within(
+      await screen.findByRole("region", { name: t("commands.handoff.title") }),
+    );
+    expect(await handoff.findByText("/Users/me/Documents/GuildBotics")).toBeInTheDocument();
+    const link = handoff.getByRole("link", { name: /reports\/weekly report\.pdf/ });
+    expect(link).toHaveAttribute("href", "/api/handoff/files/reports/weekly%20report.pdf");
+    expect(link).toHaveAttribute("download", "weekly report.pdf");
+    expect(handoff.getByText(/2\.0 KiB/)).toBeInTheDocument();
+  });
+
+  it("says so when the handoff folder holds nothing", async () => {
+    await renderPage();
+
+    expect(await screen.findByText(t("commands.handoff.empty"))).toBeInTheDocument();
   });
 
   it("keeps the save-state label inline inside its status wrapper", async () => {

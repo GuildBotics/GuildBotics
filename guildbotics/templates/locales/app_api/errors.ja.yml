@@ -3,7 +3,13 @@ ja:
   command_workspace_changing: "Desktop のワークスペースを切り替えています。完了後にもう一度実行してください。"
   # errors.en.yml と 1 key = 1 文で対応する。片方だけの変更は
   # tests/guildbotics/app_api/test_api_error_messages.py が検出する。
-  invalid_session_token: "セッショントークンが不正です。"
+  unauthorized: "有効なセッションまたはトークンがありません。サーバーのマシンで `guildbotics open` を実行して開き直してください。"
+  csrf_mismatch: "このセッションの CSRF の値がなかったため、何も変更していません。画面を読み込み直してから、もう一度実行してください。"
+  invalid: "許可された内容と一致しないため、拒否しました。"
+  misdirected: "GuildBotics のサーバーとは別のホストを指すリクエストです。"
+  origin_mismatch: "別のサイトからのリクエストは受け付けません。"
+  handoff_file_not_found: "そのファイルは受け渡しフォルダにありません。"
+  handoff_file_too_large: "ファイルが大きすぎるため、画面からはダウンロードできません。"
   command_workspace_changed: "コマンドの開始前に Desktop のワークスペースが変わりました。コマンドをもう一度実行してください。"
   validation_error: "リクエストの検証に失敗しました。"
   config_busy: "同期がこのワークスペースへ書き込み中のため、保存されませんでした。少し待ってから、もう一度実行してください。"

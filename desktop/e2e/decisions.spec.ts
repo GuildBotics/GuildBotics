@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readStackContext } from "./stack-context";
-import { expect, test } from "@playwright/test";
+import { readStackContext, test } from "./stack-context";
+import { expect } from "@playwright/test";
 
 // Credentials use the isolated stack's fake keychain. Assignment persistence
 // and the section save go through the real API. No model call is needed.

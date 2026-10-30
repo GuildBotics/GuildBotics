@@ -28,6 +28,7 @@ import {
   type EnvironmentToolStatus,
   type SnapshotState,
 } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 
 /** Anchor for a system alert to scroll to. */
 export const AGENT_ENVIRONMENT_CARD_ID = "agent-environment";
@@ -391,6 +392,7 @@ function BaseImage({ image }: { image: EnvironmentImageStatus }) {
 /** One tool's login on this device, with the command that performs it. */
 function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
   const { t, i18n } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const recheck = useMutation({
     mutationFn: () => getCliAgentUsage(tool.name, true),
@@ -437,6 +439,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
         >
           {t(
             `setup.intelligence.environment.${recheck.isPending ? "usageChecking" : (resultKey ?? cliToolStatusKey(tool))}`,
+            { machine },
           )}
         </Badge>
         {check && (
@@ -451,6 +454,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
         <Text size="xs" c="dimmed">
           {t(
             `setup.intelligence.environment.${tool.credentials_saved ? "toolCredentialsSaved" : "toolCredentialsMissing"}`,
+            { machine },
           )}
         </Text>
       )}

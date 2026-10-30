@@ -28,6 +28,11 @@
 #   own code from it with the Python the snapshot installs
 #   (`environment/command_environment.py`). The dependencies it runs with,
 #   `environment/requirements.txt`, are package data too.
+# - The screens the Local API serves (`app_api/ui.py`), the Vite build in
+#   `desktop/dist`, go to `_internal/desktop/dist`: beside `_internal/guildbotics/`
+#   as `desktop/` is beside `guildbotics/` in a checkout, which is where the
+#   server looks for them. `scripts/desktop-build-backend.sh` refuses to build
+#   without them.
 # - `weasyprint` is intentionally NOT bundled. `ToPdfCommand` imports it lazily
 #   and raises a friendly `CommandError` when its native libraries are missing,
 #   so the sidecar stays buildable without GTK/Pango/Cairo. The agent
@@ -54,6 +59,7 @@ hiddenimports = []
 # Collect the whole guildbotics package (code + sources + templates/locales/assets).
 hiddenimports += collect_submodules("guildbotics")
 datas += collect_data_files("guildbotics", include_py_files=True)
+datas.append((os.path.join(REPO_ROOT, "desktop", "dist"), os.path.join("desktop", "dist")))
 
 # Third-party packages that rely on dynamic imports / bundled data files.
 for pkg in (

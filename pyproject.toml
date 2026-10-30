@@ -382,5 +382,6 @@ forbidden_modules = [
 ]
 ignore_imports = [
   "guildbotics.utils.keychain -> keyring",
+  "guildbotics.utils.local_api -> keyring",
   "guildbotics.utils.secret_store -> keyring",
 ]

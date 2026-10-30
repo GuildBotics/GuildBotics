@@ -35,6 +35,7 @@ from guildbotics.setup.setup_service import (
     settle_accounts,
 )
 from guildbotics.utils.fileio import load_yaml_file
+from guildbotics.utils.local_api import PORT_ENV
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import identity_secret_store
 
@@ -133,7 +134,6 @@ async def _start(registrations: AppRegistrations, organization: str = ""):
             app_name="  my-bot  ",
             person_id="alice",
             organization=organization,
-            callback_base_url=f"{BASE_URL}/",
         ),
         _no_team,
     )
@@ -258,15 +258,15 @@ def test_an_agent_stores_the_values_it_names_and_its_token() -> None:
     assert GitHubAccount().stored("alice", False) == ({}, {})
 
 
-def test_an_app_stores_its_ids_and_the_key_files_content(tmp_path: Path) -> None:
-    key_file = tmp_path / "app.pem"
-    key_file.write_text("-----BEGIN RSA PRIVATE KEY-----\nkey\n", encoding="utf-8")
+def test_an_app_stores_its_ids_and_the_key_files_content() -> None:
+    # The form reads the key file wherever the browser runs and sends its
+    # content: the server may run on another machine.
     account = GitHubAccount(
         account_type="github_apps",
         username="my-bot[bot]",
         app_id=7,
         installation_id=42,
-        private_key_path=key_file,
+        private_key="-----BEGIN RSA PRIVATE KEY-----\nkey",
     )
 
     assert account.stored("alice", False) == (
@@ -276,22 +276,14 @@ def test_an_app_stores_its_ids_and_the_key_files_content(tmp_path: Path) -> None
             "github_app_id": "7",
             "github_installation_id": "42",
         },
-        {"GITHUB_PRIVATE_KEY": "-----BEGIN RSA PRIVATE KEY-----\nkey\n"},
+        {"GITHUB_PRIVATE_KEY": "-----BEGIN RSA PRIVATE KEY-----\nkey"},
     )
 
 
-@pytest.mark.parametrize("content", [None, b"\xff\xfe"])
-def test_an_unreadable_key_file_is_refused(tmp_path: Path, content) -> None:
-    key_file = tmp_path / "app.pem"
-    if content is not None:
-        key_file.write_bytes(content)
+def test_the_key_is_never_shown_in_the_accounts_text() -> None:
+    account = GitHubAccount(account_type="github_apps", private_key="secret-key")
 
-    with pytest.raises(SetupError) as error:
-        GitHubAccount(account_type="github_apps", private_key_path=key_file).stored(
-            "alice", False
-        )
-
-    assert error.value.code == "github_private_key_unreadable"
+    assert "secret-key" not in repr(account)
 
 
 def test_the_view_shows_the_stored_values_and_which_secrets_are_held() -> None:
@@ -336,9 +328,7 @@ def test_the_view_shows_ids_that_are_not_numbers_as_unset() -> None:
 async def test_start_refuses_an_invalid_app_name(name: str) -> None:
     with pytest.raises(SetupError) as error:
         await AppRegistrations().start(
-            AppRegistrationStart(
-                app_name=name, person_id="alice", callback_base_url=BASE_URL
-            ),
+            AppRegistrationStart(app_name=name, person_id="alice"),
             _no_team,
         )
 
@@ -359,6 +349,26 @@ async def test_start_sends_the_browser_to_the_manifest_page() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_browser_comes_back_to_the_port_this_machine_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHub sends the browser to this server as the browser reaches it: on
+    the fixed loopback port, forwarded there from any other machine."""
+    monkeypatch.setenv(PORT_ENV, "9876")
+    registrations = AppRegistrations()
+    started = await _start(registrations)
+
+    page = await registrations.manifest_page({"state": started.state})
+
+    assert started.start_url.startswith(
+        "http://127.0.0.1:9876/providers/github/pages/app-manifest?"
+    )
+    assert "http://127.0.0.1:9876/providers/github/pages/app-callback" in (
+        html.unescape(page.html)
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_manifest_page_posts_the_manifest_to_github() -> None:
     registrations = AppRegistrations()
     started = await _start(registrations, organization="acme")
@@ -376,6 +386,11 @@ async def test_the_manifest_page_posts_the_manifest_to_github() -> None:
     manifest = json.loads(html.unescape(value.group(1)))
     assert manifest["name"] == "my-bot"
     assert manifest["redirect_url"] == f"{BASE_URL}/providers/github/pages/app-callback"
+    # The user presses the button: the pages run no script, and this one may
+    # post a form to GitHub besides this server.
+    assert "<script" not in page.html
+    assert "<button" in page.html
+    assert page.form_action == "https://github.com"
 
 
 @pytest.mark.asyncio

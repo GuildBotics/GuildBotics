@@ -13,6 +13,7 @@ import { TestMantineProvider } from "../test/TestMantineProvider";
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   getAgentEnvironmentImages: vi.fn(),
+  getServerMachineName: vi.fn(async () => "studio"),
 }));
 
 const t = i18n.getFixedT("en");
@@ -181,6 +182,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
           reference: "local/agent:1",
           architecture: "arm64",
           declared: "amd64",
+          machine: "studio",
         }),
       ),
     ).toBeInTheDocument();
@@ -227,7 +229,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
     await waitFor(() =>
       expect(select).toHaveValue(
-        `local/agent:2 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+        `local/agent:2 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere", { machine: "studio" })}`,
       ),
     );
 
@@ -259,7 +261,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
     await waitFor(() =>
       expect(select).toHaveValue(
-        `local/agent:1 (${DIGEST.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+        `local/agent:1 (${DIGEST.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere", { machine: "studio" })}`,
       ),
     );
     await userEvent.click(select);
@@ -286,7 +288,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
     await waitFor(() =>
       expect(select).toHaveValue(
-        `local/agent:1 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+        `local/agent:1 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere", { machine: "studio" })}`,
       ),
     );
     // The declared digest is not loaded here, the new one is: two choices.
@@ -314,6 +316,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
       await screen.findByText(
         t("setup.intelligence.environment.declaration.imageUnavailable", {
           problem: "no hypervisor",
+          machine: "studio",
         }),
       ),
     ).toBeInTheDocument();

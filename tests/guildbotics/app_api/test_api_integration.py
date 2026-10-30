@@ -17,8 +17,6 @@ HTTP_OK = 200
 HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
-
 
 def _init_project(
     client: TestClient,
@@ -29,7 +27,6 @@ def _init_project(
 ) -> None:
     response = client.post(
         "/config/init",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "language": language,
@@ -58,23 +55,17 @@ def test_temp_workspace_member_flow_before_project_init(
     }
 
     with client:
-        created = client.post(
-            "/config/members", headers=AUTH_HEADERS, json=member_request
-        )
-        team = client.get("/team", headers=AUTH_HEADERS)
-        missing_avatar = client.get(
-            "/config/members/local-agent/avatar", headers=AUTH_HEADERS
-        )
+        created = client.post("/config/members", json=member_request)
+        team = client.get("/team")
+        missing_avatar = client.get("/config/members/local-agent/avatar")
         uploaded_avatar = client.post(
             "/config/members/local-agent/avatar",
-            headers=AUTH_HEADERS,
             files={"file": ("avatar.png", b"avatar", "image/png")},
         )
-        avatar = client.get("/config/members/local-agent/avatar", headers=AUTH_HEADERS)
-        snapshot = client.get("/config/members/local-agent", headers=AUTH_HEADERS)
+        avatar = client.get("/config/members/local-agent/avatar")
+        snapshot = client.get("/config/members/local-agent")
         updated = client.put(
             "/config/members/local-agent",
-            headers=AUTH_HEADERS,
             json={
                 **member_request,
                 "original_person_id": "local-agent",
@@ -82,14 +73,13 @@ def test_temp_workspace_member_flow_before_project_init(
                 "expected_revisions": snapshot.json()["revisions"],
             },
         )
-        refreshed_team = client.get("/team", headers=AUTH_HEADERS)
+        refreshed_team = client.get("/team")
         deleted = client.request(
             "DELETE",
             "/config/members/local-agent",
-            headers=AUTH_HEADERS,
             json={"config_dir": str(config_dir)},
         )
-        empty_team = client.get("/team", headers=AUTH_HEADERS)
+        empty_team = client.get("/team")
 
     assert not (config_dir / "team/project.yml").exists()
     assert created.status_code == HTTP_OK
@@ -124,7 +114,7 @@ def test_temp_workspace_init_project_member_team_flow(
         # config/init wrote the project file on disk.
         assert (config_dir / "team/project.yml").exists()
 
-        project = client.get("/config/project", headers=AUTH_HEADERS)
+        project = client.get("/config/project")
         assert project.status_code == HTTP_OK
         project_payload = project.json()
         assert project_payload["language"] == "en"
@@ -135,7 +125,6 @@ def test_temp_workspace_init_project_member_team_flow(
 
         member = client.post(
             "/config/members",
-            headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
                 "person_type": "",
@@ -150,7 +139,7 @@ def test_temp_workspace_init_project_member_team_flow(
         assert member.status_code == HTTP_OK
         assert (config_dir / "team/members/local-agent/member.yml").exists()
 
-        team = client.get("/team", headers=AUTH_HEADERS)
+        team = client.get("/team")
 
     assert team.status_code == HTTP_OK
     team_payload = team.json()
@@ -167,7 +156,7 @@ def test_temp_workspace_command_options_return_localized_sample_command(
     config_dir = workspace / ".guildbotics/config"
     with client:
         _init_project(client, config_dir, language="ja")
-        response = client.get("/commands/options", headers=AUTH_HEADERS)
+        response = client.get("/commands/options")
 
     assert response.status_code == HTTP_OK
     options = {option["command"]: option for option in response.json()["options"]}
@@ -198,7 +187,7 @@ def test_temp_workspace_command_files_crud_flow(
     with client:
         _init_project(client, config_dir, language="en")
 
-        listing = client.get("/commands/files", headers=AUTH_HEADERS)
+        listing = client.get("/commands/files")
         assert listing.status_code == HTTP_OK
         commands = {item["command"] for item in listing.json()["files"]}
         assert {"translate", "summarize"} <= commands
@@ -206,13 +195,12 @@ def test_temp_workspace_command_files_crud_flow(
         summary = next(
             item for item in listing.json()["files"] if item["command"] == "translate"
         )
-        detail = client.get(f"/commands/files/{summary['id']}", headers=AUTH_HEADERS)
+        detail = client.get(f"/commands/files/{summary['id']}")
         assert detail.status_code == HTTP_OK
         assert detail.json()["revision"]
 
         created = client.post(
             "/commands/files",
-            headers=AUTH_HEADERS,
             json={"command": "reports/weekly", "format": "markdown"},
         )
         assert created.status_code == HTTP_OK
@@ -223,7 +211,6 @@ def test_temp_workspace_command_files_crud_flow(
         # Duplicate create is rejected without overwriting.
         duplicate = client.post(
             "/commands/files",
-            headers=AUTH_HEADERS,
             json={"command": "reports/weekly", "format": "markdown"},
         )
         assert duplicate.status_code == 409
@@ -231,7 +218,6 @@ def test_temp_workspace_command_files_crud_flow(
 
         updated = client.put(
             f"/commands/files/{created_payload['id']}",
-            headers=AUTH_HEADERS,
             json={
                 "content": "---\nname: Weekly\nbrain: none\n---\nUpdated body.\n",
                 "expected_revision": created_payload["revision"],
@@ -245,7 +231,6 @@ def test_temp_workspace_command_files_crud_flow(
 
         extra_update_field = client.put(
             f"/commands/files/{created_payload['id']}",
-            headers=AUTH_HEADERS,
             json={
                 "content": updated.json()["content"],
                 "expected_revision": updated.json()["revision"],
@@ -257,7 +242,6 @@ def test_temp_workspace_command_files_crud_flow(
         # Stale revision now conflicts.
         stale = client.put(
             f"/commands/files/{created_payload['id']}",
-            headers=AUTH_HEADERS,
             json={
                 "content": "---\nname: Weekly\n---\nAgain.\n",
                 "expected_revision": created_payload["revision"],
@@ -266,7 +250,7 @@ def test_temp_workspace_command_files_crud_flow(
         assert stale.status_code == 409
         assert stale.json()["code"] == "command_file_changed"
 
-        missing = client.get("/commands/files/bm9wZQ", headers=AUTH_HEADERS)
+        missing = client.get("/commands/files/bm9wZQ")
         assert missing.status_code == 404
 
         # A stale revision refuses the delete instead of discarding the file.
@@ -274,7 +258,6 @@ def test_temp_workspace_command_files_crud_flow(
         stale_delete = client.delete(
             f"/commands/files/{created_payload['id']}"
             f"?expected_revision={created_payload['revision']}",
-            headers=AUTH_HEADERS,
         )
         assert stale_delete.status_code == 409
         assert stale_delete.json()["code"] == "command_file_changed"
@@ -283,7 +266,6 @@ def test_temp_workspace_command_files_crud_flow(
         deleted = client.delete(
             f"/commands/files/{created_payload['id']}"
             f"?expected_revision={current_revision}",
-            headers=AUTH_HEADERS,
         )
         assert deleted.status_code == HTTP_OK
         assert "reports/weekly" not in {
@@ -296,7 +278,6 @@ def test_temp_workspace_command_files_crud_flow(
             client.delete(
                 f"/commands/files/{created_payload['id']}"
                 f"?expected_revision={current_revision}",
-                headers=AUTH_HEADERS,
             ).status_code
             == 404
         )
@@ -310,7 +291,6 @@ def test_command_file_execution_status_and_run_guard(
         _init_project(client, config_dir, language="en")
         client.post(
             "/config/members",
-            headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
                 "person_type": "",
@@ -324,13 +304,11 @@ def test_command_file_execution_status_and_run_guard(
         )
         created = client.post(
             "/commands/files",
-            headers=AUTH_HEADERS,
             json={"command": "notes", "format": "markdown"},
         ).json()
 
         status = client.get(
             f"/commands/files/{created['id']}/execution-status",
-            headers=AUTH_HEADERS,
             params={"person": "local-agent", "expected_revision": created["revision"]},
         )
         assert status.status_code == HTTP_OK
@@ -340,14 +318,12 @@ def test_command_file_execution_status_and_run_guard(
         # guard below.
         stale_status = client.get(
             f"/commands/files/{created['id']}/execution-status",
-            headers=AUTH_HEADERS,
             params={"person": "local-agent", "expected_revision": "stale"},
         )
         assert stale_status.json()["blocking_code"] == "command_file_changed"
 
         run = client.post(
             "/commands/run",
-            headers=AUTH_HEADERS,
             json={
                 "command": "notes",
                 "person": "local-agent",
@@ -363,7 +339,6 @@ def test_command_file_execution_status_and_run_guard(
         )
         saved = client.put(
             f"/commands/files/{created['id']}",
-            headers=AUTH_HEADERS,
             json={
                 "content": invalid_source,
                 "expected_revision": created["revision"],
@@ -376,7 +351,6 @@ def test_command_file_execution_status_and_run_guard(
 
         invalid_status = client.get(
             f"/commands/files/{created['id']}/execution-status",
-            headers=AUTH_HEADERS,
             params={
                 "person": "local-agent",
                 "expected_revision": saved.json()["revision"],
@@ -385,7 +359,7 @@ def test_command_file_execution_status_and_run_guard(
         assert invalid_status.status_code == HTTP_OK
         assert invalid_status.json()["blocking_code"] == "command_file_invalid_source"
 
-        options = client.get("/commands/options", headers=AUTH_HEADERS)
+        options = client.get("/commands/options")
         assert options.status_code == HTTP_OK
         notes = next(
             option
@@ -396,7 +370,6 @@ def test_command_file_execution_status_and_run_guard(
 
         invalid_run = client.post(
             "/commands/run",
-            headers=AUTH_HEADERS,
             json={
                 "command": "notes",
                 "person": "local-agent",
@@ -414,7 +387,6 @@ def test_run_request_expected_pair_must_be_complete(
     with client:
         response = client.post(
             "/commands/run",
-            headers=AUTH_HEADERS,
             json={
                 "command": "notes",
                 "expected_command_file_id": "abc",
@@ -430,14 +402,13 @@ def test_temp_workspace_intelligence_update_writes_files(
     with client:
         _init_project(client, config_dir)
 
-        current = client.get("/config/intelligences", headers=AUTH_HEADERS)
+        current = client.get("/config/intelligences")
         assert current.status_code == HTTP_OK
         payload = current.json()
         payload["model_mapping"]["default"] = "models/openai/gpt-5-mini.yml"
 
         update = client.put(
             "/config/intelligences",
-            headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
                 "model_mapping": payload["model_mapping"],
@@ -470,7 +441,7 @@ def test_temp_workspace_intelligence_effort_round_trips_through_the_api(
     with client:
         _init_project(client, config_dir)
 
-        payload = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+        payload = client.get("/config/intelligences").json()
         model_path = payload["model_mapping"]["default"]
         for model in payload["models"]:
             if model["path"] == model_path:
@@ -485,7 +456,6 @@ def test_temp_workspace_intelligence_effort_round_trips_through_the_api(
 
         update = client.put(
             "/config/intelligences",
-            headers=AUTH_HEADERS,
             json={
                 "config_dir": str(config_dir),
                 "model_mapping": payload["model_mapping"],
@@ -497,7 +467,7 @@ def test_temp_workspace_intelligence_effort_round_trips_through_the_api(
         )
         assert update.status_code == HTTP_OK
 
-        reread = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+        reread = client.get("/config/intelligences").json()
 
     written = safe_load((config_dir / f"intelligences/{model_path}").read_text())
     assert written["effort"]["high"] == {"reasoning_effort": "high"}
@@ -526,14 +496,13 @@ def test_temp_workspace_transcript_settings_update_then_status(
 
         update = client.put(
             "/transcripts/settings",
-            headers=AUTH_HEADERS,
             json={"detail": "full", "retention_days": 14},
         )
         assert update.status_code == HTTP_OK
         assert update.json()["detail"] == "full"
         assert update.json()["retention_days"] == 14
 
-        status = client.get("/transcripts/settings", headers=AUTH_HEADERS)
+        status = client.get("/transcripts/settings")
 
     assert status.status_code == HTTP_OK
     status_payload = status.json()

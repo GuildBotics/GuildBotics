@@ -1,11 +1,19 @@
 import { useTranslation } from "react-i18next";
 
 import type { CliAgentLastTurn } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 
 export function CliAgentLastTurnDetails({ turn }: { turn: CliAgentLastTurn | undefined }) {
   const { t, i18n } = useTranslation();
+  // The records are the server machine's, which a browser elsewhere could
+  // take for its own.
+  const machine = useServerMachineLabel();
   if (!turn) {
-    return <span className="cli-agent-last-turn">{t("setup.intelligence.lastTurn.noRecord")}</span>;
+    return (
+      <span className="cli-agent-last-turn">
+        {t("setup.intelligence.lastTurn.noRecord", { machine })}
+      </span>
+    );
   }
   const source = t(`setup.intelligence.lastTurn.${turn.model_specified ? "specified" : "default"}`);
   const summary =
@@ -26,6 +34,7 @@ export function CliAgentLastTurnDetails({ turn }: { turn: CliAgentLastTurn | und
       <span>
         {t("setup.intelligence.lastTurn.time", {
           time: new Date(turn.timestamp).toLocaleString(i18n.language),
+          machine,
         })}
       </span>
     </span>
