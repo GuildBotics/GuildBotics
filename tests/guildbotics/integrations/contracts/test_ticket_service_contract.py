@@ -298,6 +298,89 @@ async def test_creation_checks_all_related_write_scopes_before_creating(
 
 
 @pytest.mark.asyncio
+async def test_interactive_updates_read_inheritance_and_control_patrol(board):
+    root = await _ticket(board, "Root")
+    parent = await _ticket(board, "Parent")
+    child = await _ticket(board, "Child")
+    await _relate(board, parent, parent=root)
+    await _relate(board, child, parent=parent)
+    board.assign(child)
+    [task] = await board.tickets.candidates()
+    initial = await _read(board, child)
+    for url in (root, parent, child):
+        read = await _read(board, url)
+        assert read["interactive"] is False
+        assert read["interactive_ancestor"] is None
+
+    async def update(url, **options):
+        return await board.tickets.update_ticket(
+            url,
+            body=None,
+            title=None,
+            add_labels=(),
+            remove_labels=(),
+            state=None,
+            state_reason=None,
+            **options,
+        )
+
+    if "interactive" not in board.features:
+        for enabled in (True, False):
+            before = len(board.writes)
+            with pytest.raises(ServiceUnsupported):
+                # Refuse the whole operation, before any other fields change.
+                await update(child, interactive=enabled, parent="")
+            assert board.writes[before:] == []
+        unchanged = await update(child)
+        assert unchanged.interactive is False
+        assert unchanged.interactive_ancestor is None
+        return
+
+    enabled = await update(child, interactive=True)
+    assert enabled.interactive is True and enabled.interactive_ancestor is None
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert not await board.tickets.can_receive_work(child)
+    # An unrelated update preserves the own flag.
+    assert (await update(child)).interactive is True
+    assert (await _read(board, child))["interactive"] is True
+    disabled = await update(child, interactive=False)
+    assert disabled.interactive is False and disabled.interactive_ancestor is None
+    assert [t.url for t in await board.tickets.candidates()] == [child]
+    assert await board.tickets.refresh(task) is not None
+    assert await board.tickets.can_receive_work(child)
+
+    await update(root, interactive=True)
+    inherited = await update(child, interactive=False)
+    assert inherited.interactive is False and inherited.interactive_ancestor == root
+    assert (await _read(board, child))["interactive_ancestor"] == root
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert not await board.tickets.can_receive_work(child)
+    # Read and update choose the nearest interactive ancestor, even when
+    # the child itself also has the flag set.
+    await update(parent, interactive=True)
+    own_and_inherited = await update(child, interactive=True)
+    assert own_and_inherited.interactive is True
+    assert own_and_inherited.interactive_ancestor == parent
+    read = await _read(board, child)
+    assert read["interactive"] is True and read["interactive_ancestor"] == parent
+    await update(parent, interactive=False)
+    await update(child, interactive=False)
+    assert (await _read(board, child))["interactive_ancestor"] == root
+    await update(root, interactive=False)
+    assert (await _read(board, child))["interactive_ancestor"] is None
+    assert [t.url for t in await board.tickets.candidates()] == [child]
+    # Reparenting in the same write reports the new inheritance.
+    await update(parent, interactive=True)
+    detached = await update(child, interactive=False, parent="")
+    assert detached.interactive is False and detached.interactive_ancestor is None
+    read = await _read(board, child)
+    assert read["lane"] == "ready"
+    assert read["assignees"] == initial["assignees"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("member_index", [0, 1])
 async def test_creation_can_assign_human_members(board, member_index):
     member = board.team.members[member_index]

@@ -131,6 +131,8 @@ class BranvilTicketService(BranvilApi, TicketService):
             children=[self._relative(entry) for entry in data["children"]],
             blocked_by=[self._relative(entry) for entry in data["blocked_by"]],
             blocks=[self._relative(entry) for entry in data["blocks"]],
+            interactive=data["interactive"],
+            interactive_ancestor=_interactive_ancestor(data),
         )
         return ReadPage.of(resource, [ticket], target=self.target(item, data))
 
@@ -214,6 +216,7 @@ class BranvilTicketService(BranvilApi, TicketService):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
         item = self.item(url, "ticket")
         # A relation is written to both tickets: each is in the scope.
@@ -226,6 +229,7 @@ class BranvilTicketService(BranvilApi, TicketService):
             "title": title,
             "state": state,
             "state_reason": None if state is None else state_reason,
+            "interactive": interactive,
         }
         answer = await self.call(
             "PATCH",
@@ -246,6 +250,8 @@ class BranvilTicketService(BranvilApi, TicketService):
             state_changed=bool(answer["state_changed"]),
             labels=list(data["labels"]),
             target=self.target(item, data),
+            interactive=data["interactive"],
+            interactive_ancestor=_interactive_ancestor(data),
         )
 
     async def add_reaction(
@@ -461,6 +467,11 @@ class BranvilTicketService(BranvilApi, TicketService):
             done=lambda: self.move(task, "done"),
             finish_merged=finish_merged,
         )
+
+
+def _interactive_ancestor(ticket: dict[str, Any]) -> str | None:
+    ancestor = ticket["interactive_ancestor"]
+    return str(ancestor["url"]) if ancestor else None
 
 
 def _ticket_item(ticket: dict[str, Any]) -> BranvilItem:

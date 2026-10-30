@@ -25,3 +25,6 @@ en:
     new_messages: "New source-thread messages have arrived since the last check."
     required: "%{reason} Run guildbotics member chat updates --person %{person}, read its result, and reconsider the operation before retrying."
   ticket_assignee: "No ticket-service account for roster member %{person}."
+  ticket_interactive: "Changing the ticket interactive mode"
+  ticket_update_empty: "ticket update needs at least one of body, title, labels, state, parent, blockers, or interactive mode."
+  ticket_update_options: "ticket update needs --content-stdin/--content-file, --title, --add-label, --remove-label, --state, --parent, --add-blocked-by, --remove-blocked-by, or --interactive/--no-interactive."

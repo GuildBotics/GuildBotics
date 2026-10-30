@@ -130,6 +130,8 @@ class LocalTicketService(TicketService):
                 "assignees": item["assignees"],
                 "labels": item["labels"],
                 "lane": item["lane"],
+                "interactive": item["interactive"],
+                "interactive_ancestor": self._interactive_ancestor(item),
                 "parent": _relative(parent) if parent else None,
                 "children": [
                     _relative(other.url)
@@ -219,6 +221,7 @@ class LocalTicketService(TicketService):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
         ref = store.locate(url, "ticket")
         item = store.load(ref)
@@ -236,7 +239,12 @@ class LocalTicketService(TicketService):
             if blocker not in blockers
         ]
         state_changed = state is not None and item["state"] != state
-        for key, value in (("body", body), ("title", title), ("state", state)):
+        for key, value in (
+            ("body", body),
+            ("title", title),
+            ("state", state),
+            ("interactive", interactive),
+        ):
             if value is not None:
                 item[key] = value
         if state_changed:
@@ -250,6 +258,8 @@ class LocalTicketService(TicketService):
             state_changed=state_changed,
             labels=item["labels"],
             target=items.target(ref, item),
+            interactive=item["interactive"],
+            interactive_ancestor=self._interactive_ancestor(item),
         )
 
     async def add_reaction(
@@ -326,17 +336,17 @@ class LocalTicketService(TicketService):
         check_path(self.scope, ref.place, provider="local")
         return ref.url
 
-    def _interactive(self, item: dict[str, Any]) -> bool:
-        """A ticket inherits its interactive parent's exclusion from patrol."""
+    def _interactive_ancestor(self, item: dict[str, Any]) -> str | None:
+        """The nearest ancestor whose own interactive setting is enabled."""
         seen: set[str] = set()
         while True:
-            if item["interactive"]:
-                return True
             parent = item["parent"]
             if not parent or parent in seen:
-                return False
+                return None
             seen.add(parent)
             item = store.load(store.locate(parent, "ticket"))
+            if item["interactive"]:
+                return parent
 
     async def _work(
         self, ref: store.Ref, item: dict[str, Any], *, finish_merged: bool = True
@@ -346,7 +356,8 @@ class LocalTicketService(TicketService):
         if (
             item["state"] != "open"
             or not in_scope(self.scope, ref.place)
-            or self._interactive(item)
+            or item["interactive"]
+            or self._interactive_ancestor(item)
         ):
             return None
         assigned = me in item["assignees"]

@@ -189,6 +189,8 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
         "state_changed": True,
         "labels": [],
         "target": target,
+        "interactive": False,
+        "interactive_ancestor": None,
     }
     assert commented == {
         "id": "comment-1",
@@ -198,6 +200,24 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
         "target": target,
     }
     assert [c["body"] for c in item(url)["comments"]] == ["Closing."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_ticket_interactive_update_requires_human_approval(member, enabled):
+    url = ticket(1, interactive=not enabled)
+    before = item(url)
+    with pytest.raises(MemberCapabilityError, match="human instruction"):
+        await member_repository.ticket_update(
+            member, url, interactive=enabled, title="Must not change"
+        )
+    assert item(url) == before
+    updated = await member_repository.ticket_update(
+        member, url, interactive=enabled, human_approved=True
+    )
+    assert updated["interactive"] is enabled
+    assert item(url)["interactive"] is enabled
+    assert updated["interactive_ancestor"] is None
 
 
 @pytest.mark.asyncio

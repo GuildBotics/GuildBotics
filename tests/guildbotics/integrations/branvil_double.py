@@ -704,7 +704,14 @@ class BranvilDouble:
                 for related in filter(None, [body.get("parent"), *blockers]):
                     self._related(url, related)
                 state_changed = body.get("state", ticket["state"]) != ticket["state"]
-                for key in ("title", "body", "state", "state_reason", "parent"):
+                for key in (
+                    "title",
+                    "body",
+                    "state",
+                    "state_reason",
+                    "parent",
+                    "interactive",
+                ):
                     if key in body:
                         ticket[key] = body[key]
                 if state_changed:

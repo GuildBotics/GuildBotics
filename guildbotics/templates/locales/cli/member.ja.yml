@@ -25,3 +25,6 @@ ja:
     new_messages: "前回の確認後に元のスレッドへ新着メッセージが届いています。"
     required: "%{reason} guildbotics member chat updates --person %{person} を実行し、結果を読んで操作内容を再検討してから再試行してください。"
   ticket_assignee: "名簿のメンバー %{person} にチケットサービスのアカウントがありません。"
+  ticket_interactive: "チケットの対話指定の切り替え"
+  ticket_update_empty: "ticket update には、本文、タイトル、ラベル、状態、親、依存先、対話指定のいずれかが必要です。"
+  ticket_update_options: "ticket update には --content-stdin/--content-file、--title、--add-label、--remove-label、--state、--parent、--add-blocked-by、--remove-blocked-by、--interactive/--no-interactive のいずれかが必要です。"

@@ -293,6 +293,8 @@ class GitHubTicketService(GitHubApi, TicketService):
                     children=_relatives(place["subIssues"]),
                     blocked_by=_relatives(place["blockedBy"]),
                     blocks=_relatives(place["blocking"]),
+                    interactive=False,
+                    interactive_ancestor=None,
                 )
                 return ReadPage.of(resource, [ticket], target=self.target(item, data))
             request = request_of(self, resource, subject, conditions)
@@ -457,7 +459,12 @@ class GitHubTicketService(GitHubApi, TicketService):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
+        if interactive is not None:
+            raise ServiceUnsupported(
+                t("integrations.github.response.interactive_unsupported")
+            )
         item = self.item(url, "ticket")
         new_parent = self.item(parent, "ticket") if parent else None
         adding = [self.item(blocker, "ticket") for blocker in add_blocked_by]
@@ -532,6 +539,8 @@ class GitHubTicketService(GitHubApi, TicketService):
             state_changed=state_changed,
             labels=_label_names(data),
             target=self.target(item, data),
+            interactive=False,
+            interactive_ancestor=None,
         )
 
     async def add_reaction(

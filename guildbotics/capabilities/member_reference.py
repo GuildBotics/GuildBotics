@@ -130,11 +130,18 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "[--content-file <file>] [--title <title>] [--add-label <name> ...] "
                 "[--remove-label <name> ...] "
                 "[--state open|closed [--state-reason completed|not_planned] --human-approved] "
+                "[--interactive|--no-interactive --human-approved] "
                 "[--parent <ticket_url>] [--add-blocked-by <ticket_url> ...] "
                 "[--remove-blocked-by <ticket_url> ...]",
-                "Change a ticket's body, title, labels, state, parent, or the tickets "
+                "Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets "
                 "it is blocked by; empty content removes the body, and an empty "
-                "`--parent` the parent.",
+                "`--parent` the parent. Changing interactive mode requires a human's "
+                "request or approval for that ticket (--human-approved). Unsupported "
+                "providers refuse either flag. Reads and updates return the ticket's own "
+                "interactive setting and interactive_ancestor URL; clearing the setting "
+                "does not override an interactive ancestor. Report that inherited state "
+                "to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した "
+                "場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。",
             ),
             (
                 "guildbotics member ticket reaction add --person <person> --url <ticket_url> "
@@ -581,7 +588,7 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Say what the member thinks the priority should be, and why, in the ticket comment, PR "
     "comment, or thread where the work was requested, and leave the recording to a human.",
     "What the inspect commands read maps to writes like this: `ticket update` writes body, "
-    "title, labels, state, `parent`, and `blocked_by`, and `pr update` writes body and "
+    "title, labels, state, `interactive`, `parent`, and `blocked_by`, and `pr update` writes body and "
     "title. A ticket's `children` and `blocks` change by updating those tickets: a child "
     "names its parent, a blocked ticket the tickets it is blocked by. A parent is meant to "
     "be completed only once its children are closed, and a ticket to be started only once "
@@ -591,9 +598,13 @@ _CROSS_CUTTING_RULES: list[str] = [
     "the board. The exception is ticket creation: --human-approved covers the initial "
     "assignee (any roster member, including humans), lane, interactive mode, parent, "
     "and blockers requested in the conversation. Creating a ticket never authorizes "
-    "changing the assignment or lane of an existing ticket. "
+    "changing the assignment or lane of an existing ticket. Changing an existing ticket's "
+    "interactive mode requires a human's explicit request or approval for that ticket "
+    "and --human-approved, because it changes whether patrol starts work automatically. "
     "例外として、作成時の担当者 (人を含む名簿のメンバー)、レーン、対話指定、親、依存先の指定は "
     "--human-approved の承認に含まれる。既存チケットの担当者とレーンの変更は承認しない。 "
+    "既存チケットの対話指定の切り替えも巡回の自動着手を変える人の判断なので、そのチケットへの "
+    "人の依頼か承認と --human-approved が必要。 "
     "PR state, draft, and base are read-only for the same reason (the "
     "host ticket selector makes a PR a draft at the automatic re-review limit, "
     "records it in Activity and announces it on the PR and in the reviewer's "
