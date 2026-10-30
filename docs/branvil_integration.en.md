@@ -32,7 +32,7 @@ checks it awaits settle.
 ```text
 Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ GuildBotics (forwards)       │
+│ branvil serve                │            │ OpenSSH (OS user service)    │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
 │ GuildBotics                  │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
@@ -40,15 +40,12 @@ Hub machine                                 another machine
 
 - Branvil runs once, on the machine that hosts the GuildBotics Hub, and listens on
   loopback only.
-- Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default. On
-  the Hub machine that is Branvil itself. On any other machine, GuildBotics (Desktop,
-  or the service of `guildbotics start`) forwards that local port to the Hub over the
-  SSH connection the Hub sync already uses, for as long as it runs, so nothing else
-  needs to run there. While GuildBotics is not running, `branvil tunnel --via <hub>`
-  forwards it instead (for `git` or Branvil's GUI). Whichever of them binds the port
-  first forwards it; the other waits, and GuildBotics takes the port over within
-  10 seconds once it is free. Only a loopback base URL (`127.0.0.1` or `localhost`)
-  is forwarded.
+- Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default.
+  On the Hub machine that is Branvil itself. On another machine, set up the
+  [SSH forwarding service](#set-up-ssh-forwarding-on-another-machine) once. OpenSSH
+  starts at login and forwards the loopback ports over one connection, independently
+  of GuildBotics and Branvil's client. The browser, git and CLI can use it even when
+  GuildBotics is closed.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
   on every machine, and GuildBotics' connection to Branvil names one base URL. A repository
@@ -94,8 +91,8 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 Following the Branvil README:
 
-1. Run Branvil on the Hub machine. Other machines need nothing more while GuildBotics
-   runs there. `branvil init` creates Branvil's owner, the one person who uses it: the
+1. Run Branvil on the Hub machine. Set up SSH forwarding on other machines as below.
+   `branvil init` creates Branvil's owner, the one person who uses it: the
    GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
@@ -103,6 +100,81 @@ Following the Branvil README:
    repository. GuildBotics can create the workspace itself (below).
 
 Members and their tokens are not created in Branvil: GuildBotics does that.
+
+## Set up SSH forwarding on another machine
+
+Run the bundled script from a checkout on each machine other than the Hub. It
+needs only OpenSSH and the OS service manager; Python and the GuildBotics CLI are
+not needed. No setup is needed on the Hub itself, beyond accepting your SSH key.
+
+1. Stop any `branvil tunnel` you run manually or as a service.
+2. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
+   `[user@]host`) and accept the verified host key. Configure keys and hostnames
+   in your existing OpenSSH configuration. Do **not** put `LocalForward` in that
+   host entry: an ordinary `ssh my-hub` would then compete with the service.
+3. Use an unencrypted key or an unlocked ssh-agent key. The unencrypted
+   `~/.ssh/id_ed25519` created for Hub sync can be reused. The service uses
+   `BatchMode=yes` and strict host-key checking, so it never prompts. On Windows,
+   enable the OpenSSH client and, if used, the OpenSSH Authentication Agent service.
+4. Install the service using the commands below, then inspect its status.
+
+macOS (launchd user agent) and Linux (systemd user service):
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878
+sh scripts/hub-forward.sh status
+# Replace the entire port list by running install again with every desired port.
+sh scripts/hub-forward.sh uninstall
+```
+
+On Linux, a user service does not inherit your login shell's `SSH_AUTH_SOCK`.
+Without `--agent-socket` the service disables agent use and needs an unencrypted
+key. To use an agent, pass its **stable, absolute socket path**, for example:
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
+```
+
+The script sets `SSH_AUTH_SOCK` in the service. If your agent uses a new socket
+path after login, install again with the new path or configure a stable socket.
+macOS uses the agent made available to launchd by the OS.
+
+Windows (Task Scheduler, Windows PowerShell 5.1; no administrator account needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port 7878
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
+# Replace the entire port list with -Port "7878,12345" (use your actual ports).
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
+```
+
+The execution-policy override permits the unsigned script for this invocation.
+The task runs only while you are logged in, without a visible console. A small
+PowerShell runner under `%LOCALAPPDATA%\hub-forward` retries ssh after 15 seconds,
+including on failure; the task has no execution time limit. Removing the service
+also removes that runner. macOS stores the definition at
+`~/Library/LaunchAgents/local.hub-forward.plist` (ssh errors in
+`~/Library/Logs/hub-forward.log`); Linux uses
+`${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service` (logs via
+`journalctl --user -u hub-forward.service`). The scripts do not change SSH config,
+keys or known_hosts. There is one service per user: install replaces its Hub and
+complete port list, with repeated `--port` on POSIX or `-Port "7878,12345"` in PowerShell.
+
+All forwards bind only `127.0.0.1` and target the same port on the Hub's
+`127.0.0.1`. A dropped connection is detected by SSH keepalives and restarted.
+Linux and Windows wait 15 seconds after ssh exits; macOS's `ThrottleInterval`
+limits how often launchd starts it to once per 15 seconds. Status reports the OS process/task and its last result, not an
+end-to-end health check of Branvil. On Windows, a running task may be between SSH
+attempts. Check `http://127.0.0.1:7878` in the browser to verify Branvil too.
+
+Until the backend is consolidated on the Hub, GuildBotics still has its own
+forward. If this service binds first, the backend waits. If the backend already
+owns the port, this service's ssh exits (`ExitOnForwardFailure=yes`) and retries
+at intervals. Status may show it stopped or restarting while Branvil is still
+reachable through the backend. After stopping that backend forward, the service
+takes over on a retry. Do not run a second forwarding service for the same ports.
+The future client installer adds the GuildBotics server port once it is fixed;
+the scripts themselves contain no application names or default ports.
 
 Several GuildBotics workspaces can use one Branvil. The connection to Branvil and each
 member's agent and token belong with the members' identities, which every workspace
