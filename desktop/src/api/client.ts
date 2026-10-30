@@ -2061,21 +2061,3 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
 export async function getServerMachineName(): Promise<string> {
   return (await request<{ machine_name: string }>("/health")).machine_name;
 }
-
-/** A file in the server machine's handoff folder; `path` is relative to it. */
-export type HandoffFile = { path: string; size: number; modified_at: string };
-
-export type HandoffFiles = {
-  /** The handoff folder as the server machine names it. */
-  directory: string;
-  files: HandoffFile[];
-};
-
-export async function getHandoffFiles(): Promise<HandoffFiles> {
-  return request("/handoff/files");
-}
-
-/** Where a handoff file downloads from; the session cookie authenticates it. */
-export function handoffFileUrl(path: string): string {
-  return `${API_PREFIX}/handoff/files/${path.split("/").map(encodeURIComponent).join("/")}`;
-}

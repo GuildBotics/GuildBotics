@@ -9,7 +9,6 @@ import { MemberSelector } from "../MemberSelector";
 import { useServerPathHint } from "../serverMachine";
 import { CommandInput } from "./CommandInput";
 import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorState";
-import { HandoffFiles } from "./HandoffFiles";
 import { UnmetRequirements } from "./UnmetRequirements";
 
 type ActiveMember = { person_id: string; name: string };
@@ -195,9 +194,6 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
           ) : (
             <div className="empty-row">{t("commands.noRunsYet")}</div>
           )}
-          <HandoffFiles
-            refreshKey={`${props.selectedRecord?.traceId ?? ""}:${props.selectedRecord?.status ?? ""}`}
-          />
         </div>
       </div>
     </section>

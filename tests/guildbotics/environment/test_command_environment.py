@@ -2067,15 +2067,8 @@ def test_no_temporary_place_is_chosen_by_a_fixed_name() -> None:
 
 
 #: Who names a place a command's microVM can write, and what the host does
-#: there: never more than make it before the microVM boots, name it, or hand
-#: its regular files to the user as bytes, read without following a link.
+#: there: never more than make it before the microVM boots, or name it.
 _GUEST_WRITABLE = {
-    ("guildbotics/app_api/handoff.py", "list_files"): (
-        "lists the exchange directory's regular files, following no link"
-    ),
-    ("guildbotics/app_api/handoff.py", "read_file"): (
-        "reads one of them with its no-follow ancestry held, for the user's download"
-    ),
     ("guildbotics/drivers/command_runner.py", "host_command_cwd"): (
         "makes the exchange directory, the default working directory, before"
         " the microVM boots"

@@ -1761,11 +1761,6 @@ const resources = {
         inputFileDropUpload: "Drop to hand over a copy of the file",
         inputFolderRefused:
           "A folder cannot be dropped here. Type its path on the server machine instead.",
-        handoff: {
-          title: "Handoff folder",
-          refresh: "Reload",
-          empty: "The handoff folder holds no files.",
-        },
         inputPathHint:
           "Agents reach only the working directory and the folders allowed under Settings → AI. A read-only copy is kept by GuildBotics and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
@@ -3677,11 +3672,6 @@ const resources = {
         inputFileDropUpload: "ドロップしてファイルのコピーを渡す",
         inputFolderRefused:
           "フォルダはドロップできません。サーバーのマシンでのフォルダのパスを入力してください。",
-        handoff: {
-          title: "受け渡しフォルダ",
-          refresh: "再読み込み",
-          empty: "受け渡しフォルダにファイルはありません。",
-        },
         inputPathHint:
           "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは GuildBotics が読み取り専用で保持し、アプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",

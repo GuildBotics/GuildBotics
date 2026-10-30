@@ -3194,7 +3194,7 @@ function TranscriptSettingsPanel() {
   );
 }
 
-export function formatBytes(value: number): string {
+function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
   }
@@ -3305,7 +3305,7 @@ function sourceEnabledLabel(t: TFunction, enabled: boolean | null | undefined) {
   return enabled ? t("overview.enabled") : t("overview.disabled");
 }
 
-export function formatDateTime(value: string | null | undefined) {
+function formatDateTime(value: string | null | undefined) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
     return "-";

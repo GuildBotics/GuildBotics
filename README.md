@@ -602,7 +602,6 @@ In a browser, a few parts of the screens differ:
 - A file dropped on a command's input is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped)
 - The AI CLI tools' skill status and forced update are not shown
 - Settings labelled "this machine" (keeping it awake, sync, ...) are the server machine's
-- What runs produce (files in the exchange folder `~/Documents/GuildBotics`) can be downloaded from the list under a command's result
 
 **Port**: the backend listens on the fixed port 8765. If another program uses that port, the backend does not start. To run two backends on one machine (a development and a released desktop app, for example), set `GUILDBOTICS_SERVER_PORT` to another port where one of them starts; the server, the CLI, and the desktop app all read it.
 

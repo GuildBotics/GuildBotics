@@ -9,8 +9,6 @@ en:
   invalid: "The request does not match what was authorized, so it was refused."
   misdirected: "This request names another host than the GuildBotics server."
   origin_mismatch: "Requests from another site are refused."
-  handoff_file_not_found: "That file is not in the exchange folder."
-  handoff_file_too_large: "That file is too large to download from the screen."
   command_workspace_changed: "The Desktop workspace changed before the command started. Run the command again."
   validation_error: "Request validation failed."
   config_busy: "Synchronization is still writing to this workspace, so nothing was saved. Try again in a moment."

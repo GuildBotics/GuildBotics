@@ -14,7 +14,6 @@ import {
   getCommandFile,
   getCommandFileExecutionStatus,
   getConfigStatus,
-  getHandoffFiles,
   getHotkeys,
   getTeam,
   getTraceDetail,
@@ -73,7 +72,6 @@ vi.mock("./api/client", async (importOriginal) => {
     applyCommandAuthoring: vi.fn(),
     authorCommand: vi.fn(),
     getConfigStatus: vi.fn(),
-    getHandoffFiles: vi.fn(),
     getServerMachineName: vi.fn(async () => "studio"),
     getHotkeys: vi.fn(),
     updateHotkeys: vi.fn(),
@@ -92,7 +90,6 @@ vi.mock("./api/client", async (importOriginal) => {
 
 const getConfigStatusMock = vi.mocked(getConfigStatus);
 const getHotkeysMock = vi.mocked(getHotkeys);
-const getHandoffFilesMock = vi.mocked(getHandoffFiles);
 const applyCommandAuthoringMock = vi.mocked(applyCommandAuthoring);
 const authorCommandMock = vi.mocked(authorCommand);
 const getTeamMock = vi.mocked(getTeam);
@@ -166,9 +163,6 @@ beforeEach(() => {
   window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   getHotkeysMock.mockReset().mockResolvedValue({ quick_run: "", commands: {} });
-  getHandoffFilesMock
-    .mockReset()
-    .mockResolvedValue({ directory: "/Users/me/Documents/GuildBotics", files: [] });
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
@@ -332,31 +326,6 @@ describe("Command editor screen", () => {
     // The usual selection stays: the first command, as with no link.
     await waitFor(() => expect(getCommandFileMock).toHaveBeenCalledWith(summary().id));
     expect(getCommandFileMock).not.toHaveBeenCalledWith("weekly-id");
-  });
-
-  it("lists the handoff folder under the run result with a download for each file", async () => {
-    getHandoffFilesMock.mockResolvedValue({
-      directory: "/Users/me/Documents/GuildBotics",
-      files: [
-        { path: "reports/weekly report.pdf", size: 2048, modified_at: "2026-10-30T01:00:00Z" },
-      ],
-    });
-    await renderPage();
-
-    const handoff = within(
-      await screen.findByRole("region", { name: t("commands.handoff.title") }),
-    );
-    expect(await handoff.findByText("/Users/me/Documents/GuildBotics")).toBeInTheDocument();
-    const link = handoff.getByRole("link", { name: /reports\/weekly report\.pdf/ });
-    expect(link).toHaveAttribute("href", "/api/handoff/files/reports/weekly%20report.pdf");
-    expect(link).toHaveAttribute("download", "weekly report.pdf");
-    expect(handoff.getByText(/2\.0 KiB/)).toBeInTheDocument();
-  });
-
-  it("says so when the handoff folder holds nothing", async () => {
-    await renderPage();
-
-    expect(await screen.findByText(t("commands.handoff.empty"))).toBeInTheDocument();
   });
 
   it("keeps the save-state label inline inside its status wrapper", async () => {

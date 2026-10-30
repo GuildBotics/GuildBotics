@@ -6,7 +6,6 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Annotated, Any, cast
-from urllib.parse import quote
 
 from fastapi import (
     Depends,
@@ -31,7 +30,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from guildbotics.app_api import decisions, handoff, hub_secrets, ui
+from guildbotics.app_api import decisions, hub_secrets, ui
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_images,
     evaluate_grant,
@@ -792,21 +791,6 @@ def create_app(
     @router.get("/hotkeys")
     def get_hotkeys() -> HotkeySettings:
         return load_hotkeys()
-
-    @router.get("/handoff/files")
-    def handoff_files() -> handoff.HandoffFiles:
-        return handoff.list_files()
-
-    @router.get("/handoff/files/{path:path}")
-    def handoff_file(path: str) -> Response:
-        name, content = handoff.read_file(path)
-        return Response(
-            content,
-            media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"
-            },
-        )
 
     @router.put("/hotkeys")
     def put_hotkeys(request: HotkeySettings) -> HotkeySettings:
