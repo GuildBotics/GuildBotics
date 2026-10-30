@@ -76,8 +76,8 @@ _FETCH_REFSPECS = ("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tag
 #: The references a clone is given of the host's repository.
 _SHARED_REFS = ("refs/remotes/origin/", "refs/tags/")
 _PUBLISHED_REFS = "refs/guildbotics/published/"
-#: Leave room for metadata and worst-case JSON escaping of object contents.
-MAX_GIT_SHOW_BYTES = MAX_PAGE_BYTES // 8
+#: Bound object reads; the serialized result budget below also accounts for escaping.
+MAX_GIT_SHOW_BYTES = MAX_PAGE_BYTES // 2
 #: Git operations that can be pending even when status is clean.
 _GIT_IDLE = (
     "for state in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD MERGE_AUTOSTASH "
@@ -512,7 +512,10 @@ class MemberGitWorkspaceService:
             for path in paths:
                 item = origin.show_path(commit, path)
                 size = len(json.dumps(item))
-                if used + size > MAX_PAGE_BYTES // 2:
+                # The remaining quarter covers metadata of subsequent omitted items.
+                if ("content" in item or "entries" in item) and (
+                    used + size > MAX_PAGE_BYTES * 3 // 4
+                ):
                     item.pop("content", None)
                     item.pop("entries", None)
                     item["status"] = "too_large"

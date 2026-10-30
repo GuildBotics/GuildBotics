@@ -43,9 +43,13 @@ _SERVICE_READ = (
     "Reads go through the member's credential for the service, which bounds "
     "what they reach."
 )
+_REPOSITORY_ACCESS = (
+    "Repository reads use the member's service credential; repository writes "
+    "also pass the service's configured scope check."
+)
 _CHAT = "The member's chat credential reaches only the channels it was given."
 #: Why a service bounds what no function of GuildBotics checks.
-_SERVICE_RATIONALES = frozenset({_SERVICE_READ, _CHAT})
+_SERVICE_RATIONALES = frozenset({_SERVICE_READ, _REPOSITORY_ACCESS, _CHAT})
 _CONVERSATION = "guildbotics.environment.host_window.HostWindow._check_conversation"
 
 _CHAT_TARGETS = frozenset(
@@ -170,9 +174,15 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         "guildbotics.cli.member._reject_current_workspace_mode_in_task_run",
     ),
     "branch": (SERVICE, frozenset({"git prepare"}), _PUSH),
+    # Literal paths select git objects of the authenticated repository, never host files.
+    "paths": (SERVICE, frozenset({"git show"}), _SERVICE_READ),
     # The code host and the tickets: what the member writes to, within the
     # service's configured scope.
-    "repo": (SERVICE, frozenset({"git prepare", "pr create"}), _SCOPE),
+    "repo": (
+        SERVICE,
+        frozenset({"git prepare", "git show", "pr create"}),
+        _REPOSITORY_ACCESS,
+    ),
     "tracker": (SERVICE, frozenset({"ticket create"}), _SCOPE),
     "issue_url": (
         SERVICE,

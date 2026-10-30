@@ -571,6 +571,59 @@ async def test_show_omits_large_trees_and_blobs_before_reading_contents(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("character", ["x", "規", "\x01", "\U0001f30f"])
+async def test_show_bounds_serialized_content_with_escaping_and_many_paths(
+    member, tmp_path, character
+):
+    source = tmp_path / "source"
+    content = character * (member_git.MAX_GIT_SHOW_BYTES // len(character.encode()))
+    with git.Repo.clone_from(member.remotes["owner"], source) as repo:
+        (source / "content").write_text(content, encoding="utf-8")
+        repo.git.add("content")
+        repo.index.commit("content", author=git.Actor("Test", "test@example.com"))
+        repo.git.push("origin", "main")
+    # This many paths fit the request metadata budget but cannot all return content.
+    result = await member.service.show(REPOSITORY, ["content"] * 1000)
+    assert len(result["items"]) == 1000
+    assert len(json.dumps(result).encode()) < member_git.MAX_PAGE_BYTES
+    assert (
+        len(json.dumps(result, ensure_ascii=False).encode()) < member_git.MAX_PAGE_BYTES
+    )
+    for item in result["items"]:
+        if item["status"] == "ok":
+            assert item["content"] == content
+        else:
+            assert item["status"] == "too_large" and "content" not in item
+    assert result["items"][-1]["status"] == "too_large"
+    if character == "x":
+        assert result["items"][0]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_show_keeps_metadata_only_items_within_reserved_budget(
+    member, monkeypatch
+):
+    # SHA-256 gitlinks have the largest metadata, and have no payload to omit.
+    def show_path(_origin, _commit, path):
+        if path == "s":
+            return {"path": path, "kind": "submodule", "commit": "f" * 64}
+        content = "x" * (member_git.MAX_GIT_SHOW_BYTES if path == "a" else 163000)
+        return {
+            "path": path,
+            "kind": "file",
+            "size": len(content),
+            "status": "ok",
+            "content": content,
+        }
+
+    monkeypatch.setattr(member_git._Origin, "show_path", show_path)
+    result = await member.service.show(REPOSITORY, ["a", "b"] + ["s"] * 1229)
+    assert result["items"][0]["status"] == result["items"][1]["status"] == "ok"
+    assert len(json.dumps(result).encode()) < member_git.MAX_PAGE_BYTES
+    assert all("status" not in item for item in result["items"][2:])
+
+
+@pytest.mark.asyncio
 async def test_commit_does_not_push(member, seeded):
     repo, repo_path = seeded()
     (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
