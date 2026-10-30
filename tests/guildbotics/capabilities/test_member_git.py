@@ -2288,7 +2288,10 @@ async def test_current_workspace_exchanges_bundles_and_reports_readiness(
         assert call.cwd != repo_path
         if "--" in call.args:
             assert call.args[call.args.index("--") + 1].endswith(".bundle")
-    assert any(call.cwd == repo_path and "unbundle" in call.args for call in host_git)
+    # Every returned tip is already local, so only the refs need updating.
+    assert not any(
+        call.cwd == repo_path and "unbundle" in call.args for call in host_git
+    )
     if operation != "up_to_date":
         assert any(
             call.cwd == repo_path and "create" in call.args and "bundle" in call.args
@@ -2332,6 +2335,165 @@ async def test_current_workspace_retries_a_bundle_with_missing_prerequisites(
     assert requests[1] == set()
     assert f"-{missing} ".encode() in headers[0]
     assert not any(line.startswith(b"-") for line in headers[1].splitlines())
+
+
+def _remote_commit(remote, parent, message):
+    identity = {
+        f"GIT_{role}_{field}": value
+        for role in ("AUTHOR", "COMMITTER")
+        for field, value in (("NAME", "Other"), ("EMAIL", "other@example.com"))
+    }
+    with remote.git.custom_environment(**identity):
+        return remote.git.commit_tree(
+            remote.commit(parent).tree.hexsha, "-p", parent, m=message
+        )
+
+
+def _return_history(mode, member, origin, path):
+    if mode == "current":
+        member_git._send_current(origin, member_git._HostGit(path))
+    else:
+        clone = member_git._GuestGit(member.guest, str(path))
+        member_git._send(origin, clone, origin.refs(*member_git._SHARED_REFS))
+
+
+@pytest.mark.parametrize("mode", ["current", "member"])
+def test_returned_bundles_exclude_the_receivers_history(
+    member, tmp_path, worker_git_seed, monkeypatch, mode
+):
+    repo, path = _current_repo(tmp_path, worker_git_seed)
+    origin = member_git._Origin(
+        tmp_path / "host", REPOSITORY, member.url("owner"), None
+    )
+    remote = member.remote()
+    previous = remote.commit("main").hexsha
+    create = member_git.LocalGit.write_bundle
+    headers = []
+
+    def observed(sender, bundle, revisions):
+        create(sender, bundle, revisions)
+        headers.append(bundle.read_bytes().split(b"\n\n", 1)[0])
+
+    monkeypatch.setattr(member_git.LocalGit, "write_bundle", observed)
+    for index in range(3):
+        tip = _remote_commit(remote, previous, f"remote {index}")
+        remote.git.update_ref("refs/heads/main", tip)
+        origin.fetch(None)
+        _return_history(mode, member, origin, path)
+        assert f"-{previous} ".encode() in headers[-1]
+        assert repo.commit("origin/main").hexsha == tip
+        previous = tip
+    assert len(headers) == 3
+    # Repeating the return with no new history must not write another pack.
+    packs = sorted((Path(repo.git_dir) / "objects" / "pack").glob("*.pack"))
+    _return_history(mode, member, origin, path)
+    assert len(headers) == 3
+    assert sorted((Path(repo.git_dir) / "objects" / "pack").glob("*.pack")) == packs
+
+
+@pytest.mark.parametrize("mode", ["current", "member"])
+def test_shallow_receiver_does_not_advertise_missing_ancestors_as_known(
+    member, tmp_path, mode
+):
+    remote = member.remote()
+    base = remote.commit("main").hexsha
+    tip = _remote_commit(remote, base, "shallow tip")
+    remote.git.update_ref("refs/heads/main", tip)
+    remote.git.update_ref("refs/heads/old", base)
+    path = tmp_path / "shallow"
+    repo = git.Repo.clone_from(member.url("owner"), path, depth=1, branch="main")
+    with pytest.raises(git.GitCommandError):
+        repo.git.cat_file("-e", base)
+    origin = member_git._Origin(
+        tmp_path / "host", REPOSITORY, member.url("owner"), None
+    )
+    origin.fetch(None)
+
+    _return_history(mode, member, origin, path)
+
+    assert repo.commit("origin/old").hexsha == base
+    assert repo.commit("origin/main").hexsha == tip
+
+
+@pytest.mark.asyncio
+async def test_current_push_of_an_existing_ancestor_needs_no_bundle(
+    member, tmp_path, worker_git_seed
+):
+    repo, path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    base = repo.head.commit.hexsha
+    ahead = repo.index.commit("public descendant").hexsha
+    remote = member.remote()
+    # Seed the public descendant before the host first fetches it.
+    repo.git.push("origin", "main")
+    repo.git.switch("-c", "old", base)
+
+    result = await member.service.push(path, workspace_mode="current", cwd=path)
+
+    assert result.pushed
+    assert remote.commit("old").hexsha == base
+    assert repo.commit("origin/main").hexsha == ahead
+    assert repo.commit("origin/old").hexsha == base
+
+
+@pytest.mark.parametrize("mode", ["current", "member"])
+def test_returned_bundle_retries_missing_prerequisites_once(
+    member, tmp_path, worker_git_seed, monkeypatch, mode
+):
+    repo, path = _current_repo(tmp_path, worker_git_seed)
+    remote = member.remote()
+    missing = _remote_commit(remote, remote.commit("main").hexsha, "missing parent")
+    tip = _remote_commit(remote, missing, "remote tip")
+    remote.git.update_ref("refs/heads/main", tip)
+    origin = member_git._Origin(
+        tmp_path / "host", REPOSITORY, member.url("owner"), None
+    )
+    origin.fetch(None)
+    # Model a prerequisite lost after the receiver advertised it.
+    monkeypatch.setattr(member_git, "known_commits", lambda git: {missing})
+    create = member_git.LocalGit.write_bundle
+    headers = []
+
+    def observed(sender, bundle, revisions):
+        create(sender, bundle, revisions)
+        headers.append(bundle.read_bytes().split(b"\n\n", 1)[0])
+
+    monkeypatch.setattr(member_git.LocalGit, "write_bundle", observed)
+
+    _return_history(mode, member, origin, path)
+
+    assert repo.commit("origin/main").hexsha == tip
+    assert len(headers) == 2
+    assert f"-{missing} ".encode() in headers[0]
+    assert not any(line.startswith(b"-") for line in headers[1].splitlines())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected", [True, False])
+async def test_tracking_return_failure_preserves_the_push_failure(
+    member, tmp_path, worker_git_seed, monkeypatch, caplog, rejected
+):
+    repo, path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    if rejected:
+        _advance(member.remotes["owner"], tmp_path, "diverged remote\n")
+    sha = repo.index.commit("local").hexsha
+
+    def fail_return(*args):
+        raise MemberCapabilityError("tracking lock conflict")
+
+    monkeypatch.setattr(member_git, "_send_current", fail_return)
+    with pytest.raises(MemberCapabilityError) as error:
+        await member.service.push(path, workspace_mode="current", cwd=path)
+    if rejected:
+        assert "Failed to push 'main'" in str(error.value)
+        assert "tracking lock conflict" in caplog.text
+        assert member.remote().commit("main").hexsha != sha
+    else:
+        assert "tracking lock conflict" in str(error.value)
+        assert member.remote().commit("main").hexsha == sha
 
 
 def _in_environment(monkeypatch, tmp_path, settings) -> None:

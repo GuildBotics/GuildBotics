@@ -30,6 +30,23 @@ class GitResult(Protocol):
     def stderr(self) -> bytes: ...
 
 
+def known_commits(git: Callable[..., GitResult]) -> set[str]:
+    """Advertise complete histories the receiver can exclude from a bundle.
+
+    A shallow tip does not prove its ancestors are present, so shallow
+    receivers advertise no exclusions. Object-presence checks still let them
+    avoid receiving tips they already hold.
+    """
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() == b"true":
+        return set()
+    listed = git("for-each-ref", "--format=%(objectname) %(objecttype)")
+    return {
+        name
+        for name, kind in (line.split() for line in listed.stdout.decode().splitlines())
+        if kind == "commit"
+    }
+
+
 class LocalGit:
     """Run Git under the local repository's configuration and hooks."""
 
@@ -100,7 +117,9 @@ class LocalGit:
             stdin="".join(f"{name}\n" for name in sorted(names)).encode(),
         )
         held = names & set(present.stdout.decode().splitlines())
-        if head.stdout.decode().strip() in held:
+        if not self(
+            "rev-list", "--max-count=1", ref, "--not", *sorted(held), "--"
+        ).stdout:
             return False
         self.write_bundle(bundle, (ref, *(f"^{name}" for name in sorted(held))))
         return True
@@ -116,7 +135,11 @@ class LocalGit:
             stdin="".join(f"{line}\n" for line in revisions).encode(),
         )
 
-    def update_tracking(self, bundle: Path, refs: Mapping[str, str]) -> None:
+    def verify_bundle(self, bundle: Path) -> bool:
+        """Whether the bundle's prerequisites are present before importing it."""
+        return self("bundle", "verify", str(bundle), ok=range(256)).returncode == 0
+
+    def update_tracking(self, bundle: Path | None, refs: Mapping[str, str]) -> None:
         """Import returned history and update only origin's tracking refs.
 
         As with a fetch without prune, unrelated and deleted remote refs in
@@ -124,7 +147,8 @@ class LocalGit:
         """
         if any(not ref.startswith("refs/remotes/origin/") for ref in refs):
             raise GitError("Only origin tracking references may be updated.")
-        self("bundle", "unbundle", str(bundle))
+        if bundle is not None:
+            self("bundle", "unbundle", str(bundle))
         self(
             "update-ref",
             "--no-deref",

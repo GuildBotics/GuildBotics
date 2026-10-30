@@ -42,7 +42,7 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.repository_scope import valid_path
-from guildbotics.local_git import GitError, LocalGit
+from guildbotics.local_git import GitError, GitResult, LocalGit, known_commits
 from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
@@ -86,9 +86,14 @@ _GIT_IDLE = (
     'p=$(git rev-parse --git-path "$state") || exit 2; '
     '[ ! -e "$p" ] || exit 1; done'
 )
+#: Distinguish a missing prerequisite from an import or reference-update failure.
+_BUNDLE_PREREQUISITES_MISSING = 3
 #: Store a bundle read from stdin in the clone, without touching its references.
 _UNBUNDLE = (
-    'f="$(mktemp)" || exit 1; cat >"$f" && git bundle unbundle "$f" >/dev/null;'
+    'f="$(mktemp)" || exit 1; cat >"$f" || { rm -f "$f"; exit 1; }; '
+    'git bundle verify "$f" >/dev/null || { rm -f "$f"; '
+    f"exit {_BUNDLE_PREREQUISITES_MISSING}; }}; "
+    'git bundle unbundle "$f" >/dev/null;'
     ' s=$?; rm -f "$f"; exit $s'
 )
 #: Replace the clone's remote-tracking references with those read from stdin.
@@ -737,6 +742,7 @@ class MemberGitWorkspaceService:
             ensure_chat_current(self.person.person_id)
             credential = await self.code.git_credential()
             origin.fetch(credential)
+            push_failed = False
             try:
                 sha = (
                     _receive(source, origin, branch)
@@ -751,10 +757,20 @@ class MemberGitWorkspaceService:
                     origin.git("update-ref", tracking, sha)
                     if isinstance(source, _GuestGit):
                         source("update-ref", tracking, sha)
+            except Exception:
+                push_failed = True
+                raise
             finally:
                 if isinstance(source, _HostGit):
                     # A rejected push still reports the fetched remote history.
-                    _send_current(origin, source)
+                    try:
+                        _send_current(origin, source)
+                    except Exception as exc:
+                        if not push_failed:
+                            raise
+                        self.logger.warning(
+                            "Could not return origin tracking refs: %s", exc
+                        )
         pull_requests: list[dict[str, Any]] = []
         pull_requests_error = None
         try:
@@ -1111,8 +1127,8 @@ def _object_name(output: bytes) -> str:
     return name
 
 
-def _present(clone: _GuestGit, names: Iterable[str]) -> set[str]:
-    """Which of ``names`` the clone holds, as far as it says."""
+def _present(clone: Callable[..., GitResult], names: Iterable[str]) -> set[str]:
+    """Which of ``names`` the repository holds, as far as it says."""
     asked = set(names)
     listed = clone(
         "cat-file",
@@ -1142,12 +1158,21 @@ def _send_objects(origin: _Origin, clone: _GuestGit, refs: Mapping[str, str]) ->
     held = _present(clone, refs.values())
     wanted = sorted(ref for ref, name in refs.items() if name not in held)
     if wanted:
+        known = _present(origin.git, known_commits(clone))
         with host_temporary_directory("guildbotics-bundle-") as tmp:
             bundle = Path(tmp, "send.bundle")
             origin.git.write_bundle(
-                bundle, (*wanted, *(f"^{name}" for name in sorted(held)))
+                bundle, (*wanted, *(f"^{name}" for name in sorted(known)))
             )
-            clone.run(("sh", "-c", _UNBUNDLE), stdin=bundle)
+            received = clone.run(
+                ("sh", "-c", _UNBUNDLE),
+                stdin=bundle,
+                ok=(0, _BUNDLE_PREREQUISITES_MISSING),
+            )
+            if received.returncode == _BUNDLE_PREREQUISITES_MISSING:
+                bundle.unlink()
+                origin.git.write_bundle(bundle, wanted)
+                clone.run(("sh", "-c", _UNBUNDLE), stdin=bundle)
 
 
 def _reusable_checkout(
@@ -1225,14 +1250,24 @@ def _receive_current(origin: _Origin, user: LocalGit, branch: str) -> str:
 
 
 def _send_current(origin: _Origin, user: LocalGit) -> None:
-    """Return origin's fetched tracking refs and history in a bundle."""
+    """Return tracking refs and only the history the user's repository lacks."""
     refs = origin.refs("refs/remotes/origin/")
     if not refs:
         return
+    held = _present(user, refs.values())
+    wanted = sorted(ref for ref, name in refs.items() if name not in held)
     with host_temporary_directory("guildbotics-bundle-") as tmp:
-        bundle = Path(tmp, "send.bundle")
-        origin.git.write_bundle(bundle, sorted(refs))
         try:
+            bundle = None
+            if wanted:
+                known = _present(origin.git, known_commits(user))
+                bundle = Path(tmp, "send.bundle")
+                origin.git.write_bundle(
+                    bundle, (*wanted, *(f"^{name}" for name in sorted(known)))
+                )
+                if not user.verify_bundle(bundle):
+                    bundle.unlink()
+                    origin.git.write_bundle(bundle, wanted)
             user.update_tracking(bundle, refs)
         except GitError as exc:
             raise MemberCapabilityError(str(exc)) from exc
