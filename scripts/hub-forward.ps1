@@ -24,8 +24,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskName = 'hub-forward-' + $identity.User.Value
-$directory = Join-Path $env:LOCALAPPDATA 'hub-forward'
-$runner = Join-Path $directory 'run.ps1'
 $shell = Join-Path $PSHOME 'powershell.exe'
 
 if ($Action -eq 'status') {
@@ -59,13 +57,27 @@ if ($Action -eq 'install') {
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) {
     Stop-ScheduledTask -TaskName $taskName
-    # Kill the task's process tree before replacing the runner or starting another.
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    # Stopping the task ends only the process it started, so its loop and ssh
+    # would outlive it. They end a generation at a time: each is gone before
+    # its children are listed, so none can start a child after the list. The
+    # last argument, the encoded loop, is in the console's and the loop's
+    # command lines alike.
+    $loop = ($existing.Actions[0].Arguments -split ' ')[-1]
+    $generation = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($loop) })
+    while ($generation) {
+        $generation | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Wait-Process -Id $generation.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+        $ended = Get-Date
+        # A child starts while its parent runs; any other process naming the
+        # parent's ID names an earlier or later holder of that ID.
+        $generation = @(Get-CimInstance Win32_Process | Where-Object {
+            $child = $_
+            $parent = $generation | Where-Object ProcessId -eq $child.ParentProcessId
+            $parent -and $parent.CreationDate -le $child.CreationDate -and $child.CreationDate -lt $ended })
+    }
 }
-if ($Action -eq 'uninstall') {
-    if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
-    return
-}
+if ($Action -eq 'uninstall') { return }
 # Encode arguments as PowerShell literals, without evaluating any user text.
 function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") + "'" }
 $arguments = ($sshArgs | ForEach-Object { Quote-Literal $_ }) -join ', '
@@ -78,10 +90,13 @@ while (`$true) {
     Start-Sleep -Seconds 15
 }
 "@
-New-Item -ItemType Directory -Path $directory -Force | Out-Null
-# UTF-8 BOM lets Windows PowerShell 5.1 read non-ASCII paths.
-[IO.File]::WriteAllText($runner, $source, (New-Object Text.UTF8Encoding($true)))
-$taskAction = New-ScheduledTaskAction -Execute $shell -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runner`""
+# The loop travels in the task itself: a file written here may be invisible to
+# the task, as AppData writes of a process in a packaged (MSIX) app are.
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
+# -WindowStyle Hidden still shows the console as PowerShell starts; a headless
+# console has no window to show.
+$conhost = Join-Path $env:windir 'System32\conhost.exe'
+$taskAction = New-ScheduledTaskAction -Execute $conhost -Argument "--headless `"$shell`" -NoProfile -NonInteractive -EncodedCommand $encoded"
 $user = $identity.Name
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
