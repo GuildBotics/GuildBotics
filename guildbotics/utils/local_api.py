@@ -92,13 +92,22 @@ def local_api_proof(digest: str, nonce: str, token_id: str) -> str:
     return hmac.new(digest.encode(), message.encode(), hashlib.sha256).hexdigest()
 
 
-def client_token(port: int) -> str | None:
-    """The credential this machine holds for the server on ``port``: the
-    owner token file where the server runs, else the consent token."""
+def client_tokens(port: int, *, consent: bool) -> Iterator[str]:
+    """The credentials this machine holds for the server on ``port``: the
+    owner token file of a server that ran here, then, with ``consent``, the
+    consent token.
+
+    Which one the server on the port knows only its proof can tell: an owner
+    file outlives its server, and the port may now lead to the Hub. The
+    keychain is read only when the owner file is missing or not taken.
+    """
     try:
-        return owner_token_path(port).read_text("utf-8").strip() or None
+        if owner := owner_token_path(port).read_text("utf-8").strip():
+            yield owner
     except OSError:
         pass
+    if not consent:
+        return
     from keyring.errors import KeyringError
 
     from guildbotics.utils.keychain import SecretStoreError, system_keychain
@@ -106,9 +115,11 @@ def client_token(port: int) -> str | None:
     # A machine without a usable keychain (no backend, locked over SSH) holds
     # no consent token: its callers then run where they are.
     try:
-        return system_keychain().get_password(_KEYCHAIN_SERVICE, _account(port))
+        token = system_keychain().get_password(_KEYCHAIN_SERVICE, _account(port))
     except SecretStoreError, KeyringError:
-        return None
+        return
+    if token:
+        yield token
 
 
 def keep_client_token(port: int, token: str) -> None:
@@ -124,10 +135,18 @@ def _account(port: int) -> str:
 
 @contextmanager
 def connect_local_api(
-    *, headers: dict[str, str] | None = None, timeout: float | None
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float | None,
+    consent: bool = False,
 ) -> Iterator[httpx.Client | None]:
     """Yield a client carrying this machine's credential, or None without
     sending it.
+
+    Without ``consent`` only the owner file is offered, so only the server
+    running on this machine can answer: a caller that hands over this
+    machine's paths or secrets needs that one. With it, the consent token
+    reaches the server the port leads to, the Hub's through a forward.
 
     Whatever listens on the port first sees only a token id and a fresh nonce,
     and the token is attached only after it answers with the proof that it
@@ -137,23 +156,20 @@ def connect_local_api(
     holds the port.
     """
     port = server_port()
-    token = client_token(port)
-    parsed = parse_token(token) if token else None
-    if token is None or parsed is None:
-        yield None
-        return
     with httpx.Client(
         base_url=base_url(port) + API_PREFIX,
         headers=headers,
         trust_env=False,
         timeout=timeout,
     ) as client:
-        if not _proves_token(client, *parsed):
-            yield None
-            return
-        # Later requests usually reuse the connection the proof came over.
-        client.headers["Authorization"] = f"Bearer {token}"
-        yield client
+        for token in client_tokens(port, consent=consent):
+            parsed = parse_token(token)
+            if parsed is not None and _proves_token(client, *parsed):
+                # Later requests usually reuse the connection the proof came over.
+                client.headers["Authorization"] = f"Bearer {token}"
+                yield client
+                return
+        yield None
 
 
 def _proves_token(client: httpx.Client, token_id: str, digest: str) -> bool:

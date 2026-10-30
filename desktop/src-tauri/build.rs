@@ -6,6 +6,7 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "backend_entry",
             "restart_app",
+            "enter_again",
             "bootstrap_log",
             "cli_agent_skill_statuses",
             "force_update_cli_agent_skill",

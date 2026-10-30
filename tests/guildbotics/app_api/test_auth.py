@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -347,15 +348,18 @@ def test_a_session_may_consent_with_its_csrf_value(app):
     assert client.post("/apps/authorizations", json=CONSENT).status_code == 403
 
 
-def test_a_session_in_use_is_renewed_and_an_idle_one_expires(app, monkeypatch):
-    used = browser_client(app)
-    idle = browser_client(app)
-    start = auth._now()
-    monkeypatch.setattr(auth, "_now", lambda: start + auth.SESSION_SECONDS * 0.6)
-    assert used.get("/config/status").status_code == 200
-    monkeypatch.setattr(auth, "_now", lambda: start + auth.SESSION_SECONDS * 1.1)
-    assert used.get("/config/status").status_code == 200
-    assert idle.get("/config/status").status_code == 401
+def test_a_session_ends_after_its_time_however_much_it_is_used(app, monkeypatch):
+    client = browser_client(app)
+    cookie = f"{app.state.auth.cookie}={client.cookies[app.state.auth.cookie]}"
+    start = time.time()
+    for day, status in ((18, 200), (29, 200), (31, 401)):
+        # The server and the browser's cookie jar both read this clock.
+        monkeypatch.setattr(time, "time", lambda day=day: start + day * 24 * 3600)
+        answer = client.get("/config/status")
+        assert answer.status_code == status, day
+        assert "set-cookie" not in answer.headers
+    # The server ends it too, for a client that keeps sending the cookie.
+    assert client.get("/config/status", headers={"Cookie": cookie}).status_code == 401
 
 
 def test_each_port_has_its_own_session_cookie(workspace):

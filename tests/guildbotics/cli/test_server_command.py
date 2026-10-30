@@ -15,7 +15,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.cli import server
 from guildbotics.utils import local_api
-from guildbotics.utils.local_api import client_token, owner_token_path
+from guildbotics.utils.local_api import client_tokens, owner_token_path
 from tests.guildbotics.app_api.owner import ORIGIN, browser_client
 
 
@@ -120,8 +120,8 @@ def test_connect_keeps_the_token_the_consent_gives(app, monkeypatch):
     monkeypatch.setattr(server.webbrowser, "open", _consent(app, "allow"))
     result = CliRunner().invoke(server.connect, [])
     assert result.exit_code == 0, result.output
-    token = client_token(8765)
-    assert token is not None and token.startswith("gbt_")
+    [token] = client_tokens(8765, consent=True)
+    assert token.startswith("gbt_")
     anonymous = TestClient(app, base_url=ORIGIN + "/api")
     answer = anonymous.get("/health", headers={"Authorization": f"Bearer {token}"})
     assert answer.status_code == 200
@@ -131,7 +131,7 @@ def test_connect_keeps_nothing_when_the_owner_denies(app, monkeypatch):
     monkeypatch.setattr(server.webbrowser, "open", _consent(app, "deny"))
     result = CliRunner().invoke(server.connect, [])
     assert result.exit_code != 0
-    assert client_token(8765) is None
+    assert list(client_tokens(8765, consent=True)) == []
 
 
 def test_the_machine_name_fits_the_consent_rules(monkeypatch):

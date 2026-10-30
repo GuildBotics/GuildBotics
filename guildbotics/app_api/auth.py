@@ -189,7 +189,7 @@ class ServerAuth:
             if scheme.lower() != "bearer" or not self._known_token(token):
                 raise AppApiError("unauthorized", status_code=401)
             return
-        csrf = self._session_csrf(request.cookies.get(self.cookie), renew=True)
+        csrf = self._session_csrf(request.cookies.get(self.cookie))
         if csrf is None:
             raise AppApiError("unauthorized", status_code=401)
         if request.method not in _SAFE_METHODS and not hmac.compare_digest(
@@ -330,22 +330,13 @@ class ServerAuth:
             and hmac.compare_digest(token.digest.encode(), parsed[1].encode())
         )
 
-    def _session_csrf(self, cookie: str | None, *, renew: bool = False) -> str | None:
-        """The CSRF value of the cookie's live session. A session in use lives
-        on: once half its time has passed, a request renews it, so a screen
-        left open (a Desktop window for months) never finds itself signed out.
-        """
-        key = _digest(cookie) if cookie else ""
-        session = self._records.sessions.get(key)
+    def _session_csrf(self, cookie: str | None) -> str | None:
+        """The CSRF value of the cookie's live session. A session lasts its
+        ``SESSION_SECONDS`` however much it is used, as Branvil's does; the
+        screen then says how to enter again."""
+        session = self._records.sessions.get(_digest(cookie) if cookie else "")
         if session is None or session.expires_at <= _now():
             return None
-        if renew and session.expires_at - _now() < SESSION_SECONDS / 2:
-            with self._lock:
-                records = self._records.model_copy(deep=True)
-                records.sessions[key] = _Session(
-                    csrf=session.csrf, expires_at=_now() + SESSION_SECONDS
-                )
-                self._save(records)
         return session.csrf
 
     def _keep_owner_token(self) -> None:

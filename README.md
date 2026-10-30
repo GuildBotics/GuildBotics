@@ -593,7 +593,7 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
 ssh <Hub> guildbotics open --print
 ```
 
-**Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain (connecting the same machine again revokes its previous token).
+**Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain, and `guildbotics open` on that machine uses it (connecting the same machine again revokes its previous token).
 
 In a browser, a few parts of the screens differ:
 

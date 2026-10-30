@@ -22,6 +22,7 @@
     "allow-poll-clipboard",
     "allow-open-main-window",
     "allow-set-tray-labels",
-    "allow-quit-app"
+    "allow-quit-app",
+    "allow-enter-again"
   ]
 }

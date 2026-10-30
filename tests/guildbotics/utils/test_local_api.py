@@ -23,7 +23,7 @@ from guildbotics.utils.local_api import (
     API_PREFIX,
     PORT_ENV,
     PROOF_PATH,
-    client_token,
+    client_tokens,
     connect_local_api,
     keep_client_token,
     local_api_proof,
@@ -151,6 +151,21 @@ def test_an_impostor_never_receives_the_token(impostor):
     _assert_only_a_nonce_was_sent(impostor)
 
 
+def test_an_impostor_receives_neither_token_a_machine_holds(impostor):
+    consent = new_token()[2]
+    keep_client_token(server_port(), consent)
+    with connect_local_api(timeout=5.0, consent=True) as client:
+        assert client is None
+    impostor.release.set()
+    assert impostor.finished.wait(10), "the proof handler did not finish"
+    assert impostor.requests
+    for path, headers, body in impostor.requests:
+        assert path == API_PREFIX + PROOF_PATH
+        for token in (TOKEN, consent):
+            assert token not in json.dumps(headers) and token.encode() not in body
+        assert json.loads(body).keys() == {"token_id", "nonce"}
+
+
 def test_the_cli_runs_locally_instead_of_delegating_to_an_impostor(
     impostor, machine_state
 ):
@@ -219,6 +234,50 @@ def test_a_token_the_server_does_not_know_is_not_sent(genuine):
     assert [request.url.path for request in genuine] == [API_PREFIX + PROOF_PATH]
 
 
+def test_an_owner_file_left_by_an_earlier_server_does_not_hide_the_consent(genuine):
+    # The port now leads to a server this machine holds a consent token for,
+    # while a server that once ran here left its own owner file behind.
+    consent = owner_token_path(8765).read_text("utf-8").strip()
+    keep_client_token(8765, consent)
+    _hold_token(8765)
+    with connect_local_api(timeout=5.0, consent=True) as client:
+        assert client is not None
+        assert client.get("/health").status_code == 200
+    stale, proven, health = genuine
+    assert [stale.url.path, proven.url.path] == [API_PREFIX + PROOF_PATH] * 2
+    assert "authorization" not in stale.headers
+    assert "authorization" not in proven.headers
+    assert health.headers["authorization"] == f"Bearer {consent}"
+
+
+def test_the_keychain_is_not_read_when_the_owner_file_is_taken(genuine, monkeypatch):
+    from guildbotics.utils import keychain
+
+    def unreachable() -> None:
+        pytest.fail("the keychain was read")
+
+    monkeypatch.setattr(keychain, "system_keychain", unreachable)
+    with connect_local_api(timeout=5.0, consent=True) as client:
+        assert client is not None
+
+
+def test_only_this_machines_server_is_reached_without_consent(genuine, monkeypatch):
+    # A caller handing over this machine's paths or secrets must not reach the
+    # server the consent token is for, however the port leads there.
+    from guildbotics.utils import keychain
+
+    keep_client_token(8765, owner_token_path(8765).read_text("utf-8").strip())
+    _hold_token(8765)
+
+    def unreachable() -> None:
+        pytest.fail("the keychain was read")
+
+    monkeypatch.setattr(keychain, "system_keychain", unreachable)
+    with connect_local_api(timeout=5.0) as client:
+        assert client is None
+    assert [request.url.path for request in genuine] == [API_PREFIX + PROOF_PATH]
+
+
 def test_each_proof_uses_a_fresh_nonce(genuine):
     for _ in range(2):
         with connect_local_api(timeout=5.0) as client:
@@ -245,13 +304,15 @@ def test_the_proof_route_signs_only_for_a_known_token():
     assert answer.status_code == 401
 
 
-def test_the_owner_file_wins_over_the_keychain_token(machine_state):
-    assert client_token(8765) is None
+def test_the_machine_offers_its_owner_file_then_its_consent_token(machine_state):
+    assert list(client_tokens(8765, consent=True)) == []
     keep_client_token(8765, "consent-token")
-    assert client_token(8765) == "consent-token"
+    assert list(client_tokens(8765, consent=True)) == ["consent-token"]
+    assert list(client_tokens(8765, consent=False)) == []
     _hold_token(8765)
-    assert client_token(8765) == TOKEN
-    assert client_token(8766) is None
+    assert list(client_tokens(8765, consent=True)) == [TOKEN, "consent-token"]
+    assert list(client_tokens(8765, consent=False)) == [TOKEN]
+    assert list(client_tokens(8766, consent=True)) == []
 
 
 @pytest.mark.parametrize(
@@ -302,6 +363,6 @@ def test_a_machine_without_a_usable_keychain_holds_no_consent_token(monkeypatch)
             raise NoKeyringError("no backend")
 
     monkeypatch.setattr(keychain, "system_keychain", Unusable)
-    assert client_token(8765) is None
-    with connect_local_api(timeout=5.0) as client:
+    assert list(client_tokens(8765, consent=True)) == []
+    with connect_local_api(timeout=5.0, consent=True) as client:
         assert client is None

@@ -1483,9 +1483,11 @@ a monorepo on purpose.
     bytes, single use, 60 s, in memory as its hash; `?next=` names a page of this
     server). The code is in the fragment, so it is in no request line, log, or
     `Referer`. The page removes it from the address bar and exchanges it at
-    `POST /api/session` for the session cookie `guildbotics_session` (`HttpOnly`,
-    `SameSite=Strict`, 30 days; the name differs from Branvil's `branvil_session`
-    because cookies are not separated by port) and its CSRF value. Every non-GET
+    `POST /api/session` for the session cookie `guildbotics_session_<port>` (`HttpOnly`,
+    `SameSite=Strict`, 30 days; the port is in the name because cookies are not
+    separated by port, which also keeps it apart from Branvil's `branvil_session`) and
+    its CSRF value. As in Branvil, a session ends after its 30 days however much it is
+    used, and the screen then says how to enter again. Every non-GET
     request made with the cookie must carry `X-GuildBotics-CSRF`, else
     `403 csrf_mismatch`. `guildbotics open [--print]` is that client on the command
     line; the Desktop host is another.
@@ -1496,8 +1498,11 @@ a monorepo on purpose.
     the CLI exchanges the single-use, 60-second code bound to its name, address, and
     challenge at `POST /api/apps/token` for a token labelled `app:<client>`, replacing
     that client's previous one. The token is kept in the machine's OS keychain
-    (service `guildbotics-server`). A client uses `owner.token` when it can read it,
-    else that token (`utils/local_api.client_token`).
+    (service `guildbotics-server`). `guildbotics open` offers `owner.token`, then that
+    token, and uses the first the server proves it knows (`utils/local_api.client_tokens`):
+    an owner file outlives its server, and the port may lead to the Hub by then. `run`
+    delegation and macOS Hub Secret hand over this machine's paths and secrets, so they
+    offer `owner.token` alone: only the server running on this machine knows it.
   - The guard runs before every route, the screens included: `Host` must be
     `127.0.0.1`, `localhost`, or `[::1]` with the port (else `421 misdirected`, against
     DNS rebinding), and an `Origin` must be that same origin (else
@@ -1514,7 +1519,7 @@ a monorepo on purpose.
   only to a process that showed it holds the port or knows the token.
   - Desktop starts the sidecar on the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by
     default), which the sidecar reads from the environment it inherits. The sidecar
-    writes its owner token file, binds, listens, and then announces the port as the
+    binds, listens, writes its owner token file, and then announces the port as the
     only line its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards
     stdout is stderr. It announces before loading the workspace, whose secrets can wait
     on a keychain prompt, so the host's deadline measures binding only. The host keeps
@@ -1535,11 +1540,14 @@ a monorepo on purpose.
     `http://127.0.0.1:<port>/*`), while the bootstrap page's own commands
     (`backend_entry`, `bootstrap_log`, `restart_app`) stay with the bundled page. The
     sidecar starts again only with the app, so the bootstrap page shows why it stopped
-    and offers to restart the app (`restart_app`). While the App is not shown, quit
+    and offers to restart the app (`restart_app`). A window whose session has ended
+    goes back to its bootstrap page (`enter_again`, which navigates only to the page the
+    host recorded for that window) and enters again. While the App is not shown, quit
     requests go straight to `quit_app`.
   - Host clients (`guildbotics run` delegation, `guildbotics open`, and macOS Hub
-    Secret) go through `utils/local_api.py`'s `connect_local_api()`. It first posts the
-    token's id and a fresh 32-byte nonce to `/api/local-api/proof`, which takes no
+    Secret) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
+    offers, it first posts the token's id and a fresh 32-byte nonce to
+    `/api/local-api/proof`, which takes no
     token and answers `HMAC-SHA256(sha256(secret), "guildbotics-local-api-proof\n" +
     nonce + "\n" + id)`. Only a matching proof attaches the token; a process that took
     the port while the server was down knows no digest, so it, a replayed answer, a

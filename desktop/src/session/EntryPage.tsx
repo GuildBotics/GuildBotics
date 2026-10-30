@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { enterAgain } from "../api/backend";
 import { onConnectionLost, type ConnectionLoss } from "../api/client";
+import { isTauriRuntime } from "../desktopWindow";
 import { AuthorizeView } from "./AuthorizeView";
 import { EnterView } from "./EnterView";
 import { AUTHORIZE_PATH, ENTER_PATH, SESSION_QUERY } from "./entryPages";
@@ -35,8 +37,11 @@ export function EntryPage({ children }: { children: ReactNode }) {
 
 /**
  * Show `children` while the session holds. A request that finds it gone shows
- * how to enter again; one that finds the server unreachable keeps the screen
- * under a notice until a retry reaches it, and then reloads what it shows.
+ * how to enter again, or in a Desktop window enters again itself, but only
+ * for a session it once took up: a window that cannot keep one stops at the
+ * guide instead of entering over and over. A request that finds the server
+ * unreachable keeps the screen under a notice until a retry reaches it, and
+ * then reloads what it shows.
  */
 function AppSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -48,7 +53,7 @@ function AppSession({ children }: { children: ReactNode }) {
     return (
       <>
         <QuitsThrough />
-        <NoSessionGuide />
+        {session.data && isTauriRuntime() ? <EnterAgain /> : <NoSessionGuide />}
       </>
     );
   }
@@ -76,4 +81,13 @@ function AppSession({ children }: { children: ReactNode }) {
       {notice}
     </>
   );
+}
+
+/** A Desktop window enters again through its bootstrap page, as it did first. */
+function EnterAgain() {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    enterAgain().catch(() => setFailed(true));
+  }, []);
+  return failed ? <NoSessionGuide /> : <Connecting />;
 }

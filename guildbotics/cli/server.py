@@ -43,7 +43,7 @@ def open_screens(print_link: bool) -> None:
 
     The browser enters with a single-use link that expires after 60 seconds.
     """
-    with connect_local_api(timeout=10.0) as client:
+    with connect_local_api(timeout=10.0, consent=True) as client:
         if client is None:
             raise click.ClickException(t("cli.server.unreachable"))
         try:

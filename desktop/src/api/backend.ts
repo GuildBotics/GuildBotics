@@ -96,6 +96,12 @@ export function letQuitsThrough(): () => void {
   return () => void listening.then((stop) => stop());
 }
 
+/** Send this Desktop window back to its bootstrap page, which enters again. */
+export async function enterAgain() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("enter_again");
+}
+
 export async function restartApp() {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("restart_app");

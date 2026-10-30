@@ -291,6 +291,20 @@ fn restart_app(app: tauri::AppHandle) {
     app.request_restart();
 }
 
+/// Send the window back to its bootstrap page, which enters the UI again with
+/// a fresh entry link: the way back once its session has ended. The page is
+/// the bundled one the host recorded, whichever page asks; without one the
+/// window stays where it is and says how to enter.
+#[tauri::command]
+fn enter_again(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    let state = app.state::<BackendState>();
+    let page = lock(&state.bootstrap_pages)
+        .get(webview.label())
+        .cloned()
+        .ok_or("no bootstrap page")?;
+    webview.navigate(page).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn bootstrap_log(state: tauri::State<'_, BackendState>) -> serde_json::Value {
     let tail = read_boot_log_tail(&state.boot_log_path).unwrap_or_default();
@@ -1823,6 +1837,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend_entry,
             restart_app,
+            enter_again,
             bootstrap_log,
             cli_agent_skill_statuses,
             force_update_cli_agent_skill,
