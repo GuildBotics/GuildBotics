@@ -266,7 +266,7 @@ MEMBER_ARGUMENTS: dict[str, tuple[str, frozenset[str] | None, str]] = {
         frozenset({"ticket create"}),
         "guildbotics.capabilities.member_repository.ticket_create",
     ),
-    "interactive": (CONTENT, frozenset({"ticket create"}), ""),
+    "interactive": (CONTENT, frozenset({"ticket create", "ticket update"}), ""),
     "lane": (CONTENT, frozenset({"ticket create"}), ""),
     "add_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),
     "remove_blocked_by": (SERVICE, frozenset({"ticket update"}), _SCOPE),

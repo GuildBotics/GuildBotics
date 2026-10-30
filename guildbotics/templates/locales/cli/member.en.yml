@@ -26,5 +26,8 @@ en:
     required: "%{reason} Run guildbotics member chat updates --person %{person}, read its result, and reconsider the operation before retrying."
   ticket_assignee: "No ticket-service account for roster member %{person}."
   ticket_interactive: "Changing the ticket interactive mode"
+  ticket_create: "Creating a ticket"
+  ticket_state: "Changing the ticket state to '%{state}'"
+  human_approval_required: "%{action} requires a human instruction or approval. Ask the human first, then re-run with --human-approved."
   ticket_update_empty: "ticket update needs at least one of body, title, labels, state, parent, blockers, or interactive mode."
   ticket_update_options: "ticket update needs --content-stdin/--content-file, --title, --add-label, --remove-label, --state, --parent, --add-blocked-by, --remove-blocked-by, or --interactive/--no-interactive."

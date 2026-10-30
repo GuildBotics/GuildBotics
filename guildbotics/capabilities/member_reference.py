@@ -140,7 +140,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "providers refuse either flag. Reads and updates return the ticket's own "
                 "interactive setting and interactive_ancestor URL; clearing the setting "
                 "does not override an interactive ancestor. Report that inherited state "
-                "to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した "
+                "to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した"
                 "場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。",
             ),
             (
