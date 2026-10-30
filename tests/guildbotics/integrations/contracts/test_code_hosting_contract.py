@@ -13,6 +13,7 @@ remote of. What a provider cannot do at all it refuses as unsupported.
 from __future__ import annotations
 
 import io
+import asyncio
 import zipfile
 
 import pytest
@@ -86,6 +87,42 @@ async def _ticket(host: Harness, title: str = "Fix login") -> str:
 
 async def _head(host: Harness, url: str) -> str:
     return (await host.code.read("pull_requests", url)).items[0]["head_sha"]
+
+
+@pytest.mark.asyncio
+async def test_only_the_call_that_drafted_a_pr_reports_a_conversion(host: Harness):
+    url = (await _pull_request(host)).target.url
+    results = await asyncio.gather(
+        host.code.convert_pull_request_to_draft(url),
+        host.other_code.convert_pull_request_to_draft(url),
+    )
+    assert sorted(results) == [False, True]
+    assert (await host.code.read("pull_requests", url)).items[0]["draft"]
+    before = len(host.writes)
+    assert await host.code.convert_pull_request_to_draft(url) is False
+    assert host.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_draft_conversion_refuses_a_write_outside_scope(host: Harness):
+    # The harness' other repository need not hold a PR: the write must be
+    # refused by scope before even trying to convert it.
+    url = (await _pull_request(host)).target.url.replace(
+        host.repository, host.elsewhere
+    )
+    before = len(host.writes)
+    with pytest.raises(ServiceError, match="refused"):
+        await host.code.convert_pull_request_to_draft(url)
+    assert host.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_a_closed_pull_request_is_not_drafted(host: Harness):
+    url = (await _pull_request(host)).target.url
+    host.merge(url)
+    before = len(host.writes)
+    assert await host.code.convert_pull_request_to_draft(url) is False
+    assert host.writes[before:] == []
 
 
 @pytest.mark.asyncio

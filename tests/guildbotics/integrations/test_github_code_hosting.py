@@ -15,7 +15,11 @@ from guildbotics.capabilities.artifact_archive import MAX_ARTIFACT_BYTES
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_context import member_context
 from guildbotics.entities.team import Person, Project, Role, Team
-from guildbotics.integrations.github.api import GitHubItem
+from guildbotics.integrations.github.api import (
+    GitHubItem,
+    GraphQLUnprocessable,
+    graphql_error,
+)
 from guildbotics.integrations.github.code_hosting_service import (
     GitHubCodeHostingService,
 )
@@ -69,6 +73,71 @@ from tests.guildbotics.member_services import GuestDouble, MemberServices
 PULL = pull_url(7)
 ISSUE = issue_url(42)
 _REPO_API = f"{API}/repos/{REPO}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("another_writer_drafted", [True, False])
+async def test_draft_conversion_reports_only_its_own_transition(
+    monkeypatch, another_writer_drafted
+):
+    service = code_host(ScriptedGitHub(), monkeypatch)
+    reads = []
+
+    async def fetch(item):
+        reads.append(item)
+        return {
+            "node_id": "PR_7",
+            "state": "open",
+            "draft": bool(len(reads) > 1 and another_writer_drafted),
+        }
+
+    async def convert(query, variables):
+        assert variables == {"pullRequest": "PR_7"}
+        raise GraphQLUnprocessable("conversion refused")
+
+    monkeypatch.setattr(service, "fetch", fetch)
+    monkeypatch.setattr(service, "graphql", convert)
+    try:
+        if another_writer_drafted:
+            assert await service.convert_pull_request_to_draft(PULL) is False
+        else:
+            with pytest.raises(ServiceError, match="conversion refused"):
+                await service.convert_pull_request_to_draft(PULL)
+    finally:
+        await service.aclose()
+    assert len(reads) == 2
+
+
+def test_unprocessable_graphql_answers_are_typed_without_exposing_the_response():
+    error = graphql_error([{"type": "UNPROCESSABLE", "message": "private response"}])
+    assert isinstance(error, GraphQLUnprocessable)
+    assert str(error) == t("integrations.github.response.response")
+
+
+@pytest.mark.asyncio
+async def test_a_lost_conversion_response_is_not_mistaken_for_another_writers_draft(
+    monkeypatch,
+):
+    service = code_host(ScriptedGitHub(), monkeypatch)
+    reads = []
+
+    async def fetch(item):
+        reads.append(item)
+        return {"node_id": "PR_7", "state": "open", "draft": len(reads) > 1}
+
+    async def convert(query, variables):
+        # The write may have reached the host. A later draft cannot prove
+        # that someone else made it, so the caller must report the failure.
+        raise ServiceError("transport failed")
+
+    monkeypatch.setattr(service, "fetch", fetch)
+    monkeypatch.setattr(service, "graphql", convert)
+    try:
+        with pytest.raises(ServiceError, match="transport failed"):
+            await service.convert_pull_request_to_draft(PULL)
+    finally:
+        await service.aclose()
+    assert len(reads) == 1
 
 
 @pytest.mark.asyncio

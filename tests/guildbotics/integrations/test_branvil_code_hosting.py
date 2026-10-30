@@ -442,50 +442,55 @@ def _past_the_review_limit(double: BranvilDouble, url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_at_the_review_limit_the_pull_request_is_handed_to_a_human(monkeypatch):
+async def test_review_limit_is_a_read_only_decision_for_the_selector(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code, author="otota")
     _past_the_review_limit(double, url)
     before = len(double.writes)
-
-    assert await _work(code) == []
-
-    path = "/api/v1/repos/acme%2Fdemo/pulls/1"
-    assert double.writes[before:] == [f"PATCH {path}", f"POST {path}/comments"]
-    assert double.pulls[url]["draft"] is True
-    notice = double.entries[url]["comments"][-1]
-    status = WorkflowStatus.from_payload(notice["meta"])
-    assert status is not None
-    assert (status.reason, status.person_id, status.subject) == (
-        "review_limit",
-        MEMBER,
-        url,
-    )
-    assert notice["body"] == "@otota\n\n" + t(
-        "integrations.pull_request_patrol.review_limit_reached", count=3
-    )
-    # Marked ready for review again, the rounds start over.
-    double.ready(url)
-    double.advance("feature")
-    assert await _work(code) == ["pull_request_review"]
+    assert await _work(code) == ["pull_request_review_limit"]
+    [task] = await code.pull_request_candidates()
+    refreshed = await code.refresh_pull_request(task)
+    assert refreshed is not None and refreshed.trigger_reason == task.trigger_reason
+    assert double.writes[before:] == []
+    assert not double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
 
 @pytest.mark.asyncio
-async def test_a_refused_draft_holds_the_pull_request_as_failed(monkeypatch):
+async def test_a_refused_draft_conversion_is_a_port_failure(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code, author="otota")
-    _past_the_review_limit(double, url)
     double.refuse_draft = True
+    with pytest.raises(ServiceError):
+        await code.convert_pull_request_to_draft(url)
+    assert not double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
-    assert await _work(code) == []
 
-    notice = double.entries[url]["comments"][-1]
-    assert WorkflowStatus.from_payload(notice["meta"]).reason == "failed"  # type: ignore[union-attr]
-    assert (
-        t("integrations.pull_request_patrol.review_limit_draft_failed", count=3)
-        in (notice["body"])
-    )
-    assert await _work(code) == []
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_to_draft", [True, False])
+async def test_draft_conversion_rechecks_a_revision_lost_to_another_writer(
+    monkeypatch, changed_to_draft
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code, author="otota")
+    call = code.call
+    revisions = []
+
+    async def racing(method, path, body=None, **kwargs):
+        if method == "PATCH":
+            revisions.append(body["revision"])
+            if len(revisions) == 1:
+                # The human or another reviewer wins after this caller read.
+                double.pulls[url]["draft"] = changed_to_draft
+                double.pulls[url]["revision"] += 1
+        return await call(method, path, body, **kwargs)
+
+    monkeypatch.setattr(code, "call", racing)
+    assert await code.convert_pull_request_to_draft(url) is (not changed_to_draft)
+    assert revisions == ([1] if changed_to_draft else [1, 2])
+    assert double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
 
 # -- readiness ------------------------------------------------------------
@@ -886,7 +891,7 @@ def _error(status: int, code: str, message: str = "It says no.") -> httpx.Respon
         (_error(400, "label_undefined"), ServiceError, "not defined"),
         (
             _error(409, "conflict"),
-            ServiceError,
+            api.Conflict,
             "Branvil refused GET /api/v1/repos/acme/demo",
         ),
         (_error(503, "unavailable"), ServiceError, "503 unavailable"),

@@ -1935,6 +1935,30 @@ function renderActivity() {
   );
 }
 
+it("shows a PR handed over at the review limit as Activity without a session", async () => {
+  const user = userEvent.setup();
+  const event = {
+    id: "review-limit-1",
+    timestamp: "2026-07-01T11:00:00+00:00",
+    person_id: "alice",
+    type: "pr_draft" as const,
+    title: "PR !7 Draft (review limit)",
+    detail: "Fix login",
+    url: "https://example.com/pr/7",
+    links: [],
+  };
+  vi.mocked(getActivityHistory).mockResolvedValue({
+    ...ACTIVITY_FIXTURE,
+    sessions: [],
+    events: [event],
+  });
+  renderActivity();
+  await user.hover(await screen.findByRole("button", { name: event.title }));
+  expect(await screen.findByText(i18n.t("activity.eventTypes.pr_draft"))).toBeInTheDocument();
+  expect(screen.getByText("Fix login")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: event.url })).toHaveAttribute("href", event.url);
+});
+
 describe("a change the hub did not accept", () => {
   const rejectionEvent = {
     id: "rejection-1",

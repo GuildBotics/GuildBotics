@@ -37,7 +37,7 @@ class _Context:
         await self.tickets.aclose()
 
 
-# All eight provider branches in TicketSelector's host calls. Selection can
+# All provider branches in TicketSelector's host calls. Selection can
 # itself write (done lanes, review limits); every request uses the same client.
 _HOST_CALLS = [
     ("candidates", "pull", "GET", "/api/v1/pulls"),
@@ -48,6 +48,7 @@ _HOST_CALLS = [
     ("failure", "ticket", "POST", ""),
     ("failure", "pull", "POST", ""),
     ("checks", "pull", "POST", ""),
+    ("handover", "pull", "PATCH", "/api/v1/repos/acme/demo/pulls/1"),
 ]
 
 
@@ -115,6 +116,13 @@ async def test_host_ticket_calls_wait_for_recovery_without_a_member_deadline(
         elif phase == "failure":
             with pytest.raises(RuntimeError, match="workflow failed"):
                 await selector.run(context.person, invocation, run_workflow)
+        elif phase == "handover":
+            await selector._hand_over_at_review_limit(context, task)
+            assert double.pulls[pull_url]["draft"]
+            assert (
+                double.entries[pull_url]["comments"][-1]["meta"]["reason"]
+                == "review_limit"
+            )
         else:
             assert (
                 await selector.run(context.person, invocation, run_workflow) == "done"

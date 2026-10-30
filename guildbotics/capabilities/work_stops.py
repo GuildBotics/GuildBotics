@@ -8,6 +8,8 @@ notice in each of its selected chat channels so that someone learns of it. The
 notice carries the stop as its status, which keeps every member from answering
 it. When the run declared recipients and all are active agents, the stop is
 recorded in diagnostics with those recipients instead of posting a notice.
+The host also announces a PR handed to a human at the automatic review limit;
+that stop has its own trace but no agent run or completion status.
 """
 
 from __future__ import annotations
@@ -26,9 +28,11 @@ from guildbotics.runtime.port import ServiceError, WorkflowStatus
 from guildbotics.utils.i18n_tool import t
 
 #: Why the work waits for a person: the member asked something, is blocked, or
-#: its run failed and said so on the item.
-StopReason = Literal["asking", "blocked", "failed"]
+#: its run failed and said so on the item, or the host handed over its PR.
+CompletedStopReason = Literal["asking", "blocked", "failed"]
+StopReason = Literal[CompletedStopReason, "review_limit"]
 STOP_REASONS: tuple[StopReason, ...] = get_args(StopReason)
+COMPLETED_STOP_REASONS: tuple[CompletedStopReason, ...] = get_args(CompletedStopReason)
 
 NOTIFIED_EVENT_TYPE = "work_stop.notified"
 SUPPRESSED_EVENT_TYPE = "work_stop.suppressed"
@@ -75,7 +79,7 @@ def completed_stop(task: Task, run_id: str, team: Team) -> WorkStop | None:
         evidence = store.evidence(run_id)
     except TaskRunError:
         return None
-    if status not in STOP_REASONS:
+    if status not in COMPLETED_STOP_REASONS:
         return None
     members = {person.person_id: person for person in team.members if person.is_active}
     if (
@@ -190,3 +194,5 @@ def _headline(reason: StopReason, **values: str) -> str:
             return t("capabilities.work_stops.blocked", **values)
         case "failed":
             return t("capabilities.work_stops.failed", **values)
+        case "review_limit":
+            return t("capabilities.work_stops.review_limit", **values)

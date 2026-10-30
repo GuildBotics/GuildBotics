@@ -611,6 +611,8 @@ class BranvilDouble:
             case "GET", []:
                 return 200, self._pull(pull)
             case "PATCH", []:
+                if "revision" in body and body["revision"] != pull["revision"]:
+                    raise Refusal(409, "conflict", "The revision changed.")
                 if self.refuse_draft and "draft" in body:
                     raise Refusal(403, "forbidden", "The member may not do that.")
                 for key in ("title", "body", "draft", "tickets"):
@@ -618,6 +620,7 @@ class BranvilDouble:
                         pull[key] = body[key]
                 if body.get("draft") is False:
                     self.ready(url)
+                pull["revision"] += 1
                 return 200, self._pull(pull)
             case "GET", ["activity"]:
                 return 200, self._activity(url)
@@ -940,6 +943,7 @@ class BranvilDouble:
             "state": "open",
             "merged": False,
             "draft": body["draft"],
+            "revision": 1,
             "author": self.actor,
             "ready_at": None if body["draft"] else self.now(),
             "head": body["head"],

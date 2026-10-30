@@ -621,7 +621,10 @@ class GitHubDouble:
         ):
             self.writes.append(f"{request.method} {path}")
         if path == "/graphql":
-            return httpx.Response(200, json={"data": self._graphql(body)})
+            result = self._graphql(body)
+            return httpx.Response(
+                200, json=result if "errors" in result else {"data": result}
+            )
         if path == "/rate_limit":
             return httpx.Response(200, json={"resources": {}})
         if path == "/search/issues":
@@ -1043,6 +1046,13 @@ class GitHubDouble:
             return {"node": {"repository": {"name": name, "owner": {"login": owner}}}}
         if "addReaction" in query:
             return {"addReaction": {"reaction": {"content": variables["content"]}}}
+        if "convertPullRequestToDraft" in query:
+            number = int(variables["pullRequest"].removeprefix("NODE"))
+            pull = self.items[number]
+            if pull["draft"]:
+                return {"errors": [{"type": "UNPROCESSABLE"}]}
+            pull["draft"] = True
+            return {"convertPullRequestToDraft": {"pullRequest": {"isDraft": True}}}
         if "projectV2(number" in query:
             return {"organization": {"projectV2": {"id": "PROJECT"}}}
         if "addProjectV2ItemById" in query:

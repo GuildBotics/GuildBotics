@@ -39,5 +39,6 @@ TRACE_COMPLETED_EVENT_TYPES = frozenset(
         "system.finished",
         "diagnostics.completed",
         "verify.completed",
+        "review_limit.finished",
     }
 )

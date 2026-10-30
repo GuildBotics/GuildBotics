@@ -464,6 +464,7 @@ export type ActivityHistoryEvent = {
     | "pr_create"
     | "pr_merge"
     | "pr_closed"
+    | "pr_draft"
     | "push"
     | "issue_create"
     | "issue_resolve"

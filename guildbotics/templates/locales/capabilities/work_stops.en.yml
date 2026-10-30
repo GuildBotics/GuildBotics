@@ -3,3 +3,4 @@ en:
   blocked: "%{name} cannot go on with %{item} and is waiting for someone to respond there: %{url}"
   failed: "%{name} stopped working on %{item} after an error and is waiting for someone to respond there: %{url}"
   comment: "The member's comment: %{url}"
+  review_limit: "%{name} reached the automatic re-review limit for %{item}. The PR is now a draft and waits for a human to mark it Ready for review: %{url}"

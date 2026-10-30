@@ -21,6 +21,7 @@ from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
     BranvilItem,
+    Conflict,
     interactive,
     segment,
     username,
@@ -500,6 +501,23 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
 
     # -- the pull request patrol --------------------------------------------
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        check_path(self.workspace, item.place, provider=PROVIDER)
+        while True:
+            pull = await self.get(item.api)
+            if pull["draft"] or pull["state"] != "open":
+                return False
+            try:
+                await self.call(
+                    "PATCH", item.api, {"draft": True, "revision": pull["revision"]}
+                )
+            except Conflict:
+                # The revision precondition is checked inside Branvil's
+                # write transaction. Re-read the winner, never claim its work.
+                continue
+            return True
+
     async def pull_request_candidates(self) -> list[Task]:
         """Every open, ready PR in the scope that involves the member and asks
         something of it, in Branvil's order: what waits for least once the
@@ -547,7 +565,6 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             me,
             provider=PROVIDER,
             person_id=self.person.person_id,
-            draft=lambda: self.call("PATCH", item.api, {"draft": True}),
         )
         if task is not None and _name(pull) == me and await self._interactive(pull):
             return None
