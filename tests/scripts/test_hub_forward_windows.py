@@ -60,7 +60,8 @@ def run_powershell(tmp_path, body):
     harness.write_text(HARNESS + body, encoding="utf-8-sig")
     stub = tmp_path / "ssh space ' 東京.ps1"
     stub.write_text(
-        "$args | ConvertTo-Json -Compress | Add-Content -LiteralPath $env:HF_LOG\n"
+        "ConvertTo-Json -InputObject @($args) -Compress | "
+        "Add-Content -LiteralPath $env:HF_LOG -Encoding UTF8\n"
         "exit 255\n",
         encoding="utf-8-sig",
     )
@@ -128,14 +129,27 @@ $updated = [IO.File]::ReadAllText($runner)
     assert not result["remains"]
     assert "23456" not in result["updated"]
     assert "34567" in result["updated"]
-    lines = (tmp_path / "ssh.jsonl").read_text().splitlines()
+    lines = (tmp_path / "ssh.jsonl").read_text(encoding="utf-8-sig").splitlines()
     assert (
         len(lines) == 2
     )  # A failed ssh restarts too, without relying on Task Scheduler.
-    args = json.loads(lines[0])
-    assert args == json.loads(lines[1])
-    assert args.count("-N") == 1
-    assert args[-6:] == [
+    expected_args = [
+        "-N",
+        "-T",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
         "-L",
         "127.0.0.1:12345:127.0.0.1:12345",
         "-L",
@@ -143,14 +157,28 @@ $updated = [IO.File]::ReadAllText($runner)
         "--",
         "user@hub",
     ]
-    for option in (
-        "BatchMode=yes",
-        "StrictHostKeyChecking=yes",
-        "ExitOnForwardFailure=yes",
-        "ServerAliveInterval=15",
-        "ServerAliveCountMax=3",
-    ):
-        assert option in args
+    assert [json.loads(line) for line in lines] == [expected_args, expected_args]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [[], ["-N"], ["-N", "a space", "'東京\\", "$literal%"]],
+)
+def test_ssh_double_records_an_argument_array(tmp_path, args):
+    # Exercise the recorder independently of the generated retry loop. Neither
+    # an empty nor a single-element argument vector may collapse to a scalar.
+    literals = ", ".join("'" + arg.replace("'", "''") + "'" for arg in args)
+    run_powershell(
+        tmp_path,
+        f"""
+$values = @({literals})
+& $env:HF_SSH @values
+@{{}} | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
+""",
+    )
+    lines = (tmp_path / "ssh.jsonl").read_text(encoding="utf-8-sig").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == args
 
 
 @pytest.mark.parametrize(

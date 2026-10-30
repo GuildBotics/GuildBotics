@@ -71,8 +71,9 @@ function Quote-Literal([string]$value) { return "'" + $value.Replace("'", "''") 
 $arguments = ($sshArgs | ForEach-Object { Quote-Literal $_ }) -join ', '
 $source = @"
 `$ErrorActionPreference = 'Stop'
+`$sshArgs = @($arguments)
 while (`$true) {
-    try { & $(Quote-Literal $ssh) @($arguments) }
+    try { & $(Quote-Literal $ssh) @sshArgs }
     catch { [Console]::Error.WriteLine(`$_.Exception.Message) }
     Start-Sleep -Seconds 15
 }
