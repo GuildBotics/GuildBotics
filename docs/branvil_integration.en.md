@@ -150,9 +150,9 @@ powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninsta
 
 The execution-policy override permits the unsigned script for this invocation.
 The task runs only while you are logged in, without a visible console. A small
-PowerShell runner under `%LOCALAPPDATA%\hub-forward` retries ssh after 15 seconds,
-including on failure; the task has no execution time limit. Removing the service
-also removes that runner. macOS stores the definition at
+PowerShell loop, kept in the task's own arguments, retries ssh after 15 seconds,
+including on failure; the task has no execution time limit. Replacing or removing
+the task also ends its ssh. macOS stores the definition at
 `~/Library/LaunchAgents/local.hub-forward.plist` (ssh errors in
 `~/Library/Logs/hub-forward.log`); Linux uses
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service` (logs via

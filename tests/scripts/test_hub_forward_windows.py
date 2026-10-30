@@ -20,8 +20,23 @@ $global:HFexists = $false
 $global:HFcalls = @()
 function Get-ScheduledTask {
     param($TaskName, $ErrorAction)
-    if ($global:HFexists) { [pscustomobject]@{ TaskName=$TaskName; State='Running' } }
+    if ($global:HFexists) {
+        $action = [pscustomobject]@{ Arguments=$global:HFregistration.Action.Argument }
+        [pscustomobject]@{ TaskName=$TaskName; State='Running'; Actions=@($action) }
+    }
 }
+# The task's console (101), its loop (102) and ssh (103), listed children
+# first, and another PowerShell with its ssh.
+function Get-CimInstance {
+    param($ClassName)
+    $task = 'conhost.exe ' + $global:HFregistration.Action.Argument
+    [pscustomobject]@{ ProcessId=103; ParentProcessId=102; CommandLine='ssh.exe' }
+    [pscustomobject]@{ ProcessId=102; ParentProcessId=101; CommandLine='powershell.exe' }
+    [pscustomobject]@{ ProcessId=101; ParentProcessId=1; CommandLine=$task }
+    [pscustomobject]@{ ProcessId=104; ParentProcessId=1; CommandLine=$null }
+    [pscustomobject]@{ ProcessId=105; ParentProcessId=104; CommandLine='ssh.exe' }
+}
+function Stop-Process { param($Id, [switch]$Force, $ErrorAction) $global:HFcalls += "kill $Id" }
 function Stop-ScheduledTask { param($TaskName) $global:HFcalls += 'stop' }
 function Unregister-ScheduledTask {
     param($TaskName, [switch]$Confirm)
@@ -94,39 +109,56 @@ def test_install_update_status_remove_and_retry(tmp_path):
     result = run_powershell(
         tmp_path,
         r"""
+function Get-Loop {
+    $encoded = [regex]::Match($global:HFregistration.Action.Argument, '-EncodedCommand (\S+)$').Groups[1].Value
+    [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+}
 & $env:HF_SCRIPT -Action install -Hub 'user@hub' -Port '12345,23456,12345' | Out-Null
 $initial = $global:HFregistration
-$runner = Join-Path $env:LOCALAPPDATA 'hub-forward/run.ps1'
-$first = [IO.File]::ReadAllText($runner)
 & $env:HF_SCRIPT -Action install -Hub 'user@hub' -Port '12345,23456' | Out-Null
-if ($first -ne [IO.File]::ReadAllText($runner)) { throw 'not idempotent' }
+if ($initial.Action.Argument -ne $global:HFregistration.Action.Argument) { throw 'not idempotent' }
 $global:HFiterations = 0
-try { . $runner } catch { if ($_.Exception.Message -ne 'end-loop') { throw } }
+try { . ([scriptblock]::Create((Get-Loop))) } catch { if ($_.Exception.Message -ne 'end-loop') { throw } }
 & $env:HF_SCRIPT -Action install -Hub 'other-hub' -Port 34567 | Out-Null
-$updated = [IO.File]::ReadAllText($runner)
+$updated = Get-Loop
 & $env:HF_SCRIPT -Action status | Out-Null
 & $env:HF_SCRIPT -Action uninstall
 & $env:HF_SCRIPT -Action uninstall
-@{initial=$initial; updated=$updated; calls=$global:HFcalls; remains=(Test-Path $runner)} |
+# A file the task read could be hidden from it (a packaged app's AppData).
+$written = Test-Path -LiteralPath $env:LOCALAPPDATA
+@{initial=$initial; updated=$updated; calls=$global:HFcalls; written=$written} |
     ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 (Join-Path $PSScriptRoot 'result.json')
 """,
     )
     initial = result["initial"]
     assert initial["TaskName"].startswith("hub-forward-S-1-")
-    assert "powershell.exe" in initial["Action"]["Execute"]
-    assert "-WindowStyle Hidden" in initial["Action"]["Argument"]
-    assert "-NoProfile -NonInteractive" in initial["Action"]["Argument"]
-    assert '-ExecutionPolicy Bypass -File "' in initial["Action"]["Argument"]
+    # A headless console: -WindowStyle Hidden still shows one as it starts.
+    assert initial["Action"]["Execute"].lower().endswith("\\system32\\conhost.exe")
+    argument = initial["Action"]["Argument"]
+    assert argument.startswith('--headless "')
+    assert 'powershell.exe" -NoProfile -NonInteractive -EncodedCommand ' in argument
+    assert "-File" not in argument
     assert initial["Trigger"]["AtLogOn"]["IsPresent"]
     assert initial["Principal"]["LogonType"] == "Interactive"
     assert initial["Principal"]["RunLevel"] == "Limited"
     assert initial["Settings"]["ExecutionTimeLimit"]["Ticks"] == 0
     assert initial["Settings"]["MultipleInstances"] == "IgnoreNew"
     assert initial["Settings"]["RestartInterval"]["TotalSeconds"] == 60
-    calls = result["calls"]
-    assert calls[:6] == ["register", "start", "stop", "unregister", "register", "start"]
-    assert calls[-3:] == ["status", "stop", "unregister"]
-    assert not result["remains"]
+    # Replacing and removing end the task's tree, parents first, and nothing
+    # else; once removed, there is nothing left to stop.
+    kills = ["kill 101", "kill 102", "kill 103"]
+    replace = ["stop", "unregister", *kills, "register", "start"]
+    assert result["calls"] == [
+        "register",
+        "start",
+        *replace,
+        *replace,
+        "status",
+        "stop",
+        "unregister",
+        *kills,
+    ]
+    assert not result["written"]
     assert "23456" not in result["updated"]
     assert "34567" in result["updated"]
     lines = (tmp_path / "ssh.jsonl").read_text(encoding="utf-8-sig").splitlines()

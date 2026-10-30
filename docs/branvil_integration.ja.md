@@ -137,9 +137,9 @@ powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninsta
 ```
 
 実行ポリシーの指定は、この実行に限って署名なしのスクリプトを許可します。タスクはログイン中だけ、
-コンソールを表示せずに動きます。`%LOCALAPPDATA%\hub-forward` に置く小さな PowerShell の
-ループが、ssh の失敗時も 15 秒あけて起動し直します。実行時間の上限はありません。
-削除時にはこのファイルも消します。macOS の定義は
+コンソールを表示せずに動きます。タスクの引数に収めた小さな PowerShell のループが、
+ssh の失敗時も 15 秒あけて起動し直します。実行時間の上限はありません。タスクを置き換えたり
+削除したりすると、その ssh も終了します。macOS の定義は
 `~/Library/LaunchAgents/local.hub-forward.plist`（ssh のエラーは
 `~/Library/Logs/hub-forward.log`）、Linux の定義は
 `${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service`（ログは
