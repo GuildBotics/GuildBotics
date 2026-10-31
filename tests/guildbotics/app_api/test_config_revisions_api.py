@@ -200,12 +200,11 @@ def test_colliding_members_are_repairable_without_changing_shared_secrets(
         pytest.fail("repair accessed ambiguous secrets")
 
     with monkeypatch.context() as guarded:
-        for operation in ("get", "set", "rename", "delete", "keys"):
+        for operation in ("get", "set", "delete", "keys"):
             guarded.setattr(KeyringSecretStore, operation, unexpected)
         read = client.get("/config/members/alice-bak")
         assert read.status_code == HTTP_OK
         assert read.json()["accounts"]["slack"]["has_bot_token"] is False
-        assert read.json()["secret_env_keys"] == {}
         response = client.delete("/identities/alice_bak")
         assert response.status_code == HTTP_OK
     assert store.location.read_bytes() == before
@@ -724,7 +723,7 @@ def _member_files(config_dir: Path) -> dict[str, Path]:
 def _change_elsewhere(path: Path) -> None:
     """Another writer -- a save elsewhere, or synchronization -- changing the
     file through the shared-write port, as every writer does."""
-    from guildbotics.utils.workspace_sync_port import update_shared_text
+    from guildbotics.utils.shared_writes import update_shared_text
 
     update_shared_text(path, lambda text: (text or "") + "# changed elsewhere\n")
 

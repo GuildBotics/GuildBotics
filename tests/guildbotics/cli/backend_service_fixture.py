@@ -35,12 +35,16 @@ def main():
         app = original(**kwargs)
         runtime = app.state.runtime
 
-        def before_start():
-            if os.environ.get("SERVICE_TEST_MODE") == "start_failure":
-                raise RuntimeError("workspace sync failed")
+        scheduler = runtime._lifecycle._scheduler
+        start = scheduler.start
 
-        runtime._lifecycle._before_start = before_start
-        runtime._lifecycle._scheduler._context_factory = lambda: None
+        def start_or_fail(**kwargs):
+            if os.environ.get("SERVICE_TEST_MODE") == "start_failure":
+                raise RuntimeError("scheduler start failed")
+            return start(**kwargs)
+
+        scheduler.start = start_or_fail
+        scheduler._context_factory = lambda: None
         return app
 
     lifecycle.TaskScheduler = Worker

@@ -18,9 +18,10 @@ from guildbotics.utils import managed_cli
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import identity_secret_store
+from guildbotics.utils.shared_writes import dump_shared_json
 from guildbotics.workspace.identity import (
+    device_identity_path,
     ensure_device_identity,
-    set_device_display_name,
 )
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
@@ -116,7 +117,10 @@ async def test_issuing_again_revokes_the_token_of_the_machine_s_old_name(
 ):
     first = await owner_git_credential(BASE)
     assert first is not None
-    set_device_display_name("renamed")
+    renamed = ensure_device_identity().model_copy(update={"display_name": "renamed"})
+    device_identity_path().write_text(
+        dump_shared_json(renamed.model_dump()), encoding="utf-8"
+    )
     keyring.delete_password("GuildBotics/branvil-git", BASE)
 
     second = await owner_git_credential(BASE)

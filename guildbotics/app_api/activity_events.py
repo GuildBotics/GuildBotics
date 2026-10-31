@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.utils.i18n_tool import t
 
 type ActivityEventType = Literal[
@@ -13,7 +12,6 @@ type ActivityEventType = Literal[
     "push",
     "issue_create",
     "issue_resolve",
-    "sync_rejected",
     "external",
 ]
 
@@ -30,8 +28,6 @@ def classify_event(
     if event_type == "pull_request.review_limit":
         return "pr_draft"
 
-    if event_type == SYNC_UPDATE_REJECTED:
-        return "sync_rejected"
     if "push" in normalized_type or "commits" in payload or action == "push":
         return "push"
     if "merge" in normalized_type or _payload_bool(pull_request, "merged"):
@@ -62,13 +58,6 @@ def event_label(
     classification: ActivityEventType,
 ) -> str:
     label = target_label(payload, attributes)
-    if classification == "sync_rejected":
-        paths = rejected_paths(payload)
-        return (
-            f"Update not applied: {len(paths)} file(s)"
-            if paths
-            else "Update not applied"
-        )
     if classification == "push":
         commits = commit_entries(payload)
         if len(commits) == 1:
@@ -93,12 +82,6 @@ def event_label(
         "external": "",
     }[classification]
     return " ".join(part for part in (prefix, label, suffix) if part)
-
-
-def rejected_paths(payload: dict[str, Any]) -> list[str]:
-    """Return the shared paths a rejected local change covered."""
-    paths = payload.get("paths")
-    return [str(path) for path in paths] if isinstance(paths, list) else []
 
 
 def event_detail(

@@ -58,7 +58,7 @@ FILESYSTEM_GRANTS_PATH = "intelligences/cli_agent_filesystem_grants.yml"
 #: to every workspace until its grants file says otherwise.
 EXCHANGE_DIRECTORY = "Documents/GuildBotics"
 #: The device-local file (under ``<workspace>/.guildbotics/local``): extra
-#: paths this machine alone opens or closes, never synchronized.
+#: paths this machine alone opens or closes.
 LOCAL_GRANTS_FILENAME = "cli_agent_filesystem_grants.yml"
 _HOME_TOKEN = "$HOME"
 _WORKSPACE_TOKEN = "<workspace>"
@@ -116,8 +116,8 @@ class DocumentGrant(BaseModel):
     """A directory below the home directory that agents may use for documents.
 
     This is the workspace's decision -- where its work reads from and writes
-    to -- so it is shared, spelled relative to the home directory and resolved
-    on every device the same way.
+    to -- so it is shared by every member, and spelled relative to the home
+    directory.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -367,8 +367,7 @@ def resolve_access(
     """Resolve the shared and local grants against this device.
 
     A document directory that does not exist yet is created before a turn
-    starts: the grant is shared by every device using the workspace, and an
-    empty directory under the home directory is a harmless thing to make. A
+    starts: the grant is the workspace's, and an empty directory under the home directory is a harmless thing to make. A
     preview passes ``create=False`` and sees it as absent instead. A local
     path must exist here, because this file describes this machine: a turn
     refuses to start over one that does not, and a preview reports it absent
@@ -601,8 +600,8 @@ def validate_workspace_location(workspace: Path) -> Path:
     """Refuse workspace state inside its own grants or the exchange directory."""
     target = inspect_host_path(workspace, missing=True)
     home = normalize_host_path(Path.home())
-    # Selection enables editing and synchronization to repair configuration;
-    # it never authorizes execution. Runtime contract loading stays strict.
+    # Selection enables editing to repair configuration; it never authorizes
+    # execution. Runtime contract loading stays strict.
     grants: list[DocumentGrant | LocalPathGrant] = []
     for loader, field_name in (
         (load_shared_grants, "documents"),

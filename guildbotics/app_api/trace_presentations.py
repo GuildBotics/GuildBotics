@@ -4,10 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from guildbotics.drivers.live_state import LivePresentation
+from pydantic import BaseModel, ConfigDict, Field
+
 from guildbotics.utils.rate_limit_display import rate_limit_reset_display
 
-TracePresentation = LivePresentation
+
+class TracePresentation(BaseModel):
+    """Provider-neutral presentation of one trace record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label_key: str = ""
+    label_fallback: str = ""
+    message_key: str = ""
+    message: str = ""
+    message_params: dict[str, Any] = Field(default_factory=dict)
+    tone: str = "neutral"
+    effort: str = ""
+
 
 _COMMAND_PHASES = frozenset({"started", "finished", "failed", "deferred"})
 _SERVICE_PHASES = frozenset({"starting", "running", "stopping", "stopped", "failed"})

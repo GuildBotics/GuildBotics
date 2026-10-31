@@ -391,8 +391,7 @@ async def remove_snapshots(workspace_root: Path | None = None) -> list[str]:
 class SnapshotUpkeep(threading.Thread):
     """Keep this device's snapshot matching the declaration while the service runs.
 
-    A declaration edited here, or arriving from another device through
-    synchronization, is rebuilt without anyone asking, so the next turn boots
+    A declaration edited here is rebuilt without anyone asking, so the next turn boots
     from it. A build already running elsewhere, and one that failed for this
     same declaration, are left alone: the failure stays on the device's
     status until the declaration changes or someone builds by hand. The

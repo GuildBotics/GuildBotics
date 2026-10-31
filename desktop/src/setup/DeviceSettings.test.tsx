@@ -3,15 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createDeviceSshKey,
-  createHub,
-  getDeviceSshKey,
-  getHubStatus,
-  getRegisteredWorkspaces,
-  getConfigStatus,
-  unregisterWorkspace,
-} from "../api/client";
+import { getConfigStatus, getRegisteredWorkspaces, unregisterWorkspace } from "../api/client";
 import i18n from "../i18n";
 import { DeviceSettings } from "./DeviceSettings";
 import { TestMantineProvider } from "../test/TestMantineProvider";
@@ -22,10 +14,6 @@ vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
   return {
     ...actual,
-    createDeviceSshKey: vi.fn(),
-    createHub: vi.fn(),
-    getDeviceSshKey: vi.fn(),
-    getHubStatus: vi.fn(),
     getRegisteredWorkspaces: vi.fn(),
     getConfigStatus: vi.fn(),
     unregisterWorkspace: vi.fn(),
@@ -48,80 +36,6 @@ beforeEach(() => {
   vi.mocked(getConfigStatus).mockResolvedValue({ workspace: null } as Awaited<
     ReturnType<typeof getConfigStatus>
   >);
-  vi.mocked(getDeviceSshKey).mockResolvedValue({
-    exists: false,
-    path: null,
-    public_key: "",
-    fingerprint: "",
-  });
-  vi.mocked(getHubStatus).mockResolvedValue({
-    hosted: false,
-    hub_root: "/home/u/.guildbotics/hub",
-    hub_id: null,
-    created_at: null,
-    ssh_endpoint: null,
-    workspace_ids: [],
-  });
-});
-
-describe("this device's SSH key", () => {
-  it("creates the key on request and shows it to copy", async () => {
-    const user = userEvent.setup();
-    vi.mocked(createDeviceSshKey).mockResolvedValue({
-      exists: true,
-      path: "/home/u/.ssh/id_ed25519",
-      public_key: "ssh-ed25519 AAAAC3Nz user@mac",
-      fingerprint: "SHA256:key",
-    });
-    renderSettings();
-
-    await user.click(await screen.findByRole("button", { name: t("sync.sshKey.create") }));
-
-    expect(await screen.findByText("ssh-ed25519 AAAAC3Nz user@mac")).toBeInTheDocument();
-  });
-});
-
-describe("hosting the hub here", () => {
-  it("asks for nothing beyond this machine", async () => {
-    // The machine that hosts the hub is often the one that never gets a
-    // workspace of its own, so nothing here may depend on one being selected.
-    const user = userEvent.setup();
-    vi.mocked(createHub).mockResolvedValue({
-      hosted: true,
-      hub_root: "/home/u/.guildbotics/hub",
-      hub_id: "hub-1",
-      created_at: "2026-07-01T00:00:00+00:00",
-      ssh_endpoint: "user@hub.local",
-      workspace_ids: [],
-    });
-    renderSettings();
-
-    await user.click(await screen.findByRole("button", { name: t("sync.host.create") }));
-
-    await waitFor(() =>
-      expect(screen.getByText(t("sync.host.hosted", { count: 0 }))).toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: t("sync.sshKey.create") })).toBeInTheDocument();
-  });
-
-  it("reports what this machine holds once it is a hub", async () => {
-    const user = userEvent.setup();
-    vi.mocked(createHub).mockResolvedValue({
-      hosted: true,
-      hub_root: "/home/u/.guildbotics/hub",
-      hub_id: "hub-1",
-      created_at: "2026-07-01T00:00:00+00:00",
-      ssh_endpoint: "user@hub.local",
-      workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
-    });
-    renderSettings();
-
-    await user.click(await screen.findByRole("button", { name: t("sync.host.create") }));
-
-    await waitFor(() =>
-      expect(screen.getByText(t("sync.host.hosted", { count: 1 }))).toBeInTheDocument(),
-    );
-  });
 });
 
 describe("registered workspaces", () => {
@@ -137,23 +51,23 @@ describe("registered workspaces", () => {
     renderSettings();
     await user.click(
       await screen.findByRole("button", {
-        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+        name: t("setup.device.registeredWorkspaces.remove", { path: "/work/one" }),
       }),
     );
     await user.click(
-      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.confirmLabel") }),
     );
     await user.keyboard("{Escape}");
     await user.click(document.body);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }),
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.cancel") }),
     ).toBeDisabled();
     reject(new Error("Removal failed"));
     const error = await screen.findByText("Removal failed");
     expect(error.closest('[role="dialog"]')).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }),
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.cancel") }),
     ).toBeEnabled();
   });
   it("allows cancellation and displays mutation failures inside the confirmation", async () => {
@@ -162,18 +76,22 @@ describe("registered workspaces", () => {
     const user = userEvent.setup();
     renderSettings();
     const open = await screen.findByRole("button", {
-      name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+      name: t("setup.device.registeredWorkspaces.remove", { path: "/work/one" }),
     });
     await user.click(open);
-    await user.click(screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }));
+    await user.click(
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.cancel") }),
+    );
     expect(unregisterWorkspace).not.toHaveBeenCalled();
     await user.click(open);
     await user.click(
-      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.confirmLabel") }),
     );
     const error = await screen.findByText("Registry is locked");
     expect(error.closest('[role="dialog"]')).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: t("sync.registeredWorkspaces.cancel") }));
+    await user.click(
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.cancel") }),
+    );
     await user.click(open);
     expect(screen.queryByText("Registry is locked")).not.toBeInTheDocument();
   });
@@ -183,10 +101,12 @@ describe("registered workspaces", () => {
     >);
     vi.mocked(getRegisteredWorkspaces).mockResolvedValue(["/work/one"]);
     renderSettings();
-    expect(await screen.findByText(t("sync.registeredWorkspaces.active"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("setup.device.registeredWorkspaces.active")),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+        name: t("setup.device.registeredWorkspaces.remove", { path: "/work/one" }),
       }),
     ).toBeDisabled();
     expect(unregisterWorkspace).not.toHaveBeenCalled();
@@ -198,12 +118,12 @@ describe("registered workspaces", () => {
     renderSettings();
     await user.click(
       await screen.findByRole("button", {
-        name: t("sync.registeredWorkspaces.remove", { path: "/work/one" }),
+        name: t("setup.device.registeredWorkspaces.remove", { path: "/work/one" }),
       }),
     );
     expect(unregisterWorkspace).not.toHaveBeenCalled();
     await user.click(
-      screen.getByRole("button", { name: t("sync.registeredWorkspaces.confirmLabel") }),
+      screen.getByRole("button", { name: t("setup.device.registeredWorkspaces.confirmLabel") }),
     );
     expect(unregisterWorkspace).toHaveBeenCalledWith("/work/one", expect.anything());
     await waitFor(() => expect(screen.queryByText("/work/one")).not.toBeInTheDocument());

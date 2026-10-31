@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.integrations.github import setup as github_setup
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
@@ -69,7 +68,6 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
-        self.workspace_sync_service = WorkspaceSyncService()
         self.event_bus = EventBus()
 
     def get_config_status(self) -> ConfigStatus:

@@ -108,7 +108,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
   });
 
-  it("shows resource values received after the declaration is synchronized", () => {
+  it("shows resource values received after the declaration is reloaded", () => {
     const { rerender } = render(<Harness value={packaged} />);
 
     rerender(

@@ -19,7 +19,6 @@ function context(overrides: Partial<MemberContext> = {}): MemberContext {
     memberKey: "new",
     gitEmail: "my-bot@example.com",
     setGitEmail: () => undefined,
-    secretEnvKeys: {},
     chatChannels: [],
     chatChannelsField: null,
     services: {},

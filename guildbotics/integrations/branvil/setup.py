@@ -10,15 +10,12 @@ connection is the identities', not a workspace's: one Branvil holds the members
 of every workspace, and Branvil keeps one token of the label, which a second
 connection would replace. So the token is kept as the identities' Secret
 ``BRANVIL_ADMIN_TOKEN``, with the base URL it was given for beside it
-(:data:`~guildbotics.integrations.branvil.api.CONNECTION_PATH`); it reaches the
-other machines through the Hub's Secret transfer, and is used by the host
-alone: to list and create workspaces and agents, to issue the agents' tokens, to
+(:data:`~guildbotics.integrations.branvil.api.CONNECTION_PATH`), and is used
+by the host alone: to list and create workspaces and agents, to issue the agents' tokens, to
 hand Branvil the members' GitHub credentials, and to open Branvil's GUI.
 Consents in flight are held in memory only.
 
-Every machine reaches Branvil at the same base URL (on a machine other than
-the Hub, Branvil's tunnel forwards it), so the URL the connection records is the
-one the records name, and one admin token serves every workspace and both kinds
+The URL the connection records is the one the records name, and one admin token serves every workspace and both kinds
 of service. A member's agent and its token are likewise the identity's, so one
 token serves the member in every workspace.
 """

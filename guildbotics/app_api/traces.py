@@ -18,12 +18,12 @@ from guildbotics.app_api.models import (
     TracesResponse,
     TraceSummary,
 )
+from guildbotics.app_api.trace_presentations import normalize_trace_presentation
 from guildbotics.capabilities.member_memory_audit import (
     MemoryAuditStore,
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.drivers.trace_presentations import normalize_trace_presentation
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.utils.fileio import get_workspace_state_path

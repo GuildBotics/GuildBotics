@@ -138,7 +138,7 @@ The same evaluation determines the required response effort, which the workflow 
 
 For Jev yes/no judgments, an affirmative probability at or below 0.4 is false, at or above 0.6 is true, and the range between them is unknown. These provisional thresholds prioritize avoiding missed work; they do not guarantee accuracy. Reaction selection takes the highest-probability candidate. Jev probability thresholds do not apply to the true, false, and unknown answers returned by LLM engines.
 
-Diagnostics show the judgment engine, model, route, and reason. Detailed inputs and raw answers are stored with secrets masked under the workspace's device-local `.guildbotics/local/run/required-io/` and are not shared through Workspace Sync. Recording failures also defer to the agent.
+Diagnostics show the judgment engine, model, route, and reason. Detailed inputs and raw answers are stored with secrets masked under the workspace's device-local `.guildbotics/local/run/required-io/`. Recording failures also defer to the agent.
 
 The development script can compare a saved judgment from the current question version using another configuration. Here, `comparison` is a feature assignment prepared beforehand. The script calls the actual model API but does not post to Slack or change processed-message state.
 

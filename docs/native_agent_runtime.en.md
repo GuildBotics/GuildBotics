@@ -87,8 +87,7 @@ base image, the snapshot's state (with a
 build button), the assigned resources, the network policy, the DNS resolvers,
 and each tool's login; `guildbotics
 environment status` / `build` / `login` are the same state and actions from
-a terminal. While the service runs, a changed base image (including one that
-arrived from another device through synchronization) is rebuilt by itself;
+a terminal. While the service runs, a changed base image is rebuilt by itself;
 resource, network, and DNS changes apply when the next microVM boots. While
 the image builds, or whenever the environment is unusable, the
 ticket patrol and chat dispatch are deferred rather than failed. Why a turn
@@ -180,19 +179,19 @@ directory instead of a parent containing private data; a `deny` does not carve a
 hole in a larger mount. Existing filesystem objects are compared by identity,
 so another spelling of the same directory does not bypass this check.
 
-Opening, creating, or joining a workspace registers its location on this device.
+Opening or creating a workspace registers its location on this device.
 Credential symlinks protect their original location, intermediate links, and actual destination; they
 do not prevent commands in unrelated directories. Loops stop after 40 link hops.
 Missing or non-directory components before `..` remain untraversable; their inspected
 prefix stays protected without blocking unrelated locations. The trusted installed package
 is canonicalized once before inspection, and code and templates share that root.
-The **Device and hub → Registered workspaces** list includes inactive workspaces;
+The **This machine → Registered workspaces** list includes inactive workspaces;
 remove an entry only when its state no longer needs protection. Removing the entry
 does not delete files. The selected workspace cannot be unregistered, and removing
 another entry requires confirmation. Invalid startup selections leave Desktop
 running with no workspace selected and show the refusal reason. Unavailable old
 locations can still be unregistered. Malformed grants allow workspace selection
-for editing or synchronization, but commands remain refused until repaired.
+for editing, but commands remain refused until repaired.
 Copy sources must remain outside protected state. Leaf links are refused. Ancestor
 links such as `~/Dropbox/report.pdf` are accepted only when the parent contains fixed
 credential state and cannot be shared with a turn; otherwise select the file in its
@@ -305,7 +304,7 @@ admission; turns cannot create such links because protected files are not mounte
   opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that protect directories from sharing, in
-  `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential
+  `local/cli_agent_filesystem_grants.yml`. Credential
   directories (`~/.ssh`, a provider's own directory) and registered workspace
   state are protected by the same source checks. Nothing else of the host exists inside: not its PATH, not
   its other clones, not its keychain. The agent's tools are the environment's
@@ -332,9 +331,8 @@ admission; turns cannot create such links because protected files are not mounte
 
 - **Resources**: `resources:` in `intelligences/agent_environment.yml` assigns
   memory in MiB and virtual CPUs to every command's microVM and every snapshot build. Omitting it
-  uses 4096 MiB and 2 vCPUs. This declaration is workspace-wide and the same
-  values are used on every device, so choose values that fit the device with
-  the least memory and fewest CPU cores.
+  uses 4096 MiB and 2 vCPUs. This declaration is workspace-wide, so choose values
+  that fit the machine's memory and CPU cores.
 
   ```yaml
   resources:
@@ -536,7 +534,7 @@ and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret test
   `~/.guildbotics/data/agent_environment/claude/login.sealed`. The record binds the tool,
   the account, and the format as authenticated data, so it never opens as anything else.
   The account file (`.claude.json`) holds no secret and stays in the store, bound into
-  turns. None of it is a workspace secret, and none of it travels through Git or a Hub.
+  turns. None of it is a workspace secret.
 - **What a turn holds**: the turn's microVM gets a credentials file whose access token is
   a stand-in minted for the turn and whose expiry is far away. The file is built from the
   non-secret fields the catalog names (`scopes`, `subscriptionType`, `rateLimitTier`) alone,

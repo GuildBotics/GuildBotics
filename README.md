@@ -59,9 +59,9 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
   - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
-- **OpenSSH** (only to share one workspace across several machines):
-  - Every participating machine needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
-  - The machine acting as the hub also needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
+- **OpenSSH** (only to use GuildBotics from a browser on another machine):
+  - GuildBotics runs on one machine, the **Hub**. Each other machine you use it from needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
+  - The Hub needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
 - **Hardware virtualization** for the isolated agent environment. Every command, with its subcommands and AI CLI turns, runs inside a microVM that GuildBotics boots on the machine running the command, so that machine needs: on macOS, Apple Silicon (Intel Macs are not supported); on Windows 11, the **Windows Hypervisor Platform** optional feature; on Linux, KVM (`/dev/kvm` readable by the user). The runtime itself ([microsandbox](https://microsandbox.dev/)) ships with GuildBotics and is placed under `~/.guildbotics/data/msb` on first use; nothing else needs to be installed
 - **An account for an AI CLI tool**. The tools themselves are installed by GuildBotics inside the isolated environment, so nothing has to be installed on the machine for turns. What you need is the account: after setup, log in once per machine from a terminal with `guildbotics environment login <tool>` (the **Agent execution environment** screen shows the exact command). The tools GuildBotics provisions in the environment:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
@@ -463,7 +463,7 @@ For all front matter options, context injection, and command composition, see th
 
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
-- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names and generations. This machine's keychain namespace and the generations it holds are in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
+- **OS keychain:** secret values live in the OS secret store (macOS Keychain, Windows Credential Manager, Linux Secret Service). The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names. This machine's keychain namespace is in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
 - **Two stores:** the members' credentials (`{PERSON_ID}_...`) and the services' connections (`BRANVIL_ADMIN_TOKEN`) are kept in the identities' store, shared by every workspace on the machine (its index is `~/.guildbotics/identity/.guildbotics/config/secrets.yml`). The workspace's store keeps the other keys, such as LLM API keys. A process reads the identities' store first, then the workspace's.
 - **Windows credentials:** GuildBotics stores secret values as UTF-8 Credential Manager blobs, allowing ASCII-heavy PEM private keys to use the full 2,560-byte Windows limit. An import validates every value before writing any of them.
 - **Precedence:** real environment variables > OS keychain. GuildBotics does not read a workspace `.env`.
@@ -474,45 +474,19 @@ Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/
 
 ```bash
 guildbotics secrets status                        # OS secret-store availability and key count
-guildbotics secrets pull                          # fetch missing or outdated values from the hub
-guildbotics secrets push                          # give the hub the values entered here
 guildbotics secrets export --file secrets.env     # export secrets for a move
 guildbotics secrets import secrets.env            # import them on the new machine
 guildbotics secrets --identities status           # the same, for the members' credentials
 ```
 
-When a workspace is shared between machines, values never enter the shared history: they
-move through the hub machine's OS secret store, and only when you send or fetch them. See
-[Share credentials with each machine](#share-credentials-with-each-machine).
-
 `--identities` before the subcommand makes it act on the identities' store; without it, the CLI refuses to store a member's key in a workspace. A member's key prefix is shared by every workspace, so two IDs that differ only in `-` and `_` (`foo-bar` and `foo_bar`) cannot both exist, even in different workspaces.
 
-A workspace's secrets are stored per workspace (keychain entries are namespaced by the `store_id` in each machine's `.guildbotics/local/secrets.json`. The namespace belongs to the machine and does not change when it joins a hub or synchronizes. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
+A workspace's secrets are stored per workspace (keychain entries are namespaced by the `store_id` in the workspace's `.guildbotics/local/secrets.json`. A copy of the workspace that includes `local/` uses the same namespace as the original). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
 guildbotics secrets --workspace /path/to/workspace list
 ```
-
-**Upgrading from a version that kept `store_id` in `secrets.yml`:** the keychain namespace now
-lives in each machine's `local/secrets.json`. Values in the old namespace are not carried over,
-so switch in this order:
-
-1. Before upgrading, run `guildbotics secrets status` on each machine and settle every unsent
-   key and every key showing *Changed on two machines*, for example with
-   `guildbotics secrets push`. Values the hub holds can be fetched again after the upgrade. In a
-   workspace that is not connected to a hub, write the values out with
-   `guildbotics secrets export --file ...`
-2. Upgrade every machine that shares the workspace at the same time. With old and new versions
-   mixed, synchronization stops on the new ones and the old ones can no longer read their values
-3. In a workspace connected to a hub, delete the `store_id:` line from
-   `.guildbotics/config/secrets.yml` on one machine. Synchronization sends the change to the
-   hub. While the hub still holds that line, machines running the new version cannot join it
-4. On each machine, run `guildbotics secrets pull` (or **Fetch all credentials** in the desktop
-   app). In a workspace that is not connected to a hub, read the exported file back with
-   `guildbotics secrets import` and delete the file
-5. Keychain entries in the old namespace (`GuildBotics/<old store_id>`) are not deleted
-   automatically. Remove them from the OS keychain manager if you no longer need them
 
 ### Run on a Server
 
@@ -521,7 +495,7 @@ All non-secret configuration is stored as plain text files inside the workspace,
 1. Install the CLI on the target machine with `uv tool install guildbotics`
 2. Copy the workspace folder and `~/.guildbotics/identity/` (the members' identities) to the target machine
 3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target, and the same with `--identities` for the members' credentials (delete the export files afterwards). Keychain entries themselves never leave the machine
-4. On servers without a keychain, set up an OS secret store or pass the secrets as environment variables at run time
+4. On servers without a keychain, set up an OS secret store (on Linux, see [A headless Linux server's secret store](#a-headless-linux-servers-secret-store)) or pass the secrets as environment variables at run time
 5. Build the isolated agent environment on the server and log in to the AI CLI tool there (the server needs KVM; see [What You Need](#what-you-need)):
 
    ```bash
@@ -564,21 +538,48 @@ The backend holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) f
 
 The CLI backend also serves the API and browser screens, so `guildbotics run` can delegate commands to it. `guildbotics start` always starts services; it is not an API-only mode. Before updating Desktop, stop `guildbotics start` and any active `guildbotics run` processes. Restart the CLI service after the update, or use Desktop's Service screen.
 
-When a workspace is synchronized, the service also has one persistent owner on
-the Hub. `guildbotics start` and the desktop service screen must reach the Hub
-and confirm this machine as the owner before accepting service work. A different
-owner blocks new service work; an owner change is detected by the common
-execution boundary and stops the old service. A Hub outage does not cancel work
-already in progress, but it does prevent new service work until ownership can be
-checked again.
+Completed work is kept in TaskRun records (`state/task-runs/`), so a service restart does not accept the same input again.
 
-Ownership is not a lease and is never changed automatically. After confirming
-that the old machine's service has stopped, use **Take over on this machine** in
-the desktop Sync settings. The live work indicator is transient relay state,
-not Git history, and disappears after its publisher stops heartbeats and the
-snapshot expires. Completed
-work is kept in shared TaskRun records so a service restart does not accept the
-same input again after the result has been pushed.
+#### A headless Linux server's secret store
+
+On a headless Linux server, the OS secret store (Secret Service) has to run without a
+desktop session.
+
+1. Install a Secret Service implementation (`gnome-keyring` or similar) and D-Bus.
+2. Enable lingering, so the user's systemd and session bus keep running while nobody is
+   logged in.
+
+   ```bash
+   sudo loginctl enable-linger "$USER"
+   ```
+
+   There is no need to keep `gnome-keyring-daemon` running yourself: recent distributions
+   start it on demand through socket activation (`gnome-keyring-daemon.socket`). A daemon
+   started that way holds the control socket and the D-Bus name **while still locked**,
+   though, so the next step stops it before starting an unlocked one in its place.
+
+3. After each restart, restart the daemon with an unlock. The keyring password is normally
+   the account's login password (the one it was created with).
+
+   ```bash
+   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
+   ```
+
+   Run `pkill` with `-x` (exact process-name match) and nothing else: with `-f`, the
+   pattern matches this command line itself and kills the shell running it.
+
+4. The command's output does not say whether the unlock worked, so always check.
+
+   ```bash
+   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
+   ```
+
+   `b false` means unlocked. If it stays `b true`, the password did not match: the keyring
+   does not follow login password changes, so an account whose password was changed later
+   still uses the old one.
+
+   Until that unlock, workflows that need a secret fail at run time. GuildBotics never
+   falls back to a plaintext file.
 
 ### Use It from a Browser
 
@@ -592,11 +593,40 @@ guildbotics open
 
 The browser opens with a single-use entry link that expires after 60 seconds. There is no sign-in screen: the OS user who can read `~/.guildbotics/data/server/<port>/owner.token` is the owner. A session lasts 30 days; when it has expired, run `guildbotics open` again.
 
-**In a browser on another machine**: forward the port over SSH (the forwarding script in [Share a Workspace Across Machines](#share-a-workspace-across-machines), or `ssh -L 8765:127.0.0.1:8765 <Hub>`), print an entry link on the Hub, and paste it into your browser:
+**In a browser on another machine**: GuildBotics runs only on the Hub, and another machine reaches its screens over SSH. That machine needs no GuildBotics installation, only an OpenSSH client (see [What You Need](#what-you-need)).
 
-```bash
-ssh <Hub> guildbotics open --print
-```
+1. Let the machine log in to the Hub with an SSH key. Add its public key (`~/.ssh/id_ed25519.pub`; create one with `ssh-keygen -t ed25519` if it has none) to the Hub's `~/.ssh/authorized_keys`. On the Hub:
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... alice@laptop' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+   ```
+
+2. Connect once with `ssh <Hub>` and accept the host key after comparing its fingerprint with the one the Hub prints for itself:
+
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+3. Check that the Hub answers `guildbotics` over non-interactive SSH:
+
+   ```bash
+   ssh <Hub> guildbotics --version
+   ```
+
+   A non-interactive SSH session does not read the shell startup files an interactive login does, so a `guildbotics` installed under `~/.local/bin` is often invisible to it. The shortest fix is a link from a directory that is always on the PATH, made on the Hub:
+
+   ```bash
+   sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
+   ```
+
+   `~/.guildbotics/bin/guildbotics` is the managed shim, so it keeps working across reinstalls of the CLI itself. On Windows the installer puts the managed bin on the user PATH, which SSH sessions also get.
+
+4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 8765` (and `--port 7878` as well when you use Branvil). For a single session, `ssh -L 8765:127.0.0.1:8765 <Hub>` also works.
+5. Print an entry link on the Hub and paste it into your browser:
+
+   ```bash
+   ssh <Hub> guildbotics open --print
+   ```
 
 **Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain, and `guildbotics open` on that machine uses it (connecting the same machine again revokes its previous token).
 
@@ -606,7 +636,7 @@ In a browser, a few parts of the screens differ:
 - Commands cannot be opened in an external editor; edit them in the screen's editor
 - A file dropped on a command's input is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped)
 - The AI CLI tools' skill status and forced update are not shown
-- Settings labelled "this machine" (keeping it awake, sync, ...) are the server machine's
+- Settings labelled "this machine" (keeping it awake, the registered workspaces) are the Hub's
 
 **Port**: the backend listens on the fixed port 8765. If another program uses that port, the backend does not start. To run two backends on one machine (a development and a released desktop app, for example), set `GUILDBOTICS_SERVER_PORT` to another port where one of them starts; the server, the CLI, and the desktop app all read it.
 
@@ -660,362 +690,9 @@ GuildBotics stores three kinds of local data:
 
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
 - The members' identities, shared by every workspace, are stored in `$HOME/.guildbotics/identity/.guildbotics`, laid out like a workspace's `.guildbotics`
-- Shared workspace state — memory, chat control, task-run records, interactive session records, activity events — is stored in `<workspace>/.guildbotics/state`
+- Workspace state — memory, chat control, task-run records, interactive session records, activity events — is stored in `<workspace>/.guildbotics/state`
 - Device-local data — diagnostics, transcripts, chat cache, member clones, the built agent environment (`local/agent_environment/snapshots`) — is stored in `<workspace>/.guildbotics/local`
 - The isolated agent environment's runtime and its images live in `$HOME/.guildbotics/data/msb`; the AI CLI tools' logins and sessions, shared by every member and workspace on the machine, live in `$HOME/.guildbotics/data/agent_environment/<tool>/`
-
-### Share a Workspace Across Machines
-
-One workspace can be shared by several of your machines. Settings, members, memory, chat
-state, and activity history are kept in step; API keys, member clones, diagnostics, and
-hotkeys stay on the machine they were made on.
-
-The members' identities (`~/.guildbotics/identity/`) are connected to the same hub whenever
-a workspace is: registering, joining, copying, or changing the hub. The hub keeps one
-repository of them for every workspace; the first machine registers it, and the others join
-it by the same rules as a workspace (below). It is not listed among the hub's workspaces, and
-it is synchronized beside the selected workspace.
-
-Sharing runs through a **hub**: one machine you choose, holding a Git repository the others
-push to and fetch from over SSH. It is not a service and it is not hosted by anyone else —
-it is a directory under `~/.guildbotics/hub` on a machine you already own.
-
-The Hub also holds the current service owner and transient live snapshots. The
-owner is persistent and changes only through an explicit takeover after you have
-confirmed that the previous service stopped. If the Hub is unavailable, an
-already-running service keeps its current work but cannot start new service work
-until the owner can be checked. Live snapshots are not committed to Git; when a
-publisher exits its heartbeat stops, and the Hub removes that snapshot after it
-expires.
-
-Everything below is done in the desktop app's **Settings**. Hosting the hub and this
-device's SSH key are under **Device and hub** (they belong to the machine, not to a
-workspace); connecting a workspace is under **Sync**.
-
-#### Set up the first machine
-
-1. On the machine that will be the hub, select **Host the hub on this machine** under
-   **Device and hub**. Make sure its OpenSSH server is running (see
-   [What You Need](#what-you-need)). This creates `~/.guildbotics/hub/` and its `hub.json`;
-   the repository for a workspace is created later, when the first machine registers one.
-2. On the machine holding the workspace, select **Create a key** under **Device and hub →
-   This device's SSH key**, then copy the key it shows. It is `~/.ssh/id_ed25519`, and an
-   existing key of that name is used as it is rather than replaced.
-3. Add that public key to the hub machine's `~/.ssh/authorized_keys`. On the hub machine:
-
-   ```bash
-   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... guildbotics alice@mac-studio' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-   ```
-
-   GuildBotics cannot do this for you: that step is what proves you already have access to
-   the machine. It is a prerequisite rather than a fallback — the next step asks the hub for
-   its workspace list over SSH, and synchronization runs SSH non-interactively, so an
-   unregistered key fails there instead of prompting for a password.
-4. Check that the hub machine answers its own command over SSH, from the machine holding the
-   workspace:
-
-   ```bash
-   ssh user@hub-host guildbotics hub status
-   ```
-
-   GuildBotics reaches the hub by running `guildbotics hub …` there, so the command has to be
-   on the PATH that non-interactive SSH sessions get — which is not always the one an
-   interactive login has. If it is not found, see
-   [`guildbotics` is not found over SSH](#guildbotics-is-not-found-over-ssh).
-5. Back in the desktop app, under **Sync**, enter the hub as `user@host` and select
-   **Look up**.
-6. Compare the fingerprint shown against the hub machine's own, then confirm it. On the hub
-   machine, print it with:
-
-   ```bash
-   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-   ```
-
-   This is the only point at which the key is checked: synchronization runs SSH
-   non-interactively afterwards, so its usual first-contact prompt never appears.
-7. Select **Register this workspace on the hub**. The hub's repository for this workspace,
-   `~/.guildbotics/hub/workspaces/<workspace id>/repository.git`, is created now.
-
-##### `guildbotics` is not found over SSH
-
-A non-interactive SSH session does not read the shell startup files an interactive login
-does, so a `guildbotics` installed under `~/.local/bin` is often invisible to it. The
-shortest fix is a link from a directory that is always on the PATH, made on the hub machine:
-
-```bash
-sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
-```
-
-`~/.guildbotics/bin/guildbotics` is the managed shim, so it keeps working across
-reinstalls of the CLI itself. On Windows the installer puts the managed bin on the user
-PATH, which SSH sessions also get.
-
-#### Add another machine
-
-On the new machine, create its SSH key and register it with the hub as above, then either:
-
-- **Take a copy**: choose the workspace from the hub's list to create a new workspace
-  directory from it, or
-- **Join with what you already have**: on a machine that already has a workspace, look up
-  the hub and select **Join…** next to the matching workspace.
-
-Joining is not an overwrite. This machine's content is committed first; for any file both
-sides hold, the hub's version wins; files only this machine has are sent to the hub. What
-is shown before you confirm is exactly that division. A commit pushed aside this way is
-kept locally — see [Recover a change that was not applied](#recover-a-change-that-was-not-applied).
-
-#### Share credentials with each machine
-
-The **values** of API keys and tokens are not shared. What travels between machines is a
-key name and a generation; the value stays in each machine's own OS secret store. The hub
-machine's secret store is the distribution point, and a value moves only when you send or
-fetch it, over the standard input and output of one SSH command. It is never written to
-the Git repository, to a relay file on the hub, or to a temporary file.
-
-The lists and the transfers are under **Settings → Sync**, in two cards: **Members' credentials
-on this machine** (the members' accounts and the services' connections, the same in every
-workspace) and **This workspace's credentials on this machine** (the API keys this workspace
-uses). Each card works as described below.
-The provider and member forms where a value is typed show its state and link here; they
-carry no transfer buttons of their own.
-
-**On a macOS hub**, log in to the GUI with the Hub's user account and start
-GuildBotics Desktop before sending or fetching credentials. Desktop need only stay
-open during the transfer; it can have any workspace selected. Hub Secret commands,
-including status checks, use its authenticated loopback API to access the keychain
-in the GUI session. If Desktop is unavailable, the transfer asks you to start it.
-Windows and Linux hubs access their OS secret stores directly.
-
-**On a machine you have just added**, choose **Fetch all credentials** once. Everything
-this machine lacks or holds an older value for arrives in a single exchange and goes
-straight into this machine's OS secret store. Nothing is retyped.
-
-**When you update a value**, choose **Send** on the machine where you typed it. The shared
-files are taken first, so a machine that has been offline never sends from a generation the
-others have moved past. Once the value reaches the hub the shared generation moves on, and
-the other machines show *Updated elsewhere*; choose **Fetch** on each to catch up.
-
-**Send all** covers every value the hub does not have yet, so connecting an existing
-workspace to a hub — or rebuilding one — hands it everything in a single action.
-
-If two machines change the same key, the one that receives the other's update shows *Changed
-on two machines*. Choose which to keep on that key's own row: **Send** makes this machine's
-value the new generation, **Fetch** takes the other machine's, and either way the other
-machine is told about it. Nothing has to be typed again. The bulk actions leave such a key
-alone, because which value to keep is a decision per key.
-
-If the record of the shared generation is interrupted after the hub has already stored the
-value, the key shows *Needs checking*. Choosing **Send** on any machine that holds a value
-settles it: a send is built on the generation the hub reports, so it moves past the
-interrupted one and the record is made. That works from a machine that knows nothing about
-the interrupted send, and after the value has been entered again on the machine that was
-sending.
-
-**Fetch** is not offered for that key meanwhile — taking a generation the workspace has no
-record of would remove the very thing saying it still needs settling.
-
-On a machine that runs no desktop app, use the CLI:
-
-```bash
-guildbotics secrets status   # this machine's state, and which keys need attention
-guildbotics secrets pull     # fetch everything missing or outdated, in one exchange
-guildbotics secrets push     # give the hub the values entered on this machine
-```
-
-Add `--identities` before the subcommand for the members' credentials.
-
-While an OS secret store is locked, nothing can be sent or fetched. GuildBotics never falls
-back to a plaintext file, so unlock it and try again.
-
-**To use a headless Linux machine as a device**, its secret store (Secret Service) has to
-run without a desktop session.
-
-1. Install a Secret Service implementation (`gnome-keyring` or similar) and D-Bus.
-2. Enable lingering, so the user's systemd and session bus keep running while nobody is
-   logged in.
-
-   ```bash
-   sudo loginctl enable-linger "$USER"
-   ```
-
-   There is no need to keep `gnome-keyring-daemon` running yourself: recent distributions
-   start it on demand through socket activation (`gnome-keyring-daemon.socket`). A daemon
-   started that way holds the control socket and the D-Bus name **while still locked**,
-   though, so the next step stops it before starting an unlocked one in its place.
-
-3. After each restart, restart the daemon with an unlock. The keyring password is normally
-   the account's login password (the one it was created with).
-
-   ```bash
-   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
-   ```
-
-   Run `pkill` with `-x` (exact process-name match) and nothing else: with `-f`, the
-   pattern matches this command line itself and kills the shell running it.
-
-4. The command's output does not say whether the unlock worked, so always check.
-
-   ```bash
-   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
-   ```
-
-   `b false` means unlocked. If it stays `b true`, the password did not match: the keyring
-   does not follow login password changes, so an account whose password was changed later
-   still uses the old one.
-
-   Until that unlock, workflows on that machine that need a secret fail at run time and
-   no transfer can start. If the hub runs on that machine, fetches from every other machine
-   stop for the same reason, and they show *The hub machine's secret store is locked*.
-
-#### Revoke a machine
-
-When a machine is lost, remove its public key from the hub.
-
-1. Find that machine's SSH public key fingerprint in the device list under
-   **Settings → Sync**.
-2. On the hub machine, delete the line with that fingerprint from
-   `~/.ssh/authorized_keys`.
-
-   ```bash
-   ssh-keygen -l -f ~/.ssh/authorized_keys
-   ```
-
-   GuildBotics does not edit `authorized_keys`. Deciding which line to remove, and removing
-   it, stay with you.
-
-3. Values already stored on the lost machine cannot be erased remotely. Revoke and reissue
-   the tokens and API keys at GitHub, Slack, and your LLM providers. Enter each reissued
-   value on a machine you still have, then use **Send** to give it to the others.
-
-#### Rebuild the hub
-
-Any participating machine holds a full copy, so a lost hub is rebuilt from one of them.
-
-1. Choose a machine to host the new hub and select **Host the hub on this machine**.
-2. Add every other machine's public key to the new hub machine's `~/.ssh/authorized_keys`,
-   and check `guildbotics` answers over SSH there, as in
-   [Set up the first machine](#set-up-the-first-machine). A new hub machine knows nothing
-   about the keys the old one held.
-3. On each other machine, open **Connected hub → Connect to a different hub** and connect to
-   the new address.
-
-Content only one machine has is sent to the new hub rather than discarded, so the order the
-machines reconnect in does not lose anything.
-
-#### When two machines change the same file
-
-Whichever change reaches the hub first is the one that is kept. The other machine's commit
-is not merged and not discarded: it is set aside locally, and it appears on that machine
-under **Settings → Sync**, in "Changes set aside", with the time, the files, and a recovery
-ID (the warning band's "Sync settings" button opens the same screen). Activity History keeps
-the same record. Synchronization does not stop, and no one is asked to resolve anything.
-
-Content that was not adopted when a machine with an existing `.guildbotics/` joined the hub
-is listed there the same way.
-
-Files and directories whose names start with `.` are not shared from `config/` or `state/`.
-Bookkeeping files created by Finder or an editor at any depth therefore do not appear as
-changes that cannot be sent.
-
-Only regular files are shared. A symbolic link, or another Git repository placed inside,
-becomes a change that cannot be sent until it is a regular file again. Meanwhile, changes
-from the hub are not applied to that path or anything beneath it, so synchronization never
-rewrites or deletes the files a link points at. Every other file keeps synchronizing.
-
-A repository created with `git init` that has no commit yet is also a change that cannot
-be sent. Synchronization does not stop, and every other file is still sent. After its first
-commit it is held back like any other nested repository. The files inside it are not shared
-in either case.
-
-A file this machine cannot read, or a directory whose contents it cannot list, is not held
-back. Synchronization stops with **Sync failed on this machine**, and nothing else is sent
-until it is fixed; **Error details** names the path. A directory that cannot be listed is
-never sent as the deletion of the files inside it. A file another application has open
-exclusively stops synchronization the same way until it is closed, and so does a Git lock
-file (`index.lock`) an interrupted process left in `.guildbotics/.git`.
-
-#### Recover a change that was not applied
-
-This is an exception procedure, not part of normal use. GuildBotics never restores a set
-aside change automatically, and neither the desktop app nor the API will show its contents.
-Reading it takes the Git commands below.
-
-The set aside content exists **only on the machine that made the change**. Run the commands
-on the machine whose **Settings → Sync** lists the change under "Changes set aside", and
-fill in the placeholders as follows.
-
-| Placeholder | What goes there |
-| --- | --- |
-| `<workspace>` | The workspace directory, as shown in the "Workspace" field under "Settings → Project" |
-| `<recovery ID>` | The value in the "Recovery ID" column |
-| `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/member.yml`) |
-| `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/member.yml`) |
-
-A change to the members' names or accounts is set aside in the members' own repository
-rather than the workspace's, and is listed under "Members' changes set aside". For those,
-put `~/.guildbotics/identity` (on Windows, `%USERPROFILE%\.guildbotics\identity`) in place
-of `<workspace>`.
-
-1. Read what was set aside. This shows the difference from what is in use now (`+` lines
-   are the set aside side):
-
-   ```bash
-   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<recovery ID>" -- <path>...
-   ```
-
-   To print the set aside side in full rather than as a diff, name one file at a time:
-
-   ```bash
-   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<recovery ID>:<path>"
-   ```
-
-   A file the set aside change deleted has no content to show, so `git diff` reports only the
-   deletion. Binary files such as images do not display usefully; export them in the next
-   step instead.
-
-2. If you need the files outside Git, export them together as a zip. Point
-   `<output-directory>` outside `<workspace>/.guildbotics/`; `<output-name>` is up to you.
-   A zip is used because saving through shell redirection (`>`) can change the text
-   encoding or corrupt binary files, depending on the shell.
-
-   ```bash
-   git -C "<workspace>/.guildbotics" archive --format=zip --output="<output-directory>/<output-name>.zip" "refs/guildbotics/rejected/<recovery ID>" -- <path>...
-   ```
-
-3. Make the changes you still want again through GuildBotics, starting from the content
-   currently in use. They are shared like any other edit.
-
-Do not do any of the following to the synchronization repository, as they replace shared
-content without going through the rules above:
-
-- `checkout`, `switch`, `reset`, `merge`, `rebase`, `cherry-pick`, or `push` a
-  `refs/guildbotics/rejected/...` ref
-- Write the export into `<workspace>/.guildbotics/`
-
-A set aside change cannot be recovered if the machine that made it is lost, or if it has
-been discarded there. Nothing prunes them automatically.
-
-Once you are done looking, discard it from **Settings → Sync**, under "Changes set
-aside" (or "Members' changes set aside"). Discarding removes the set aside content and clears the warning. This machine
-holds the only copy, so look at the content with the steps above before
-discarding; the activity history record stays either way.
-
-#### What the sidebar is telling you
-
-The sidebar shows whichever of the workspace's and the members' synchronization needs you
-more. Select it to see which one it is.
-
-| State | Meaning | What to do |
-| --- | --- | --- |
-| In sync | This machine and the hub hold the same content | Nothing |
-| Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
-| Receiving | Content from the hub is being taken in | Wait |
-| Hub sync failed | Local work continues; sharing is delayed | Read the **Error details** shown with it, fix the cause, and select **Try again**. If SSH is the cause, check the prerequisites in [Set up the first machine](#set-up-the-first-machine) |
-| Sync failed on this machine | Local work continues; sharing is delayed | Fix the file or folder named in **Error details** (a leftover lock file, permissions, a file another application holds open). Sharing resumes automatically; **Try again** also works |
-| Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
-| Shared data problem | Content could not be reconciled automatically | Open **Sync** |
-| Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |
-| Not connected to the hub | The members are not on the hub this workspace uses, so their names and accounts do not reach the other machines | Read the **Error details**. If GuildBotics on the hub machine is older, update it there, then select **Try again** |
 
 ### Configuration Files
 
@@ -1047,15 +724,15 @@ more. Select it to see which one it is.
 - `task_schedules`: cron-based scheduled commands
 - `message_channels`: watched channel settings (`chat.enabled`, `channel_id`/`name`), on the project's chat service
 
-A field in the other file is refused when the team is loaded. A workspace member whose identity is missing (deleted on another machine, or not synchronized yet) is left out of the team, and the rest of the team works, until it is removed from the workspace or the identity arrives.
+A field in the other file is refused when the team is loaded. A workspace member whose identity is missing (the member was deleted from another workspace) is left out of the team, and the rest of the team works, until it is removed from this workspace.
 
 **LLM / AI CLI tool settings**:
 
 - `intelligences/brain_mapping.yml`: per-function engine and LLM / AI CLI slot assignments. For `chat_decision`, which decides whether a chat needs a response agent, see the [Slack integration guide](docs/slack_integration.en.md#chat-judgment-engine).
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
-- `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: what agents make for you goes there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
+- `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: what agents make for you goes there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
 - `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian image unless set; for another toolchain, build an image yourself that keeps git, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Changing the image rebuilds the environment on every machine; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
+- `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian image unless set; for another toolchain, build an image yourself that keeps git, load it on the machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Changing the image rebuilds the environment; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).

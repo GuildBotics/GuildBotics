@@ -1,7 +1,7 @@
 import { providerOperation } from "../../../api/client";
 
-/** Where Branvil is reached unless connected elsewhere: the same on every
- * machine, through Branvil's tunnel on those other than the Hub. */
+/** Where Branvil is reached unless connected elsewhere: a Branvil running on
+ * this machine. */
 export const BRANVIL_BASE_URL = "http://127.0.0.1:7878";
 
 export const ORIGIN = /^https?:\/\/[^/\s?#@]+\/?$/;

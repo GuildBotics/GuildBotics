@@ -31,7 +31,6 @@ from guildbotics.app_api.auth import ServerAuth
 
 COOKIE = "guildbotics_session_8765"
 from guildbotics.app_api.events import EventBus
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.correlation import trace_scope
 from guildbotics.utils.local_api import API_PREFIX, base_url, server_directory
@@ -53,7 +52,6 @@ class RuntimeStub:
     system_service_run_id = "stub-service"
 
     def __init__(self, event_bus: EventBus) -> None:
-        self.workspace_sync_service = WorkspaceSyncService()
         self.event_bus = event_bus
 
     def stop_scheduler(self, *, force: bool = False) -> None:

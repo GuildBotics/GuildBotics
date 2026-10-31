@@ -13,8 +13,8 @@ from pydantic import (
 )
 
 from guildbotics.app_api.activity_events import ActivityEventType
+from guildbotics.app_api.trace_presentations import TracePresentation
 from guildbotics.commands.formats import CommandFormat
-from guildbotics.drivers.live_state import LivePresentation
 from guildbotics.environment.contract import (
     LocalGrants,
     NetworkPolicy,
@@ -118,296 +118,6 @@ class ConfigStatus(BaseModel):
 
 class WorkspaceChangeRequest(BaseModel):
     workspace_dir: Path
-
-
-class HubStatus(BaseModel):
-    """Whether this machine hosts a hub, and what it holds."""
-
-    hosted: bool
-    hub_root: Path
-    hub_id: str | None = None
-    created_at: str | None = None
-    ssh_endpoint: str | None = None
-    workspace_ids: list[str] = Field(default_factory=list)
-
-
-class HubTarget(BaseModel):
-    """Which hub an operation is about.
-
-    An empty ``endpoint`` means this machine, which needs no network and no
-    host key: the hub repositories are right there on disk.
-    """
-
-    endpoint: str = ""
-
-
-class HubTrustRequest(BaseModel):
-    """Trust a hub machine's host key, naming the one the user confirmed.
-
-    The fingerprint comes back from the caller so that what is stored is what
-    was shown, rather than whatever the machine answers when asked again.
-    """
-
-    endpoint: str = ""
-    fingerprint: str = ""
-
-
-class HubConnection(BaseModel):
-    """What this device can see of a hub before connecting a workspace to it."""
-
-    endpoint: str = ""
-    is_local: bool
-    host_key_fingerprints: list[str] = Field(default_factory=list)
-    host_key_trusted: bool = True
-    #: True when this device holds a key for the host but the host is offering
-    #: another one, so the screen asks the user to look again rather than
-    #: presenting a first contact.
-    host_key_changed: bool = False
-    workspace_ids: list[str] = Field(default_factory=list)
-
-
-class DeviceSshKey(BaseModel):
-    """This device's public key, for registration on a hub machine."""
-
-    exists: bool
-    path: Path | None = None
-    public_key: str = ""
-    fingerprint: str = ""
-
-
-class UnsendableChangeModel(BaseModel):
-    """A local change that cannot be shared until the file is repaired."""
-
-    path: str
-    reason: str
-
-
-class RejectedChangeModel(BaseModel):
-    """A local change the hub did not accept, still held on this device.
-
-    The content is deliberately absent. Recovery is a manual procedure on this
-    machine, so what is published is only what makes the stashed commit
-    findable -- and what lets the user say they are done with it.
-    """
-
-    rejection_id: str
-    occurred_at: str
-    paths: list[str]
-
-
-class WorkspaceDevice(BaseModel):
-    """A machine sharing this workspace, including relay-derived liveness."""
-
-    device_id: str
-    display_name: str
-    os: str
-    joined_at: str
-    status: str = "active"
-    ssh_public_key_fingerprint: str = ""
-    # Whether this record is the machine the Desktop is running on, which is
-    # the only one whose name it can change.
-    is_self: bool = False
-    live_status: Literal["unknown", "online", "delayed", "expired"] = "unknown"
-    last_seen_at: str | None = None
-
-
-class WorkspaceDevices(BaseModel):
-    devices: list[WorkspaceDevice] = Field(default_factory=list)
-    device_id: str = ""
-
-
-class WorkspaceLiveWork(BaseModel):
-    """One remote work item received from a Hub live relay."""
-
-    work_id: str
-    run_id: str | None = None
-    member_id: str
-    workflow_name: str
-    presentation: dict[str, Any] | None = None
-    retry_at: str | None = None
-
-
-class WorkspaceLiveState(BaseModel):
-    """A live relay snapshot suitable for the Desktop API."""
-
-    schema_version: int
-    workspace_id: str
-    device_id: str
-    publisher_id: str
-    observed_at: str
-    status: Literal["online", "delayed", "expired"]
-    works: list[WorkspaceLiveWork] = Field(default_factory=list)
-
-
-class WorkspaceServiceOwner(BaseModel):
-    """The persistent service owner and the local device's relation to it."""
-
-    workspace_id: str
-    owner_device_id: str | None = None
-    updated_at: str | None = None
-    is_self: bool = False
-
-
-class WorkspaceServiceOwnerTransferRequest(BaseModel):
-    device_id: str
-
-
-class DeviceRenameRequest(BaseModel):
-    """Rename this machine. Other devices are named on the machines themselves."""
-
-    display_name: str
-
-
-class WorkspaceSyncStatus(BaseModel):
-    """The synchronization state of the selected workspace, or of the members'
-    identities, which every workspace shares.
-
-    ``state`` is the queue's own state, plus ``not_connected`` for identities
-    that are not on the hub the workspace synchronizes with.
-    """
-
-    enabled: bool
-    workspace_id: str | None = None
-    device_id: str | None = None
-    hub_url: str | None = None
-    state: str = "disabled"
-    local_head: str | None = None
-    remote_head: str | None = None
-    ahead_count: int = 0
-    behind_count: int = 0
-    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
-    rejected_changes: list[RejectedChangeModel] = Field(default_factory=list)
-    last_success_at: str | None = None
-    last_error_code: str | None = None
-    last_error_detail: str | None = None
-    live_error_code: str | None = None
-
-
-class WorkspaceSyncEnableRequest(BaseModel):
-    """Connect the selected workspace to a hub.
-
-    ``workspace_id`` names the hub workspace to join. Leaving it empty
-    registers this workspace on the hub under its own identifier.
-    """
-
-    hub: HubTarget = Field(default_factory=HubTarget)
-    workspace_id: str = ""
-
-
-class WorkspaceSyncPreview(BaseModel):
-    """What joining the workspace a hub already holds would do.
-
-    Registering is not previewed: a hub with no copy of this workspace has
-    nothing to compare against.
-    """
-
-    hub_workspace_id: str | None = None
-    workspace_id: str
-    mode: Literal["join", "reconnect"]
-    hub_only: list[str] = Field(default_factory=list)
-    device_only: list[str] = Field(default_factory=list)
-    differing: list[str] = Field(default_factory=list)
-    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
-
-
-class WorkspaceSyncCloneRequest(BaseModel):
-    """Create a new workspace root from a copy of a hub's shared content."""
-
-    hub: HubTarget = Field(default_factory=HubTarget)
-    workspace_id: str
-    workspace_dir: Path
-
-
-class SecretStoreState(BaseModel):
-    """Whether one machine's OS secret store can be used right now.
-
-    ``available`` and ``locked`` are separate answers: a locked store is
-    installed and reachable and still refuses every value, and the way out of
-    the two is different, so the screen says which one it is.
-    """
-
-    available: bool = False
-    locked: bool = False
-    error_code: str = ""
-
-
-class WorkspaceSecretState(BaseModel):
-    """One key's standing on this device, and on the hub when it answered.
-
-    No field here can carry a secret value. What the screen shows is a name, a
-    state, and two counters, which is the whole of what the shared metadata
-    holds as well.
-    """
-
-    key: str
-    status: str
-    shared_generation: int = 0
-    local_generation: int | None = None
-    hub_generation: int | None = None
-    updated_at: str = ""
-    # Which transfer this key can take. Decided where the transfers are, so a
-    # button cannot offer one the transfer itself would refuse.
-    can_send: bool = False
-    can_fetch: bool = False
-
-
-class WorkspaceSecrets(BaseModel):
-    """The Secret half of the synchronization screen.
-
-    Attributes:
-        enabled (bool): Whether this workspace has a hub to transfer with.
-        hub_reachable (bool): Whether the hub answered. When it did not, the
-            key list is still the local view rather than nothing.
-        hub_error_code (str): Why the hub did not answer, for the message.
-        secret_store (SecretStoreState): This machine's own store.
-        hub_secret_store (SecretStoreState | None): The hub machine's store,
-            when it answered.
-        keys (list[WorkspaceSecretState]): Every key the workspace knows.
-        sendable_keys (list[str]): What "send everything" would hand the hub.
-        fetchable_keys (list[str]): What "fetch everything" would ask it for.
-        missing_count (int): Keys this machine has no value for.
-        outdated_count (int): Keys another device published a newer value for.
-        pending_count (int): Keys the hub cannot hand to the other machines
-            yet: a value entered here, a key changed on two machines, an
-            unrecorded send, or a recorded generation the hub holds no copy
-            of.
-        attention_count (int): The three above together, which is the number a
-            summary band shows.
-    """
-
-    enabled: bool = False
-    hub_reachable: bool = False
-    hub_error_code: str = ""
-    secret_store: SecretStoreState = Field(default_factory=SecretStoreState)
-    hub_secret_store: SecretStoreState | None = None
-    keys: list[WorkspaceSecretState] = Field(default_factory=list)
-    sendable_keys: list[str] = Field(default_factory=list)
-    fetchable_keys: list[str] = Field(default_factory=list)
-    missing_count: int = 0
-    outdated_count: int = 0
-    pending_count: int = 0
-    attention_count: int = 0
-
-
-class SecretTransferRequest(BaseModel):
-    """Which keys to move. An empty list means "everything this device needs"."""
-
-    keys: list[str] = Field(default_factory=list)
-
-
-class SecretTransferResult(BaseModel):
-    """What happened to one key, named without its value."""
-
-    key: str
-    status: str
-    generation: int | None = None
-
-
-class SecretTransferResponse(BaseModel):
-    """The outcome of one transfer, with the states it left behind."""
-
-    results: list[SecretTransferResult] = Field(default_factory=list)
-    secrets: WorkspaceSecrets
 
 
 class ProjectSummary(BaseModel):
@@ -781,9 +491,6 @@ class TraceSummary(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
-TracePresentation = LivePresentation
-
-
 class TraceRecord(BaseModel):
     kind: str
     timestamp: str = ""
@@ -874,31 +581,10 @@ class ActivityHistorySession(BaseModel):
     duration_seconds: float = 0
     links: list[ActivityHistoryLink] = Field(default_factory=list)
     rate_limit: ActivityHistoryRateLimit | None = None
-    # Whether this device holds the execution's transcript. The session itself
-    # is shared and looks the same on every device; only the detail view is
-    # local, so the frontend offers its link from this and not from trace_id.
+    # Whether the execution's transcript is still kept. The session itself is
+    # a record of its own; the detail view reads the transcript, so the
+    # frontend offers its link from this and not from trace_id.
     detail_available: bool = False
-
-
-#: The two things a device synchronizes with its hub: the selected workspace,
-#: and the members' identities, which every workspace shares.
-type SyncScope = Literal["workspace", "identities"]
-
-
-class ActivityHistoryRejection(BaseModel):
-    """What identifies a local change the hub did not accept.
-
-    Only enough to find the stashed commit is carried: recovery is a manual
-    procedure on the device that made the change, and the stashed content is
-    deliberately absent from every API.
-    """
-
-    rejection_id: str
-    paths: list[str] = Field(default_factory=list)
-    source_device_id: str = ""
-    #: Whose repository holds the stashed commit: the workspace's, or the
-    #: members' identities', which every workspace shares.
-    scope: SyncScope = "workspace"
 
 
 class ActivityHistoryEvent(BaseModel):
@@ -910,9 +596,6 @@ class ActivityHistoryEvent(BaseModel):
     detail: str = ""
     url: str = ""
     links: list[ActivityHistoryLink] = Field(default_factory=list)
-    # Present only on ``sync_rejected``, whose facts are structured rather than
-    # a link to somewhere else.
-    rejection: ActivityHistoryRejection | None = None
 
 
 class ActivityHistoryResponse(BaseModel):
@@ -1410,7 +1093,7 @@ class IntelligenceConfigResponse(BaseModel):
     #: The workspace's shared grants (documents). They are the team's,
     #: whichever scope is read, and only the team scope writes them.
     filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
-    #: This device's own extra paths and denies, never synchronized.
+    #: This device's own extra paths and denies.
     local_grants: LocalGrants = Field(default_factory=LocalGrants)
     #: The workspace's agent environment declaration (image, network, and DNS). The
     #: team's, whichever scope is read; only the team scope writes it.

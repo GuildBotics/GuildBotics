@@ -453,18 +453,6 @@ export type ActivityHistorySession = {
   detail_available: boolean;
 };
 
-/**
- * Enough to find a rejected change's stashed commit again. The stashed content
- * is deliberately absent: recovery is a manual procedure on the source device.
- */
-export type ActivityHistoryRejection = {
-  rejection_id: string;
-  paths: string[];
-  source_device_id: string;
-  /** Whose repository holds the stashed commit. */
-  scope: SyncScope;
-};
-
 export type ActivityHistoryEvent = {
   id: string;
   timestamp: string;
@@ -477,14 +465,11 @@ export type ActivityHistoryEvent = {
     | "push"
     | "issue_create"
     | "issue_resolve"
-    | "sync_rejected"
     | "external";
   title: string;
   detail: string;
   url: string;
   links: ActivityHistoryLink[];
-  /** Present only on `sync_rejected`. */
-  rejection?: ActivityHistoryRejection | null;
 };
 
 export type ActivityHistoryResponse = {
@@ -757,10 +742,6 @@ export type MemberConfig = {
   character: Record<string, unknown>;
   /** The member's stored account with each provider, as its setup shows it. */
   accounts: Record<string, Record<string, unknown>>;
-  // Member-relative secret name -> the environment key that value is stored
-  // under, so the synchronization state of a credential can be looked up
-  // without this side reconstructing the backend's naming.
-  secret_env_keys?: Record<string, string>;
   chat_channels: string[];
   work_stop_notification_channels: string[];
   chat_channel_participation: Record<string, ChatParticipationPolicy>;
@@ -871,7 +852,7 @@ export type SharedGrants = {
   documents: DocumentGrant[];
 };
 
-// A path this device alone grants; may be absolute, never synchronized.
+// A path this device alone grants; may be absolute, never in the workspace config.
 export type LocalPathGrant = {
   path: string;
   access: GrantAccess;
@@ -1132,213 +1113,6 @@ export type ApiErrorPayload = {
 /** Config-relative path -> the revision the screen was composed against. */
 export type ConfigRevisions = Record<string, string>;
 
-/** The queue state the backend reports for the selected workspace. */
-export type SyncState =
-  | "disabled"
-  | "idle"
-  | "fetching"
-  | "reconciling"
-  | "pushing"
-  | "unreachable"
-  | "local_error"
-  | "invalid_shared_state"
-  | "update_required"
-  /** Identities that are not on the hub the workspace synchronizes with. */
-  | "not_connected";
-
-export type UnsendableChange = {
-  path: string;
-  reason: string;
-};
-
-/**
- * A local change the hub did not accept, still held on this machine.
- *
- * The content is not here and is not fetchable: recovery is a manual procedure
- * on this device, so what travels is what makes the stashed commit findable.
- */
-export type RejectedChange = {
-  rejection_id: string;
-  occurred_at: string;
-  paths: string[];
-};
-
-export type WorkspaceSyncStatus = {
-  enabled: boolean;
-  workspace_id: string | null;
-  device_id: string | null;
-  hub_url: string | null;
-  state: SyncState;
-  local_head: string | null;
-  remote_head: string | null;
-  ahead_count: number;
-  behind_count: number;
-  unsendable_changes: UnsendableChange[];
-  rejected_changes: RejectedChange[];
-  last_success_at: string | null;
-  last_error_code: string | null;
-  last_error_detail: string | null;
-  live_error_code: string | null;
-};
-
-export type WorkspaceLiveWork = {
-  work_id: string;
-  run_id: string | null;
-  member_id: string;
-  workflow_name: string;
-  presentation: Record<string, unknown> | null;
-  retry_at: string | null;
-};
-
-export type WorkspaceLiveState = {
-  schema_version: number;
-  workspace_id: string;
-  device_id: string;
-  publisher_id: string;
-  observed_at: string;
-  status: "online" | "delayed" | "expired";
-  works: WorkspaceLiveWork[];
-};
-
-export type WorkspaceServiceOwner = {
-  workspace_id: string;
-  owner_device_id: string | null;
-  updated_at: string | null;
-  is_self: boolean;
-};
-
-/** Empty `endpoint` means this machine, which needs no network and no host key. */
-export type HubTarget = {
-  endpoint: string;
-};
-
-export type HubStatus = {
-  hosted: boolean;
-  hub_root: string;
-  hub_id: string | null;
-  created_at: string | null;
-  ssh_endpoint: string | null;
-  workspace_ids: string[];
-};
-
-export type HubConnection = {
-  endpoint: string;
-  is_local: boolean;
-  host_key_fingerprints: string[];
-  host_key_trusted: boolean;
-  /** A key is stored for this host, and the host is offering a different one. */
-  host_key_changed: boolean;
-  workspace_ids: string[];
-};
-
-export type HubTrustRequest = {
-  endpoint: string;
-  /** The fingerprint the user actually looked at. Trusting without one is refused. */
-  fingerprint: string;
-};
-
-export type DeviceSshKey = {
-  exists: boolean;
-  path: string | null;
-  public_key: string;
-  fingerprint: string;
-};
-
-export type WorkspaceSyncEnableRequest = {
-  hub: HubTarget;
-  /** Names the hub workspace to join; empty registers this one on the hub. */
-  workspace_id?: string;
-};
-
-export type WorkspaceSyncPreview = {
-  hub_workspace_id: string | null;
-  workspace_id: string;
-  mode: "join" | "reconnect";
-  hub_only: string[];
-  device_only: string[];
-  differing: string[];
-  unsendable_changes: UnsendableChange[];
-};
-
-export type WorkspaceSyncCloneRequest = {
-  hub: HubTarget;
-  workspace_id: string;
-  workspace_dir: string;
-};
-
-export type WorkspaceDevice = {
-  device_id: string;
-  display_name: string;
-  os: string;
-  joined_at: string;
-  status: string;
-  ssh_public_key_fingerprint: string;
-  is_self: boolean;
-  live_status?: "unknown" | "online" | "delayed" | "expired";
-  last_seen_at?: string | null;
-};
-
-export type WorkspaceDevices = {
-  devices: WorkspaceDevice[];
-  device_id: string;
-};
-
-/** Whether one machine's OS secret store can be used right now. */
-export type SecretStoreState = {
-  error_code: string;
-  available: boolean;
-  locked: boolean;
-};
-
-/**
- * What one key's standing is. Every field here is a name or a counter: the
- * value itself never leaves the two OS secret stores it travels between.
- */
-export type WorkspaceSecretState = {
-  key: string;
-  status: SecretStatus;
-  shared_generation: number;
-  local_generation: number | null;
-  hub_generation: number | null;
-  updated_at: string;
-  // Which transfer this key can take. Decided by the backend, where the
-  // transfers are, so a button cannot offer one the transfer would refuse.
-  can_send: boolean;
-  can_fetch: boolean;
-};
-
-export type SecretStatus =
-  "ready" | "missing" | "outdated" | "pending_send" | "conflict" | "unconfirmed" | "hub_behind";
-
-export type WorkspaceSecrets = {
-  enabled: boolean;
-  hub_reachable: boolean;
-  hub_error_code: string;
-  secret_store: SecretStoreState;
-  hub_secret_store: SecretStoreState | null;
-  keys: WorkspaceSecretState[];
-  sendable_keys: string[];
-  fetchable_keys: string[];
-  missing_count: number;
-  outdated_count: number;
-  pending_count: number;
-  attention_count: number;
-};
-
-/** An empty `keys` means "everything this device is short of". */
-export type SecretTransferRequest = { keys?: string[] };
-
-export type SecretTransferResult = {
-  key: string;
-  status: string;
-  generation: number | null;
-};
-
-export type SecretTransferResponse = {
-  results: SecretTransferResult[];
-  secrets: WorkspaceSecrets;
-};
-
 export class ApiRequestError extends Error {
   code: string;
   context: Record<string, unknown>;
@@ -1351,90 +1125,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-export async function getWorkspaceSyncStatus(
-  scope: SyncScope = "workspace",
-): Promise<WorkspaceSyncStatus> {
-  return request(`/${scope}/sync`);
-}
-
-export async function previewWorkspaceSync(
-  body: WorkspaceSyncEnableRequest,
-): Promise<WorkspaceSyncPreview> {
-  return request("/workspace/sync/preview", { method: "POST", body });
-}
-
-export async function enableWorkspaceSync(
-  body: WorkspaceSyncEnableRequest,
-): Promise<WorkspaceSyncStatus> {
-  return request("/workspace/sync/enable", { method: "POST", body });
-}
-
-export async function changeWorkspaceSyncHub(
-  body: WorkspaceSyncEnableRequest,
-): Promise<WorkspaceSyncStatus> {
-  return request("/workspace/sync/hub", { method: "POST", body });
-}
-
-export async function retryWorkspaceSync(
-  scope: SyncScope = "workspace",
-): Promise<WorkspaceSyncStatus> {
-  return request(`/${scope}/sync/retry`, { method: "POST" });
-}
-
-export async function cloneWorkspaceFromHub(
-  body: WorkspaceSyncCloneRequest,
-): Promise<ConfigStatus> {
-  return request("/workspace/sync/clone", { method: "POST", body });
-}
-
-/** Whose secrets: the selected workspace's, or the identities' -- the
- * members' credentials and the connections', which every workspace shares. */
-/**
- * The two things a device synchronizes with its hub: the selected workspace,
- * and the members' identities, which every workspace shares.
- */
-export type SyncScope = "workspace" | "identities";
-
-export async function getWorkspaceSecrets(
-  scope: SyncScope = "workspace",
-): Promise<WorkspaceSecrets> {
-  return request(`/${scope}/secrets`);
-}
-
-export async function sendWorkspaceSecrets(
-  body: SecretTransferRequest = {},
-  scope: SyncScope = "workspace",
-): Promise<SecretTransferResponse> {
-  return request(`/${scope}/secrets/send`, { method: "POST", body });
-}
-
-export async function fetchWorkspaceSecrets(
-  body: SecretTransferRequest = {},
-  scope: SyncScope = "workspace",
-): Promise<SecretTransferResponse> {
-  return request(`/${scope}/secrets/fetch`, { method: "POST", body });
-}
-
-export async function getHubStatus(): Promise<HubStatus> {
-  return request("/hub");
-}
-
-export async function createHub(): Promise<HubStatus> {
-  return request("/hub", { method: "POST" });
-}
-
-export async function inspectHub(body: HubTarget): Promise<HubConnection> {
-  return request("/hub/inspect", { method: "POST", body });
-}
-
-export async function trustHub(body: HubTrustRequest): Promise<HubConnection> {
-  return request("/hub/trust", { method: "POST", body });
-}
-
-export async function getDeviceSshKey(): Promise<DeviceSshKey> {
-  return request("/hub/ssh-key");
-}
-
 export async function getRegisteredWorkspaces(): Promise<string[]> {
   return request("/device/workspaces");
 }
@@ -1443,53 +1133,12 @@ export async function unregisterWorkspace(workspace: string): Promise<string[]> 
   return request("/device/workspaces", { method: "DELETE", body: { workspace_dir: workspace } });
 }
 
-export async function createDeviceSshKey(): Promise<DeviceSshKey> {
-  return request("/hub/ssh-key", { method: "POST" });
-}
-
-export async function getWorkspaceDevices(): Promise<WorkspaceDevices> {
-  return request("/workspace/devices");
-}
-
-export async function renameThisDevice(displayName: string): Promise<WorkspaceDevices> {
-  return request("/workspace/devices/self", {
-    method: "POST",
-    body: { display_name: displayName },
-  });
-}
-
-export async function getWorkspaceLive(): Promise<WorkspaceLiveState[]> {
-  return request("/workspace/live");
-}
-
-export async function getWorkspaceServiceOwner(): Promise<WorkspaceServiceOwner> {
-  return request("/workspace/service-owner");
-}
-
-export async function transferWorkspaceServiceOwner(
-  deviceId: string,
-): Promise<WorkspaceServiceOwner> {
-  return request("/workspace/service-owner/transfer", {
-    method: "POST",
-    body: { device_id: deviceId },
-  });
-}
-
 export async function getConfigStatus(): Promise<ConfigStatus> {
   return request("/config/status");
 }
 
 export async function setWorkspace(body: WorkspaceChangeRequest): Promise<ConfigStatus> {
   return request("/workspace", { method: "POST", body });
-}
-
-export async function discardWorkspaceSyncRejection(
-  rejectionId: string,
-  scope: SyncScope = "workspace",
-): Promise<WorkspaceSyncStatus> {
-  return request(`/${scope}/sync/rejections/${encodeURIComponent(rejectionId)}/discard`, {
-    method: "POST",
-  });
 }
 
 export async function getHotkeys(): Promise<HotkeySettings> {

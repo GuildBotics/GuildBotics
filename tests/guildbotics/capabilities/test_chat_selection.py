@@ -696,21 +696,6 @@ async def test_declined_batch_leaves_no_run_record(tmp_path):
     assert list(RunStore().records()) == []
 
 
-@pytest.mark.asyncio
-async def test_unshared_run_start_hands_the_batch_back(tmp_path, monkeypatch):
-    service = FakeChatService()
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-    _set_incoming_event(ctx)
-    _set_retry_context(ctx, run_id="run-unshared")
-    monkeypatch.setattr(chat_selection, "await_shared_change", lambda change: False)
-
-    with pytest.raises(ThreadContextUnavailableError):
-        await _dispatch(ctx, chat_service=service, state_store=state_store)
-
-    assert ctx.invocations == []
-
-
 def _set_retry_context(ctx: types.SimpleNamespace, *, run_id: str) -> None:
     ctx.retry_context = {
         "attempt_count": 1,

@@ -282,7 +282,7 @@ class PendingChatDispatcher:
             except WorkRejectedError as exc:
                 # A finished run is reported as a duplicate only when it is
                 # not known to have left its work undone, so the event really
-                # was handled (usually by another device). A previous attempt
+                # was handled. A previous attempt
                 # that merely failed is accepted again and retried above,
                 # never marked processed.
                 if (

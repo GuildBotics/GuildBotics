@@ -1,2 +1,2 @@
 en:
-  credentials_missing: Credentials are missing or unavailable on this device. Register an API key or fetch the current secret in Sync settings.
+  credentials_missing: Credentials are missing or unavailable on this device. Register an API key.

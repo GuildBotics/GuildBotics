@@ -1,9 +1,8 @@
 """Durable task-run records and completion evidence.
 
-Each run is one shared JSON object at
-``state/task-runs/<run_id>/result.json``. A task run has one lifecycle record,
-so another device can observe running and terminal states without reconstructing
-an event log.
+Each run is one JSON object at ``state/task-runs/<run_id>/result.json``. A
+task run has one lifecycle record, so its running and terminal states are read
+without reconstructing an event log.
 """
 
 from __future__ import annotations
@@ -28,12 +27,11 @@ from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
-    ChangeSet,
-    update_shared_json_with_change,
+    update_shared_json,
 )
+from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 from guildbotics.workspace.identity import ensure_device_identity
 
 
@@ -174,13 +172,12 @@ class RunStore:
         work_kind: str = "member-work",
         execution_mode: TaskRunExecutionMode = "user_initiated",
         member_id: str = "unknown",
-        device_id: str | None = None,
     ) -> None:
         self.root = root or get_workspace_state_path("task-runs")
         self.work_kind = work_kind
         self.execution_mode = execution_mode
         self.member_id = member_id
-        self.device_id: str = device_id or _device_id()
+        self.device_id: str = _device_id()
         self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
@@ -240,39 +237,13 @@ class RunStore:
         source: str = "",
         attributes: Mapping[str, Any] | None = None,
     ) -> TaskRunRecord:
-        """Create the running record used by the common execution boundary."""
-
-        record, _ = self.start_record_with_change(
-            run_id,
-            work_kind=work_kind,
-            execution_mode=execution_mode,
-            member_id=member_id,
-            work_identity=work_identity,
-            source=source,
-            attributes=attributes,
-        )
-        return record
-
-    def start_record_with_change(
-        self,
-        run_id: str,
-        *,
-        work_kind: str,
-        execution_mode: TaskRunExecutionMode,
-        member_id: str,
-        work_identity: dict[str, str] | None = None,
-        source: str = "",
-        attributes: Mapping[str, Any] | None = None,
-    ) -> tuple[TaskRunRecord, ChangeSet | None]:
-        """Create a running record and expose its sync notification.
+        """Create the running record used by the common execution boundary.
 
         A run that ended leaving its work undone is re-opened for its next
         attempt instead of being kept terminal, so every attempt of one
         logical unit of work accumulates its evidence under a single run id.
         A run that recorded a result, or whose outcome could not be observed,
-        is never restarted. Re-opening moves the record's ownership to the
-        device that is starting this attempt, which is the device the run is
-        now running on.
+        is never restarted.
 
         Args:
             source: The source of the run's trace.
@@ -297,7 +268,7 @@ class RunStore:
                 }
             )
 
-        return self._mutate_with_change(run_id, _start)
+        return self._mutate(run_id, _start)
 
     def finish_record(
         self,
@@ -307,21 +278,7 @@ class RunStore:
         safe_summary: str = "",
         attributes: Mapping[str, Any] | None = None,
     ) -> TaskRunRecord | None:
-        """Record a generic execution outcome without bypassing evidence rules."""
-        record, _ = self.finish_record_with_change(
-            run_id, status=status, safe_summary=safe_summary, attributes=attributes
-        )
-        return record
-
-    def finish_record_with_change(
-        self,
-        run_id: str,
-        *,
-        status: str,
-        safe_summary: str = "",
-        attributes: Mapping[str, Any] | None = None,
-    ) -> tuple[TaskRunRecord | None, ChangeSet | None]:
-        """Finish a run and expose the sync notification for a barrier.
+        """Record a generic execution outcome without bypassing evidence rules.
 
         A run that never recorded its start took no work, so there is nothing
         to finish and no record is created for it: an input the workflow
@@ -332,13 +289,12 @@ class RunStore:
                 attributes recorded at its start keep their values.
 
         Returns:
-            The finished record and its sync notification, or ``(None, None)``
-            when the run has no record.
+            The finished record, or None when the run has no record.
         """
         if status not in TASK_RUN_TERMINAL_STATES:
             raise TaskRunError(f"Task run has invalid terminal status '{status}'.")
         if not self._path(run_id).is_file():
-            return None, None
+            return None
 
         def _finish(current: TaskRunRecord) -> TaskRunRecord:
             merged = _first_seen(current.attributes, attributes)
@@ -353,7 +309,7 @@ class RunStore:
                 }
             )
 
-        return self._mutate_with_change(run_id, _finish)
+        return self._mutate(run_id, _finish)
 
     @property
     def workspace_root(self) -> Path | None:
@@ -378,7 +334,7 @@ class RunStore:
         This is the timeline's read: a run is one lifecycle record, so the
         screen shows it from this alone instead of folding the events it
         emitted. A record that cannot be read is skipped here rather than
-        failing the whole screen; the synchronization boundary reports it.
+        failing the whole screen.
         """
         matched: list[TaskRunRecord] = []
         for record in self._readable_records():
@@ -619,12 +575,6 @@ class RunStore:
         return self._read_record(run_id)
 
     def _mutate(self, run_id: str, mutate: Any) -> TaskRunRecord:
-        record, _ = self._mutate_with_change(run_id, mutate)
-        return record
-
-    def _mutate_with_change(
-        self, run_id: str, mutate: Any
-    ) -> tuple[TaskRunRecord, ChangeSet | None]:
         path = self._path(run_id)
         workspace_root = self._workspace_root()
         with shared_write_lock(workspace_root):
@@ -650,12 +600,10 @@ class RunStore:
                     update={"schema_version": SHARED_RECORD_SCHEMA_VERSION}
                 ).model_dump()
 
-            payload, change = update_shared_json_with_change(
-                path, _apply, workspace_root=workspace_root
-            )
+            payload = update_shared_json(path, _apply, workspace_root=workspace_root)
         self._completions_cache = None
         try:
-            return TaskRunRecord.model_validate(payload), change
+            return TaskRunRecord.model_validate(payload)
         except ValueError as exc:  # pragma: no cover - callback returns the model
             raise TaskRunError(
                 f"Task run '{run_id}' produced an invalid record."

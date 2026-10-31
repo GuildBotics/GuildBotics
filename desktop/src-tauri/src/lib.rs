@@ -463,7 +463,7 @@ fn request_entry_link(state: &BackendState, next: &str) -> io::Result<String> {
 }
 
 /// Ask the Local API to exit through its own shutdown path, so its teardown
-/// (scheduler stop, sync deactivation, session finish) runs before it goes.
+/// (scheduler stop, session finish) runs before it goes.
 ///
 /// Returns how long the backend says that teardown may take. The host waits
 /// that long rather than keeping a number of its own, which would go stale the

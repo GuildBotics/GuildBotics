@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import ConfigStatus
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.utils.local_api import API_PREFIX
 from guildbotics.utils.person_id import identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
@@ -50,7 +49,6 @@ class RuntimeStub:
             project_file_exists=True,
             storage_dir=tmp_path,
         )
-        self.workspace_sync_service = WorkspaceSyncService()
         self.event_bus = EventBus()
 
     def stop_scheduler(self, *, force: bool = False) -> None:
@@ -147,16 +145,6 @@ def test_post_avatar_upload_rejects_large_file(client: TestClient) -> None:
     response = client.post("/config/members/alice/avatar", files=files)
     assert response.status_code == 400
     assert response.json()["code"] == "avatar_invalid"
-
-
-def test_the_upload_limit_is_the_limit_synchronization_can_carry() -> None:
-    """An avatar the product accepts but the sync boundary refuses would be
-    displayed here and never reach the other machines, with nothing in the
-    normal paths failing to say why."""
-    from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
-    from guildbotics.workspace.validation import MAX_SHARED_AVATAR_BYTES
-
-    assert MAX_AVATAR_BYTES == MAX_SHARED_AVATAR_BYTES
 
 
 # --- handing the avatar to the member's accounts ---------------------------

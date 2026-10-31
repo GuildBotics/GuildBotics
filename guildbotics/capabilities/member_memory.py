@@ -26,18 +26,18 @@ from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
     shared_write_lock,
 )
-from guildbotics.utils.workspace_sync_port import (
+from guildbotics.utils.shared_writes import (
     SHARED_RECORD_SCHEMA_VERSION,
     dump_shared_json,
-    notify_shared_state_changed,
     update_shared_json,
     write_shared_text,
 )
 from guildbotics.workspace.identity import ensure_device_identity
-from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
 DEFAULT_DIGEST_N = 20
+#: The largest memory file (a document's meta or body, or a recency record).
+MAX_MEMORY_FILE_BYTES = 1_048_576
 RG_NO_MATCH_EXIT_CODE = 1
 BODY_FILE = "body.md"
 META_FILE = "meta.yml"
@@ -78,12 +78,11 @@ class MemberMemoryService:
 
     A document is metadata plus a body, and every change reads the whole of it
     before writing the whole of it back. Team memory is written by several
-    members from several machines, so the other writer may be a member CLI in
-    another process, or the synchronization queue checking a hub's content out
-    over these files. A read taken before that checkout and written back after
-    it restores the superseded document as an ordinary local edit, so what the
-    other machine wrote disappears without being recorded as a conflict -- and
-    for memory the unit lost is a whole document.
+    members at once, so the other writer may be another member's workflow or
+    a member command. A read taken before the other write and written back
+    after it restores the superseded document, so what the other writer wrote
+    disappears without being recorded as a conflict -- and for memory the unit
+    lost is a whole document.
 
     Each operation therefore holds the workspace's shared-write lock from the
     read it derives from to the last file it writes. Declaring it here rather
@@ -126,8 +125,8 @@ class MemberMemoryService:
         # of the write, and it is a scan of the whole team directory rather
         # than a read of the file being written, so no write helper can put it
         # inside the span. Asked outside one, it can be answered "no" a moment
-        # before the queue adopts another device's policy, and then a second
-        # one is created beside it. The delegation below re-enters this span.
+        # before another writer records a policy, and then a second one is
+        # created beside it. The delegation below re-enters this span.
         with shared_write_lock():
             if kind == "policy":
                 self._ensure_policy_write_allowed(policy_approved)
@@ -401,7 +400,6 @@ class MemberMemoryService:
             if target.exists():
                 raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
             doc.path.rename(target)
-            _notify_document_moved(doc.path, target)
         archived_path = _document_path(self.root, target)
         self._record_audit("archive", doc, path=archived_path)
         return {"doc_id": doc.doc_id, "path": archived_path}
@@ -417,7 +415,6 @@ class MemberMemoryService:
             if target.exists():
                 raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
             doc.path.rename(target)
-            _notify_document_moved(doc.path, target)
             self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
@@ -639,13 +636,12 @@ class MemberMemoryService:
     def _touch_recent(self, doc_id: str) -> None:
         """Record that this member used a document, in this device's record.
 
-        Each device writes only its own record, so two devices using memory
-        while apart never change the same shared file. The record is written
+        Each device writes only its own record. The record is written
         inside the operation's span, unlike the best-effort audit journal, so
         a completed operation always leaves its recency behind. Entries are not
         removed when a document is archived -- the digest skips what no longer
         resolves -- and the oldest are dropped only when the record would grow
-        past what synchronization accepts.
+        past the memory file limit.
         """
         person_id = self.person.person_id
 
@@ -699,17 +695,6 @@ class _MemoryDoc:
     meta_text: str
 
 
-def _notify_document_moved(source: Path, target: Path) -> None:
-    """Announce a moved document as the delete and create it actually is.
-
-    Archiving and promoting rename a document directory. A consumer that
-    stages or coalesces by operation would drop one half of the move if both
-    paths arrived under a single operation.
-    """
-    notify_shared_state_changed("delete", [source])
-    notify_shared_state_changed("create", [target])
-
-
 def _summary_payload(doc: _MemoryDoc, *, snippet: str = "") -> dict[str, Any]:
     payload = {
         "doc_id": doc.doc_id,
@@ -735,8 +720,8 @@ def _baseline_policy_payload() -> dict[str, Any]:
 def _document_path(root: PurePath, path: PurePath) -> str:
     """Return a document's logical ``documents/...`` path.
 
-    Memory paths reach agents and other devices, so they are spelled with
-    forward slashes everywhere instead of in the writing device's separators.
+    Memory paths reach agents, so they are spelled with forward slashes
+    everywhere instead of in the writing OS's separators.
     """
     return f"documents/{path.relative_to(root).as_posix()}"
 
@@ -771,7 +756,7 @@ def _used_at() -> str:
 
 
 def _within_shared_size(record: dict[str, Any]) -> dict[str, Any]:
-    """Drop the oldest uses until the recency record fits a shared file."""
+    """Drop the oldest uses until the recency record fits a memory file."""
     members = record["members"]
     uses = sorted(
         (used_at, person_id, doc_id)
@@ -779,7 +764,7 @@ def _within_shared_size(record: dict[str, Any]) -> dict[str, Any]:
         for doc_id, used_at in used.items()
     )
     while (
-        uses and len(dump_shared_json(record).encode("utf-8")) > MAX_SHARED_FILE_BYTES
+        uses and len(dump_shared_json(record).encode("utf-8")) > MAX_MEMORY_FILE_BYTES
     ):
         _, person_id, doc_id = uses.pop(0)
         del members[person_id][doc_id]
@@ -787,23 +772,16 @@ def _within_shared_size(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _require_shareable_size(filename: str, text: str) -> None:
-    """Refuse content the commit boundary would then hold back forever.
-
-    A size limit is the one thing the boundary rejects that the product's own
-    paths accept: an agent can pour a long answer into a memory document, the
-    save succeeds, the agent reports success, and only the synchronization
-    queue -- on every cycle from then on -- says the change cannot be sent. So
-    the limit is answered here, where the writer can still say no, and it is
-    the boundary's own limit rather than a second opinion about it.
+    """Refuse a memory file above the size a memory document may have.
 
     Raises:
-        MemberMemoryError: When the content is above the shared size limit.
+        MemberMemoryError: When the content is above the size limit.
     """
     size = len(text.encode("utf-8"))
-    if size > MAX_SHARED_FILE_BYTES:
+    if size > MAX_MEMORY_FILE_BYTES:
         raise MemberMemoryError(
             f"Memory {filename} is {size} bytes, above the "
-            f"{MAX_SHARED_FILE_BYTES} byte limit for a shared file."
+            f"{MAX_MEMORY_FILE_BYTES} byte limit for a memory file."
         )
 
 

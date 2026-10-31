@@ -7,7 +7,7 @@ from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunSt
 from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.runtime.member_invocation import ChatSubject, Work
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+from guildbotics.utils.shared_writes import SHARED_RECORD_SCHEMA_VERSION
 
 
 def test_deferred_existing_run_is_written_with_current_schema(tmp_path):

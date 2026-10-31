@@ -10,7 +10,6 @@ from guildbotics.integrations.provider import SetupError
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
 from guildbotics.setup import setup_service
 from guildbotics.setup.setup_service import (
-    MEMBER_SECRET_NAMES,
     PersonConfigSnapshot,
     PersonSetupInput,
     ProjectSetupInput,
@@ -751,9 +750,6 @@ def test_read_person_config_shows_each_providers_account(tmp_path: Path) -> None
         },
         "slack": {"user_id": "", "has_bot_token": True, "has_app_token": True},
         "branvil": {"username": "", "has_token": False},
-    }
-    assert snapshot.secret_env_keys == {
-        name: f"ALICE_{name}" for name in MEMBER_SECRET_NAMES
     }
     assert snapshot.chat_channels == ["C1"]
     assert snapshot.chat_channel_participation == {"C1": "muted"}

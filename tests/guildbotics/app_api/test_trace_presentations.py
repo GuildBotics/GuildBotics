@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import guildbotics
-from guildbotics.drivers.trace_presentations import (
+from guildbotics.app_api.trace_presentations import (
     normalize_trace_presentation,
     supports_trace_event,
 )

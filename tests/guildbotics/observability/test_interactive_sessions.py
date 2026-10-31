@@ -6,7 +6,7 @@ from guildbotics.observability.interactive_sessions import (
     InteractiveTraceSession,
     InteractiveTraceStore,
 )
-from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
+from guildbotics.utils.shared_writes import SHARED_RECORD_SCHEMA_VERSION
 
 
 def test_interactive_trace_store_reuses_session_until_idle_timeout(tmp_path):

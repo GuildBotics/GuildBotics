@@ -22,7 +22,6 @@ from guildbotics.app_api.activity_events import (
     event_detail,
     event_label,
     event_url,
-    rejected_paths,
     target_attrs_from_payload,
 )
 from guildbotics.app_api.activity_links import links_from_record, links_from_records
@@ -31,10 +30,8 @@ from guildbotics.app_api.models import (
     ActivityHistoryLink,
     ActivityHistoryMember,
     ActivityHistoryRateLimit,
-    ActivityHistoryRejection,
     ActivityHistoryResponse,
     ActivityHistorySession,
-    SyncScope,
 )
 from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.entities.team import Person
@@ -53,7 +50,7 @@ type ActivitySessionMode = Literal["interactive", "workflow"]
 # such a run actually changed still surfaces through activity events.
 MANUAL_SESSION_SOURCE = "manual"
 #: An automated run that ended without incident and without touching anything
-#: is not activity; every other outcome is, on every device alike. Automated
+#: is not activity; every other outcome is. Automated
 #: means every workflow run that is not manual, whatever its source says (a
 #: record written before the source was recorded says nothing).
 _QUIET_STATUSES = frozenset({"success", "running", "info"})
@@ -130,7 +127,6 @@ def build_activity_history(
     members: Iterable[Person],
     lifecycles: Iterable[ActivityLifecycle],
     records: Iterable[dict[str, Any]],
-    identity_records: Iterable[dict[str, Any]] = (),
     detail_available: Callable[[str], bool],
 ) -> ActivityHistoryResponse:
     """Assemble the response from lifecycle records and fact records.
@@ -142,12 +138,8 @@ def build_activity_history(
         lifecycles: One per execution to show as a session.
         records: The fact records (shared activity events, memory audit
             events, work targets) in diagnostics-record shape.
-        identity_records: The activity events of the members' identities, in
-            the same shape. They describe the identities' own synchronization,
-            which every workspace shares.
-        detail_available: Whether this device holds the transcript of a
-            trace, by trace id. Every other part of a session is shared and
-            reads the same on every device.
+        detail_available: Whether the transcript of a trace is still kept, by
+            trace id.
     """
     display_members = [
         ActivityHistoryMember(
@@ -164,13 +156,7 @@ def build_activity_history(
     sessions = _build_sessions(
         lifecycles, ordered_records, display_member_ids, detail_available
     )
-    events = _build_events(
-        [
-            *((item, "workspace") for item in ordered_records),
-            *((item, "identities") for item in identity_records),
-        ],
-        display_member_ids,
-    )
+    events = _build_events(ordered_records, display_member_ids)
     return ActivityHistoryResponse(
         start=start.isoformat(),
         end=end.isoformat(),
@@ -310,13 +296,13 @@ def _attribute_has_value(attributes: dict[str, Any], key: str) -> bool:
 
 
 def _build_events(
-    records: list[tuple[dict[str, Any], SyncScope]], display_member_ids: set[str]
+    records: list[dict[str, Any]], display_member_ids: set[str]
 ) -> list[ActivityHistoryEvent]:
-    """Build the events, each knowing which repository's record it came from."""
+    """Build the events of the fact records."""
     events: list[ActivityHistoryEvent] = []
     seen: set[str] = set()
-    for index, (item, scope) in enumerate(records):
-        event = _activity_event(item, index, display_member_ids, scope)
+    for index, item in enumerate(records):
+        event = _activity_event(item, index, display_member_ids)
         if event is None or event.id in seen:
             continue
         seen.add(event.id)
@@ -326,7 +312,7 @@ def _build_events(
 
 
 def _activity_event(
-    item: dict[str, Any], index: int, display_member_ids: set[str], scope: SyncScope
+    item: dict[str, Any], index: int, display_member_ids: set[str]
 ) -> ActivityHistoryEvent | None:
     timestamp = str(item.get("timestamp") or "")
     if parse_timestamp(timestamp) is None:
@@ -348,11 +334,6 @@ def _activity_event(
     person_id = str(item.get("person_id") or "")
     if person_id and person_id not in display_member_ids:
         return None
-    rejection = None
-    if classification == "sync_rejected":
-        rejection = _rejection(payload, scope)
-        if rejection is None:
-            return None
     link_attrs = dict(attributes)
     link_attrs.update(target_attrs_from_payload(payload))
     links = links_from_record(payload, link_attrs, item)
@@ -364,33 +345,9 @@ def _activity_event(
         person_id=person_id,
         type=classification,
         title=label,
-        detail=(
-            ", ".join(rejection.paths)
-            if rejection is not None
-            else event_detail(item, payload, attributes)
-        ),
+        detail=event_detail(item, payload, attributes),
         url=url,
         links=links,
-        rejection=rejection,
-    )
-
-
-def _rejection(
-    payload: dict[str, Any], scope: SyncScope
-) -> ActivityHistoryRejection | None:
-    """Describe a rejected local change, or nothing when it cannot be found again.
-
-    A record without a ``rejection_id`` names no stashed commit, so it would
-    tell the user something happened without telling them where to look.
-    """
-    rejection_id = str(payload.get("rejection_id") or "")
-    if not rejection_id:
-        return None
-    return ActivityHistoryRejection(
-        rejection_id=rejection_id,
-        paths=rejected_paths(payload),
-        source_device_id=str(payload.get("source_device_id") or ""),
-        scope=scope,
     )
 
 

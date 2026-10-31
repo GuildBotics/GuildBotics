@@ -238,7 +238,6 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
         lambda person: (None, SimpleNamespace(person_id=person)),
     )
     monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
 
     exit_code, stdout, stderr = _run(
@@ -294,7 +293,6 @@ def test_a_run_record_is_written_only_under_the_turns_lease(
         "_resolve",
         lambda person: (context, SimpleNamespace(person_id=person)),
     )
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", lambda: None)
     lease = PersonExecutionLease(lease_person, tmp_path) if lease_person else None
     if kind == "ticket":
         # A ticket run ends blocked only after saying so on its item.

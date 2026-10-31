@@ -17,9 +17,6 @@ from guildbotics.integrations.github.repository_scope import (
     CONVERT_PULL_REQUEST_TO_DRAFT,
     NODE_REPOSITORY,
 )
-from guildbotics.integrations.github.workflow_status_comment import (
-    parse_workflow_status_comment,
-)
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.github_services import (

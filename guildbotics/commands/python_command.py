@@ -88,11 +88,10 @@ class PythonCommand(CommandBase):
 class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
     """Source loader that never writes a bytecode cache beside the source.
 
-    Command files live in the synchronized ``config/commands/`` tree, where a
-    ``__pycache__/*.pyc`` is a binary file the shared-file validation refuses.
-    Running a command would therefore leave the user an unsendable change they
-    never wrote. Discarding the cache keeps the generated artifact from
-    existing at all; the cost is recompiling the command source on each run.
+    Command files live in the user's ``config/commands/`` tree, where a
+    ``__pycache__/*.pyc`` would be a file the user never wrote. Discarding the
+    cache keeps the generated artifact from existing at all; the cost is
+    recompiling the command source on each run.
     """
 
     def set_data(self, path: str, data: Any, *, _mode: int = 0o666) -> None:

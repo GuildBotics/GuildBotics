@@ -2,8 +2,7 @@
 Branvil API, the addresses of tickets and pull requests, and the comments and
 reactions on them.
 
-Branvil is reached at one base URL, the same on every machine (Branvil's own
-tunnel forwards it to the Hub elsewhere), which the identities' connection
+Branvil is reached at one base URL, which the identities' connection
 records: one Branvil serves every workspace, whose members' identities and
 admin token are the identities'. The URLs it is known by are the ones recorded: a ticket is ``{base}/{repository}/-/tickets/{number}``, a pull
 request ``{base}/{repository}/-/pulls/{number}``; a repository

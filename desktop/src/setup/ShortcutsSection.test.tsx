@@ -57,8 +57,8 @@ describe("ShortcutsSection", () => {
   });
 
   it("says hotkeys stay on this machine", async () => {
-    // Every other setting on this screen is shared once a hub is connected, so
-    // the one that is not has to say so.
+    // Every other setting on this screen belongs to the workspace, so the one
+    // that does not has to say so.
     renderSection();
 
     expect(await screen.findByText(t("hotkey.deviceLocal"))).toBeInTheDocument();

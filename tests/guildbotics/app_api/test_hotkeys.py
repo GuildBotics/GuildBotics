@@ -14,7 +14,6 @@ from guildbotics.app_api.hotkeys import (
 )
 from guildbotics.app_api.models import HotkeySettings
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_template_path
-from guildbotics.utils.workspace_sync_port import shared_relative_path
 from tests.guildbotics.app_api.owner import owner_client
 from tests.guildbotics.app_api.test_api import RuntimeStub
 
@@ -202,12 +201,3 @@ def test_put_endpoint_reports_missing_workspace(
     assert rejected.status_code == 409
     assert rejected.json()["code"] == "workspace_not_configured"
     assert not (get_template_path() / "hotkeys.yml").exists()
-
-
-def test_hotkeys_never_travel_to_another_machine(local_dir: Path) -> None:
-    """Whether a combination is free depends on that machine's own shortcuts,
-    other applications, and keyboard, so carrying the choice across would
-    register something the user never picked."""
-    save_hotkeys(HotkeySettings(quick_run="Control+Alt+G"))
-
-    assert shared_relative_path(hotkeys_file()) is None

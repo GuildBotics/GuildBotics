@@ -37,16 +37,13 @@ guildbotics/
 │  host
 ├── app_api/         # Desktop-facing Local API (FastAPI + EventBus + normalizers)
 ├── cli/             # Click commands (start/run/stop, workspace, secrets, member)
-├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control, live state
+├── drivers/         # Scheduler, host context builder, command runner, workflow dispatcher, service control
 ├── setup/           # Workspace and member setup (setup_service) used by the GUI; per-provider setup lives in integrations/<provider>/setup.py
 ├── environment/     # The isolated environment: microVM, credential gateway, the window's host side, member broker, write-back, inference calls
 ├── capabilities/    # Member-side code-host/git/chat/memory operations + domain events, judgments (decisions/)
 ├── integrations/    # Provider descriptors and per-kind selection, the write scope, the receiving port, the patrol / readiness / ticket selection rules; GitHub / Branvil / Slack / local (the reference provider)
 ├── observability/   # Diagnostics and activity record writers, trace status, interactive sessions
-├── sync/            # The Git sync queue: local repository, commits, enrollment, activation
-├── hub/             # The bare repositories and relay a hub holds, and reaching one over OpenSSH
-├── secrets/         # Secret value distribution between machines
-├── workspace/       # Workspace storage: identity, shared-file validation, config CAS
+├── workspace/       # Workspace storage: identity, config CAS
 │  guest
 ├── guest/           # The entry inside a command's microVM, worktree copy, AI CLI adapters and turns, the AI CLI brain, the window's client
 │  shared
@@ -87,25 +84,16 @@ Dependency rules (the contracts in `[tool.importlinter]`, checked by `lint-impor
 - Each side imports only downward, in the order of the map above, and the
   packages that share a step (`|`) import none of each other. The host:
   `app_api` → `cli` → `drivers | setup` → `environment` → `capabilities` →
-  `integrations` → `sync | secrets` → `workspace | observability | hub`. The
+  `integrations` → `workspace | observability`. The
   shared packages: `commands` → `intelligences` → `runtime` → `loader` →
   `entities` → `utils`. `app_api` sits above `cli` because the Desktop runs
   the member CLI in its own process for the member brokers of its commands.
 - `app_api` is the top layer: no other guildbotics package may import it. Knowledge
   needed by both app_api and core (e.g. LLM provider / AI CLI tool catalogs) lives in
   core (`guildbotics/intelligences/*`); app_api only converts it to API models.
-- `workspace`, `observability`, `hub`, `sync` and `secrets` take from the shared
-  packages only `utils`. Observability records without knowing app_api or capability
-  concerns; workspace is storage; the hub knows repositories and an SSH route, never
-  what the shared records mean.
-- `sync` builds on `workspace` and `observability`, `secrets` on `hub`; neither
-  reaches the other's.
-- `sync` may be imported **only by a composition root**, the `allowed_importers` of
-  the `sync-composition-roots` contract. Everything else reaches synchronization
-  through the Workspace Sync Port. The Desktop backend and `guildbotics start` install
-  a queue; member CLI uses the same boundary for one locked commit/push. The
-  process-local activation guard is supplemented by `local/run/sync.lock`, so two
-  processes cannot operate the same repository at once.
+- `workspace` and `observability` take from the shared packages only `utils`.
+  Observability records without knowing app_api or capability concerns; workspace is
+  storage.
 - Only `environment/runtime.py` imports the microVM SDK.
 
 Responsibility boundaries between CLI / capabilities / observability / app_api /
@@ -407,8 +395,7 @@ Invariants:
   never authorizes them.
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
-  command-name strings. Write-capable commands still perform one-shot synchronization
-  after execution, independently of the execution lease.
+  command-name strings.
 - The backend is singleton per machine: Desktop and CLI `guildbotics start` launch
   the same `guildbotics.app_api` child process. It holds
   `<machine-state-root>/run/app-api.lock` from before binding through server exit.
@@ -618,8 +605,7 @@ links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
 (`data/workspaces.json`); Desktop lists and unregisters entries through
 `/device/workspaces`. Workspace admission rejects locations under the target's grants
 or the exchange directory before registration or initialization.
-Admission permits unavailable grant configuration so editing and synchronization
-can repair it; command contract loading remains strict. Protected link names and
+Admission permits unavailable grant configuration so editing can repair it; command contract loading remains strict. Protected link names and
 intermediate links and actual destinations share one component-wise interpretation
 for mounts and input previews; loops protect every traversed name. Copy sources
 must remain outside protected state. Leaf links are refused. Ancestor links are
@@ -821,23 +807,20 @@ Members persist knowledge across runs as a document store (mechanism in
   `<workspace-data-root>/documents/`. `meta.yml` holds `schema_version`,
   title/summary/keywords, typed `source` entries (ticket/PR/channel/thread URLs),
   creation/update timestamps and member IDs (`created_at`/`created_by`,
-  `updated_at`/`updated_by`), `pinned`, and `kind`. Both files stay under the shared
-  file size limit, checked together before either is written. A document is text
-  only: synchronization carries no binary but member avatars, so anything else put
-  beside these two would be held back on every cycle with no way to send it.
+  `updated_at`/`updated_by`), `pinned`, and `kind`. Both files stay under the memory file size limit
+  (`MAX_MEMORY_FILE_BYTES`), checked together before either is written, so a document is
+  never half old and half new.
 - **Scopes**: `personal/<person_id>/` and `team/`. `memory promote` moves a document
   from personal to team.
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
   over meta+body; `--meta-only` for source-URL pinpointing), `get`, `update`,
   `touch` ("this note actually helped" — recency only), `archive`, `promote`.
-- **Recency (MRU)**: each device keeps its own record,
+- **Recency (MRU)**: the device keeps its own record,
   `documents/recency/<device_id>.json`, of when each member last used each document
   (`record`/`update`/`touch`/`promote`; read operations do not count). The record is
   written inside the operation's shared-write span, so it is not lost when the
   best-effort audit journal fails or trims. The digest takes each document's latest
-  use across every device's record and leaves out archived or missing documents. One
-  list rewritten by every device would conflict whenever two devices use memory while
-  apart, and the side set aside would lose its order.
+  use across the records and leaves out archived or missing documents.
   `member context` output includes a `memory` block: `digest` (top-N recent metas —
   hints that a relevant note exists) and `pinned` (always-on documents, body
   included).
@@ -861,12 +844,11 @@ the process cwd or a member working clone.
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/app-api.lock`, `run/service.lock` — state needed _before_ a workspace is chosen                  |
-| Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json` (including `identity_id`, the identities' repository), and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
 | Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials and connection Secrets such as `BRANVIL_ADMIN_TOKEN`), `config/connections/branvil.yml` |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
-| Config             | `<workspace>/.guildbotics/config`                                                                | project YAML, each member's participation (`team/members/<person_id>/member.yml`), `secrets.yml` (key names and generations), transcript settings                                                                 |
-| Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
-| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this device's keychain namespace and held generations), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
+| Config             | `<workspace>/.guildbotics/config`                                                                | project YAML, each member's participation (`team/members/<person_id>/member.yml`), `secrets.yml` (key names), transcript settings                                                                 |
+| Workspace state    | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, `secrets.json` (this machine's keychain namespace), person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
 
 Invariants:
 
@@ -878,12 +860,12 @@ Invariants:
   `task_schedules`) and its `intelligences/` and `commands/` overrides live in that
   workspace (`IDENTITY_FIELDS` / `PARTICIPATION_FIELDS` in `entities/team.py`). Team
   loading refuses a field in the other file's place and leaves out a workspace
-  member whose identity this machine does not have (yet). A `person_id` never
-  changes.
+  member whose identity is missing. A `person_id` never changes.
 - Workspace root is resolved only from `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`,
   `GUILDBOTICS_CONFIG_DIR` when it is `<ws>/.guildbotics/config`, or
   `active-workspace.json`. Missing workspace is an error for writes.
-- `config/` and `state/` are the synchronized tree; `local/` is device-only. Anything
+- `config/` and `state/` are the workspace's shared files, written only through the
+  helpers of section 8; `local/` is this machine's own. Anything
   whose value is decided by the machine rather than the workspace belongs in `local/` —
   absolute paths, but also hotkeys, since which combinations are free depends on the OS,
   the other applications installed, and the keyboard layout.
@@ -891,255 +873,55 @@ Invariants:
   Agent execution copies that resolved value into `AgentExecutionContext`.
 - There is no `GUILDBOTICS_DATA_DIR` override and no workspace `.env` file.
 
-## 8. Workspace Synchronization
+## 8. Shared State Writes
 
-One workspace can be shared by several of the user's machines. `config/` and `state/`
-are the shared tree; `local/` never leaves the device it was written on.
-
-**Premise.** One person owns every participating machine and can see, on the machine
-itself, whether a service is running there. The design leans on that instead of
-re-creating it: ownership has no lease and never moves on its own, and there is no
-device PKI, no per-device access list, and no transport but OpenSSH.
-
-**Design principles.**
-
-- **Git is the only store of persistent shared data.** History and shared data live in
-  Git (`config/`, `state/`) and nowhere else. What a running process is doing lives in
-  the hub's relay files (`live/`) and is never committed; which device runs the service
-  lives in `service-owner.json`; diagnostics stay on the device that recorded them;
-  secret values live only in each machine's OS keychain.
-- **The hub holds no source of truth for the shared history beyond its repository.**
-  Every device has a full copy of it, so any one of them can rebuild a lost hub. The
-  owner record and the hub's keychain are not in that history (see rebuilding below).
-- **Nothing runs permanently for synchronization.** On the hub only `sshd` is resident:
-  each `guildbotics hub …` command is started by sshd for one connection and ends with
-  it, so Git synchronization needs no GuildBotics process running there (a macOS hub's
-  secret transfers are the exception: they go through its Desktop, section 9). On a
-  device, the process already doing the work synchronizes itself: the Desktop backend
-  and `guildbotics start` run the queue, publish their live state, and check ownership,
-  while a member CLI command commits and pushes its own write once. Processes are
-  serialized by OS advisory locks rather than by an owner process. A resident
-  coordinator would hold only what connected devices had just sent and the owner
-  record; files on the hub carry the same information with nothing to restore after a
-  restart and no second instance to prevent.
-- **Synchronization never changes where work runs.** A workflow or command runs on the
-  machine that started it; neither the hub nor another machine running the service
-  takes it over.
-- **Only portable values cross machines.** Absolute paths, process state, and anything
-  else decided by the machine stay in `local/`. Shared records derive from
-  `SharedRecord` (`workspace/identity.py`), which rejects unknown fields, so device-local
-  data is kept out by structure rather than by a list of forbidden field names.
-- **Synchronization is opt-in per workspace.** A workspace never connected to a hub runs
-  no queue, publishes no live state, needs no service owner, and behaves as a single
-  machine.
+GuildBotics runs on one machine. Its workspace's `config/` and `state/`, and the identity
+root's `config/`, are still written by several writers that do not know about each other:
+the scheduler's member threads, the API handlers, the member commands the backend runs in
+process, and processes of their own such as a local `guildbotics run` or
+`guildbotics secrets`. `local/` is this machine's own state and is not among them.
 
 **Identity.** A workspace and a device are each identified by a UUIDv7 minted once
-(`workspace/identity.py`). The workspace ID travels in `state/workspace.json`; the device
-ID stays in `~/.guildbotics/data/device.json`, and its display name (the host name by
-default) and the fingerprint of the SSH key it registered with the hub are published in
-`state/devices/<device_id>.json`. Neither ID depends on a path, so a workspace root
-that was moved or renamed reconnects to the same hub repository, and every cycle checks
-that the local copy and the hub's copy name the same workspace. A hub machine may host
-several workspaces, and each workspace chooses its hub; joining and service ownership
-are per workspace, never per machine.
+(`workspace/identity.py`). The workspace ID is in `state/workspace.json`: the member CLI
+names the workspace it means by it, so a backend serving another selection refuses rather
+than acting there. The device ID and its display name (the host name) are in
+`~/.guildbotics/data/device.json`; records carry the device ID, and the owner's Branvil git token
+is labelled with it. Neither identity authenticates anything. Shared
+records derive from `SharedRecord` (`workspace/identity.py`), which rejects unknown
+fields, so machine-local data is kept out of them by structure rather than by a list of
+forbidden field names.
 
-**Identities.** The identity root is a second synchronized root of the same shape, with
-its own ID, its own queue (`activate_identity_sync()`, running beside the selected
-workspace's and untouched by a workspace switch), and its own shared-write lock. A span
-that changes a member's identity and a workspace's file of it together takes the identity
-root's lock outside the workspace's (`member_write_operation`). Connecting a workspace to
-a hub (registering, joining, copying, or changing hubs) connects the identities to the
-same hub: the hub holds exactly one identities repository, recorded as `identity_id` in
-`hub.json` by `guildbotics hub identity claim`. The first machine registers it, and the
-others join it by the same rules as a workspace join. It is not listed among the hub's
-workspaces.
+**The write helpers** (`utils/shared_writes.py`). Every write to a shared path goes
+through `write_shared_*`, `append_shared_text`, `delete_shared_path`,
+`update_shared_text`, or `update_shared_json`; a path under `local/`, or no selected
+workspace, is passed through without the lock. Shared-path membership
+(`shared_relative_path`) resolves existing ancestors and appends missing components by
+name, so the decision stays stable while another writer creates a parent directory; an
+ancestor that cannot be inspected stops the write instead of treating the path as
+machine-local. Shared JSON is written by `dump_shared_json` (sorted keys and a trailing
+newline), so the same record is the same bytes.
 
-**Hub.** A machine the user chooses, holding one bare Git repository per workspace under
-`~/.guildbotics/hub` (`guildbotics/hub/host.py`). Every repository is configured
-`receive.denyNonFastForwards` and `receive.denyDeletes` each time the hub is asked to
-create it (the request is idempotent): the automatic reconciliation below rests on the
-hub refusing to rewind, so a repository restored from a backup must still refuse a force
-push. Its `post-receive` hook only touches the `head-updated` marker; the live watch
-stream reports it and the process watching wakes its queue. That is an accelerator, not a
-dependency: with the notification lost, a device still converges at its next periodic
-cycle. The hub knows nothing about what the records mean,
-and stores no workspace paths — only workspace identifiers.
+**The shared-write lock** (`utils/shared_write_lock.py`). One lock per workspace, an OS
+advisory lock, so it serializes the writers of every process. The helpers take it, so a
+writer that composes what it writes without reading anything has nothing to declare and
+no way to forget. What the helpers cannot infer is how far back a span reaches: a value
+derived from a file's current contents has to keep the other writers out of the read too,
+or the write puts back content another writer has just replaced — costing a Slack answer
+for conversation control state (`state/chat_state`), or a whole document for member memory
+(`state/documents`). `update_shared_text(path, apply)` and its JSON form take the lock,
+read, hand the content to `apply`, and write what comes back (`None` deletes; the same
+content is not written), so the span starts at the read by construction. A missing file is
+passed to `apply` as `None`; other read failures stop the update without replacing the
+shared file.
 
-Operations on a hub are performed by the `guildbotics hub` CLI on the hub machine itself,
-invoked over SSH by the joining device (`guildbotics/hub/connection.py`). Raw Git commands
-are never sent across. Synchronization pins `GIT_SSH_COMMAND` to the OS OpenSSH so that a
-host key the user confirmed once is the same one `git fetch` sees.
-
-**Live relay and service owner.** The Hub has two kinds of state outside the Git
-repository. `live/<device>/<publisher>.json` is a transient complete snapshot of
-one process's current work. The process that runs the work publishes it through
-`guildbotics/hub/relay_client.py`; a Desktop backend or `guildbotics start`
-process watches the same stream. Heartbeats make delayed and expired states
-observable, while expiry deletes the relay file and the viewer drops its cached
-snapshot. A newer relay `schema_version` is reported as a client-update error;
-it is not silently discarded or partially decoded. Each process publishes under an ID
-it draws when it starts, so a Desktop backend and `guildbotics start` on one device do
-not overwrite each other, and the file a restarted process left behind simply expires.
-Whether a device is online is derived from fresh `live/` files; it is not stored.
-
-`service-owner.json` is different: it is one persistent owner device per
-workspace, managed by `hub owner get/claim/transfer`. It complements, rather than
-replaces, the machine-wide `run/service.lock`: the lock stops a second service on the
-same machine, the owner record stops one on another machine. A claim creates the file
-exclusively, so two devices claiming at once end with one owner. Starting a service
-first synchronizes to the hub's head, then requires an owner answer from the Hub —
-even when the stored owner is this device — and refuses a different owner. A running
-service is deliberately asymmetric to that: a Hub it cannot reach makes it wait, and
-it stops only when the Hub names another owner. Stopping a service does not release
-ownership; only a transfer moves it. The Desktop's transfer moves ownership to its own
-device only, and then marks the previous owner's `running` records `interrupted` under
-the sync barrier; the hub's own `hub owner transfer` command only rewrites the record.
-The common execution
-boundary checks ownership before accepting service work, before the command
-starts, and when publishing service-derived live state. A lost Hub connection
-does not stop work already in progress, but blocks new service work. An explicit
-transfer is allowed only after the user has directly confirmed that the old
-service stopped; ownership is never changed by a live timeout. The same boundary
-records TaskRun start and terminal state and waits for the corresponding sync
-barrier, which prevents a running or completed input from being accepted again
-after a service handoff. An input is accepted again only when its run ended
-proving the work did not happen: it raised, was cancelled, or lost its owner
-device. That next attempt continues under the same run id, on the device now
-doing the work, keeping the evidence earlier attempts recorded. A run whose
-outcome could not be observed (`result_unknown`) keeps its input, because the
-work may already have taken effect elsewhere; only the user starts it again.
-
-An autonomous operation that could not connect to its service ends as `deferred`,
-through the port's `ServiceUnavailable` type. This terminal state releases its input
-for a later attempt and appears as information in Activity. Its command boundary
-records `command.deferred` rather than a failure; the scheduler preserves its error
-count and continues other work; a deferred scheduled occurrence stays due. Manual callers and failures after a request may have
-arrived retain their usual failure behavior. Shared record schema 3 introduces this
-state so older builds reject the new records instead of misreading them. Every run
-write stamps the current schema, including updates to an existing record.
-
-A run record means work was taken. The ticket patrol selects its ticket outside
-the boundary and claims a slot only for a ticket it dispatches, so an idle patrol
-leaves no record (and no trace). A chat event is different: whether it holds work
-for the member is known only after the thread has been read. The dispatcher
-selects it before opening a trace, so an event that is not work for the member
-(an edit, its own message, one its participation excludes) leaves neither a trace
-nor a record. For an event that is, it opens the trace, claims only the event's
-identity (`record_start=False`), and selection records the start itself, under
-the same barrier, before judging the batch; the boundary finishes only a run
-that started. The boundary sits inside the work it tracks on every route, so a
-failure or a forced stop reaches it and the run ends `failed` or `cancelled`, not
-`succeeded`. The run is its trace (`run_id == trace_id`, for the ticket workflow
-too), and the boundary mirrors the trace's source and attributes into the record
-at start and at finish, so the record names the run's PR / issue or chat thread
-on every device without the trace.
-
-**Workspace Sync Port** (`utils/workspace_sync_port.py`). Storage layers announce a
-completed shared write as a `ChangeSet` and never learn that Git is involved. Writes go
-through `write_shared_*` / `delete_shared_path`; paths under `local/` are dropped by the
-port rather than classified by the caller. `guildbotics/sync` is the only subscriber.
-
-**Git Sync Manager** (`guildbotics/sync/manager.py`). One queue per device runs commit →
-fetch → reconcile → push, coalescing bursts. `<workspace>/.guildbotics` is itself an
-independent Git repository, and its path is always derived from a verified workspace root
-rather than accepted from a caller, so a member working clone cannot be handed to a sync
-command. Notifications can be lost without losing changes: a periodic rescan of the working
-tree recovers anything the port did not report.
-
-**Concurrent edits.** The hub serializes what is committed. Whichever change lands first is
-kept; the later commit is moved to `refs/guildbotics/rejected/<rejection_id>` on the device
-that made it, and one provider-neutral activity event records the paths, that device, the
-time, and the identifier. This is not an error and does not stop the queue. The set aside
-content stays out of every API: recovery is a manual, source-device-only procedure
-documented in the README.
-
-Each cycle fetches and then fast-forwards when only the hub moved, or pushes when only this
-device did. When both moved, the paths both changed take the hub's version and the local
-commit is set aside as above; this device's other changes are committed again on top of the
-hub's head. No timestamps and no content merges take part. A push that loses the race is
-redone a bounded number of times, and a push whose reply was lost is judged by the hub's
-head after a fetch, so it never produces a second commit. Rejections stay rare because state
-the system writes is one small file per record (events, task runs, memory documents, device
-records), so two devices seldom touch the same path; in practice the rule settles config a
-person edited on two machines.
-
-Some differences are not races to settle but anomalies, and stop the queue instead of
-converging: two devices both creating a path under `state/events/` (immutable records
-whose IDs are never reused), a received file that fails the validation boundary, a hub copy that
-names another workspace or shares no history with this one.
-
-**Hub unreachable.** A device keeps working from its full copy: it reads everything it
-already has, runs the work it is asked to, and commits its changes locally, which the queue
-pushes once the hub answers again. Only what needs the hub is unavailable meanwhile:
-starting a service (below), sending or fetching secret values, seeing other devices'
-current work, and joining or registering.
-
-**Validation boundary** (`workspace/validation.py`). What crosses the boundary is checked
-for three things only: shared root, size limits, decode and syntax; a `schema_version`
-newer than this build understands; and the structure of `config/secrets.yml`. These are
-the checks nothing else can make — a writer's bug belongs in the writer's tests, and a file
-the user hand-edits fails the same way on every device with or without synchronization.
-Per-record semantic validators are deliberately absent; adding a shared record needs no
-change here.
-
-The generation check only reaches records that declare one, so every record written under
-`state/` stamps `SHARED_RECORD_SCHEMA_VERSION` at the point it is written — one constant, in
-`utils/workspace_sync_port.py` because the writers span layers that cannot import each other.
-A second literal would be a fault rather than a duplication: the boundary runs on the sending
-side too, so raising one kind's version alone makes the device that wrote it reject its own
-file and stop its own queue. `config/secrets.yml` is the one record that cannot carry a
-version, because the index admits nothing but `keys` — the same restriction
-that keeps secret values out of the history structurally.
-
-**Joining.** A device with existing content commits it first, then adopts the hub's version
-of any file both hold and sends what only it has. It is not an overwrite, and the commit
-pushed aside is kept. Joining is previewed; registering is not, because a hub with no copy
-of the workspace has nothing to compare against. Comparing two whole trees is right only
-when the two sides share no history; a device that does share history with the hub
-(`reconnect` in `sync/enrollment.py`) is settled by the ordinary cycle above instead.
-
-**Rebuilding a hub.** Moving a hub and replacing a lost one are the same procedure:
-register one device's copy on the new hub under the same workspace ID, then reconnect the
-other devices, whose differences are settled by the ordinary rules and whose content only
-they had is sent. A rebuilt hub has no owner record, so the first service started
-against it claims ownership; nothing can make two hubs mutually exclusive, so a service
-still running against the old hub is the user's to stop. Secret values are not in the history: a device that
-holds them sends them to the new hub, and a value only the lost hub held has to be issued
-again by its provider. The README gives the connection steps.
-
-**Optimistic locking** (`workspace/config_repository.py`). Config is the shared state a
-person edits by hand, so a screen can be composed against content another machine has since
-replaced. Reads report each file's Git blob ID; saves state the IDs they expect, and a save
-whose expectation no longer holds is refused rather than merged. A screen that reconciles a
-whole directory also states the set of paths it read, so a file another device added under
-it is a change like any other rather than something the save may prune unseen. This applies
-to config alone; for every other shared file the first-committer-wins rule settles it.
-
-**One write API, not a sequence to assemble.** `ConfigRepository.write(apply, expected,
-report)` takes the lock, compares, runs the caller's write, and reads the revisions to
-answer with — all before releasing. The caller supplies what to write and gets back a
-receipt. This is a shape, not a convenience: when the lock, the comparison, the write, and
-the observation are separate parts, every writer is a place to order them wrongly or leave
-one out, and there are as many such places as there are writers. Each half of it earns its
-place. Writing inside the comparison's lock stops a refusal that has already applied half
-of itself. Reading the revisions there too stops an answer that pairs content the caller
-wrote with a revision the hub's arrival produced — the screen would save against it and
-overwrite content it never saw. Every route that changes config goes through
-`app_api/config_revisions.py`, including those with nothing to compare: comparing is
-optional, being the only writer while writing is not. Which routes those are is not
-decided by the URL — commands (`config/commands`) and transcript settings
-(`config/transcripts.yml`) are config reached from elsewhere, and the `guildbotics
-secrets` CLI writes `config/secrets.yml` from another process entirely.
-
-**The shared-write lock** (`utils/shared_write_lock.py`). One lock per workspace, taken
-by every writer of its shared files and by the synchronization queue across checking the
-hub's content out and committing what survives. Without it the comparison decides nothing —
-a save can land on top of content adopted while it was running, and since that overwrite is
-an ordinary local write, the next cycle commits and pushes it with nothing recording the
-other device's change as lost. Nothing holds the lock across the network, so a save never
-waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
-`OSError` family: synchronization catches that family to mean the cycle failed and
-would otherwise report a failure over a save that is merely in progress.
+A few operations are wider than any single write — a journal that may be replaced rather
+than appended to, a document that is two files, a policy that is at most one per directory,
+a decision that reads another file — and those take the lock themselves. Within one thread
+it re-enters, so such a writer declares its span without knowing whether a caller declared a
+wider one. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
+`OSError` family, so a caller that catches I/O errors does not report a save that is merely
+in progress as an environment failure; the API answers it with 503 from one exception
+handler. `tests/guildbotics/workspace/test_shared_write_lock_boundary.py` fixes the writers.
 
 The identity root is a shared root of its own with a lock of its own. A span that changes
 both a member's identity and the selected workspace's file of it takes the identity root's
@@ -1147,90 +929,68 @@ lock first and the workspace's inside it (`member_write_operation`); taking them
 way round is refused as a programming error, since it would deadlock against every span
 that takes them in order.
 
-Which writers must take it is not decided writer by writer. Every write to a shared path
-goes through the sync port, and the port takes the lock for it, so a writer that composes
-what it writes without reading anything has nothing to declare and no way to forget.
-Device-local paths and an unselected workspace are dropped by the same judgement that
-decides whether to announce a change, so neither waits on anything. Shared-path membership
-resolves existing ancestors and appends missing components by name, keeping the lock and
-notification decision stable while another writer creates a parent directory.
-If an existing ancestor cannot be inspected, resolution fails and the write stops
-instead of treating the path as device-local.
+**Optimistic locking** (`workspace/config_repository.py`). Config is the shared state a
+person edits by hand, so a screen (or a second browser tab) can be composed against content
+another save has since replaced. Reads report each file's Git blob ID; saves state the IDs
+they expect, and a save whose expectation no longer holds is refused rather than merged. A
+screen that reconciles a whole directory also states the set of paths it read, so a file
+added under it since is a change like any other rather than something the save may prune
+unseen. This applies to config alone; memory, conversation state, and task runs keep their
+save APIs, and the lock closes their silent loss.
 
-What the port cannot infer is how far back a span reaches. Config is not the only side that
-loses this way: conversation control state (`state/chat_state`) and member memory
-(`state/documents`) read a shared file and write it back without knowing Git exists, so the
-same interleaving reinstates what the queue just adopted — costing a Slack answer, or a
-whole memory document. `update_shared_text(path, apply)` and its JSON form take the lock,
-read, hand the content to `apply`, and write what comes back, so the span starts at the read
-by construction rather than by each writer remembering to say so. It is the same shape as
-`ConfigRepository.write` for the same reason: passing the transformation in leaves no
-sequence for a caller to assemble wrongly. A missing file is passed to `apply` as `None`;
-other read failures stop the update without replacing the shared file.
+**One write API, not a sequence to assemble.** `ConfigRepository.write(apply, expected,
+report)` takes the lock, compares, runs the caller's write, and reads the revisions to
+answer with — all before releasing. The caller supplies what to write and gets back a
+receipt. This is a shape, not a convenience: when the lock, the comparison, the write, and
+the observation are separate parts, every writer is a place to order them wrongly or leave
+one out, and there are as many such places as there are writers. Writing inside the
+comparison's lock stops a refusal that has already applied half of itself; reading the
+revisions there too stops an answer that pairs content the caller wrote with a revision
+another writer produced. Every route that changes config goes through
+`app_api/config_revisions.py`, including those with nothing to compare: comparing is
+optional, being the only writer while writing is not. Which routes those are is not decided
+by the URL — commands (`config/commands`) and transcript settings (`config/transcripts.yml`)
+are config reached from elsewhere, and the `guildbotics secrets` CLI writes
+`config/secrets.yml` from another process entirely.
+`tests/guildbotics/app_api/test_config_write_boundary.py` classifies every write route.
 
-A few operations are wider than any single write — a journal that may be replaced rather
-than appended to, a document that is two files, a policy that is at most one per directory —
-and those take the lock themselves. Within one thread it re-enters, so such a writer declares
-its span without knowing whether a caller declared a wider one; that question is what was
-being answered per writer, and wrongly. Optimistic locking stays with config alone: the lock
-closes the silent loss, while a conflict the queue records as first-committer-wins is the
-design working.
+**Record schema.** Every record written under `state/` stamps
+`SHARED_RECORD_SCHEMA_VERSION` (`utils/shared_writes.py`) at the point it is written — one
+constant, in `utils` because the writers span layers that cannot import each other.
+`tests/guildbotics/workspace/test_shared_schema_version.py` runs the writers and checks every
+record they leave. `config/secrets.yml` carries no version: it holds nothing but `keys`.
 
-**What the boundary commits is what it validated.** Content is staged first and checked
-from the index. Reading a file to validate it and letting `git add` read it again are two
-reads of something a writer can change in between, and the second is what becomes history —
-one such file stops every receiving device's queue, while the sender stays green because its
-working tree matches the commit it made. Staging first also settles a deletion recreated
-before the commit: the recreated file is staged as content, so it is checked as content. A
-file that fails is unstaged and held back, left on disk for the user to fix.
+**Task runs.** The common execution boundary (`drivers/execution.py`) records each run's
+start and terminal state in `state/task-runs/<run_id>/result.json`. Accepting an input
+scans the member's runs and creates the record under the shared-write lock, so two workers
+cannot both accept the same event or schedule slot, and a running or completed input is not
+accepted again after a restart. An input is accepted again only when its run ended proving
+the work did not happen: it raised or was cancelled. That next attempt continues under the
+same run id, keeping the evidence earlier attempts recorded. A run whose outcome could not
+be observed (`result_unknown`) keeps its input, because the work may already have taken
+effect; only the user starts it again.
 
-**Only regular files travel, as the bytes validated.** The check takes each entry's Git
-mode with its content, from the index when sending and from the arriving commit when
-receiving (and before a copy taken from the hub is checked out): `100644` and `100755`
-pass, a link or a gitlink does not — its content is a path or a commit, which would read as
-valid text — and neither does any path with an element starting with `.`, since Git reads
-some of those itself. A held change covers everything beneath it by path element: a held
-link is a directory on this device, so the hub's writes and deletions there are skipped
-rather than carried to its target, while the rest still converges. What `git add` cannot
-handle is found before it runs, never guessed from what it left behind. An embedded
-repository with no commit cannot be indexed and would fail its whole shared root; status
-names an embedded repository, and only that, as a directory (`config/commands/`), so those
-with no commit are excluded from the add (`:(exclude,literal)`, every path still a literal
-name) and held back under that name. Once that repository has a commit Git stages a
-gitlink, which the mode check holds. Any other failure of the add — an unreadable file, a
-file another process holds open exclusively, a locked index — fails the cycle instead of
-being held. Git only warns about a directory it cannot list: a file added inside it is
-never sent, and a tracked file inside it can be staged as deleted (Git for Windows does so
-for a modified one). So every directory Git walks under the shared roots is listed before
-the add, and one that cannot be listed fails the cycle, naming its path. Where Git does not
-walk is Git's own answer — the directories its status reports with `--ignored=matching`
-instead of expanding: embedded repositories, held as a whole, and ignored directories with
-nothing tracked inside.
-`core.longpaths` is set so that Git for Windows does not silently leave out a path longer
-than 260 characters. The repository's own
-`info/attributes` switches off every line-ending, filter, and encoding conversion, so neither
-a global `core.autocrlf` nor an untracked `.gitattributes` can make what lands on disk
-differ from the blob that was checked.
+An autonomous operation that could not connect to its service ends as `deferred`, through
+the port's `ServiceUnavailable` type. This terminal state releases its input for a later
+attempt and appears as information in Activity. Its command boundary records
+`command.deferred` rather than a failure; the scheduler preserves its error count and
+continues other work; a deferred scheduled occurrence stays due. Manual callers and failures
+after a request may have arrived retain their usual failure behavior. Every run write stamps
+the current schema, including updates to an existing record.
 
-**The interval no writer can protect.** Fetching waits on the hub without the lock, and a
-save made in that interval holds the lock correctly and is still only in the working tree, so
-the checkout would take it with nothing recording the loss. The queue's convergence therefore
-holds the lock from end to end — nothing in it waits on the hub — and re-runs the commit
-boundary as its first act: the save becomes a change with a name, which either survives the
-adoption or is rejected on the record. A commit there means the convergence was computed from
-a head that no longer exists, so the cycle is redone. Joining a hub has the same interval,
-for the same reason, and closes it the same way — the join commits again inside its own lock
-and compares against the head that produced.
-
-**Queue ownership.** The Desktop backend and `guildbotics start` may activate a queue;
-member CLI writes use a short-lived queue boundary after the capability completes. If
-another process holds `local/run/sync.lock`, the member command reports `sync: pending`
-and exits successfully; its next invocation or the queue will recover the working-tree
-commit. The one-shot neither fetches nor converges, so a device receives other devices'
-changes only while its Desktop backend or `guildbotics start` is running. `sync/activation.py` keeps one queue per process, while
-`local/run/sync.lock` serializes each cycle, one-shot commit/push, and workspace pause
-across processes. The machine-wide `run/service.lock` is the background-service exclusion,
-not the repository lock.
+A run record means work was taken. The ticket patrol selects its ticket outside the boundary
+and claims a slot only for a ticket it dispatches, so an idle patrol leaves no record (and no
+trace). A chat event is different: whether it holds work for the member is known only after
+the thread has been read. The dispatcher selects it before opening a trace, so an event that
+is not work for the member (an edit, its own message, one its participation excludes) leaves
+neither a trace nor a record. For an event that is, it opens the trace, claims only the
+event's identity (`record_start=False`), and selection records the start itself before
+judging the batch; the boundary finishes only a run that started. The boundary sits inside
+the work it tracks on every route, so a failure or a forced stop reaches it and the run ends
+`failed` or `cancelled`, not `succeeded`. The run is its trace (`run_id == trace_id`, for the
+ticket workflow too), and the boundary mirrors the trace's source and attributes into the
+record at start and at finish, so the record names the run's PR / issue or chat thread
+without the trace.
 
 ## 9. Secret Storage (SecretStore)
 
@@ -1261,11 +1021,10 @@ names cleared: deleting one preserves the ambiguous keys.
 access and member key spelling in the package.
 
 - **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
-  non-secret index in `.guildbotics/config/secrets.yml` (logical key names,
-  generations). `.guildbotics/local/secrets.json` holds this device's keychain
-  namespace (`store_id`, the service `GuildBotics/<store_id>`) and the generations it
-  holds there; a record without a `store_id` starts over as a new, empty namespace.
-  Joining or synchronizing never changes it.
+  non-secret index in `.guildbotics/config/secrets.yml`, `keys: [<name>, ...]` and
+  nothing else, so no value has a place to go. `.guildbotics/local/secrets.json` holds
+  this machine's keychain namespace (`store_id`, the service `GuildBotics/<store_id>`);
+  a record without a `store_id` starts over as a new, empty namespace.
   There is no env-file backend and no `GUILDBOTICS_SECRETS_BACKEND` switch. A
   missing or locked keychain is an error. Machine moves use `guildbotics secrets
   export` / `import` (dotenv is an exchange format only). `secrets set --from-file`
@@ -1284,68 +1043,6 @@ access and member key spelling in the package.
   A PEM from GitHub App auto-registration stays in the Local API's memory: the
   member save names the registration, and the API stores its key in the
   keychain and discards the registration.
-- **Distribution between machines** (`guildbotics/secrets/`, `hub/secret_host.py`,
-  `hub/secret_stream.py`): the shared history carries key names and generations only.
-  Values live in each machine's OS keychain, and the hub machine's keychain is the
-  distribution point they are taken from. A transfer happens only when the user asks
-  for one, over the standard input and output of one `guildbotics hub secret`
-  command run through OpenSSH: no relay file, no Git object, no temporary file.
-  The identities' store is transferred the same way, under the identities'
-  repository ID (`/identities/secrets*` in the Local API, `guildbotics secrets
-  --identities` in the CLI).
-  Entries are framed as a JSON header line plus the exact bytes it declares, so a
-  value crosses a Windows machine unaltered and nothing that reads, logs, or reports
-  a header can carry one. No encryption is layered on top: OpenSSH already
-  authenticates both ends and encrypts the channel, and every machine needs the same
-  value, so a per-device envelope would add key management without a threat it answers.
-- **Device keys**: each device's SSH key fingerprint is published in
-  `state/devices/<device_id>.json`. Revoking a device is the user removing its line
-  from the hub machine's `authorized_keys`; GuildBotics never edits that file. Values
-  already stored on a lost device cannot be wiped from elsewhere, so they are issued
-  again at their provider.
-- **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
-  requests, including those arriving over SSH, use the server's owner token, once the
-  server proved it knows that token (section 11). `POST /api/hub/secrets/{workspace_id}/{operation}` accepts `list`,
-  `send`, or `receive` and passes framed bytes to `hub/secret_service.py`. It requires
-  a loopback peer and the owner's credential, validates a registered Hub Workspace ID,
-  and does not depend on the workspace open in Desktop. This binary transfer route
-  is the sole exception to the rule excluding secret values from API responses.
-  Values stay out of logs, diagnostics, validation errors, and screen responses.
-  A missing Desktop returns `desktop_required`; no direct-keychain fallback runs.
-  Windows and Linux execute the same protocol handler directly.
-- **Hub storage consistency** (`hub/secret_host.py`): the keychain stores one JSON
-  record containing both `generation` and `value` per key. Under `secrets.lock`, a
-  send writes that record before publishing the generation index. A failed keychain
-  write leaves the index unchanged. A read uses the same lock and refuses a record
-  whose generation differs from the index, so interruption during publication
-  cannot expose a new value as an older generation. Resending the key recovers it.
-  Keychain exceptions become value-free `SecretStoreError` failures at this boundary.
-- **Generations**: entering a value locally does not advance the shared generation —
-  that number names a value every device can obtain, so it is published only after
-  the hub holds the value. A send is built on the generation the *hub* reports, and
-  the hub refuses one whose base is not what it holds; that single check is what
-  stops two machines that read it at the same moment from both succeeding. The hub
-  also requires the candidate to be exactly one past the base, and refuses only a hub
-  that is _ahead_ of the base: a hub that is behind — empty, or restored from an
-  older copy — holds nothing any device can obtain, and refusing it would leave no
-  way to put a value back.
-- **A send that was cut off** between the two writes leaves the hub holding a
-  generation the shared history does not name. Nothing on the sending machine
-  records that: the comparison of the two authoritative records *is* the record, so
-  every device can see it, it survives the value being entered again there, and it
-  survives that machine being lost. A fetch adopts only the generation the shared
-  history names, so such a value is reported rather than spread; a send from any
-  device holding a value builds past it and settles the key. Both transfers refresh
-  the shared files first, since both read the current generation out of them.
-- **Which transfer applies** to which key is decided in `secrets/transfer.py`
-  (`can_send` / `can_fetch` / `bulk_send_keys` / `bulk_fetch_keys`) and travels to
-  the Desktop on the API model, so the CLI, the API, and the screen cannot come to
-  different answers about what a button offers. The transfer enforces the same
-  answer itself: a fetch asks `can_fetch` before the hub is reached and once more
-  inside the shared-write lock just before the value lands, and a send confirms the
-  local value is still the one that was sent before claiming this machine holds the
-  published generation — so a value typed while an exchange was in flight is never
-  silently overwritten or silently reported as shared.
 - **Tests**: an autouse `fake_keyring` fixture installs an in-memory keychain so
   tests never touch the developer's real OS store.
 
@@ -1361,8 +1058,7 @@ access and member key spelling in the package.
   Work targets use `target.provider/kind/url/label/title/action`; chats use
   `chat.provider/channel/thread/message`. Fact event types name their subject:
   `repository.push`, `pull_request.item`, `ticket.item`, `ticket.comment`,
-  `target.recorded`, and `target.scope_refused`. Shared record schema version 2
-  carries these names; older builds reject the newer records at the sync boundary.
+  `target.recorded`, and `target.scope_refused`.
   Idle ticket patrols (a routine cycle whose selector finds no actionable ticket) open
   no trace and leave no records; liveness is exposed instead as a per-member patrol
   heartbeat (`member_routines`) in the scheduler's runtime status.
@@ -1372,9 +1068,8 @@ access and member key spelling in the package.
   session under `run/sessions/` (`session_transcripts.py`). `standard` detail omits high-volume
   thinking/delta events and bounds AI CLI tool stderr to its final 8 KiB; `full` keeps them.
   Session transcripts default to 30-day retention. Memory audit remains a separate store
-  under `documents/memory_events/<device_id>.jsonl`: each device appends to and trims only
-  its own bounded journal, so two devices never write the same shared path, and readers
-  merge every device's journal in timestamp order.
+  under `documents/memory_events/<device_id>.jsonl`: the device appends to and trims its
+  own bounded journal, and readers merge the journals in timestamp order.
 - **Lifecycle records, fact events**: one execution is one shared record. A workflow
   run is its task-run record (`state/task-runs/<trace_id>/result.json`); an interactive
   member CLI session is its session record (`state/sessions/<trace_id>.json`,
@@ -1382,10 +1077,10 @@ access and member key spelling in the package.
   first command, its last command's result, and the first `github.*` attributes its
   commands recorded. The shared activity events (`activity_event_store.py`) carry only
   the facts recorded inside an execution — provider domain outcomes, completion
-  evidence, dispatch decisions, sync rejections — never the `command.*` /
+  evidence, dispatch decisions — never the `command.*` /
   `member.command.*` boundary events, which stay in local diagnostics. The Activity
   History therefore reads one record per execution instead of folding every command
-  it ran, and every device shows the same status for it. Two consequences are
+  it ran. Two consequences are
   deliberate: an interactive session's status is its last command's result rather than
   "failed once, failed forever", and an `ERROR` log no longer marks a session failed
   (logs are local; the diagnostics index still folds them for its own list).
@@ -1473,9 +1168,10 @@ a monorepo on purpose.
   the main page tells apart by path; `app_api/ui.py`). It listens on loopback only, on
   one fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default), which every program of
   the machine reads from the environment: the server, its CLI clients, the Desktop
-  that launches it, and the Vite dev server that proxies `/api` to it. Other machines
-  reach it through SSH forwarding to the same port. The screens therefore work the same
-  in any browser and in the Desktop windows.
+  that launches it, and the Vite dev server that proxies `/api` to it. GuildBotics runs
+  on one machine, the Hub; other machines reach it from a browser through SSH forwarding
+  to the same port (`scripts/hub-forward.sh` / `.ps1`, plain OpenSSH user services). The
+  screens therefore work the same in any browser and in the Desktop windows.
 - **Authentication** (`app_api/auth.py`, as Branvil's "Entering the GUI"): there is one
   person, the owner, and no sign-in screen.
   - The server keeps its records in `~/.guildbotics/data/server/<port>/` (`0700`):
@@ -1508,8 +1204,8 @@ a monorepo on purpose.
     (service `guildbotics-server`). `guildbotics open` offers `owner.token`, then that
     token, and uses the first the server proves it knows (`utils/local_api.client_tokens`):
     an owner file outlives its server, and the port may lead to the Hub by then. `run`
-    delegation and macOS Hub Secret hand over this machine's paths and secrets, so they
-    offer `owner.token` alone: only the server running on this machine knows it.
+    delegation hands over this machine's paths and secrets, so it offers `owner.token`
+    alone: only the server running on this machine knows it.
   - The guard runs before every route, the screens included: `Host` must be
     `127.0.0.1`, `localhost`, or `[::1]` with the port (else `421 misdirected`, against
     DNS rebinding), and an `Origin` must be that same origin (else
@@ -1551,8 +1247,7 @@ a monorepo on purpose.
     goes back to its bootstrap page (`enter_again`, which navigates only to the page the
     host recorded for that window) and enters again. While the App is not shown, quit
     requests go straight to `quit_app`.
-  - Host clients (`guildbotics run` delegation, `guildbotics open`, and macOS Hub
-    Secret) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
+  - Host clients (`guildbotics run` delegation and `guildbotics open`) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
     offers, it first posts the token's id and a fresh 32-byte nonce to
     `/api/local-api/proof`, which takes no
     token and answers `HMAC-SHA256(sha256(secret), "guildbotics-local-api-proof\n" +
@@ -1564,8 +1259,8 @@ a monorepo on purpose.
     taken before the client's next connection (later requests usually reuse the proved
     connection). A browser redirected back by GitHub App registration or Branvil's
     consent reaches the port even after the server exited, carrying a one-time code.
-- **Runtime lifecycle**: the backend is the sole composition root for service
-  synchronization, relay, member workers and event listeners. Both Desktop and CLI
+- **Runtime lifecycle**: the backend is the sole composition root for member workers
+  and event listeners. Both Desktop and CLI
   `guildbotics start` launch it (the module in development, the sibling bundled
   `guildbotics-app-api` when packaged), passing their parent PID to the watchdog.
   The backend owns `app-api.lock` for its lifetime and `service.lock` only while
@@ -1591,20 +1286,9 @@ a monorepo on purpose.
   app also installs a `~/.local/bin/guildbotics` shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.
-- **Sync / Device and hub**: two settings sections (`desktop/src/sync/`). "Sync" covers
-  connecting, reconnecting to a rebuilt hub, the changes that cannot be sent, and the
-  devices that joined; "Device and hub" holds what belongs to the machine rather than to
-  a workspace — hub hosting and this device's SSH key — and is listed in the settings
-  nav under its own "This machine" group. A sidebar indicator derives one of seven states
-  from `GET /workspace/sync`, ordering them so that what waiting will not fix comes first;
-  only those states also reach the app-wide warning band. Connecting is a sequence rather
-  than one button because each step means something: the hub must be reachable before its
-  workspaces can be listed, the host key is confirmed by a person (synchronization runs SSH
-  non-interactively, so this is the only opportunity), and joining an existing workspace is
-  previewed while registering a new one is not. Hosting the hub and this device's key belong
-  to the machine rather than to a workspace, so the section is reachable — and those two
-  cards are shown — before any workspace is selected; only the sharing itself waits for one.
-  The machine that hosts the hub is usually the one that never gets a workspace of its own.
+- **This machine**: the settings section for what belongs to the machine rather than to a
+  workspace — the registered workspaces (`/device/workspaces`) — listed in the settings nav
+  under its own "This machine" group and reachable before any workspace is selected.
 - **Config saves are explicit and revision-checked**: every settings screen saves on a
   button, and sends back the revisions its read reported. A refused save reloads the screen
   instead of resending, since resending is exactly the overwrite that was refused.

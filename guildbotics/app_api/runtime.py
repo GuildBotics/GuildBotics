@@ -82,7 +82,6 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
-from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.capabilities.activity_events import refresh_activity_events
 from guildbotics.capabilities.command_failures import (
     command_failure_payload,
@@ -108,11 +107,9 @@ from guildbotics.drivers.command_runner import (
 )
 from guildbotics.drivers.context import create_context
 from guildbotics.drivers.execution import (
-    ExecutionStatusPublisher,
     TaskRunCoordinator,
     WorkRejectedError,
 )
-from guildbotics.drivers.live_state import LiveStatePort
 from guildbotics.drivers.member_context import resolve_person
 from guildbotics.drivers.service_lock import (
     ServiceLockUnavailableError,
@@ -175,7 +172,6 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     WorkspaceNotConfiguredError,
     apply_workspace_root,
-    get_identity_root,
     get_machine_state_root,
     get_primary_config_dir,
     get_workspace_local_path,
@@ -282,8 +278,7 @@ class AppRuntime:
         #: The directory of the files the Desktop hands its commands, which
         #: they read; none when this runtime hands over none.
         self.command_inputs: Callable[[], Path | None] = lambda: None
-        self._execution_status = ExecutionStatusPublisher()
-        self._execution = TaskRunCoordinator(self._execution_status)
+        self._execution = TaskRunCoordinator()
         self._cli_agent_usage = CliAgentUsageCache(
             lambda: self._diagnostics_store.latest_system_trace_id() or ""
         )
@@ -294,10 +289,6 @@ class AppRuntime:
             maxlen=ENVIRONMENT_BUILD_OUTPUT_LINES
         )
         self._loaded_dotenv_keys: set[str] = set()
-        self._workspace_sync = WorkspaceSyncService(
-            on_live_publisher=self.set_live_state,
-            on_owner_transfer=self._execution.mark_interrupted,
-        )
         if load_workspace_environment:
             self._load_workspace_env()
         self._lifecycle = RuntimeLifecycleService(
@@ -305,21 +296,11 @@ class AppRuntime:
             context_factory=self._get_context,
             stop_timeout_seconds=stop_timeout_seconds,
             execution_coordinator=self._execution,
-            before_start=self._prepare_runtime_start,
         )
 
     @property
     def system_service_run_id(self) -> str:
         return self._system_service_run_id
-
-    def set_live_state(self, live_state: LiveStatePort | None) -> None:
-        """Attach the process-wide Hub relay to the shared execution boundary."""
-        self._execution_status.set_live_state(live_state)
-
-    @property
-    def workspace_sync_service(self) -> WorkspaceSyncService:
-        """Expose the process-wide sync/relay service to the API composition root."""
-        return self._workspace_sync
 
     @property
     def selected_workspace(self) -> Path | None:
@@ -395,22 +376,12 @@ class AppRuntime:
         if stopped.has_active_work:
             raise _workspace_switch_blocked_error(stopped)
         self._diagnostics_store.finish_system_session()
-        # Stopped before the switch so the queue of the workspace being left
-        # cannot commit into the one being entered. A queue still finishing a
-        # fetch or push holds that workspace's repository, so the switch waits
-        # rather than leaving two of them running side by side.
-        if not self._workspace_sync.deactivate():
-            raise AppApiError(
-                "workspace_switch_blocked",
-                status_code=409,
-            )
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)
         self._load_workspace_env()
         self._diagnostics_store.start_system_session(self._system_service_run_id)
         self._diagnostics_store.start_maintenance()
-        self._workspace_sync.activate()
         self.workspace_problem = ""
         # Every open screen, in any window or browser tab, reads it again.
         self.event_bus.publish_event("workspace.changed", {"workspace": str(workspace)})
@@ -502,8 +473,7 @@ class AppRuntime:
 
         Commands live under ``config/commands``, so they are shared state like
         the rest of config: the service compares a revision and then writes,
-        and synchronization must not check the hub's content out between the
-        two. Applying a reviewed change set writes several files, which is one
+        and no other writer may change them between the two. Applying a reviewed change set writes several files, which is one
         change for the same reason.
         """
         config_dir = get_primary_config_dir()
@@ -872,18 +842,9 @@ class AppRuntime:
                     else {}
                 ),
             ) from exc
-        except Exception:
-            self._execution.set_owner_check(None)
-            raise
-
-    def _prepare_runtime_start(self) -> None:
-        """Prepare synchronization and ownership after service.lock is held."""
-        self._execution.set_owner_check(self._workspace_sync.prepare_service_owner())
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
-        status = self._lifecycle.stop(force=force)
-        self._execution.set_owner_check(None)
-        return status
+        return self._lifecycle.stop(force=force)
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()
@@ -1282,9 +1243,6 @@ class AppRuntime:
             members=context.team.members,
             lifecycles=_activity_lifecycles_between(start_time, end_time),
             records=self._activity_records_between(start_time, end_time),
-            identity_records=ActivityEventStore.of(get_identity_root()).records_between(
-                start_time, end_time
-            ),
             detail_available=self._diagnostics_store.transcript_exists,
         )
 
@@ -1333,10 +1291,9 @@ class AppRuntime:
         Executions themselves come from their lifecycle records
         (:func:`_activity_lifecycles_between`), so the only local diagnostics
         read here are the work targets member commands declared: they title a
-        session on the device that ran it and are nowhere else. Every record
-        keeps the trace id it was recorded with, whichever device recorded it:
-        the facts of an execution belong to its session on every device, and
-        whether *this* device can show the execution's detail is a separate
+        session and are nowhere else. Every record keeps the trace id it was
+        recorded with, so the facts of an execution belong to its session, and
+        whether the execution's detail can still be shown is a separate
         question (``ActivityHistorySession.detail_available``).
         """
 

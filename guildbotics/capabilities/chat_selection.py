@@ -64,7 +64,6 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.runtime.port import WorkflowStatus, WorkflowStatusReason
 from guildbotics.runtime.workflow_invocation import ChatTurn
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.workspace_sync_port import await_shared_change
 
 #: The kind of the notice a thread keeps of the status posted in it.
 _WORKFLOW_STATUS_NOTICE = "workflow_error"
@@ -384,15 +383,12 @@ class ChatSelector:
 
         The dispatcher only claimed the event: a batch the member does not act
         on (not addressed to them, already handled) leaves no run record. The
-        start still reaches the Hub before the member acts -- the same barrier
-        the execution boundary applies to the runs it records itself -- and a
-        Hub that cannot confirm it hands the attempt back like any other outage.
-        The batch membership is persisted with it, so a recovery uses this
+        batch membership is persisted with it, so a recovery uses this
         exact input even if the thread advanced before a restart.
         """
         source, attributes = trace_stamp(run_id, "event_listener")
         store = RunStore()
-        _record, change = store.start_record_with_change(
+        store.start_record(
             run_id,
             work_kind=self._command,
             execution_mode="autonomous",
@@ -403,10 +399,6 @@ class ChatSelector:
             source=source,
             attributes=attributes,
         )
-        if not await_shared_change(change):
-            raise ThreadContextUnavailableError(
-                "The run could not be shared with the Hub; the batch remains pending."
-            )
         store.append_evidence(
             run_id,
             "chat_batch",

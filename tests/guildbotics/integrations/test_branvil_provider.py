@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from guildbotics.entities.team import Person
 from guildbotics.integrations.branvil import provider as branvil_provider
 from guildbotics.integrations.branvil.setup import Workspace
-from guildbotics.integrations.factory import PROVIDERS, hub_ports
+from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.runtime.port import ServiceError
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
@@ -221,39 +221,6 @@ def test_the_services_refuse_what_names_no_workspace(
 ):
     with pytest.raises(ValidationError):
         Workspace.model_validate(items)
-
-
-BRANVIL_SERVICES = {"code_hosting_service": {"name": "branvil", "workspace": "a"}}
-
-
-@pytest.mark.parametrize(
-    ("services", "connection", "ports"),
-    [
-        (BRANVIL_SERVICES, None, {7878}),
-        (BRANVIL_SERVICES, "http://127.0.0.1:17900", {17900}),
-        (
-            {"ticket_service": {"name": "branvil", "workspace": "a"}},
-            "http://localhost:7900",
-            {7900},
-        ),
-        (BRANVIL_SERVICES, "http://hub:7878", set()),
-        (
-            {"code_hosting_service": {"name": "github", "owner": "acme"}},
-            "http://127.0.0.1:17900",
-            set(),
-        ),
-        ({}, None, set()),
-    ],
-    ids=["default", "connected", "localhost", "elsewhere", "no-branvil", "none"],
-)
-def test_the_hub_port_is_branvils_loopback_port(
-    services: dict[str, Any], connection: str | None, ports: set[int]
-) -> None:
-    """The port of the Branvil the identities are connected to, for a
-    workspace whose services use it."""
-    if connection is not None:
-        connect_admin(base_url=connection)
-    assert hub_ports(services) == ports
 
 
 _IMAGE = "guildbotics/agent-environment:dev"

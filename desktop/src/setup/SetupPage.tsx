@@ -144,10 +144,7 @@ import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailure
 import { PROVIDER_UIS, serviceErrors, servicesReady, useServiceProviders } from "./providers";
 import type { MemberContext } from "./providers/types";
 import { ShortcutsSection } from "./ShortcutsSection";
-import { CloneFromHubButton } from "../sync/CloneFromHub";
-import { DeviceSettings } from "../sync/DeviceSettings";
-import { SecretStatusHint } from "../sync/SecretStatusHint";
-import { SyncSettings } from "../sync/SyncSettings";
+import { DeviceSettings } from "./DeviceSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
@@ -192,9 +189,8 @@ const CORE_SETUP_SECTIONS_INITIAL = [
   "integrations",
   "members",
   "verification",
-  // Hosting a hub and this device's key belong to the machine rather than to a
-  // workspace, so the section has to be reachable before there is one: a
-  // machine that only hosts the hub never gets a project of its own.
+  // The registered workspaces belong to the machine rather than to a
+  // workspace, so the section has to be reachable before there is one.
   "device",
 ] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = [
@@ -206,10 +202,8 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   "integrations",
   "members",
   // Hotkeys are an everyday convenience rather than part of getting running,
-  // and sharing needs a workspace to share, so both are offered only once the
-  // workspace is configured.
+  // so they are offered only once the workspace is configured.
   "shortcuts",
-  "sync",
   "verification",
   "device",
 ] as const;
@@ -224,7 +218,6 @@ const CORE_SECTION_LABEL_KEYS = {
   members: "setup.nav.members",
   integrations: "setup.nav.integrations",
   shortcuts: "setup.nav.shortcuts",
-  sync: "setup.nav.sync",
   verification: "setup.nav.verification",
   device: "setup.nav.device",
 } as const satisfies Record<CoreSection, string>;
@@ -452,7 +445,7 @@ export function SetupPage() {
     : provisionedCliAgentNames.has(form.values.cliAgent);
   // The URL is the single source of truth for which section is open. Holding
   // it in state instead would go stale: reaching Settings again through a link
-  // (the sidebar's "Sync settings", a hash URL) changes only the search params
+  // (a system alert's setup target, a hash URL) changes only the search params
   // and never remounts this page, so a mount-time copy would keep showing the
   // section the page was first opened at.
   const sectionParam = searchParams.get("section");
@@ -622,14 +615,8 @@ export function SetupPage() {
     }
     return revisionsWritten;
   };
-  const applyWorkspaceSwitch = async (
-    workspace: string,
-    switchId: number,
-    alreadySwitched = false,
-  ) => {
-    if (!alreadySwitched) {
-      await restartBackend(workspace);
-    }
+  const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
+    await restartBackend(workspace);
     if (workspaceSwitchId.current !== switchId) {
       return;
     }
@@ -652,12 +639,12 @@ export function SetupPage() {
     await queryClient.refetchQueries({ queryKey: ["project-config"] });
     setSaveState("saved");
   };
-  const startWorkspaceSwitch = (workspace: string, alreadySwitched = false) => {
+  const startWorkspaceSwitch = (workspace: string) => {
     const switchId = workspaceSwitchId.current + 1;
     workspaceSwitchId.current = switchId;
     setWorkspaceSwitching(true);
     setSaveState("saving");
-    void applyWorkspaceSwitch(workspace, switchId, alreadySwitched)
+    void applyWorkspaceSwitch(workspace, switchId)
       .catch((error: unknown) => {
         if (workspaceSwitchId.current === switchId) {
           if (isWorkspaceSwitchBlocked(error)) {
@@ -679,20 +666,6 @@ export function SetupPage() {
     const workspace = value.trim();
     if (workspace) {
       startWorkspaceSwitch(workspace);
-    }
-  };
-  /**
-   * Take up a workspace the backend has already switched to.
-   *
-   * Taking a copy from a hub selects it on the server and answers with the new
-   * configuration, so switching again here would stop the synchronization queue
-   * that had just been started — and a queue that does not stop within the
-   * timeout reports the copy as blocked although it was taken.
-   */
-  const adoptWorkspace = (workspace: string) => {
-    form.setFieldValue("workspaceDir", workspace);
-    if (workspace) {
-      startWorkspaceSwitch(workspace, true);
     }
   };
   const dismissPendingWorkspaceSwitch = () => {
@@ -775,7 +748,6 @@ export function SetupPage() {
               saving={saveMutation.isPending}
               onSave={saveNow}
               onWorkspaceChange={changeWorkspace}
-              onWorkspaceCloned={adoptWorkspace}
             />
           ) : null}
           {activeSection === "intelligence" ? (
@@ -808,7 +780,6 @@ export function SetupPage() {
             />
           ) : null}
           {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
-          {activeSection === "sync" ? <SyncSettings /> : null}
           {activeSection === "device" ? <DeviceSettings /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
@@ -1034,7 +1005,6 @@ function ProjectSection({
   saving,
   onSave,
   onWorkspaceChange,
-  onWorkspaceCloned,
 }: {
   form: ProjectForm;
   saveState: "idle" | "saving" | "saved" | "error";
@@ -1042,7 +1012,6 @@ function ProjectSection({
   saving: boolean;
   onSave: () => Promise<ConfigRevisions | null>;
   onWorkspaceChange: (value: string) => void;
-  onWorkspaceCloned: (workspace: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -1053,15 +1022,7 @@ function ProjectSection({
         save={persisted ? { state: saveState, saving, onSave: () => void onSave() } : undefined}
       />
       <Stack mt="md">
-        <Stack gap="xs">
-          <WorkspacePicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
-          <Group>
-            <CloneFromHubButton
-              destination={form.values.workspaceDir}
-              onCloned={(status) => onWorkspaceCloned(status.workspace ?? "")}
-            />
-          </Group>
-        </Stack>
+        <WorkspacePicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
         <Textarea
           label={<RequiredLabel text={t("setup.project.description")} />}
           aria-label={t("setup.project.description")}
@@ -1331,7 +1292,6 @@ function IntelligenceSection({
                         })
                       }
                     />
-                    <SecretStatusHint envKey={option.api_key_env} />
                   </Popover.Dropdown>
                 </Popover>
               )}
@@ -3096,10 +3056,6 @@ function MembersSection({
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
   const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
   const [isActive, setIsActive] = useState(true);
-  // Which environment key each of this member's credentials is stored under.
-  // Only a saved member has them: the naming is the backend's, and a member
-  // being created has nothing stored to have a state yet.
-  const [memberSecretEnvKeys, setMemberSecretEnvKeys] = useState<Record<string, string>>({});
   const [savingMember, setSavingMember] = useState(false);
   // Which deletion the confirmation is for: taking the member out of this
   // workspace, or deleting the member everywhere.
@@ -3327,7 +3283,6 @@ function MembersSection({
     setScheduledCommands([]);
     setPersonType("agent");
     setIsActive(true);
-    setMemberSecretEnvKeys({});
     showTab(initialTab ?? "basic");
   };
 
@@ -3384,12 +3339,11 @@ function MembersSection({
         scheduledCommandToDraft(entry, commandCatalog),
       ),
     );
-    setMemberSecretEnvKeys(member.secret_env_keys ?? {});
     setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
   // What the member form was composed against, sent back with the save so an
-  // edit that arrived from another machine meanwhile is not replaced unseen.
+  // edit that arrived from elsewhere meanwhile is not replaced unseen.
   const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions | null>(null);
   const currentMember = useQuery({
     queryKey: ["member-config", editingPersonId],
@@ -3624,7 +3578,6 @@ function MembersSection({
     memberKey: memberFormKey,
     gitEmail,
     setGitEmail,
-    secretEnvKeys: memberSecretEnvKeys,
     chatChannels: isHumanMember ? [] : chatChannels,
     chatChannelsField: null,
     services,
@@ -3875,7 +3828,7 @@ function MembersSection({
         return;
       }
       // An existing member is added as its identity was read, so an edit
-      // made to it meanwhile, here or on another machine, is not replaced.
+      // made to it meanwhile, here or elsewhere, is not replaced.
       await addMemberMutation.mutateAsync(
         joiningPersonId && memberRevisions
           ? { ...request, expected_revisions: memberRevisions }
@@ -4281,8 +4234,8 @@ function MembersSection({
                     onChange={(event) => setPersonId(event.currentTarget.value)}
                     // An account set up for this member (an app registered for
                     // it, for one) is for the member it was set up for.
-                    // Other workspaces, perhaps on other machines, know the
-                    // member by its ID, so a member keeps the one it has.
+                    // Other workspaces know the member by its ID, so a
+                    // member keeps the one it has.
                     disabled={
                       formMode === "edit" ||
                       joiningPersonId !== null ||
@@ -5601,7 +5554,7 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   if (section === "verification") {
     return status.verificationReady;
   }
-  // Hotkeys, synchronization, and this machine's own settings ask for nothing
+  // Hotkeys and this machine's own settings ask for nothing
   // before the project can run, so they are never the step that is still
   // missing -- and never the step that stops the first-run walkthrough.
   return true;
@@ -5804,7 +5757,7 @@ export function toProjectUpdateRequest(
 ): ProjectConfigUpdateRequest {
   return {
     config_dir: snapshot.config_dir || config?.config_dir || resolveConfigDir(values.workspaceDir),
-    // What this form was composed against. Another machine's edit can arrive
+    // What this form was composed against. An edit made elsewhere can arrive
     // while the screen sits open, and saving would otherwise replace it with
     // values read before it landed.
     expected_revisions: snapshot.revisions,

@@ -976,7 +976,7 @@ The command reads the durable event queue without a Slack API request. `new_mess
 returns the messages received since this run's input or previous check; read them,
 reconsider the work and response, then check again before publishing. `up_to_date`
 permits proceeding. `catching_up` means received messages are waiting to be saved
-during workspace synchronization: wait a few seconds and retry, without publishing
+while another writer finishes: wait a few seconds and retry, without publishing
 or completing as `blocked` solely for this state. `unavailable` means reception cannot be verified: defer external
 writes and complete as `blocked` if reception cannot recover within the turn.
 The write commands also reject missing checks and messages arriving after a check.

@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from contextlib import ExitStack
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import click
 import httpx
@@ -39,7 +38,6 @@ from guildbotics.runtime.member_invocation import (
 from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.port import ServiceError
-from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_state import (
@@ -51,123 +49,14 @@ from tests.guildbotics.local_chat import at, chat_event, chat_team, lines, say
 member_module = importlib.import_module("guildbotics.cli.member")
 
 
-def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, capsys):
-    monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
-    calls = []
-
-    class PreparedSync:
-        def commit_and_push_once(self, *, timeout):
-            calls.append("sync")
-            raise member_module.SyncRepositoryBusyError("sync.lock is busy")
-
-    def prepare():
-        calls.append("prepare")
-        return PreparedSync()
-
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
-
-    async def command_result():
-        calls.append("command")
-        return {"doc_id": "doc-1"}
-
-    result = member_module._run(command_result(), output_format="json")
-
-    assert result == {"doc_id": "doc-1", "sync": "pending"}
-    assert calls == ["prepare", "command", "sync"]
-    assert json.loads(capsys.readouterr().out) == result
-
-
-@pytest.mark.parametrize("invalid_identity", ["device", "workspace"])
-def test_member_write_validates_sync_identity_before_running_command(
-    tmp_path, invalid_identity
-):
-    repository = LocalSyncRepository(tmp_path)
-    repository.initialize()
-    repository.set_remote(str(tmp_path / "hub.git"))
-    ignore = tmp_path / ".guildbotics" / ".gitignore"
-    ignore.write_text("stale rules\n", encoding="utf-8")
-    if invalid_identity == "device":
-        identity = tmp_path / "home" / ".guildbotics" / "data" / "device.json"
-    else:
-        identity = tmp_path / ".guildbotics" / "state" / "workspace.json"
-    identity.parent.mkdir(parents=True, exist_ok=True)
-    identity.write_text('{"device_id": "not a uuid"}', encoding="utf-8")
-    marker = tmp_path / "command-ran"
-
-    @click.command()
-    def write_command():
-        async def write():
-            marker.write_text("changed", encoding="utf-8")
-            return {"written": True}
-
-        member_module._run(write(), output_format="json")
-
-    result = CliRunner().invoke(write_command)
-
-    assert result.exit_code == 1
-    assert isinstance(result.exception, SystemExit)
-    assert (
-        result.output
-        == "Error: "
-        + member_module.t("cli.member.sync.invalid_identity", path=identity)
-        + "\n"
-    )
-    assert not marker.exists()
-    assert ignore.read_text(encoding="utf-8") == "stale rules\n"
-
-
-def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
-    async def command_result():
-        return {"written": True}
-
-    result = member_module._run(command_result(), output_format="json")
-
-    assert result == {"written": True}
-    assert json.loads(capsys.readouterr().out) == result
-
-
-def test_read_only_member_command_skips_one_shot_sync(monkeypatch):
-    def prepare():
-        pytest.fail("read-only commands must not prepare one-shot sync")
-
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
-
-    @click.command()
-    @member_module._read_only_member_command
-    def read_command():
-        async def read():
-            return {"read": True}
-
-        member_module._run(read(), output_format="json")
-
-    result = CliRunner().invoke(read_command)
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"read": True}
-
-
 @pytest.mark.parametrize("source", ["routine", "scheduled", "manual", "event_queue"])
-def test_interactive_write_and_sync_run_while_the_members_clone_is_in_use(
-    monkeypatch, source
-):
+def test_interactive_write_runs_while_the_members_clone_is_in_use(monkeypatch, source):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     monkeypatch.setattr(
         member_module,
         "resolve_member_context",
         lambda _: (FakeContext(person), person),
     )
-    calls = []
-
-    class PreparedSync:
-        def commit_and_push_once(self, *, timeout):
-            calls.append("sync")
-            return SimpleNamespace(failure=None)
-
-    def prepare():
-        calls.append("prepare")
-        return PreparedSync()
-
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
     coordinator = ExecutionCoordinator()
     with coordinator.track_work(source=source, person_id="aiko", command="workflow"):
         result = CliRunner().invoke(
@@ -194,8 +83,6 @@ def test_interactive_write_and_sync_run_while_the_members_clone_is_in_use(
             ):
                 pass
         assert excinfo.value.reason == "lease_unavailable"
-
-    assert calls == ["prepare", "sync"]
 
 
 @pytest.fixture
@@ -1846,9 +1733,8 @@ def test_member_git_show_interactively_reads_without_checkout_or_lease(
     )
 
     def forbidden(*args, **kwargs):
-        pytest.fail("a read must not prepare sync or check chat freshness")
+        pytest.fail("a read must not check chat freshness")
 
-    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", forbidden)
     monkeypatch.setattr(member_git, "ensure_chat_current", forbidden)
     # No guest, work context, lease, or checkout, as in a normal interactive session.
     with member_invocation_scope(MemberInvocation()):
@@ -4021,7 +3907,6 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,
     )
-    from guildbotics.runtime.chat_service import ChatEvent
 
     lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")

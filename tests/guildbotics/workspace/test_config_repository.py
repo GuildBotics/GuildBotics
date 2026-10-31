@@ -14,12 +14,11 @@ from guildbotics.utils.shared_write_lock import (
     shared_write_lock_path,
 )
 from guildbotics.workspace.config_repository import (
+    ConfigPathInvalidError,
     ConfigRepository,
     StaleConfigWriteError,
     blob_id,
 )
-from guildbotics.workspace.validation import SharedFileInvalidError
-from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 PROJECT = "team/project.yml"
 MODEL_MAPPING = "intelligences/model_mapping.yml"
@@ -91,7 +90,7 @@ def test_reading_an_absent_config_returns_none(repository: ConfigRepository) -> 
 
 
 def test_a_read_returns_the_content_and_its_revision(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     content = project_yaml("GuildBotics")
     write(config_dir, PROJECT, content)
@@ -119,25 +118,21 @@ def test_a_file_that_does_not_exist_has_an_empty_revision(
 
 
 def test_a_file_created_since_the_read_refuses_the_save(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     expected = repository.revisions([PROJECT, MODEL_MAPPING])
     write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
-    port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError):
         repository.write(refuse_to_run, expected=expected)
 
-    assert port.changes == []
-
 
 def test_a_guarded_write_at_the_current_revisions_applies(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     expected = repository.revisions([PROJECT])
-    port.changes.clear()
 
     receipt = repository.write(
         lambda: write(config_dir, PROJECT, project_yaml("Renamed")),
@@ -150,16 +145,14 @@ def test_a_guarded_write_at_the_current_revisions_applies(
     assert snapshot.content == project_yaml("Renamed")
     # The receipt describes what this write left, not what it replaced.
     assert receipt.revisions == {PROJECT: blob_id(project_yaml("Renamed").encode())}
-    assert [change.operation for change in port.changes] == ["update"]
 
 
 def test_a_guarded_write_at_a_stale_revision_changes_nothing(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     stale = repository.revisions([PROJECT])
     write(config_dir, PROJECT, project_yaml("Newer"))
-    port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
         repository.write(refuse_to_run, expected=stale)
@@ -171,32 +164,28 @@ def test_a_guarded_write_at_a_stale_revision_changes_nothing(
     # Read under the same lock as the comparison, so the screen reloads with
     # what the comparison actually saw.
     assert error.value.revisions == {PROJECT: current.blob_id}
-    assert port.changes == []
 
 
 def test_a_guarded_write_expecting_absence_is_refused_once_the_file_exists(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
-    port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
         repository.write(refuse_to_run, expected={PROJECT: ""})
 
     assert error.value.revisions[PROJECT] != ""
-    assert port.changes == []
 
 
 def test_one_stale_file_refuses_the_whole_save(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     """A save spanning several files applies completely or not at all."""
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
     expected = repository.revisions([PROJECT, MODEL_MAPPING])
-    # Another device's change arrives for one of the two files.
+    # Another writer's change arrives for one of the two files.
     write(config_dir, MODEL_MAPPING, project_yaml("claude"))
-    port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
         repository.write(refuse_to_run, expected=expected)
@@ -205,7 +194,6 @@ def test_one_stale_file_refuses_the_whole_save(
     untouched = repository.read_config(PROJECT)
     assert untouched is not None
     assert untouched.content == project_yaml("GuildBotics")
-    assert port.changes == []
 
 
 def test_tree_revisions_cover_every_file_under_the_directory(
@@ -294,11 +282,10 @@ def test_a_directory_revision_ignores_the_content_of_its_files(
 
 
 def test_only_one_of_two_concurrent_savers_wins(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     expected = repository.revisions([PROJECT])
-    port.changes.clear()
     start = threading.Barrier(2)
     outcomes: list[str] = []
 
@@ -322,7 +309,6 @@ def test_only_one_of_two_concurrent_savers_wins(
         thread.join()
 
     assert sorted(outcome.split(":")[0] for outcome in outcomes) == ["stale", "written"]
-    assert len(port.changes) == 1
     winner = next(name for name in ("A", "B") if f"written:{name}" in outcomes)
     current = repository.read_config(PROJECT)
     assert current is not None
@@ -340,34 +326,30 @@ def test_only_one_of_two_concurrent_savers_wins(
 )
 def test_a_path_outside_the_config_directory_is_refused(
     repository: ConfigRepository,
-    port: RecordingPort,
     tmp_path: Path,
     relative_path: str,
 ) -> None:
-    with pytest.raises(SharedFileInvalidError):
+    with pytest.raises(ConfigPathInvalidError):
         repository.write(refuse_to_run, expected={relative_path: ""})
-    with pytest.raises(SharedFileInvalidError):
+    with pytest.raises(ConfigPathInvalidError):
         repository.read_config(relative_path)
 
     assert not (tmp_path / ".guildbotics/state/workspace.json").exists()
-    assert port.changes == []
 
 
 def test_a_symlink_out_of_the_config_directory_is_refused(
-    repository: ConfigRepository, port: RecordingPort, tmp_path: Path, symlinks
+    repository: ConfigRepository, tmp_path: Path, symlinks
 ) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "escape").symlink_to(tmp_path / ".guildbotics/state")
 
-    with pytest.raises(SharedFileInvalidError):
+    with pytest.raises(ConfigPathInvalidError):
         repository.write(refuse_to_run, expected={"escape/workspace.json": ""})
-
-    assert port.changes == []
 
 
 def test_the_write_lock_is_released_after_each_save(
-    repository: ConfigRepository, config_dir: Path, port: RecordingPort
+    repository: ConfigRepository, config_dir: Path
 ) -> None:
     repository.write(lambda: write(config_dir, PROJECT, project_yaml("GuildBotics")))
 

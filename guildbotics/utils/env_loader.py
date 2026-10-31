@@ -88,7 +88,7 @@ def read_workspace_secrets(
                     values[key] = value
     except SecretStoreError as exc:
         get_logger().warning(
-            "OS secret store is unavailable; relying on process environment "
+            "The secrets could not be read; relying on process environment "
             "variables for the remaining secrets: %s",
             exc,
         )

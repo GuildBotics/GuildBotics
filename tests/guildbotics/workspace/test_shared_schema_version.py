@@ -21,7 +21,6 @@ import ast
 import json
 from pathlib import Path
 
-import pytest
 import yaml  # type: ignore
 
 from guildbotics.capabilities.member_memory import MemberMemoryService
@@ -38,16 +37,8 @@ from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
     InteractiveTraceSession,
 )
-from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
-from guildbotics.workspace.identity import (
-    ensure_workspace_identity,
-    publish_device_record,
-)
-from guildbotics.workspace.validation import (
-    REGULAR_FILE_MODE,
-    SharedSchemaAheadError,
-    validate_shared_file,
-)
+from guildbotics.utils.shared_writes import SHARED_RECORD_SCHEMA_VERSION
+from guildbotics.workspace.identity import ensure_workspace_identity
 from tests.guildbotics.local_chat import at, chat_event
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "guildbotics"
@@ -67,7 +58,6 @@ RECORD_SUFFIXES = {".json", ".jsonl", ".yml", ".yaml"}
 def _write_one_of_every_shared_record(workspace: Path) -> None:
     """Run the real writers, so the population comes from what they produce."""
     ensure_workspace_identity()
-    publish_device_record()
 
     ActivityEventStore().record(
         {
@@ -223,27 +213,6 @@ def test_a_generation_the_caller_supplies_never_survives(tmp_path: Path) -> None
             )
 
 
-def test_the_boundary_would_have_refused_the_supplied_generation(
-    tmp_path: Path,
-) -> None:
-    """The stamp matters because the boundary acts on what it finds.
-
-    A record that kept the foreign generation would be refused on the way out
-    -- by this device, about its own file -- and its queue would stop.
-    """
-    planted = _write_with_a_foreign_generation(tmp_path)
-    root = tmp_path / ".guildbotics"
-
-    for name, path in planted.items():
-        relative = path.relative_to(root).as_posix()
-        validate_shared_file(relative, REGULAR_FILE_MODE, path.read_bytes())
-        with pytest.raises(SharedSchemaAheadError):
-            validate_shared_file(
-                relative, REGULAR_FILE_MODE, _with_generation(path, AHEAD)
-            )
-        assert name
-
-
 def _shared_files(workspace: Path) -> dict[str, Path]:
     state = workspace / ".guildbotics" / "state"
     return {
@@ -296,21 +265,6 @@ def test_every_record_written_under_state_declares_its_generation(
     )
 
 
-def test_the_boundary_stops_a_record_from_a_newer_build(tmp_path: Path) -> None:
-    """The generation is only worth stamping if the boundary acts on it."""
-    _write_one_of_every_shared_record(tmp_path)
-
-    checked = 0
-    for relative, path in _shared_files(tmp_path).items():
-        if path.suffix not in RECORD_SUFFIXES:
-            continue
-        ahead = _with_generation(path, SHARED_RECORD_SCHEMA_VERSION + 1)
-        with pytest.raises(SharedSchemaAheadError):
-            validate_shared_file(relative, REGULAR_FILE_MODE, ahead)
-        checked += 1
-    assert checked
-
-
 def test_no_record_carries_its_own_copy_of_the_generation() -> None:
     """One literal, so no kind can be raised on its own.
 
@@ -359,19 +313,3 @@ def _records_in(path: Path) -> list[dict]:
     else:
         return []
     return [payload] if isinstance(payload, dict) else []
-
-
-def _with_generation(path: Path, version: int) -> bytes:
-    """Return the file's bytes with every record's generation raised."""
-    if path.suffix == ".jsonl":
-        lines = [
-            json.dumps({**json.loads(line), "schema_version": version})
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        return ("\n".join(lines) + "\n").encode("utf-8")
-    payload = _records_in(path)[0]
-    payload["schema_version"] = version
-    if path.suffix == ".json":
-        return json.dumps(payload).encode("utf-8")
-    return yaml.safe_dump(payload).encode("utf-8")

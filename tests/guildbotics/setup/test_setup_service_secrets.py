@@ -18,7 +18,7 @@ from guildbotics.setup.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.utils.fileio import dump_yaml, load_yaml_file
+from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import (
@@ -158,9 +158,6 @@ class TestPersonSecrets:
         assert snapshot.accounts["github"]["has_access_token"] is True
         assert snapshot.accounts["github"]["has_private_key"] is False
         assert snapshot.accounts["slack"]["has_bot_token"] is False
-        assert snapshot.secret_env_keys == {
-            name: f"ALICE_{name}" for name in MEMBER_SECRET_NAMES
-        }
 
     def test_saving_under_another_id_is_another_member(self, fake_keyring, tmp_path):
         """A person ID is immutable: a form saved under another ID makes
@@ -325,41 +322,14 @@ class TestPersonSecrets:
         ]
 
 
-class TestStaleKeyMetadata:
-    """Shared key metadata goes with the identity even when the local value
-    is stale (another device holds the current generation)."""
+class TestSecretStoreFailure:
+    """A secret store that refuses a write leaves the member's files as they were."""
 
     def _workspace(self, tmp_path: Path) -> Path:
         config_dir = _config_dir(tmp_path)
         config_dir.mkdir(parents=True)
         KeyringSecretStore(config_dir).ensure_initialized()
         return config_dir
-
-    def _make_stale(self, key: str) -> None:
-        store = identity_secret_store()
-        # The value written here reached the hub as generation 1 ...
-        value = store.get(key)
-        assert value is not None
-        store.confirm_shared({key: 1}, sent={key: value})
-        # ... and another device then published generation 2. Synchronization
-        # delivers the bumped index as a checkout, not through a writer, so it
-        # is written directly.
-        index = load_yaml_file(store.location)
-        index["keys"][key]["generation"] = 2
-        store.location.write_text(dump_yaml(index), encoding="utf-8")
-        assert store.get(key) is None
-
-    def test_delete_identity_removes_stale_key_metadata(self, fake_keyring, tmp_path):
-        config_dir = self._workspace(tmp_path)
-        service = SimplePersonSetupService()
-        service.save_person(
-            _person_input(config_dir, accounts=_github(access_token="ghp-old"))
-        )
-        self._make_stale("ALICE_GITHUB_ACCESS_TOKEN")
-
-        service.delete_identity(person_id="alice")
-
-        assert "ALICE_GITHUB_ACCESS_TOKEN" not in identity_secret_store().keys()
 
     def test_save_person_store_failure_leaves_member_config_untouched(
         self, fake_keyring, tmp_path, monkeypatch

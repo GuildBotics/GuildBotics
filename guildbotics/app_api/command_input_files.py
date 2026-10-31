@@ -42,8 +42,7 @@ from guildbotics.utils.safe_paths import (
     visit_host_directory,
 )
 
-#: Largest file the Desktop hands a command; not a shared file, so not derived
-#: from the sync boundary's limits.
+#: Largest file the Desktop hands a command.
 MAX_COMMAND_INPUT_FILE_BYTES = 20 * 1024 * 1024
 
 #: The longest name an upload keeps: file systems limit a name to 255 bytes,

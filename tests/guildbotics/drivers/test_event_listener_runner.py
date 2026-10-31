@@ -837,7 +837,7 @@ def test_receiver_can_restart_on_another_event_loop(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["socket", "backfill"])
-async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
+async def test_write_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
     monkeypatch, source
 ):
     from guildbotics.capabilities.chat_updates import (
@@ -877,12 +877,12 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
     runner._receive_status.save(*scope, state="ready")
     locked, release = threading.Event(), threading.Event()
 
-    def hold_sync_lock():
+    def hold_write_lock():
         with shared_write_lock():
             locked.set()
             release.wait(timeout=5)
 
-    thread = threading.Thread(target=hold_sync_lock)
+    thread = threading.Thread(target=hold_write_lock)
     thread.start()
     task = None
     try:

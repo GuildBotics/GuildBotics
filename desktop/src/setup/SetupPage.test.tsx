@@ -11,7 +11,6 @@ import {
   addMemberConfig,
   ApiRequestError,
   buildAgentEnvironment,
-  cloneWorkspaceFromHub,
   deleteIdentity,
   deleteMemberConfig,
   getCommandOptions,
@@ -28,7 +27,6 @@ import {
   getRoleOptions,
   getTeam,
   listIdentities,
-  getWorkspaceSyncStatus,
   importAvatarFromProvider,
   initConfig,
   runScenarioDiagnostics,
@@ -52,8 +50,6 @@ import { openExternal } from "../openExternal";
 import i18n from "../i18n";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
-import { SyncAlerts } from "../sync/SyncAlerts";
-import { syncQueryKey } from "../sync/syncState";
 import {
   ensureAgentField,
   getAgentFieldState,
@@ -120,51 +116,8 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     saveDecisionCredential: vi.fn(async () => ({ state: "unverified" })),
     addMemberConfig: vi.fn(async () => configWriteResponse()),
-    cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
     getRegisteredWorkspaces: vi.fn(async () => ["/workspace", "/other-workspace"]),
     getServerMachineName: vi.fn(async () => "studio"),
-    inspectHub: vi.fn(async () => ({
-      endpoint: "user@hub.local",
-      is_local: false,
-      host_key_fingerprints: [],
-      host_key_trusted: true,
-      host_key_changed: false,
-      workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
-    })),
-    getHubStatus: vi.fn(async () => ({
-      hosted: false,
-      hub_root: "/home/u/.guildbotics/hub",
-      hub_id: null,
-      created_at: null,
-      ssh_endpoint: null,
-      workspace_ids: [],
-    })),
-    getDeviceSshKey: vi.fn(async () => ({
-      exists: false,
-      path: null,
-      public_key: "",
-      fingerprint: "",
-    })),
-    getWorkspaceSyncStatus: vi.fn(async () => ({
-      enabled: false,
-      workspace_id: null,
-      device_id: "1f0a0000-0000-7000-8000-0000000000d1",
-      hub_url: null,
-      state: "disabled",
-      local_head: null,
-      remote_head: null,
-      ahead_count: 0,
-      behind_count: 0,
-      unsendable_changes: [],
-      last_success_at: null,
-      last_error_code: null,
-      last_error_detail: null,
-      live_error_code: null,
-    })),
-    getWorkspaceDevices: vi.fn(async () => ({
-      device_id: "1f0a0000-0000-7000-8000-0000000000d1",
-      devices: [],
-    })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
     deleteIdentity: vi.fn(async () => configWriteResponse()),
     listIdentities: vi.fn(async () => []),
@@ -709,37 +662,6 @@ describe("SetupPage", () => {
     expect(badge.closest(".nav-label")).toHaveTextContent(t("setup.nav.groupMachine"));
   });
 
-  it("takes up a copied workspace without switching to it a second time", async () => {
-    // `POST /workspace/sync/clone` already selected the copy and started its
-    // synchronization queue. Switching again would stop that queue, and a queue
-    // that does not stop in time reports the copy as blocked although it was
-    // taken.
-    const user = userEvent.setup();
-    const copied = configStatus({
-      cwd: "/copied-workspace",
-      workspace: "/copied-workspace",
-      config_dir: "/copied-workspace/.guildbotics/config",
-      project_file: "/copied-workspace/.guildbotics/config/team/project.yml",
-      project_file_exists: true,
-    });
-    vi.mocked(cloneWorkspaceFromHub).mockResolvedValue(copied);
-    vi.mocked(getConfigStatus).mockResolvedValue(copied);
-    renderSetupPage("/setup");
-    // The destination is whatever the workspace field already holds; typing a
-    // new one here would itself be an ordinary workspace switch.
-    await screen.findByLabelText("Workspace");
-
-    await user.click(screen.getByRole("button", { name: t("sync.clone.action") }));
-    await fill(user, await screen.findByLabelText(t("sync.connect.endpoint")), "user@hub.local");
-    await user.click(screen.getByRole("button", { name: t("sync.connect.inspect") }));
-    await user.click(await screen.findByRole("button", { name: t("sync.clone.take") }));
-
-    await waitFor(() =>
-      expect(screen.getByLabelText("Workspace")).toHaveValue("/copied-workspace"),
-    );
-    expect(restartBackend).not.toHaveBeenCalled();
-  });
-
   it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
@@ -911,8 +833,8 @@ describe("SetupPage", () => {
   });
 
   it("opens this machine's section before the project is saved", async () => {
-    // The machine that hosts the hub never gets a project of its own, so the
-    // machine-scoped section cannot wait for a saved project.
+    // The machine-scoped section does not belong to a workspace, so it cannot
+    // wait for a saved project.
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
@@ -923,15 +845,14 @@ describe("SetupPage", () => {
 
     await user.click(screen.getByRole("button", { name: t("setup.nav.device") }));
 
-    expect(await screen.findByText(t("sync.host.title"))).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: t("sync.host.create") })).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("setup.device.registeredWorkspaces.body")),
+    ).toBeInTheDocument();
   });
 
   it("lists only the sections that can be opened", async () => {
     // A nav entry that leaves the screen where it was reads as a broken app,
     // so sections the first-setup flow does not serve are not offered.
-    // Sharing needs a workspace to share, so before one exists only the
-    // machine-scoped section of the machine group is listed.
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
@@ -940,14 +861,13 @@ describe("SetupPage", () => {
     await screen.findByRole("heading", { name: "First setup" });
 
     expect(screen.getByRole("button", { name: t("setup.nav.device") })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t("setup.nav.sync") })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: t("setup.nav.shortcuts") }),
     ).not.toBeInTheDocument();
   });
 
   it("follows a section link while the page is already open", async () => {
-    // A link into Settings (the sidebar's "Sync settings") changes only the
+    // A link into Settings (a system alert's setup target) changes only the
     // search params and never remounts the page, so the open section must
     // track the URL rather than a mount-time copy of it.
     const user = userEvent.setup();
@@ -957,20 +877,20 @@ describe("SetupPage", () => {
         <Notifications />
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={["/setup?section=device"]}>
-            <Link to="/setup?section=sync">open sync from outside</Link>
+            <Link to="/setup?section=project">open project from outside</Link>
             <SetupPage />
           </MemoryRouter>
         </QueryClientProvider>
       </TestMantineProvider>,
     );
     expect(
-      await screen.findByRole("heading", { name: t("sync.device.title") }),
+      await screen.findByRole("heading", { name: t("setup.device.title") }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "open sync from outside" }));
+    await user.click(screen.getByRole("link", { name: "open project from outside" }));
 
     expect(
-      await screen.findByRole("heading", { name: t("sync.settings.title") }),
+      await screen.findByRole("heading", { name: t("setup.project.title") }),
     ).toBeInTheDocument();
   });
 
@@ -1492,7 +1412,7 @@ describe("SetupPage", () => {
 
   it("saves twice in a row without colliding with its own first save", async () => {
     // The second save must not carry the revision the first one replaced: that
-    // would report a conflict with another machine where there is none, and
+    // would report a conflict with another edit where there is none, and
     // throw the second edit away.
     const user = userEvent.setup();
     // Stand in for the file the save actually changes, so a later read of it
@@ -1523,8 +1443,8 @@ describe("SetupPage", () => {
   });
 
   it("reloads instead of resending when the save is refused as stale", async () => {
-    // What synchronization makes ordinary: another machine's edit arrived while
-    // this screen was open. Re-sending the form is exactly the overwrite the
+    // Another edit (the member CLI, another browser) arrived while this
+    // screen was open. Re-sending the form is exactly the overwrite the
     // backend refused, so the screen takes the current content instead.
     const user = userEvent.setup();
     vi.mocked(updateProjectConfig).mockRejectedValueOnce(
@@ -1540,13 +1460,11 @@ describe("SetupPage", () => {
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
     await fill(user, description, "From the stale screen");
-    vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({ description: "From the other machine" }),
-    );
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "From elsewhere" }));
     await saveSection(user);
 
     expect(await screen.findByText(t("setup.staleSave.title"))).toBeInTheDocument();
-    await waitFor(() => expect(description).toHaveValue("From the other machine"));
+    await waitFor(() => expect(description).toHaveValue("From elsewhere"));
     expect(updateProjectConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -1696,7 +1614,7 @@ describe("SetupPage", () => {
   });
 });
 
-function renderSetupPage(path: string, withSyncAlerts = false, strict = false) {
+function renderSetupPage(path: string, strict = false) {
   const theme = createTheme({
     primaryColor: "dark",
     defaultRadius: "md",
@@ -1709,7 +1627,6 @@ function renderSetupPage(path: string, withSyncAlerts = false, strict = false) {
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
-          {withSyncAlerts ? <SyncAlerts /> : null}
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -2556,7 +2473,7 @@ describe("MembersSection", () => {
     vi.mocked(getMemberConfig).mockResolvedValue(
       memberConfigDetail({ revisions: { [path]: "before" } }),
     );
-    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", false, true);
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", true);
     const name = await screen.findByLabelText(t("setup.members.personName"));
     await waitFor(() => expect(name).toHaveValue("Alice"));
     vi.mocked(getMemberConfig).mockResolvedValue(
@@ -2567,7 +2484,7 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: t("setup.members.reloadButton") })).toBeEnabled();
   });
 
-  it("keeps entries when synchronization leaves this member unchanged", async () => {
+  it("keeps entries when a reload leaves this member unchanged", async () => {
     const snapshot = memberConfigDetail({ revisions: { "team/members/alice/person.yml": "same" } });
     vi.mocked(getMemberConfig).mockResolvedValue(snapshot);
     const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
@@ -2615,13 +2532,9 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeEnabled();
   });
 
-  it.each(
-    [false, true].flatMap((rejected) =>
-      (["en", "ja"] as const).map((language) => ({ rejected, language })),
-    ),
-  )(
-    "refreshes the member list and explains reloading ($language, rejected: $rejected)",
-    async ({ rejected, language }) => {
+  it.each(["en", "ja"] as const)(
+    "refreshes the member list and explains reloading (%s)",
+    async (language) => {
       await i18n.changeLanguage(language);
       const t = i18n.getFixedT(language);
       const user = userEvent.setup();
@@ -2629,20 +2542,9 @@ describe("MembersSection", () => {
       vi.mocked(getMemberConfig).mockResolvedValue(
         memberConfigDetail({ revisions: { [revisionPath]: "before" } }),
       );
-      const sync = {
-        ...(await getWorkspaceSyncStatus()),
-        enabled: true,
-        workspace_id: "workspace-a",
-        local_head: "before",
-        rejected_changes: [],
-      };
-      vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(sync);
-      const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", true);
+      const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
       const name = await screen.findByLabelText(t("setup.members.personName"));
       await waitFor(() => expect(name).toHaveValue("Alice"));
-      await waitFor(() =>
-        expect(queryClient.getQueryData(syncQueryKey("workspace"))).toEqual(sync),
-      );
       fireEvent.change(name, { target: { value: "Unsaved name" } });
 
       const adopted = memberConfigDetail({
@@ -2657,20 +2559,8 @@ describe("MembersSection", () => {
           member.person_id === "alice" ? { ...member, name: "Adopted name" } : member,
         ),
       });
-      // Deliver the next polling response without navigating or focusing the window.
-      queryClient.setQueryData(syncQueryKey("workspace"), {
-        ...sync,
-        local_head: "adopted",
-        rejected_changes: rejected
-          ? [
-              {
-                rejection_id: "held",
-                occurred_at: "2026-10-03T00:00:00Z",
-                paths: [`config/${revisionPath}`],
-              },
-            ]
-          : [],
-      });
+      // What the app does when the server reports a change it did not make.
+      await queryClient.invalidateQueries();
 
       const list = screen.getByRole("list", { name: t("setup.members.title") });
       expect(await within(list).findByText("Adopted name (alice)")).toBeInTheDocument();
@@ -5075,7 +4965,7 @@ describe("IntelligenceEditor (team default)", () => {
 
   it.each([
     ["refused as stale", "config_changed"],
-    ["refused because synchronization holds the files", "config_busy"],
+    ["refused because another writer holds the files", "config_busy"],
   ])("does not save the advanced half when the basic half is %s", async (_name, code) => {
     // One button, two writes. Applying only the second is worse than applying
     // neither, and it contradicts the message the user was just shown.
@@ -5098,7 +4988,7 @@ describe("IntelligenceEditor (team default)", () => {
     // One button saves both halves, and the basic half rewrites two of the
     // files the advanced half guards. Sending the revisions read before that
     // write would make the screen collide with itself on every provider
-    // change, and report it as a conflict with another machine.
+    // change, and report it as a conflict with another edit.
     const user = userEvent.setup();
     vi.mocked(updateProjectConfig).mockResolvedValue(
       configWriteResponse({
@@ -5124,7 +5014,7 @@ describe("IntelligenceEditor (team default)", () => {
   it("carries the revisions its own save reported into the next one", async () => {
     // The editor stays open after a save, so a second one composed against what
     // it was loaded with would collide with the first and be reported as a
-    // conflict with another machine -- discarding the second edit.
+    // conflict with another edit -- discarding the second edit.
     const user = userEvent.setup();
     // The refetch a save starts is held open, because that is the case the
     // reply has to cover: a save that overtakes it would otherwise send the
@@ -5687,7 +5577,7 @@ describe("IntelligenceEditor (member override)", () => {
 
   it("carries the revisions its own save reported into the next one", async () => {
     // The editor stays open on the member it just saved. Sending the revision
-    // that save replaced would report a conflict with another machine where
+    // that save replaced would report a conflict with another edit where
     // there is none, and discard the second round of edits.
     const user = userEvent.setup();
     vi.mocked(updateMemberConfig).mockResolvedValue(

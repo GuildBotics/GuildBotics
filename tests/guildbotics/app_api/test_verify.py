@@ -396,7 +396,6 @@ def test_verify_accepts_private_key_content_from_keychain(
     monkeypatch: pytest.MonkeyPatch,
     fake_keyring,
 ) -> None:
-    from guildbotics.utils.secret_store import KeyringSecretStore
 
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)

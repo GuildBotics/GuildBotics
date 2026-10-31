@@ -1,8 +1,8 @@
 """Every route that changes config goes through the one comparing writer.
 
-Exclusion is no longer the question here: the sync port takes the workspace's
+Exclusion is not the question here: the write helpers take the workspace's
 shared-write lock for every shared write, so a route cannot land in the middle
-of a synchronization cycle whatever it does. What a route still has to do for
+of another writer's change whatever it does. What a route still has to do for
 itself is compare -- write through ``ConfigRepository.write``, so the revisions
 the screen composed against are checked before anything is written and the new
 ones come back in the answer. A route that skips that saves over another
@@ -41,17 +41,9 @@ HTTP_SERVICE_UNAVAILABLE = 503
 #: Routes that change something other than the workspace's shared config, and
 #: what they change instead. Naming them is what lets the check below be
 #: exhaustive rather than a list of the routes someone happened to think of.
-#: Nothing here is unprotected: shared writes still go through the port, which
-#: serializes them. They simply have nobody to compare revisions with.
-#:
-#: The secret transfers are the one entry that does touch a config file. They
-#: publish generations into ``config/secrets.yml`` through the secret store,
-#: which re-reads that file inside the port's lock immediately before writing
-#: it. There is no snapshot to compare against: no screen composes that file,
-#: and the two other writers of it -- the setup service and the ``secrets``
-#: CLI -- have never gone through the comparing writer either. What the guard
-#: is for is a route that saves over a revision a screen was holding, and this
-#: is not one.
+#: Nothing here is unprotected: shared writes still go through the write
+#: helpers, which serialize them. They simply have nobody to compare revisions
+#: with.
 ELSEWHERE = {
     ("POST", "/member/plan"): "parses Click inputs without executing a command",
     (
@@ -70,7 +62,7 @@ ELSEWHERE = {
         "POST",
         "/intelligences/decisions/credential",
     ): "OS secret store and atomic index update; no edited config snapshot",
-    ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
+    ("POST", "/chat/receive-state/reset"): "state/, no edited config snapshot",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
     ("POST", "/commands/input-files"): "a temporary file outside the workspace",
     ("POST", "/commands/input-files/copy"): "a temporary file outside the workspace",
@@ -78,20 +70,13 @@ ELSEWHERE = {
         "POST",
         "/commands/input-paths",
     ): "answers what a turn would reach, writes nothing",
-    ("POST", "/commands/run"): "starts a run; its own writes go through the port",
+    ("POST", "/commands/run"): "starts a run; its own writes go through the helpers",
     ("POST", "/diagnostics/scenario"): "local/run diagnostics",
     ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
-    ("POST", "/hub"): "~/.guildbotics/hub, outside any workspace",
     (
         "POST",
         "/intelligences/agent-environment/build",
     ): "local/agent_environment snapshots, device-local",
-    ("POST", "/hub/inspect"): "reads a hub",
-    ("POST", "/hub/secrets/{workspace_id}/{operation}"): (
-        "Hub keychain and generation index, outside any workspace; secrets.lock"
-    ),
-    ("POST", "/hub/ssh-key"): "~/.ssh",
-    ("POST", "/hub/trust"): "~/.ssh/known_hosts",
     ("POST", "/scheduler/start"): "runtime lifecycle",
     ("POST", "/scheduler/stop"): "runtime lifecycle",
     ("POST", "/shutdown"): "runtime lifecycle",
@@ -103,35 +88,6 @@ ELSEWHERE = {
     ("POST", "/system-alerts/dismiss"): "local/run state",
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",
-    ("POST", "/workspace/devices/self"): "state/, settled by first-committer-wins",
-    (
-        "POST",
-        "/workspace/secrets/fetch",
-    ): "OS secret stores; writes no config",
-    (
-        "POST",
-        "/workspace/secrets/send",
-    ): "one key generation, read-modify-written inside the port's lock",
-    ("POST", "/identities/secrets/fetch"): "OS secret stores; writes no config",
-    (
-        "POST",
-        "/identities/secrets/send",
-    ): "one key generation, read-modify-written inside the port's lock",
-    (
-        "POST",
-        "/identities/sync/rejections/{rejection_id}/discard",
-    ): "deletes a local ref, writes no config",
-    ("POST", "/identities/sync/retry"): "the identities' whole repository",
-    ("POST", "/workspace/sync/clone"): "a whole workspace, not one config file",
-    ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
-    ("POST", "/workspace/sync/hub"): "a whole workspace, not one config file",
-    ("POST", "/workspace/sync/preview"): "compares two histories, writes no config",
-    (
-        "POST",
-        "/workspace/sync/rejections/{rejection_id}/discard",
-    ): "deletes a local ref, writes no config",
-    ("POST", "/workspace/sync/retry"): "a whole workspace, not one config file",
-    ("POST", "/workspace/service-owner/transfer"): "Hub service-owner relay state",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
     ("PUT", "/service/keep-awake"): "local/service.yml is device-specific by design",

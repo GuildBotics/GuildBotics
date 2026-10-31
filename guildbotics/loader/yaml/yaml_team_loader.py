@@ -56,13 +56,12 @@ class YamlTeamLoader:
         for d in participants:
             identity_file = identity_members_dir() / d.name / IDENTITY_FILE
             if not identity_file.is_file():
-                # The identities arrive by a queue of their own, so a member
-                # added on another machine can be here before its identity is,
-                # and one deleted there stays here until it is taken out. Only
-                # that member waits; the rest of the team works.
+                # The identities are shared by every workspace, so a member
+                # whose identity another workspace deleted stays here until it
+                # is taken out. Only that member is left out; the rest of the
+                # team works.
                 get_logger().warning(
-                    "Member %s has no identity on this machine yet; it is left "
-                    "out of the team.",
+                    "Member %s has no identity; it is left out of the team.",
                     d.name,
                 )
                 continue

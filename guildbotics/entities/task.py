@@ -82,7 +82,7 @@ class Task(BaseModel):
 
         The patrol opens the run's trace with them and the ticket selector
         sets them on a trace opened before selection, so the run names its
-        ticket / PR on every device.
+        ticket / PR.
         """
         attributes = {
             "target.kind": "pull_request" if self.pull_request_url else "ticket",

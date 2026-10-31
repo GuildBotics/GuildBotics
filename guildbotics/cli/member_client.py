@@ -38,6 +38,7 @@ from guildbotics.utils.fileio import (
     workspace_root_from_config_dir,
 )
 from guildbotics.utils.i18n_tool import get_language, t
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.local_api import connect_local_api
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.secret_redaction import redact_secrets, register_secret_names
@@ -277,9 +278,12 @@ def member(ctx: click.Context) -> None:
     identity = read_workspace_identity(workspace)
     if identity is None:
         raise click.ClickException(t("cli.member.client.workspace_required"))
-    register_secret_names(
-        (workspace / ".guildbotics/config", get_identity_config_dir())
-    )
+    try:
+        register_secret_names(
+            (workspace / ".guildbotics/config", get_identity_config_dir())
+        )
+    except SecretStoreError as exc:
+        raise click.ClickException(str(exc)) from exc
     original_arguments = arguments[:]
     arguments = [redact_secrets(arg) for arg in arguments]
     body = {

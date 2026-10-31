@@ -18,9 +18,6 @@ import { defineConfig, devices } from "@playwright/test";
 //                     so mutating the member list never perturbs ③ ④.
 //   * "diagnostics" — pre-seeded workspace for the readiness / scenario
 //                     diagnostics journey (journey ⑤, `diagnostics.spec.ts`).
-//   * "sync"        — pre-seeded workspace for the synchronization journeys
-//                     (journeys ⑦–⑩, `sync.spec.ts`). Its temp HOME holds the hub,
-//                     so the whole journey runs on one machine without SSH.
 //   * "down"        — a backend the spec takes down under a loaded screen and
 //                     brings back up via a control server (connection-loss
 //                     journey ⑥, `failure.spec.ts`).
@@ -74,12 +71,6 @@ const STACKS: Stack[] = [
     // OpenAI round-trip. Keeps `npm run e2e` offline-safe and avoids flakiness
     // from external network / provider latency.
     env: { GUILDBOTICS_E2E_SEED: "1", GUILDBOTICS_E2E_OFFLINE_LLM: "1" },
-  },
-  {
-    name: "sync",
-    testMatch: /sync\.spec\.ts$/,
-    backendPort: port("GUILDBOTICS_E2E_SYNC_BACKEND_PORT", 8772),
-    env: { GUILDBOTICS_E2E_SEED: "1" },
   },
   {
     name: "down",

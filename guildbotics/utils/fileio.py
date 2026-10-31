@@ -44,8 +44,8 @@ def get_machine_root() -> Path:
     """Return the machine-wide GuildBotics directory, ``~/.guildbotics``.
 
     Everything that belongs to the machine rather than to a workspace lives
-    under it: the managed CLI, this device's state, and a hub when this machine
-    hosts one.
+    under it: the managed CLI, this device's state, and the members'
+    identities.
     """
     return Path.home() / ".guildbotics"
 
@@ -57,8 +57,8 @@ def get_identity_root() -> Path:
     and their credentials -- whichever workspace it works in, so that much is
     kept once per machine rather than in each workspace. The root is laid out
     like a workspace root, with ``.guildbotics/config``, ``state``, and
-    ``local`` under it, so the stores, locks, and synchronization that take a
-    workspace root take this one unchanged. A command's isolated environment
+    ``local`` under it, so the stores and locks that take a workspace root take
+    this one unchanged. A command's isolated environment
     is told where it is mounted through ``GUILDBOTICS_IDENTITY_ROOT``.
     """
     configured = os.getenv(GUILDBOTICS_IDENTITY_ROOT, "").strip()
@@ -101,8 +101,8 @@ def host_temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
 
 
 #: What an in-progress atomic write is called while it exists. It is created
-#: beside its destination, which for a shared file means inside the tree the
-#: sync queue enumerates, so the queue has to be told to ignore it by name.
+#: beside its destination, so a reader that lists a directory has to be told to
+#: ignore it by name.
 ATOMIC_WRITE_SUFFIX = ".tmp"
 
 
@@ -247,8 +247,7 @@ def iter_json_objects(directory: Path, pattern: str) -> Iterator[dict[str, Any]]
 
     A store that keeps one record per file reads them all this way. A file
     that cannot be read or does not hold an object is skipped: a screen does
-    not fail on one damaged record, and the synchronization boundary is what
-    reports it.
+    not fail on one damaged record.
     """
     if not directory.is_dir():
         return
@@ -278,7 +277,7 @@ def get_workspace_local_path(
 
 
 def get_member_clone_path(person_id: str, workspace_root: Path | None = None) -> Path:
-    """Return the member working clone directory (not synchronized)."""
+    """Return the member working clone directory (this machine's own)."""
     from guildbotics.utils.person_id import validate_person_id
 
     return get_workspace_local_path(
@@ -536,11 +535,11 @@ def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
     Returns:
         None
     """
-    # Imported here because the port itself builds on this module. Config is a
-    # shared root, so every YAML save under it has to reach the sync queue;
-    # routing it through the port keeps that true for callers that never learn
-    # synchronization exists, and paths outside the shared roots are dropped.
-    from guildbotics.utils.workspace_sync_port import write_shared_text
+    # Imported here because the write helpers build on this module. Config is
+    # a shared root, so every YAML save under it takes the shared-write lock;
+    # routing it through the helpers keeps that true for callers that never
+    # learn of the lock, and paths outside the shared roots take none.
+    from guildbotics.utils.shared_writes import write_shared_text
 
     write_shared_text(file_path, dump_yaml(data))
 

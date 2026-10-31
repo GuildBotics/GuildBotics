@@ -200,7 +200,7 @@ def _supervise(
     while not starting.done():
         reported = _report_interrupts(signals, reported)
         if len(signals) >= STOP_STAGES:
-            # Startup can be waiting on synchronization or a keychain prompt.
+            # Startup can be waiting on a keychain prompt.
             # No successful service start to drain yet; the second interrupt
             # must still be able to end this attempt.
             process.kill()

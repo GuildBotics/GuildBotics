@@ -346,12 +346,6 @@ class Provider:
     #: What the setup screens ask of it; a provider without one is not offered
     #: there.
     setup: ProviderSetup | None = None
-    #: The port of the hub machine's loopback the project's services reach it
-    #: at (given ``project.services``), which every other machine forwards to
-    #: the hub; ``None`` when it is reached otherwise.
-    hub_port: Callable[[Mapping[str, Mapping[str, Any]]], int | None] = (
-        lambda services: None
-    )
     #: Loads an image archive (``docker save`` or OCI), a file on the machine
     #: the CI runner of its code host runs on, into that runner's image cache,
     #: and answers the references it loaded; ``None`` when GuildBotics loads no

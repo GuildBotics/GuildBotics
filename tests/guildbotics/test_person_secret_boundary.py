@@ -66,9 +66,6 @@ STORE_ELSEWHERE = {
     ("integrations/branvil/setup.py", "_keep_connection"): (
         "Branvil's admin token, the identities' connection Secret"
     ),
-    ("app_api/workspace_secrets.py", "WorkspaceSecretService._store"): (
-        "Hub transfers of keys the user picks from the secrets index"
-    ),
     ("cli/secrets.py", "_SecretsContext.store"): (
         "`guildbotics secrets`: the user names each key explicitly"
     ),

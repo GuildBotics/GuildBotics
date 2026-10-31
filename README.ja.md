@@ -59,9 +59,9 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
   - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
-- **OpenSSH**（1 つのワークスペースを複数マシンで共有する場合のみ）:
-  - 参加する各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
-  - Hub 役のマシンには OpenSSH **サーバー**も必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
+- **OpenSSH**（別のマシンのブラウザから使う場合のみ）:
+  - GuildBotics は 1 台のマシン（**Hub**）で動きます。そこを使うほかの各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
+  - Hub には OpenSSH **サーバー**が必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
 - **ハードウェア仮想化**（エージェント隔離環境のため）。コマンドはすべて、サブコマンドや AI CLI の turn も含めて、コマンドを実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
 - **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**エージェント実行環境** 画面にそのコマンドが表示されます）。GuildBotics が隔離環境に導入するツールは次のとおりです:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
@@ -463,7 +463,7 @@ commands:
 
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
-- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名と世代だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間とデバイス固有世代を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
+- **OS キーチェーン:** シークレット値は OS 秘密ストア（macOS キーチェーン、Windows 資格情報マネージャー、Linux Secret Service）に保存します。ワークスペース側には、キー名だけを記録した非シークレットのインデックス `.guildbotics/config/secrets.yml` と、このマシンのキーチェーンの名前空間を記録した `.guildbotics/local/secrets.json` を置きます。`.env` バックエンドはありません。
 - **2 つのストア:** メンバーの認証情報（`{PERSON_ID}_...`）とサービスへの接続（`BRANVIL_ADMIN_TOKEN`）は、マシン内のすべてのワークスペースで共有するアイデンティティのストアに保存します（インデックスは `~/.guildbotics/identity/.guildbotics/config/secrets.yml`）。LLM API キーなどそれ以外のキーは、ワークスペースのストアに保存します。プロセスはアイデンティティのストア、ワークスペースのストアの順に読み込みます。
 - **Windows の資格情報:** GuildBotics はシークレット値を UTF-8 の Credential Manager blob として保存するため、ASCII が中心の PEM 秘密鍵でも Windows の 2,560 byte 上限をすべて利用できます。import は書き込み前に全値を検証します。
 - **優先順位:** 実環境変数 > OS キーチェーン。GuildBotics はワークスペースの `.env` を読みません。
@@ -474,43 +474,19 @@ GuildBotics は、シークレット（LLM API キーおよびアカウントト
 
 ```bash
 guildbotics secrets status                        # OS 秘密ストアの利用可否と登録キー数
-guildbotics secrets pull                          # Hub マシンから不足・古い値をまとめて取得
-guildbotics secrets push                          # このマシンで入力した値を Hub マシンへ送る
 guildbotics secrets export --file secrets.env     # 引越用にシークレットを書き出し
 guildbotics secrets import secrets.env            # 移行先マシンで読み込み
 guildbotics secrets --identities status           # メンバーの認証情報について同じ操作をする
 ```
 
-複数マシンでワークスペースを共有している場合、値は共有履歴には入らず、利用者が送信・取得を実行した
-ときだけ Hub マシンの OS 秘密ストア経由で移動します。手順は
-[認証情報を各マシンへ配る](#認証情報を各マシンへ配る)を参照してください。
-
 サブコマンドの前に `--identities` を指定すると、アイデンティティのストアを操作します。指定しない場合、CLI はメンバーのキーをワークスペースのストアに保存することを拒否します。メンバーのキーのプレフィックスはすべてのワークスペースで共通なので、`-` と `_` だけが違う 2 つの ID（`foo-bar` と `foo_bar`）は、別のワークスペースであっても同時には存在できません。
 
-ワークスペースのシークレットはワークスペースごとに保存されます（キーチェーンのエントリは、各マシンの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。名前空間はマシンごとのもので、Hub への参加や同期では変わりません。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
+ワークスペースのシークレットはワークスペースごとに保存されます（キーチェーンのエントリは、ワークスペースの `.guildbotics/local/secrets.json` にある `store_id` で名前空間が分かれます。`local/` を含めてワークスペースを複製すると、複製元と同じ名前空間を使います）。対象ワークスペースはサブコマンドの前の `--workspace` で指定できます。省略時は選択中の active workspace が必須です。対象がどこに解決されたかは `guildbotics secrets status` の `workspace:` 行で常に確認できます。
 
 ```bash
 guildbotics secrets --workspace /path/to/workspace status
 guildbotics secrets --workspace /path/to/workspace list
 ```
-
-**`secrets.yml` に `store_id` を持っていた版からの切り替え:** キーチェーンの名前空間は各マシンの
-`local/secrets.json` へ移りました。旧名前空間の値は引き継がれないため、次の順で切り替えます。
-
-1. 切り替え前に、各マシンで `guildbotics secrets status` を確認し、未送信の key と「2 台で同じ値を
-   変更しました」の key を `guildbotics secrets push` などで解消します。Hub へ送った値は切り替え後に
-   取り直せます。Hub に接続していないワークスペースでは `guildbotics secrets export --file ...` で
-   値を書き出しておきます
-2. ワークスペースを共有するすべてのマシンを同時に新しい版へ切り替えます。新旧の版が混在すると、
-   新しい版のマシンでは同期が止まり、古い版のマシンでは値を読めなくなります
-3. Hub に接続しているワークスペースでは、どれか 1 台で `.guildbotics/config/secrets.yml` から
-   `store_id:` の行を削除します。同期がこの変更を Hub へ送ります。この行が Hub に残っていると、
-   新しい版のマシンは Hub へ参加できません
-4. 各マシンで `guildbotics secrets pull`（またはデスクトップアプリの「まとめて取得」）を実行します。
-   Hub に接続していないワークスペースでは、書き出したファイルを `guildbotics secrets import` で読み込み、
-   ファイルを削除します
-5. 旧名前空間のキーチェーンエントリ（`GuildBotics/<旧 store_id>`）は自動では削除されません。不要なら
-   OS のキーチェーン管理画面から削除します
 
 ### サーバーで運用する
 
@@ -519,7 +495,7 @@ guildbotics secrets --workspace /path/to/workspace list
 1. 移行先で `uv tool install guildbotics` により CLI をインストールします
 2. ワークスペースフォルダと `~/.guildbotics/identity/`（メンバーのアイデンティティ）を移行先へコピーします
 3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行し、メンバーの認証情報についても `--identities` を付けて同じ操作をします（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
-4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか、実行時の環境変数でシークレットを渡してください
+4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか（Linux では [ヘッドレスの Linux サーバーの秘密ストア](#ヘッドレスの-linux-サーバーの秘密ストア) を参照）、実行時の環境変数でシークレットを渡してください
 5. サーバー上でエージェント隔離環境をビルドし、AI CLI ツールへログインします（サーバーには KVM が必要です。[必要なもの](#必要なもの) を参照）:
 
    ```bash
@@ -562,16 +538,48 @@ echo "Hello" | guildbotics run translate
 
 CLI のバックエンドも API とブラウザの画面を提供するため、`guildbotics run` の委譲先になります。`guildbotics start` は必ずサービスを開始し、API だけを動かすモードはありません。Desktop の更新前には `guildbotics start` と実行中の `guildbotics run` を止めてください。更新後に CLI サービスを起動し直すか、Desktop のサービス画面から開始します。
 
-ワークスペースを同期している場合、サービスには Hub 上の永続的な owner も 1 台だけ存在します。
-`guildbotics start` とデスクトップのサービス画面は、サービスの仕事を受け付ける前に Hub へ接続して
-このマシンが owner であることを確認します。別の device が owner なら新しいサービス処理は受け付けず、
-owner の変更は共通実行境界で検出して旧サービスを停止します。Hub が一時的に不達でも実行中の仕事は
-中断しませんが、owner を再確認できるまで新しいサービス処理は開始しません。
+完了した仕事は TaskRun の記録（`state/task-runs/`）に残るため、サービスを再起動しても同じ入力を再度受け付けません。
 
-owner は lease ではなく、自動変更されません。旧マシンのサービスが停止したことを直接確認してから、
-同期画面の「このマシンへ引き継ぐ」を使います。現在の作業表示は Git 履歴ではない一時的な relay state で、
-publisher が heartbeat を止め、状態が失効すると消えます。完了した仕事は共有 TaskRun 記録へ保存されるため、結果の push 後に
-サービスが再起動しても同じ入力を再度受け付けません。
+#### ヘッドレスの Linux サーバーの秘密ストア
+
+ヘッドレスの Linux サーバーでは、OS 秘密ストア（Secret Service）がデスクトップセッション
+無しでも動くようにします。
+
+1. Secret Service の実装（`gnome-keyring` など）と D-Bus をインストールします。
+2. ログインしていない間もユーザーの systemd とセッションバスが動くように lingering を
+   有効にします。
+
+   ```bash
+   sudo loginctl enable-linger "$USER"
+   ```
+
+   `gnome-keyring-daemon` を自分で常駐させる必要はありません。最近のディストリビューションは
+   socket activation（`gnome-keyring-daemon.socket`）で必要時に自動起動します。ただし、
+   そうして起動した daemon は**ロックされたまま**制御ソケットと D-Bus 名を握るため、
+   次の手順はそれをいったん止めてから解錠済みの daemon に置き換えます。
+
+3. 再起動のたびに、解錠付きで daemon を起動し直します。キーリングのパスワードは、
+   通常はそのアカウントの（作成時の）ログインパスワードです。
+
+   ```bash
+   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
+   ```
+
+   `pkill` は必ず `-x`（プロセス名の完全一致）で実行します。`-f` にすると、このコマンド列
+   自身がパターンにマッチしてシェルごと終了します。
+
+4. 解錠できたかどうかはコマンドの出力からは分からないため、必ず確認します。
+
+   ```bash
+   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
+   ```
+
+   `b false` なら解錠済みです。`b true` のままの場合はパスワードが一致していません。
+   キーリングはログインパスワードの変更に追随しないため、後から変更した場合は
+   変更前のパスワードを使います。
+
+   この解除が済むまで、Secret を使うワークフローは実行時エラーになります。GuildBotics が
+   平文のファイルへ書き出すことはありません。
 
 ### ブラウザから使う
 
@@ -585,11 +593,40 @@ guildbotics open
 
 ブラウザが、一度だけ使える入口リンク（60 秒で失効します）で開きます。サインインの画面はなく、`~/.guildbotics/data/server/<port>/owner.token` を読める OS のユーザーがオーナーです。セッションは 30 日続きます。期限が切れたら、もう一度 `guildbotics open` を実行してください。
 
-**別のマシンのブラウザで開く**: SSH でポートを転送し（[複数マシンでワークスペースを共有する](#複数マシンでワークスペースを共有する) の転送のスクリプト、または `ssh -L 8765:127.0.0.1:8765 <Hub>`）、Hub で入口リンクを表示して、手元のブラウザに貼ります:
+**別のマシンのブラウザで開く**: GuildBotics は Hub だけで動き、別のマシンからは SSH 経由でその画面を開きます。そのマシンに GuildBotics のインストールは要らず、OpenSSH クライアントだけが必要です（[必要なもの](#必要なもの)を参照）。
 
-```bash
-ssh <Hub> guildbotics open --print
-```
+1. そのマシンが SSH 鍵で Hub にログインできるようにします。公開鍵（`~/.ssh/id_ed25519.pub`。無ければ `ssh-keygen -t ed25519` で作ります）を Hub の `~/.ssh/authorized_keys` に追加します。Hub で実行します:
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... alice@laptop' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+   ```
+
+2. 一度 `ssh <Hub>` で接続し、Hub 自身が表示するフィンガープリントと照合してからホスト鍵を受け入れます:
+
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+3. 非対話の SSH で Hub が `guildbotics` に応答することを確認します:
+
+   ```bash
+   ssh <Hub> guildbotics --version
+   ```
+
+   非対話の SSH セッションは、対話ログインが読み込む shell の起動ファイルを読みません。そのため `~/.local/bin` に入れた `guildbotics` は見えないことがよくあります。最も簡単な対処は、常に PATH に載っているディレクトリからリンクすることです。Hub で実行します:
+
+   ```bash
+   sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
+   ```
+
+   `~/.guildbotics/bin/guildbotics` は managed shim なので、CLI 本体を入れ直しても有効なままです。Windows では installer が managed bin を user PATH へ追加するため、SSH セッションからも見えます。
+
+4. ポートを転送します。[Branvil 連携ガイド](docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する) の転送サービスを使うと、ログインしている間ずっと転送されます。`--port 8765` を指定してインストールします（Branvil を使うときは `--port 7878` も指定します）。その場限りなら `ssh -L 8765:127.0.0.1:8765 <Hub>` でも転送できます。
+5. Hub で入口リンクを表示し、手元のブラウザに貼ります:
+
+   ```bash
+   ssh <Hub> guildbotics open --print
+   ```
 
 **別のマシンの CLI をつなぐ**: そのマシンで `guildbotics connect` を実行すると、ブラウザに同意画面が開きます。オーナーが許可すると、そのマシンの CLI 用のトークンが発行され、そのマシンの OS のキーチェーンに保存されます。そのマシンの `guildbotics open` がこのトークンを使います（同じマシンからもう一度つなぐと、前のトークンは失効します）。
 
@@ -599,7 +636,7 @@ ssh <Hub> guildbotics open --print
 - コマンドを外部のエディタで開くことはできず、画面の中のエディタで編集します
 - コマンドの入力欄に落としたファイルは、コピーとしてアップロードされます（エージェントの変更は元のファイルに反映されません。フォルダは落とせません）
 - AI CLI ツールのスキルの状態と強制更新は出ません
-- 「このマシン」と表示される設定（スリープ防止、同期など）は、サーバーのマシンのものです
+- 「このマシン」と表示される設定（スリープ防止、登録済みのワークスペース）は、Hub のものです
 
 **ポート**: バックエンドは固定のポート 8765 で待ち受けます。ほかのプログラムがこのポートを使っていると、バックエンドは起動しません。同じマシンで 2 つのバックエンド（開発版と配布版のデスクトップアプリなど）を動かすときは、片方を起動する環境で `GUILDBOTICS_SERVER_PORT` に別のポートを指定します。サーバー、CLI、デスクトップアプリはすべてこの値を読みます。
 
@@ -653,340 +690,9 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
 - すべてのワークスペースで共有するメンバーのアイデンティティは、ワークスペースの `.guildbotics` と同じ構成で `$HOME/.guildbotics/identity/.guildbotics` に保存されます
-- memory、会話の制御状態、task-run 記録、interactive session 記録、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
+- memory、会話の制御状態、task-run 記録、interactive session 記録、Activity イベントなど、ワークスペースの永続状態は `<workspace>/.guildbotics/state` に保存されます
 - 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
 - エージェント隔離環境の runtime と image は `$HOME/.guildbotics/data/msb` に、AI CLI ツールのログインとセッション（マシン内の全メンバー・全ワークスペースで共有）は `$HOME/.guildbotics/data/agent_environment/<tool>/` に保存されます
-
-### 複数マシンでワークスペースを共有する
-
-1 つのワークスペースを自分の複数のマシンで共有できます。設定・メンバー・memory・チャットの
-処理状態・Activity 履歴が揃い、API キー・メンバーの作業クローン・診断情報・ホットキーは
-作成したマシンに残ります。
-
-メンバーのアイデンティティ（`~/.guildbotics/identity/`）は、ワークスペースを Hub に接続する
-とき（登録・参加・複製・Hub の変更）に、同じ Hub へ接続されます。Hub はすべてのワークスペースに
-共通のアイデンティティのリポジトリを 1 つだけ持ち、最初のマシンがそれを登録し、ほかのマシンは
-ワークスペースと同じ規則（後述）で参加します。このリポジトリは Hub のワークスペース一覧には出ず、
-選択中のワークスペースと並んで同期されます。
-
-共有は **Hub** を経由します。Hub は利用者が選んだ 1 台のマシンで、他のマシンが SSH 経由で
-push / fetch する Git リポジトリを持ちます。サービスではなく、他社が運用するものでもありません。
-自分が既に持っているマシンの `~/.guildbotics/hub` 配下のディレクトリです。
-
-Hub には現在の service owner と一時的な現在状態も置かれます。owner は永続し、旧サービスが停止したことを
-直接確認した後の明示的な引き継ぎでのみ変更されます。Hub が不達の間も実行中のサービスは現在の仕事を続けますが、
-owner を確認できるまで新しいサービス処理は開始しません。現在状態は Git へ commit されず、publisher が終了すると
-heartbeat が止まり、その状態は失効後に Hub から削除されます。
-
-以下の操作はすべて、デスクトップアプリの**設定**で行います。Hub のホストとこの device の
-SSH 鍵はワークスペースではなくマシンに属するため「端末とHub」に、ワークスペースの接続は
-「同期」にあります。
-
-#### 1 台目を設定する
-
-1. Hub 役にするマシンで、「端末とHub」の「このマシンを Hub にする」を選びます。そのマシンで
-   OpenSSH サーバーが動いていることを確認してください（[必要なもの](#必要なもの)を参照）。
-   ここで作られるのは `~/.guildbotics/hub/` と `hub.json` です。ワークスペース用の repository は、
-   最初のマシンが登録したときに作られます。
-2. ワークスペースを持つマシンで、「端末とHub」の「この device の SSH 鍵」の「鍵を作成する」を
-   選び、表示された公開鍵をコピーします。鍵は `~/.ssh/id_ed25519` で、同名の鍵が既にあれば
-   それをそのまま使い、作り直しません。
-3. その公開鍵を Hub マシンの `~/.ssh/authorized_keys` へ追加します。Hub マシンで次を実行します。
-
-   ```bash
-   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... guildbotics alice@mac-studio' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-   ```
-
-   GuildBotics はこの操作を代行しません。その操作自体が、そのマシンへのアクセス権を持っている
-   ことの証明になるためです。これは接続できなかったときの対処ではなく前提条件です。次の手順で
-   Hub のワークスペース一覧を SSH 経由で取得しますが、同期は SSH を非対話モードで実行するため、
-   未登録の鍵はパスワード入力へ切り替わらずそこで失敗します。
-
-4. ワークスペースを持つマシンから、Hub マシンが SSH 経由で自身のコマンドに応答することを
-   確認します。
-
-   ```bash
-   ssh user@hub-host guildbotics hub status
-   ```
-
-   GuildBotics は Hub 側で `guildbotics hub …` を実行して Hub へ届くため、このコマンドが
-   非対話 SSH セッションの PATH に載っている必要があります。対話ログイン時の PATH とは
-   一致しないことがあります。見つからない場合は
-   [SSH 経由で `guildbotics` が見つからない](#ssh-経由で-guildbotics-が見つからない)を参照してください。
-
-5. デスクトップアプリに戻り、「同期」で Hub のアドレスを `user@host` の形で入力し
-   「確認する」を選びます。
-6. 表示された fingerprint を Hub マシン側のものと見比べ、一致するものを確認します。Hub マシンでは
-   次のコマンドで表示できます。
-
-   ```bash
-   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-   ```
-
-   鍵を確認できるのはこの 1 回だけです。以降の同期は SSH を非対話モードで実行するため、
-   OpenSSH 自身の初回確認プロンプトは表示されません。
-
-7. 「このワークスペースを Hub に登録する」を選びます。このワークスペース用の repository
-   `~/.guildbotics/hub/workspaces/<ワークスペース ID>/repository.git` は、ここで作られます。
-
-##### SSH 経由で `guildbotics` が見つからない
-
-非対話の SSH セッションは、対話ログインが読み込む shell の起動ファイルを読みません。その
-ため `~/.local/bin` に入れた `guildbotics` は見えないことがよくあります。最も簡単な対処は、
-常に PATH に載っているディレクトリからリンクすることです。Hub マシンで実行します。
-
-```bash
-sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
-```
-
-`~/.guildbotics/bin/guildbotics` は managed shim なので、CLI 本体を入れ直しても有効なままです。
-Windows では installer が managed bin を user PATH へ追加するため、SSH セッションからも見えます。
-
-#### 2 台目以降を追加する
-
-新しいマシンでも同じ手順で SSH 鍵を作成して Hub に登録してから、次のどちらかを行います。
-
-- **複製を取得する**: Hub の一覧からワークスペースを選び、その内容から新しいワークスペース
-  ディレクトリを作ります
-- **手元の内容を持ったまま参加する**: すでにワークスペースがあるマシンで Hub を確認し、
-  対応するワークスペースの「参加する…」を選びます
-
-参加は上書きではありません。先にこのマシンの内容を commit し、両方にあるファイルは Hub 側を
-採用し、このマシンにだけあるファイルは Hub へ送信します。確認画面に出るのは、まさにこの
-振り分けです。この過程で押し出された commit はローカルに保持されます
-（[反映されなかった変更を回復する](#反映されなかった変更を回復する)を参照）。
-
-#### 認証情報を各マシンへ配る
-
-API キーとトークンの**値**は共有されません。マシン間を移動するのは key 名と世代だけで、値そのものは
-各マシンの OS 秘密ストアに残ります。Hub マシンの OS 秘密ストアが配布拠点になり、値は利用者が
-送信・取得を実行したときだけ、SSH の標準入出力を通って移動します。Git リポジトリ、Hub 上の中継
-ファイル、一時ファイルのいずれにも値は書かれません。
-
-一覧と操作は**設定 → 同期**の 2 つのカードにあります。「このマシンのメンバーの認証情報」は
-メンバーの各サービスのアカウントとサービスへの接続（すべてのワークスペースで共通）、「このマシンの
-ワークスペースの認証情報」はこのワークスペースが使う API キーです。どちらのカードも以下のとおりに
-動作します。プロバイダーやメンバーの入力欄には
-状態の表示とこの画面への導線だけを置き、転送のボタンは置いていません。
-
-**macOS を Hub にする場合**は、認証情報を送信・取得する前に Hub のユーザーで GUI ログインし、
-GuildBotics Desktop を起動してください。起動が必要なのは転送中だけで、開いているワークスペースは
-問いません。状態確認を含む Hub Secret コマンドは、認証付きのループバック API を通じて Desktop に
-GUI セッション内のキーチェーン操作を委譲します。Desktop が利用できなければ起動を案内します。
-Windows と Linux の Hub は OS 秘密ストアを直接利用します。
-
-**新しいマシンを追加したとき**は「まとめて取得」を 1 回選ぶだけです。このマシンに無い値と古い値が
-まとめて届き、そのままこのマシンの OS 秘密ストアへ登録されます。値を入力し直す必要はありません。
-
-**値を更新したとき**は、入力したマシンで「Hub マシンへ送る」を選びます。送信の直前に共有ファイルを
-取り込むため、しばらくオフラインだったマシンでも古い世代を基準に送ることはありません。送信が完了すると
-共有世代が上がり、他のマシンには「値が更新されています」と表示されます。各マシンで「取得」を選ぶと
-最新の値に揃います。
-
-「まとめて送る」は、Hub マシンがまだ持っていない値をすべて対象にします。既存のワークスペースを
-Hub へ接続した直後や、Hub を作り直した直後は、この 1 回で全部の値が Hub へ渡ります。
-
-2 台で同じ key を変更すると、後から受け取った側に「2 台で同じ値を変更しました」と表示されます。
-残したい方をその key の行で選びます。「送る」ならこのマシンの値が、「取得」なら相手のマシンの値が
-新しい世代になり、もう一方のマシンにも通知されます。入力し直す必要はありません。「まとめて送る」
-「まとめて取得」はこの状態の key を対象にしません。どちらを残すかは 1 件ずつの判断だからです。
-
-Hub 側に値が保存された直後に共有世代の記録が中断した場合は「確認が必要です」と表示されます。
-値を持っているどのマシンからでも「Hub マシンへ送る」を選べば解消します。送信は Hub が持っている
-世代の次に乗るため、中断した送信より先へ進んで記録が確定します。送信元のマシンが手元に無くても、
-そのマシンで値を入力し直したあとでも同じです。
-
-この状態のあいだ、その key の「取得」は行えません。共有記録に無い世代を取り込むと、確認が必要だと
-示している手がかり自体が消えてしまうためです。
-
-デスクトップアプリを動かさないマシンでは CLI を使います。
-
-```bash
-guildbotics secrets status   # このマシンの状態と、対応が必要な key
-guildbotics secrets pull     # 不足・古い値をまとめて取得する
-guildbotics secrets push     # このマシンで入力した値を Hub マシンへ送る
-```
-
-メンバーの認証情報は、サブコマンドの前に `--identities` を付けて操作します。
-
-OS 秘密ストアがロックされている間は、送信も取得もできません。GuildBotics が平文のファイルへ
-書き出すことはないため、ロックを解除してからやり直してください。
-
-**ヘッドレスの Linux をデバイスとして使う場合**は、OS 秘密ストア（Secret Service）が
-デスクトップセッション無しでも動くようにします。
-
-1. Secret Service の実装（`gnome-keyring` など）と D-Bus をインストールします。
-2. ログインしていない間もユーザーの systemd とセッションバスが動くように lingering を
-   有効にします。
-
-   ```bash
-   sudo loginctl enable-linger "$USER"
-   ```
-
-   `gnome-keyring-daemon` を自分で常駐させる必要はありません。最近のディストリビューションは
-   socket activation（`gnome-keyring-daemon.socket`）で必要時に自動起動します。ただし、
-   そうして起動した daemon は**ロックされたまま**制御ソケットと D-Bus 名を握るため、
-   次の手順はそれをいったん止めてから解錠済みの daemon に置き換えます。
-
-3. 再起動のたびに、解錠付きで daemon を起動し直します。キーリングのパスワードは、
-   通常はそのアカウントの（作成時の）ログインパスワードです。
-
-   ```bash
-   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
-   ```
-
-   `pkill` は必ず `-x`（プロセス名の完全一致）で実行します。`-f` にすると、このコマンド列
-   自身がパターンにマッチしてシェルごと終了します。
-
-4. 解錠できたかどうかはコマンドの出力からは分からないため、必ず確認します。
-
-   ```bash
-   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
-   ```
-
-   `b false` なら解錠済みです。`b true` のままの場合はパスワードが一致していません。
-   キーリングはログインパスワードの変更に追随しないため、後から変更した場合は
-   変更前のパスワードを使います。
-
-   この解除が済むまで、そのマシンでは Secret を使うワークフローが実行時エラーになり、
-   Secret の送信・取得も開始できません。Hub をこのマシンで動かしている場合、他のマシンからの
-   取得も同じ理由で止まり、画面には「Hub マシンの SecretStore がロックされています」と表示されます。
-
-#### マシンを失効させる
-
-マシンを紛失したときは、そのマシンの公開鍵を Hub から削除します。
-
-1. **設定 → 同期**の device 一覧で、対象マシンの SSH 公開鍵 fingerprint を確認します。
-2. Hub マシンで、その fingerprint に対応する行を `~/.ssh/authorized_keys` から削除します。
-
-   ```bash
-   ssh-keygen -l -f ~/.ssh/authorized_keys
-   ```
-
-   GuildBotics は `authorized_keys` を編集しません。どの行を消すかの判断と操作は利用者が行います。
-
-3. そのマシンに既に保存されている値は遠隔からは消せません。GitHub や Slack、LLM プロバイダー側で
-   トークンと API キーを失効させ、再発行してください。再発行した値は、手元のマシンで入力してから
-   「Hub マシンへ送る」で他のマシンへ配ります。
-
-#### Hub を作り直す
-
-参加している各マシンが完全な複製を持っているため、Hub を失っても、どれか 1 台から作り直せます。
-
-1. 新しい Hub 役にするマシンで「このマシンを Hub にする」を選びます。
-2. 他の各マシンの公開鍵を、新しい Hub マシンの `~/.ssh/authorized_keys` へ追加し、そのマシンで
-   `guildbotics` が SSH 経由で応答することを確認します（[1 台目を設定する](#1-台目を設定する)と
-   同じ手順です）。新しい Hub マシンは、旧 Hub が持っていた鍵を何も知りません。
-3. 他の各マシンで「接続中の Hub → 別の Hub へ接続する」を開き、新しいアドレスへ接続します。
-
-1 台にしかない内容は破棄されず新しい Hub へ送信されるため、再接続の順番によって内容が失われる
-ことはありません。
-
-#### 2 台が同じファイルを変更したとき
-
-先に Hub へ確定した変更が残ります。もう一方のマシンの commit は、マージも破棄もされません。
-ローカルに退避され、そのマシンの**設定 → 同期**の「退避された変更」に、退避日時・対象ファイル・
-回復用 ID が一覧されます（警告バンドの「同期設定」からも開けます）。Activity 履歴にも同じ記録が
-残ります。同期は停止せず、利用者が解決を求められることもありません。
-
-既存の `.guildbotics/` を持つマシンが Hub へ参加したときに採用されなかった内容も、同じ一覧に
-退避として並びます。
-
-`config/` と `state/` の中でも、名前が `.` で始まるファイルとディレクトリは共有されません。
-Finder やエディタがどの階層に補助ファイルを作っても、「送信できない変更」にはなりません。
-
-共有されるのは通常のファイルだけです。シンボリックリンクや、中に置いた別の Git リポジトリは
-「送信できない変更」になり、通常のファイルに戻すまで送信されません。その間、Hub から届いた変更は
-その場所にも配下にも適用されないため、リンク先のファイルが同期で書き換わったり消えたりすることは
-ありません。それ以外のファイルの同期は続きます。
-
-`git init` しただけで commit の無いリポジトリも「送信できない変更」です。同期は止まらず、
-ほかのファイルは送信されます。最初の commit を作ると、commit のある入れ子のリポジトリと同じように
-保留されます。中のファイルが共有されることは、どちらの場合もありません。
-
-このマシンで読めないファイルや、中身の一覧を読めないディレクトリは保留されません。同期は
-「このマシンの同期エラー」で止まり、直すまでほかの変更も送信されません。原因のパスは
-「エラー内容」に表示されます。一覧を読めないディレクトリの中のファイルが、削除として送信される
-ことはありません。ほかのアプリが排他的に開いているファイルも、閉じられるまで同じように同期を
-止めます。中断したプロセスが `.guildbotics/.git` に残した Git の lock ファイル（`index.lock`）も
-同じです。
-
-#### 反映されなかった変更を回復する
-
-これは通常操作ではなく、例外的な手順です。GuildBotics が退避内容を自動で復元することはなく、
-デスクトップアプリからも API からも内容は参照できません。内容を読むには、以下の Git コマンドを
-使います。
-
-退避された内容は**変更したマシンにだけ**存在します。**設定 → 同期**の「退避された変更」に
-その退避が表示されているマシンで、以下のコマンドを実行してください。コマンド中の記号は次の
-とおり置き換えます。
-
-| 記号          | 入れるもの                                                                                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------- |
-| `<workspace>` | そのワークスペースのディレクトリ（「設定 → プロジェクト」の「ワークスペース」欄の値）                         |
-| `<回復用 ID>` | 一覧の「回復用 ID」の値                                                                                       |
-| `<path>`      | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/member.yml`）                                    |
-| `<path>...`   | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/member.yml`） |
-
-メンバーの名前やアカウントの変更は、ワークスペースではなくメンバー専用のリポジトリに退避され、
-「メンバーの退避された変更」に表示されます。その場合は `<workspace>` の代わりに
-`~/.guildbotics/identity`（Windows では `%USERPROFILE%\.guildbotics\identity`）を入れてください。
-
-1. 退避された内容を読みます。現在採用されている内容との差分を表示します（`+` の行が退避された側）。
-
-   ```bash
-   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<回復用 ID>" -- <path>...
-   ```
-
-   差分ではなく退避された側の全文を見たい場合は、ファイルを 1 つずつ指定します。
-
-   ```bash
-   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<回復用 ID>:<path>"
-   ```
-
-   退避側で削除されたファイルは表示する内容が無いため、`git diff` では削除の事実だけが分かります。
-   画像などのバイナリファイルは表示に適さないので、次の手順で書き出して確認してください。
-
-2. Git の外にファイルとして取り出したい場合は、対象ファイルをまとめて zip に書き出します。
-   `<出力先ディレクトリ>` には `<workspace>/.guildbotics/` の外を指定します。`<出力ファイル名>` は任意です。
-   リダイレクト（`>`）で保存すると環境によって文字コードが変わったりバイナリが壊れたりするため、
-   zip を使います。
-
-   ```bash
-   git -C "<workspace>/.guildbotics" archive --format=zip --output="<出力先ディレクトリ>/<出力ファイル名>.zip" "refs/guildbotics/rejected/<回復用 ID>" -- <path>...
-   ```
-
-3. 必要な変更は、現在採用されている内容を起点に、GuildBotics の通常の編集操作で改めて作成します。
-   保存した変更は他の編集と同じように共有されます。
-
-同期リポジトリに対して次の操作はしないでください。上の規則を経由せずに共有内容を置き換えてしまいます。
-
-- `refs/guildbotics/rejected/...` に対する `checkout` / `switch` / `reset` / `merge` / `rebase` / `cherry-pick` / `push`
-- 書き出し先を `<workspace>/.guildbotics/` 配下にすること
-
-変更したマシンを失った場合や、そのマシンの退避が破棄された場合は回復できません。
-自動削除は行いません。
-
-内容の確認が済んだら、**設定 → 同期**の「退避された変更」（メンバーの変更は「メンバーの退避された変更」）から破棄できます。破棄すると
-退避された内容が削除され、警告表示も消えます。控えを持っているのはこのマシンだけなので、
-破棄する前に上の手順で内容を確認してください。破棄しても Activity 履歴の記録は残ります。
-
-#### sidebar の表示の意味
-
-sidebar はワークスペースとメンバーの同期のうち、対応が必要なほうの状態を表示します。どちらの状態かは、
-選択すると開く詳細に表示されます。
-
-| 状態             | 意味                                           | 操作                                                                                                  |
-| ---------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| 同期済み         | このマシンと Hub の内容が一致                  | なし                                                                                                  |
-| 送信保留         | 未送信の変更がある                             | なし。自動で送信されます                                                                              |
-| 受信中           | Hub の更新を取り込み中                         | 待機                                                                                                  |
-| Hub 同期エラー   | ローカル利用は可能、共有は遅延                 | 表示される「エラー内容」を確認し、原因を解消して「再試行」。SSH が原因なら [1 台目を設定する](#1-台目を設定する)の前提条件を確認 |
-| このマシンの同期エラー | ローカル利用は可能、共有は遅延           | 「エラー内容」に表示されたファイルやフォルダを直す（残った lock ファイル、権限、ほかのアプリが開いているファイル）。直ると自動で再開。「再試行」も可 |
-| 送信できない変更 | このマシンで直すまで共有できないファイルがある | 「同期設定」で対象と理由を確認                                                                        |
-| 共有データ異常   | 自動収束できなかった                           | 「同期設定」を開く                                                                                    |
-| 更新が必要       | 別マシンが新しいバージョンで書いた内容がある   | このマシンの GuildBotics を更新                                                                       |
-| Hub につなげません | メンバーがワークスペースと同じ Hub につながっておらず、メンバーの名前やアカウントが他のマシンへ届かない | 表示される「エラー内容」を確認する。Hub のマシンの GuildBotics が古い場合は更新してから「再試行」 |
 
 ### 設定ファイル
 
@@ -1018,15 +724,15 @@ sidebar はワークスペースとメンバーの同期のうち、対応が必
 - `task_schedules`: cron ベースのスケジュールコマンド
 - `message_channels`: 監視対象チャネル設定（`chat.enabled`, `channel_id`/`name`）。プロジェクトのチャットサービスのチャネル
 
-もう一方のファイルに置くべき項目があると、チームの読み込み時に拒否されます。アイデンティティの無いメンバー（別のマシンで削除された、またはまだ同期されていない）は、ワークスペースから外すかアイデンティティが届くまでチームから除かれ、ほかのメンバーはそのまま動きます。
+もう一方のファイルに置くべき項目があると、チームの読み込み時に拒否されます。アイデンティティの無いメンバー（別のワークスペースで削除された）は、このワークスペースから外すまでチームから除かれ、ほかのメンバーはそのまま動きます。
 
 **LLM / AI CLI ツール設定**:
 
 - `intelligences/brain_mapping.yml`: 機能ごとのエンジンと LLM／AI CLI スロットの割り当て。チャットの起動要否を判定する `chat_decision` の設定は、[Slack 連携ガイド](docs/slack_integration.ja.md#チャット判断エンジン)を参照してください。
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
-- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、エージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
+- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、エージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
-- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian。別のツールチェーンが必要なら git を残して自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
+- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian。別のツールチェーンが必要なら git を残して自分で build し、そのマシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。

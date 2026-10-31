@@ -1,2 +1,2 @@
 ja:
-  credentials_missing: この端末で認証情報を利用できません。API キーを登録するか、同期設定で現在の Secret を取得してください。
+  credentials_missing: この端末で認証情報を利用できません。API キーを登録してください。
