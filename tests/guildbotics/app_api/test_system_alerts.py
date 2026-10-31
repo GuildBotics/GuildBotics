@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
@@ -13,8 +12,7 @@ from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
+from tests.guildbotics.app_api.owner import owner_client
 
 
 def _runtime() -> RuntimeStatus:
@@ -709,10 +707,10 @@ def test_system_alerts_endpoint_reads_diagnostics(tmp_path: Path) -> None:
         {"command": "workflows/demo", "person": "alice"},
         source="manual",
     )
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
-        response = client.get("/system-alerts", headers=AUTH_HEADERS)
+    with owner_client(app) as client:
+        response = client.get("/system-alerts")
 
     assert response.status_code == 200
     assert response.json()["alerts"][0]["code"] == "command_failed"
@@ -724,15 +722,12 @@ def test_system_alerts_endpoint_dismisses_alert(tmp_path: Path) -> None:
     bus = EventBus(store=store)
     runtime = AppRuntime(bus)
     bus.publish_event("command.failed", {"command": "workflows/demo"})
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
-        alert_id = client.get("/system-alerts", headers=AUTH_HEADERS).json()["alerts"][
-            0
-        ]["id"]
+    with owner_client(app) as client:
+        alert_id = client.get("/system-alerts").json()["alerts"][0]["id"]
         response = client.post(
             "/system-alerts/dismiss",
-            headers=AUTH_HEADERS,
             json={"alert_id": alert_id},
         )
 

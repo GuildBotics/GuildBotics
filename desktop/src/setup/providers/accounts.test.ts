@@ -81,7 +81,8 @@ describe("githubAccount.request", () => {
     expect(githubAccount.request(github(), false)).toEqual({ account_type: "", username: "" });
   });
 
-  it("sends a GitHub App's IDs and key path", () => {
+  it("sends a GitHub App's IDs and the chosen key file's PEM text", () => {
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\nkey\n-----END RSA PRIVATE KEY-----\n";
     expect(
       githubAccount.request(
         github({
@@ -89,8 +90,7 @@ describe("githubAccount.request", () => {
           username: "my-app[bot]",
           installationId: "12",
           appId: "34",
-          // A picked or pasted path keeps no whitespace around it.
-          privateKeyPath: " /keys/app.pem ",
+          privateKey: { file: new File([pem], "app.pem"), pem },
         }),
         false,
       ),
@@ -99,7 +99,7 @@ describe("githubAccount.request", () => {
       username: "my-app[bot]",
       installation_id: 12,
       app_id: 34,
-      private_key_path: "/keys/app.pem",
+      private_key: pem,
     });
   });
 
@@ -273,7 +273,7 @@ describe("githubAccount.errors", () => {
     );
   });
 
-  it("requires installation id, app id, and private key path for a GitHub App", () => {
+  it("requires installation id, app id, and private key file for a GitHub App", () => {
     const errors = githubAccount.errors(
       github({ accountType: "github_apps", identity: APP_URL, username: "my-app[bot]" }),
       context(),
@@ -282,7 +282,7 @@ describe("githubAccount.errors", () => {
     expect(errors).toEqual({
       installationId: t("setup.validation.githubInstallationIdRequired"),
       appId: t("setup.validation.githubAppIdRequired"),
-      privateKeyPath: t("setup.validation.githubPrivateKeyPathRequired"),
+      privateKey: t("setup.validation.githubPrivateKeyRequired"),
     });
     const invalid = githubAccount.errors(
       github({
@@ -290,7 +290,7 @@ describe("githubAccount.errors", () => {
         username: "my-app[bot]",
         installationId: "x",
         appId: "y",
-        privateKeyPath: "/keys/app.pem",
+        privateKey: { file: new File(["pem"], "app.pem"), pem: "pem" },
       }),
       context(),
       t,

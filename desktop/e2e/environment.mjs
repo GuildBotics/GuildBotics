@@ -22,11 +22,3 @@ export function withoutEnvironment(environment, names) {
     Object.entries(environment).filter(([key]) => !omitted.has(key.toUpperCase())),
   );
 }
-
-export function npmInvocation(environment, executable = process.execPath) {
-  const cli = environmentValue(environment, "npm_execpath");
-  if (!cli) {
-    throw new Error("The E2E stack must be launched through an npm script.");
-  }
-  return { executable, arguments: [cli] };
-}

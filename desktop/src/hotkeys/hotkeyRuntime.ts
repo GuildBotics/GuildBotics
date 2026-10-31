@@ -7,10 +7,7 @@
 import { Image } from "@tauri-apps/api/image";
 
 import type { HotkeySettings } from "../api/client";
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauriRuntime } from "../desktopWindow";
 
 async function invokeHost<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!isTauriRuntime()) {

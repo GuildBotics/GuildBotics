@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the GuildBotics desktop window.",
+  "description": "What the GuildBotics UI may do in its windows; the host grants the same to the UI the backend serves.",
   "windows": [
     "main",
     "quick"
@@ -11,6 +11,18 @@
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "dialog:allow-open",
-    "shell:allow-open"
+    "shell:allow-open",
+    "allow-cli-agent-skill-statuses",
+    "allow-force-update-cli-agent-skill",
+    "allow-sync-hotkeys",
+    "allow-suspend-hotkeys",
+    "allow-resume-hotkeys",
+    "allow-hide-quick-window",
+    "allow-clipboard-watch-supported",
+    "allow-poll-clipboard",
+    "allow-open-main-window",
+    "allow-set-tray-labels",
+    "allow-quit-app",
+    "allow-enter-again"
   ]
 }

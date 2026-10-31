@@ -101,7 +101,8 @@ def test_generated_sidecar_still_starts_from_source_checkout(
 ) -> None:
     programs = _generate(dev_repo)
     result = subprocess.run(
-        [str(programs / "guildbotics-app-api"), "--port", "0"],
+        # The server takes no arguments: its port is the machine's.
+        [str(programs / "guildbotics-app-api")],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -118,8 +119,6 @@ def test_generated_sidecar_still_starts_from_source_checkout(
         "python",
         "-m",
         "guildbotics.app_api",
-        "--port",
-        "0",
     ]
 
 

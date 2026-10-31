@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "url": "bootstrap.html",
         "title": "GuildBotics",
         "width": 1280,
         "height": 820,
@@ -22,7 +23,7 @@
       },
       {
         "label": "quick",
-        "url": "quick.html",
+        "url": "bootstrap.html?next=/quick.html",
         "title": "GuildBotics",
         "width": 520,
         "height": 460,
@@ -38,7 +39,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {

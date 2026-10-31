@@ -18,7 +18,6 @@ vi.mock("../../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../api/client")>();
   return {
     ...actual,
-    connected: () => ({ base: "http://127.0.0.1:8765" }),
     providerOperation: vi.fn(),
   };
 });
@@ -199,7 +198,6 @@ describe("Branvil connection", () => {
 
     expect(providerOperation).toHaveBeenCalledWith("branvil", "connect", {
       base_url: BRANVIL_BASE_URL,
-      callback_base_url: "http://127.0.0.1:8765",
     });
     expect(openExternal).toHaveBeenCalledWith(`${BRANVIL_BASE_URL}/-/authorize?state=consent-1`);
     expect(screen.getByText(t("setup.branvil.connection.pending"))).toBeVisible();

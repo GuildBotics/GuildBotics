@@ -1,0 +1,8 @@
+ja:
+  unreachable: "このポートの GuildBotics サーバーが受け付ける資格情報がこのマシンにないか、そこで待ち受けているものがそのサーバーであることを確かめられませんでした。サーバーのマシンでは GuildBotics を起動してください。他のマシンでは、ポートをサーバーへ転送してから、先に `guildbotics connect` を実行してください。"
+  refused: "GuildBotics サーバーがリクエストを拒否しました: %{reason}"
+  consent: "ブラウザの同意画面で、このマシンを許可してください。開かなかったときは、次のアドレスを開いてください:\n%{url}"
+  callback_received: "GuildBotics が応答を受け取りました。このページは閉じてかまいません。"
+  consent_timeout: "時間内に同意画面から応答がありませんでした。もう一度 `guildbotics connect` を実行してください。"
+  denied: "同意画面で、このマシンは許可されませんでした。"
+  connected: "このマシンの CLI を GuildBotics サーバーにつなぎました。"

@@ -49,9 +49,10 @@ The Rust test wrapper clears Tauri's `bundle.resources` only for tests, so it wo
 
 ## Build
 
-From the repository root in Git Bash:
+From the repository root in Git Bash. The Local API carries the screens it serves (`desktop/dist`), so they are built first:
 
 ```bash
+(cd desktop && npm ci && npm run build)
 scripts/desktop-build-backend.sh
 scripts/desktop-smoke-sidecars.sh
 cd desktop
@@ -62,7 +63,7 @@ The PyInstaller programs are written as one directory, `desktop/src-tauri/binari
 
 The NSIS installer is produced under `desktop/src-tauri/target/release/bundle/nsis/`. The Windows Tauri overlay fixes the bundle target to NSIS so a normal Windows build does not attempt an MSI build.
 
-For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds real PyInstaller `.exe` sidecars. For faster frontend iteration, run `scripts/desktop-dev-backend.sh` in one Git Bash terminal and the Vite dev command in another; this avoids rebuilding the sidecars for each frontend change.
+For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds the screens and real PyInstaller `.exe` sidecars. For faster frontend iteration, run `scripts/desktop-dev-backend.sh` in one Git Bash terminal and the Vite dev command in another; this avoids rebuilding the sidecars for each frontend change.
 
 ## Installation and PATH behavior
 

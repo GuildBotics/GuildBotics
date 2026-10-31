@@ -1297,10 +1297,10 @@ access and member key spelling in the package.
   already stored on a lost device cannot be wiped from elsewhere, so they are issued
   again at their provider.
 - **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
-  requests, including those arriving over SSH, use Desktop's discovery record and
-  session token, once the Local API proved it holds that token (section 11). `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
+  requests, including those arriving over SSH, use the server's owner token, once the
+  server proved it knows that token (section 11). `POST /api/hub/secrets/{workspace_id}/{operation}` accepts `list`,
   `send`, or `receive` and passes framed bytes to `hub/secret_service.py`. It requires
-  a loopback peer and the session token, validates a registered Hub Workspace ID,
+  a loopback peer and the owner's credential, validates a registered Hub Workspace ID,
   and does not depend on the workspace open in Desktop. This binary transfer route
   is the sole exception to the rule excluding secret values from API responses.
   Values stay out of logs, diagnostics, validation errors, and screen responses.
@@ -1459,52 +1459,104 @@ access and member key spelling in the package.
 `desktop/` is a Tauri v2 + React (Mantine, TanStack Query) frontend; the repository is
 a monorepo on purpose.
 
-- **Local API boundary**: the GUI never reimplements the Python engine. It launches the
-  bundled backend (`python -m guildbotics.app_api`, FastAPI) and talks to it on
-  `127.0.0.1` via REST + WebSocket. Every request requires the per-process
-  `X-GuildBotics-Session-Token`; `/health` is the liveness probe. A browser
-  WebSocket cannot set that header, and uvicorn logs every handshake's path and
-  query, so `/events` takes the token as the second offered subprotocol after
-  `guildbotics.session`, which the server selects; the token is never in a URL the
-  server logs or echoed back. The launcher mints
-  that token and hands it over through `GUILDBOTICS_APP_API_TOKEN` — never argv, which
-  `ps` exposes to every other user on the host — and the server refuses to start
-  without it, consuming the variable on startup so the AI CLI agents it spawns from a
-  copy of its environment never inherit the token. Browser origins are equally
-  launcher-supplied: CORS allows the Tauri origin plus whatever
-  `GUILDBOTICS_APP_API_ALLOWED_ORIGINS` lists, so a page on an arbitrary localhost
-  port cannot reach the API.
-- **Who receives the token**: a loopback port is not owned by an OS user, so the token
-  goes only to a process that showed it holds the port or the token.
-  - Desktop starts the sidecar with `--port 0`. The sidecar binds, listens, and then
-    announces the port as the only line its stdout ever carries
-    (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is stderr. It announces
-    before loading the workspace, whose secrets can wait on a keychain prompt, so the
-    host's deadline measures binding only; the frontend waits on `/health` meanwhile. The host keeps one
-    connection state (`Starting` / `Ready(port)` / `Closed`) that only that notice makes
-    `Ready`. A missing notice after 45 seconds, an invalid or second notice, or the
-    sidecar's exit closes it for good, kills the sidecar, and sends `backend-closed` to
-    every window. `backend_info`, the host's own requests, and the frontend's HTTP,
-    WebSocket, and avatar URLs all take their destination from that state, so nothing
-    addresses a port after the sidecar is gone. The sidecar starts again only with the
-    app, so the window shows why it stopped and offers to restart the app
-    (`restart_app`). Closed is final in the frontend too: an answer the gone backend
-    sends late (`backend_info`, `/health`) cannot reopen the connection or finish the
-    start. While the App is not shown, quit requests go straight to `quit_app`.
-  - Host clients that find the Local API through `~/.guildbotics/data/run/app-api.json`
-    (`guildbotics run` delegation and macOS Hub Secret) go through
-    `utils/local_api.py`'s `connect_local_api()`. It first posts a fresh 32-byte nonce to
-    `/local-api/proof`, which takes no token and answers
-    `HMAC-SHA256(token, "guildbotics-local-api-proof\n" + nonce + "\n" + service_instance_id)`.
-    Only a matching proof for the recorded instance attaches the token; a stale record,
-    a replayed answer, a malformed answer, or a timeout sends neither the token nor
-    anything it guards. A live PID or a health answer is no evidence.
+- **Local API boundary**: the GUI never reimplements the Python engine. The backend
+  (`python -m guildbotics.app_api`, FastAPI) serves both the API under `/api` (REST,
+  and the `/api/events` WebSocket) and the screens themselves (the Vite build of
+  `desktop/`: `/`, `/quick.html`, `/assets/*`, and `/-/enter` and `/-/authorize`, which
+  the main page tells apart by path; `app_api/ui.py`). It listens on loopback only, on
+  one fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default), which every program of
+  the machine reads from the environment: the server, its CLI clients, the Desktop
+  that launches it, and the Vite dev server that proxies `/api` to it. Other machines
+  reach it through SSH forwarding to the same port. The screens therefore work the same
+  in any browser and in the Desktop windows.
+- **Authentication** (`app_api/auth.py`, as Branvil's "Entering the GUI"): there is one
+  person, the owner, and no sign-in screen.
+  - The server keeps its records in `~/.guildbotics/data/server/<port>/` (`0700`):
+    `owner.token` (`0600`) and `auth.json` (tokens and sessions, by SHA-256 only). A
+    token is `gbt_<id>_<secret>`. Whoever can read `owner.token` is the owner. At every
+    start the server checks that the file still authenticates; when it is missing or
+    does not, it revokes the previous file token, ends every session, and writes a new
+    one. Only the process that bound the port opens these records, so a second
+    backend whose bind fails changes nothing.
+  - A client holding an owner token (`Authorization: Bearer`) asks
+    `POST /api/session/links` for an entry link, `{base}/-/enter#<code>` (32 random
+    bytes, single use, 60 s, in memory as its hash; `?next=` names a page of this
+    server). The code is in the fragment, so it is in no request line, log, or
+    `Referer`. The page removes it from the address bar and exchanges it at
+    `POST /api/session` for the session cookie `guildbotics_session_<port>` (`HttpOnly`,
+    `SameSite=Strict`, 30 days; the port is in the name because cookies are not
+    separated by port, which also keeps it apart from Branvil's `branvil_session`) and
+    its CSRF value. As in Branvil, a session ends after its 30 days however much it is
+    used, and the screen then says how to enter again. Every non-GET
+    request made with the cookie must carry `X-GuildBotics-CSRF`, else
+    `403 csrf_mismatch`. `guildbotics open [--print]` is that client on the command
+    line; the Desktop host is another.
+  - A machine that cannot read `owner.token` gets an owner token of its own through the
+    consent screen: `guildbotics connect` listens on a loopback port and opens
+    `/-/authorize` with its name, that `redirect_uri`, a `state`, and a PKCE `S256`
+    challenge; the owner allows it with a session (`POST /api/apps/authorizations`), and
+    the CLI exchanges the single-use, 60-second code bound to its name, address, and
+    challenge at `POST /api/apps/token` for a token labelled `app:<client>`, replacing
+    that client's previous one. The token is kept in the machine's OS keychain
+    (service `guildbotics-server`). `guildbotics open` offers `owner.token`, then that
+    token, and uses the first the server proves it knows (`utils/local_api.client_tokens`):
+    an owner file outlives its server, and the port may lead to the Hub by then. `run`
+    delegation and macOS Hub Secret hand over this machine's paths and secrets, so they
+    offer `owner.token` alone: only the server running on this machine knows it.
+  - The guard runs before every route, the screens included: `Host` must be
+    `127.0.0.1`, `localhost`, or `[::1]` with the port (else `421 misdirected`, against
+    DNS rebinding), and an `Origin` must be that same origin (else
+    `403 origin_mismatch`). No CORS header is ever sent. Every response carries
+    `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`,
+    `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, and
+    `Referrer-Policy: no-referrer`; a provider page that must post a form elsewhere
+    (the GitHub App manifest) widens `form-action` to that one origin and runs no script.
+    The WebSocket needs the session cookie and the server's own `Origin`.
+  - Unauthenticated are only the proof below, the two code exchanges, the screens
+    (which hold no data), and the provider pages a browser comes back to from another
+    site, which act on their unguessable `state`.
+- **Who receives a token**: a loopback port is not owned by an OS user, so a token goes
+  only to a process that showed it holds the port or knows the token.
+  - Desktop starts the sidecar on the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by
+    default), which the sidecar reads from the environment it inherits. The sidecar
+    binds, listens, writes its owner token file, and then announces the port as the
+    only line its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards
+    stdout is stderr. It announces before loading the workspace, whose secrets can wait
+    on a keychain prompt, so the host's deadline measures binding only. The host keeps
+    one connection state (`Starting` / `Ready` / `Closed`) that only a notice for the
+    port it asked for makes `Ready`; only then does it read
+    `~/.guildbotics/data/server/<port>/owner.token` and send it as
+    `Authorization: Bearer` (`/api/session/links`, `/api/shutdown`,
+    `/api/scheduler/status`). A missing notice after 45 seconds, a notice for another
+    port or a second one, or the sidecar's exit closes it for good, kills the sidecar,
+    and sends every window back to its bundled bootstrap page.
+  - Both windows first load that page (`bootstrap.html`; the quick window with
+    `?next=/quick.html`). It calls `backend_entry`: `null` while the sidecar starts, a
+    fresh entry link once it is ready (an entry link works once, so the host asks for
+    one each time), or why there is none. The page replaces itself with the link, so
+    the windows show the UI the backend serves and hold a session cookie like any
+    browser. Tauri treats that origin as remote: the host grants it what
+    `capabilities/default.json` grants the bundled UI (a runtime capability for
+    `http://127.0.0.1:<port>/*`), while the bootstrap page's own commands
+    (`backend_entry`, `bootstrap_log`, `restart_app`) stay with the bundled page. The
+    sidecar starts again only with the app, so the bootstrap page shows why it stopped
+    and offers to restart the app (`restart_app`). A window whose session has ended
+    goes back to its bootstrap page (`enter_again`, which navigates only to the page the
+    host recorded for that window) and enters again. While the App is not shown, quit
+    requests go straight to `quit_app`.
+  - Host clients (`guildbotics run` delegation, `guildbotics open`, and macOS Hub
+    Secret) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
+    offers, it first posts the token's id and a fresh 32-byte nonce to
+    `/api/local-api/proof`, which takes no
+    token and answers `HMAC-SHA256(sha256(secret), "guildbotics-local-api-proof\n" +
+    nonce + "\n" + id)`. Only a matching proof attaches the token; a process that took
+    the port while the server was down knows no digest, so it, a replayed answer, a
+    malformed answer, or a timeout gets neither the token nor anything it guards. A
+    health answer is no evidence.
   - Remaining limits: a port the genuine server leaves after a client's proof can be
     taken before the client's next connection (later requests usually reuse the proved
-    connection). A browser redirected by GitHub App registration still reaches the
-    sidecar's port after the sidecar exited, carrying the one-time `code`. The browser
-    preview and E2E stack send their static token to a fixed port without a proof, so
-    they are for single-user hosts only.
+    connection). A browser redirected back by GitHub App registration or Branvil's
+    consent reaches the port even after the server exited, carrying a one-time code.
 - **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
   its own process and reports states to the UI. Desktop and CLI `guildbotics start`
   use the same machine-wide `service.lock`, so only one background service can own
@@ -1513,6 +1565,9 @@ a monorepo on purpose.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
   (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
   shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.
+  It carries the screens the Local API serves, the Vite build of `desktop/`, in
+  `_internal/desktop/dist` (beside `_internal/guildbotics/` as in a checkout), so the
+  screens are built first.
   Tauri bundles it as a resource and the app starts the Local API from it. The CLI is
   copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
   afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on

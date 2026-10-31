@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import type { WorkspaceSyncStatus } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { SyncFailureDetail } from "./SyncFailureDetail";
 import {
   mostUrgentSyncState,
@@ -53,6 +54,7 @@ const ICONS: Record<SyncIndicatorState, typeof CircleCheck> = {
  */
 export function SyncIndicator() {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const [opened, setOpened] = useState(false);
   const scoped = useSyncStatuses();
   const retry = useSyncRetry();
@@ -61,7 +63,7 @@ export function SyncIndicator() {
     return null;
   }
   const Icon = ICONS[state];
-  const label = t(`sync.state.${state}.label`);
+  const label = t(`sync.state.${state}.label`, { machine });
   const shown = scoped.filter((item) => item.state !== "disabled");
   const retryable = shown.filter((item) => syncCanRetry(item.state));
   return (
@@ -91,7 +93,7 @@ export function SyncIndicator() {
             {label}
           </Text>
           <Text c="dimmed" size="xs">
-            {t(`sync.state.${state}.detail`)}
+            {t(`sync.state.${state}.detail`, { machine })}
           </Text>
           {shown.map((item) => (
             <ScopeDetail item={item} key={item.scope} />
@@ -125,11 +127,12 @@ export function SyncIndicator() {
 /** One scope's state, what it last printed, and what it is waiting on. */
 function ScopeDetail({ item }: { item: ScopedSyncStatus }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   return (
     <Stack gap={2}>
       <Text fw={600} size="xs">
         {t(`sync.indicator.scope.${item.scope}`, {
-          state: t(`sync.state.${item.state}.label`),
+          state: t(`sync.state.${item.state}.label`, { machine }),
         })}
       </Text>
       <SyncFailureDetail status={item.status} />

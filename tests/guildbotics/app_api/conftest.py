@@ -20,6 +20,7 @@ from guildbotics.environment.status import (
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.sync.manager import GitSyncManager
+from tests.guildbotics.app_api.owner import owner_client
 
 
 @pytest.fixture
@@ -63,9 +64,7 @@ def idle_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def client(workspace: Path) -> TestClient:
     """Bind a client to a real runtime rooted at the temporary workspace."""
-    return TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
+    return owner_client(create_app(runtime=AppRuntime(EventBus())))
 
 
 class AgentEnvironmentStandIn:

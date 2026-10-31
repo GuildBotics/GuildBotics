@@ -31,12 +31,12 @@ import guildbotics.app_api.avatar as avatar_module
 import guildbotics.workspace.config_repository as config_repository_module
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.utils.fileio import get_identity_root
+from guildbotics.utils.local_api import API_PREFIX
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
 HTTP_SERVICE_UNAVAILABLE = 503
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
 #: Routes that change something other than the workspace's shared config, and
 #: what they change instead. Naming them is what lets the check below be
@@ -87,6 +87,10 @@ ELSEWHERE = {
     ("POST", "/scheduler/stop"): "runtime lifecycle",
     ("POST", "/shutdown"): "runtime lifecycle",
     ("POST", "/local-api/proof"): "computes a proof, writes nothing",
+    ("POST", "/session/links"): "an entry code held in memory",
+    ("POST", "/session"): "the server's own records, outside any workspace",
+    ("POST", "/apps/authorizations"): "a consent code held in memory",
+    ("POST", "/apps/token"): "the server's own records, outside any workspace",
     ("POST", "/system-alerts/dismiss"): "local/run state",
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",
@@ -180,7 +184,6 @@ def _post_init(client: TestClient, workspace: Path) -> Any:
     """Send the first-setup write without judging the answer."""
     return client.post(
         "/config/init",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(_config_dir(workspace)),
             "language": "en",
@@ -207,7 +210,6 @@ def _add_member(client: TestClient, config_dir: Path) -> Any:
 def _post_member(client: TestClient, config_dir: Path) -> Any:
     return client.post(
         "/config/members",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(config_dir),
             "person_type": "",
@@ -226,7 +228,6 @@ def _post_member(client: TestClient, config_dir: Path) -> Any:
 def _add_command_file(client: TestClient) -> str:
     response = client.post(
         "/commands/files",
-        headers=AUTH_HEADERS,
         json={"command": "demo", "format": "markdown", "content": "# demo\n"},
     )
     assert response.status_code == HTTP_OK
@@ -235,9 +236,9 @@ def _add_command_file(client: TestClient) -> str:
 
 def _command_file(client: TestClient) -> dict[str, str]:
     """The command file the update / delete mutations act on."""
-    listing = client.get("/commands/files", headers=AUTH_HEADERS).json()["files"]
+    listing = client.get("/commands/files").json()["files"]
     entry = next(item for item in listing if item["command"].endswith("demo"))
-    detail = client.get(f"/commands/files/{entry['id']}", headers=AUTH_HEADERS).json()
+    detail = client.get(f"/commands/files/{entry['id']}").json()
     return {"id": detail["id"], "revision": detail["revision"]}
 
 
@@ -246,7 +247,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     ("POST", "/config/init"): lambda client, workspace: _post_init(client, workspace),
     ("PUT", "/config/project"): lambda client, workspace: client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(_config_dir(workspace)),
             "language": "en",
@@ -257,7 +257,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     ),
     ("PUT", "/config/project/default-person"): lambda client, workspace: client.put(
         "/config/project/default-person",
-        headers=AUTH_HEADERS,
         json={"person_id": "alice"},
     ),
     ("POST", "/config/members"): lambda client, workspace: _post_member(
@@ -265,7 +264,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     ),
     ("PUT", "/config/members/{person_id}"): lambda client, workspace: client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(_config_dir(workspace)),
             "person_type": "",
@@ -278,20 +276,18 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
         },
     ),
     ("DELETE", "/config/members/{person_id}"): lambda client, workspace: client.delete(
-        "/config/members/alice", headers=AUTH_HEADERS
+        "/config/members/alice"
     ),
     ("DELETE", "/identities/{person_id}"): lambda client, workspace: client.delete(
-        "/identities/alice", headers=AUTH_HEADERS
+        "/identities/alice"
     ),
     ("PUT", "/config/intelligences"): lambda client, workspace: client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json={"config_dir": str(_config_dir(workspace)), "person_id": None},
     ),
     ("POST", "/config/members/{person_id}/avatar"): lambda client, workspace: (
         client.post(
             "/config/members/alice/avatar",
-            headers=AUTH_HEADERS,
             files={"file": ("avatar.png", b"\x89PNG\r\n\x1a\n", "image/png")},
         )
     ),
@@ -299,12 +295,10 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     # what decides.
     ("POST", "/commands/files"): lambda client, workspace: client.post(
         "/commands/files",
-        headers=AUTH_HEADERS,
         json={"command": "another", "format": "markdown", "content": "# x\n"},
     ),
     ("PUT", "/commands/files/{file_id}"): lambda client, workspace: client.put(
         f"/commands/files/{_command_file(client)['id']}",
-        headers=AUTH_HEADERS,
         json={
             "content": "# edited\n",
             "expected_revision": _command_file(client)["revision"],
@@ -313,11 +307,9 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     ("DELETE", "/commands/files/{file_id}"): lambda client, workspace: client.delete(
         f"/commands/files/{_command_file(client)['id']}"
         f"?expected_revision={_command_file(client)['revision']}",
-        headers=AUTH_HEADERS,
     ),
     ("POST", "/commands/author/apply"): lambda client, workspace: client.post(
         "/commands/author/apply",
-        headers=AUTH_HEADERS,
         json={
             "changes": [
                 {
@@ -332,7 +324,6 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
     ),
     ("PUT", "/transcripts/settings"): lambda client, workspace: client.put(
         "/transcripts/settings",
-        headers=AUTH_HEADERS,
         json={"detail": "full", "retention_days": 7},
     ),
 }
@@ -351,7 +342,7 @@ AVATAR_PROVIDERS = sorted(
 
 def _import_avatar(provider: str) -> Callable[[TestClient, Path], Any]:
     return lambda client, workspace: client.post(
-        f"/config/members/alice/avatar/{provider}", headers=AUTH_HEADERS
+        f"/config/members/alice/avatar/{provider}"
     )
 
 
@@ -373,9 +364,13 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
 
     The population is every mutating route, not the ones under ``/config``:
     drawing it around the URL is what let the command files and the transcript
-    settings -- both config -- be written without comparing anything.
+    settings -- both config -- be written without comparing anything. The
+    routes are named as the API names them, under its prefix.
     """
-    declared = set(MUTATIONS) | set(ELSEWHERE) | {AVATAR_IMPORT}
+    declared = {
+        (method, API_PREFIX + path)
+        for method, path in set(MUTATIONS) | set(ELSEWHERE) | {AVATAR_IMPORT}
+    }
     routing_table = {
         (method, route.path)
         for route in client.app.routes  # type: ignore[attr-defined]

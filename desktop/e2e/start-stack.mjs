@@ -1,9 +1,12 @@
 // Launcher for the Playwright E2E stack.
 //
 // Boots the REAL Python Local API backend against a FRESH temp workspace, waits
-// for `/health`, optionally PRE-SEEDS the workspace into a configured project +
-// active member via the real API, then starts Vite in browser-preview mode wired
-// to that backend via VITE_GUILDBOTICS_API_TOKEN / VITE_GUILDBOTICS_API_BASE.
+// until it announces its port and answers `/api/health` to the owner token it
+// wrote, optionally PRE-SEEDS the workspace into a configured project + active
+// member via the real API, and then prints `[e2e:<stack>] ready`, which is what
+// playwright.config.ts waits for. The backend serves the screens itself, from
+// the Vite build in `desktop/dist` that `npm run e2e` makes first; a spec opens
+// them as the owner does, through an entry link (`e2e/stack-context.ts`).
 //
 // Stacks launched in parallel by playwright.config.ts:
 //   * "setup"     — empty workspace, no seeding, so the app lands on first-setup
@@ -16,53 +19,49 @@
 //                   so mutating the member list never perturbs journeys ③ ④.
 //   * "diagnostics"— seeded workspace for the readiness/scenario diagnostics
 //                   journey (journey ⑤, `diagnostics.spec.ts`).
-//   * "down"      — DEFERRED backend: the frontend boots pointed at a backend
-//                   port that is NOT yet serving (journey ⑥, `failure.spec.ts`).
-//                   A small control HTTP server lets the spec bring the real
-//                   backend UP on demand, so backend-down → up is deterministic
-//                   rather than timing-flaky.
+//   * "down"      — a backend the spec takes DOWN and brings back UP through a
+//                   small control HTTP server (journey ⑥, `failure.spec.ts`), so
+//                   loaded screen → unreachable → retry is deterministic rather
+//                   than timing-flaky.
 //   * "environment"— seeded workspace given the ready isolated agent environment
 //                   of the workspace GUILDBOTICS_E2E_ENVIRONMENT_FROM names, so
 //                   a command runs in a real microVM (journey ⑪,
 //                   `environment.spec.ts`). The one stack that uses something
 //                   of the developer's device: its runtime and that snapshot.
 //
-// Each stack owns its OWN temp workspace, HOME, ports, token and stack-context
-// file, so the journeys stay fully isolated and the first-setup spec always sees
+// Each stack owns its OWN temp workspace, HOME (and so its own owner token),
+// ports and stack-context file, so the journeys stay fully isolated and the first-setup spec always sees
 // an empty workspace. All of them live under the OS temp dir (the "environment"
 // stack's under `~/.guildbotics-e2e`, see below), so a run leaves nothing behind
 // inside the repository even when it is interrupted. The backend
-// cwd is the temp workspace, so `/config/init` writes
+// cwd is the temp workspace, so `/api/config/init` writes
 // `<workspace>/.guildbotics/config/...` on disk. HOME is redirected to a second
 // temp dir, and the backend's PATH starts with a stub bin dir, to keep the run
 // hermetic.
 //
-// Vite runs in the foreground; when Playwright tears the web server down it kills
-// this process group, and the SIGINT/SIGTERM handlers below stop the backend so
-// no orphan uvicorn survives.
+// The backend runs as long as this process; when Playwright tears the web server
+// down it kills this process group, and the SIGINT/SIGTERM handlers below stop
+// the backend so no orphan uvicorn survives.
 
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import {
-  environmentValue,
-  npmInvocation,
-  withEnvironment,
-  withoutEnvironment,
-} from "./environment.mjs";
+import { environmentValue, withEnvironment, withoutEnvironment } from "./environment.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(here, "..");
@@ -71,30 +70,29 @@ const repoRoot = resolve(desktopDir, "..");
 // Each stack is parameterized through env vars so playwright.config.ts can launch
 // several isolated instances in parallel.
 const stackName = process.env.GUILDBOTICS_E2E_STACK ?? "setup";
-const host = process.env.GUILDBOTICS_E2E_HOST ?? "127.0.0.1";
+// The server listens on loopback only.
+const host = "127.0.0.1";
 const backendPort = Number(process.env.GUILDBOTICS_E2E_BACKEND_PORT ?? "8766");
-const frontendPort = Number(process.env.GUILDBOTICS_E2E_FRONTEND_PORT ?? "1421");
-// Minted per run rather than configured: a token that lives in a tracked file
-// is a standing credential for anyone else on the host. Specs read this run's
-// value from the stack context file below.
-const token = randomUUID();
 const shouldSeed = process.env.GUILDBOTICS_E2E_SEED === "1";
 // Seed with an empty OpenAI API key so the diagnostics journey can verify the
 // missing-key short-circuit WITHOUT firing a live LLM call. Keeps `npm run e2e`
 // fully offline and deterministic (no dependency on api.openai.com latency or
 // availability).
 const seedWithoutLlmKey = process.env.GUILDBOTICS_E2E_OFFLINE_LLM === "1";
-// "down" mode does not start the backend at boot; the spec brings it up later
-// through the control server on GUILDBOTICS_E2E_CONTROL_PORT.
-const deferBackend = process.env.GUILDBOTICS_E2E_DEFER_BACKEND === "1";
+// The "down" stack's spec stops and starts the backend through the control
+// server on GUILDBOTICS_E2E_CONTROL_PORT.
 const controlPort = Number(process.env.GUILDBOTICS_E2E_CONTROL_PORT ?? "0");
 // A workspace whose isolated agent environment is ready on this device; only
 // the "environment" stack is given one (see below).
 const environmentSource = process.env.GUILDBOTICS_E2E_ADOPT_ENVIRONMENT ?? "";
 const baseUrl = `http://${host}:${backendPort}`;
-const frontendOrigin = `http://${host}:${frontendPort}`;
-const authHeaders = { "X-GuildBotics-Session-Token": token, "Content-Type": "application/json" };
 const tag = `[e2e:${stackName}]`;
+
+// The screens the backend serves (`guildbotics/app_api/ui.py`). They are built
+// once per run by `npm run e2e`, not per stack, since the stacks start at once.
+if (!existsSync(join(desktopDir, "dist", "index.html"))) {
+  throw new Error(`${tag} desktop/dist is not built; run the journeys with \`npm run e2e\`.`);
+}
 
 // The stack name is interpolated into every path below, one of which is removed
 // on shutdown. Keep it to an allowlist so a typo such as `../x` cannot write —
@@ -124,7 +122,17 @@ const stackEnv = withEnvironment(process.env, {
   USERPROFILE: homeDir,
   PATH: environmentValue(process.env, "PATH"),
 });
-const npm = npmInvocation(stackEnv);
+// Written by the backend before it announces its port: whoever can read it is
+// the owner (`guildbotics/app_api/auth.py`). `e2e/stack-context.ts` derives the
+// same path on the spec side.
+const ownerTokenPath = join(
+  homeDir,
+  ".guildbotics",
+  "data",
+  "server",
+  String(backendPort),
+  "owner.token",
+);
 
 // Two facts live on the Python side and are read from there so no second copy
 // has to be kept in sync: the catalog of AI CLI tools shadowed below, and where
@@ -231,9 +239,9 @@ for (const executable of cliAgentExecutables) {
 // It describes this run's live processes only, so it lives beside the temp dirs
 // it points at instead of inside the repo. `e2e/stack-context.ts` mirrors this
 // path derivation on the reader side; the stack name is the only shared input.
-// The context carries this run's Local API session token, and on Linux the temp
-// dir is shared between local users, so both the directory and the file must be
-// user-private. `mkdirSync` / `writeFileSync` apply `mode` only when they
+// The context names this run's temp HOME, which holds its owner token, and on
+// Linux the temp dir is shared between local users, so both the directory and
+// the file must be user-private. `mkdirSync` / `writeFileSync` apply `mode` only when they
 // create, hence the explicit chmod for a directory left by an earlier run and
 // the removal of any stale file before writing.
 const contextDir = join(tmpdir(), "guildbotics-e2e");
@@ -252,13 +260,10 @@ writeFileSync(
       configDir,
       cliStubLog,
       backendPort,
-      frontendPort,
       controlPort,
-      token,
       host,
       seeded: shouldSeed,
       seededWithoutLlmKey: shouldSeed && seedWithoutLlmKey,
-      deferBackend,
       memberId: shouldSeed ? seededMemberId : null,
     },
     null,
@@ -272,11 +277,7 @@ let backendEnv = withEnvironment(stackEnv, {
   HOME: homeDir,
   USERPROFILE: homeDir,
   PATH: [cliStubDir, environmentValue(stackEnv, "PATH")].filter(Boolean).join(delimiter),
-  // Handed over through the environment so the token stays out of `ps`, and the
-  // CORS allowlist names this stack's Vite origin explicitly — the backend
-  // accepts no other browser origin.
-  GUILDBOTICS_APP_API_TOKEN: token,
-  GUILDBOTICS_APP_API_ALLOWED_ORIGINS: frontendOrigin,
+  GUILDBOTICS_SERVER_PORT: String(backendPort),
 });
 // `withEnvironment` replaces a Windows parent environment's `Path` key instead
 // of leaving two spellings.
@@ -349,36 +350,47 @@ if (seedWithoutLlmKey) {
 }
 
 let backend;
-let frontend;
 let controlServer;
 let shuttingDown = false;
 
-function spawnBackend() {
-  return spawn(
-    "uv",
-    [
-      "run",
-      "--project",
-      repoRoot,
-      "python",
-      "-m",
-      "guildbotics.app_api",
-      "--host",
-      host,
-      "--port",
-      String(backendPort),
-    ],
-    { cwd: workspaceDir, env: backendEnv, stdio: "inherit" },
-  );
-}
-
-function attachBackendExitGuard() {
-  backend.on("exit", (code) => {
-    if (!shuttingDown) {
+// Start the backend, and settle once it answers: first it announces, on its
+// own stdout, that it holds the port, and only then is the owner token at
+// `ownerTokenPath` this server's own, safe to send to whatever listens there.
+async function startBackend() {
+  const child = spawn("uv", ["run", "--project", repoRoot, "python", "-m", "guildbotics.app_api"], {
+    cwd: workspaceDir,
+    env: backendEnv,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  backend = child;
+  child.on("exit", (code) => {
+    if (backend === child && !shuttingDown) {
       console.error(`${tag} backend exited early with code ${code ?? "null"}`);
       shutdown(1);
     }
   });
+  const notice = `GUILDBOTICS_APP_API_PORT=${backendPort}`;
+  await new Promise((resolve, reject) => {
+    createInterface({ input: child.stdout }).on("line", (line) =>
+      line === notice ? resolve() : console.log(line),
+    );
+    child.on("exit", () => reject(new Error(`${tag} backend exited before it held the port`)));
+  });
+  await waitForHealth();
+  console.log(`${tag} backend healthy at ${baseUrl} (workspace=${workspaceDir})`);
+}
+
+// Stop the backend as the spec asks, without taking the stack down with it.
+async function stopBackend() {
+  const child = backend;
+  backend = undefined;
+  if (child && child.exitCode === null) {
+    await new Promise((resolve) => {
+      child.on("exit", resolve);
+      child.kill("SIGTERM");
+    });
+  }
+  console.log(`${tag} backend stopped`);
 }
 
 function shutdown(code) {
@@ -393,9 +405,6 @@ function shutdown(code) {
   if (controlServer) {
     controlServer.close();
   }
-  if (frontend && frontend.exitCode === null) {
-    frontend.kill("SIGTERM");
-  }
   if (backend && backend.exitCode === null) {
     backend.kill("SIGTERM");
   }
@@ -408,12 +417,17 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 process.on("exit", () => shutdown());
 
+function ownerHeaders() {
+  const token = readFileSync(ownerTokenPath, "utf-8").trim();
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
 async function waitForHealth() {
   const deadline = Date.now() + 60_000;
   let lastError = "unknown";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/health`, { headers: authHeaders });
+      const response = await fetch(`${baseUrl}/api/health`, { headers: ownerHeaders() });
       if (response.ok) {
         return;
       }
@@ -427,9 +441,9 @@ async function waitForHealth() {
 }
 
 async function postJson(path, body) {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${baseUrl}/api${path}`, {
     method: "POST",
-    headers: authHeaders,
+    headers: ownerHeaders(),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -497,99 +511,60 @@ function adoptSourceEnvironment() {
   console.log(`${tag} adopted the isolated environment of ${environmentSource}`);
 }
 
-function startFrontend() {
-  frontend = spawn(
-    npm.executable,
-    [
-      ...npm.arguments,
-      "run",
-      "dev",
-      "--",
-      "--host",
-      host,
-      "--port",
-      String(frontendPort),
-      "--strictPort",
-    ],
-    {
-      cwd: desktopDir,
-      env: withEnvironment(stackEnv, {
-        VITE_GUILDBOTICS_API_TOKEN: token,
-        VITE_GUILDBOTICS_API_BASE: baseUrl,
-      }),
-      stdio: "inherit",
-    },
-  );
-
-  frontend.on("exit", (code) => {
-    shutdown(code ?? 0);
-  });
-}
-
-// Control server for the "down" journey (⑥). The frontend is started pointed at a
-// backend port that is NOT yet serving, so the app boots into Bootstrap's error
-// state. The spec then POSTs `/control/start-backend` here; we start the REAL
-// backend, wait for `/health`, and only then answer 200 — so the subsequent
-// retry click in the app is guaranteed to find a healthy backend (no race).
+// Control server for the "down" journey (⑥): the spec takes the REAL backend
+// down under a loaded screen, and brings it back up. Each answer comes only
+// once the backend is gone, or answers again, so the spec's next step (the
+// screen noticing the loss, a retry) cannot race the backend.
 function startControlServer() {
-  let backendStarting = false;
+  const actions = {
+    "/control/stop-backend": stopBackend,
+    "/control/start-backend": () => (backend ? Promise.resolve() : startBackend()),
+  };
+  let busy = false;
   controlServer = createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/control/start-backend") {
-      if (backend) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "already-running" }));
-        return;
-      }
-      if (backendStarting) {
-        res.writeHead(409, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "starting" }));
-        return;
-      }
-      backendStarting = true;
-      console.log(`${tag} control: starting backend on demand`);
-      backend = spawnBackend();
-      attachBackendExitGuard();
-      waitForHealth()
-        .then(() => {
-          console.log(`${tag} control: backend healthy at ${baseUrl}`);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ready" }));
-        })
-        .catch((error) => {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "error", error: String(error) }));
-        });
+    const reply = (status, body) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const action = req.method === "POST" ? actions[req.url] : undefined;
+    if (!action) {
+      reply(404, { status: "not-found" });
       return;
     }
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "not-found" }));
+    if (busy) {
+      reply(409, { status: "busy" });
+      return;
+    }
+    busy = true;
+    action()
+      .then(
+        () => reply(200, { status: "done" }),
+        (error) => reply(500, { status: "error", error: String(error) }),
+      )
+      .finally(() => {
+        busy = false;
+      });
   });
-  controlServer.listen(controlPort, host, () => {
-    console.log(`${tag} control server listening on http://${host}:${controlPort}`);
-  });
+  return new Promise((resolve) =>
+    controlServer.listen(controlPort, host, () => {
+      console.log(`${tag} control server listening on http://${host}:${controlPort}`);
+      resolve();
+    }),
+  );
 }
 
 async function main() {
-  if (deferBackend) {
-    // Backend stays DOWN until the spec asks the control server to start it.
-    startControlServer();
-    startFrontend();
-    return;
-  }
-
-  backend = spawnBackend();
-  attachBackendExitGuard();
-  await waitForHealth();
-  console.log(`${tag} backend healthy at ${baseUrl} (workspace=${workspaceDir})`);
-
+  await startBackend();
   if (shouldSeed) {
     await seedWorkspace();
   }
   if (environment) {
     adoptSourceEnvironment();
   }
-
-  startFrontend();
+  if (controlPort) {
+    await startControlServer();
+  }
+  console.log(`${tag} ready at ${baseUrl}`);
 }
 
 main().catch((error) => {

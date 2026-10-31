@@ -48,6 +48,8 @@ _EXACT_EVENT_LABELS = {
     "system.finished": "system_finished",
     "session.pointer": "session_pointer",
     "chat.receive_state_reset": "chat_receive_state_reset",
+    "workspace.changed": "workspace_changed",
+    "hotkeys.changed": "hotkeys_changed",
 }
 
 
@@ -158,6 +160,12 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
             label_key=_event_key("session_pointer"),
             label=event_type,
             message=path or event_type,
+        )
+    if event_type in {"workspace.changed", "hotkeys.changed"}:
+        return _presentation(
+            label_key=_event_key(_EXACT_EVENT_LABELS[event_type]),
+            label=event_type,
+            message=_first_text(payload, "workspace") or event_type,
         )
     if event_type == "chat.receive_state_reset":
         return _presentation(

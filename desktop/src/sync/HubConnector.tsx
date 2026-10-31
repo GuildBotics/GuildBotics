@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { TriangleAlert } from "lucide-react";
 
 import { getHubStatus, inspectHub, trustHub, type HubConnection } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { RequestErrorAlert } from "./RequestErrorAlert";
 
 /**
@@ -28,6 +29,7 @@ export function HubConnector({
   onEndpointChange?: () => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const [endpoint, setEndpoint] = useState("");
   const [connection, setConnection] = useState<HubConnection | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -92,10 +94,10 @@ export function HubConnector({
             size="xs"
             variant="light"
           >
-            {t("sync.connect.useLocal")}
+            {t("sync.connect.useLocal", { machine })}
           </Button>
           <Text c="dimmed" size="xs">
-            {t("sync.connect.useLocalHint")}
+            {t("sync.connect.useLocalHint", { machine })}
           </Text>
         </Group>
       ) : null}

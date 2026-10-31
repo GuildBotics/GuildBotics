@@ -121,6 +121,8 @@ vi.mock("../api/client", async (importOriginal) => {
     saveDecisionCredential: vi.fn(async () => ({ state: "unverified" })),
     addMemberConfig: vi.fn(async () => configWriteResponse()),
     cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
+    getRegisteredWorkspaces: vi.fn(async () => ["/workspace", "/other-workspace"]),
+    getServerMachineName: vi.fn(async () => "studio"),
     inspectHub: vi.fn(async () => ({
       endpoint: "user@hub.local",
       is_local: false,
@@ -532,6 +534,7 @@ describe("SetupPage", () => {
       t("setup.intelligence.inferenceFailure.summary", {
         reason: t(`setup.intelligence.inferenceFailure.categories.${category}`),
         time: new Date(timestamp).toLocaleString("en"),
+        machine: "studio",
       });
     const openai = await screen.findByRole("button", { name: "OpenAI" });
     expect(openai).toHaveAccessibleDescription(
@@ -660,6 +663,50 @@ describe("SetupPage", () => {
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
+  });
+
+  it("takes a typed server path in the browser only once it is entered", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+    const field = await screen.findByLabelText("Workspace");
+    await waitFor(() => expect(field).toHaveValue("/workspace"));
+
+    expect(screen.queryByRole("button", { name: "Choose" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(t("app.serverMachine.pathHint", { machine: "studio" }), { exact: false }),
+    ).toBeInTheDocument();
+    await user.clear(field);
+    await user.type(field, "/srv/demo");
+    // A partial path is never opened as a workspace.
+    expect(restartBackend).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/srv/demo"));
+    expect(restartBackend).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches to a registered workspace picked from the list", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
+
+    await user.click(screen.getByRole("button", { name: t("setup.project.registered") }));
+    // The open workspace is not offered again.
+    expect(screen.queryByRole("menuitem", { name: "/workspace" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "/other-workspace" }));
+
+    await waitFor(() => expect(restartBackend).toHaveBeenCalledWith("/other-workspace"));
+  });
+
+  it("names the server machine beside the settings that belong to it", async () => {
+    renderSetupPage("/setup");
+
+    const badge = await screen.findByLabelText(
+      t("app.serverMachine.tooltip", { machine: "studio" }),
+    );
+    expect(badge).toHaveTextContent("studio");
+    expect(badge.closest(".nav-label")).toHaveTextContent(t("setup.nav.groupMachine"));
   });
 
   it("takes up a copied workspace without switching to it a second time", async () => {
@@ -960,7 +1007,9 @@ describe("SetupPage", () => {
     // which tools can be chosen is the catalog's and the same on every device.
     expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
     expect(
-      screen.getByText(t("setup.intelligence.environment.toolCredentialsMissing")),
+      screen.getByText(
+        t("setup.intelligence.environment.toolCredentialsMissing", { machine: "studio" }),
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1014,6 +1063,7 @@ describe("SetupPage", () => {
 
   it("shows AI CLI tool skill status and allows an explicit overwrite", async () => {
     const user = userEvent.setup();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
@@ -1045,6 +1095,26 @@ describe("SetupPage", () => {
     await user.click(screen.getByRole("button", { name: t("setup.intelligence.skillOverwrite") }));
 
     expect(vi.mocked(forceUpdateCliAgentSkill).mock.calls[0][0]).toBe("codex");
+  });
+
+  it("shows no AI CLI tool skill status in the browser, which cannot see its machine's skills", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+
+    expect(await screen.findByText(t("setup.intelligence.defaultCliAgent"))).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: t("setup.intelligence.skillStatusButtonLabel", { agent: "OpenAI Codex CLI" }),
+      }),
+    ).not.toBeInTheDocument();
+    expect(getCliAgentSkillStatuses).not.toHaveBeenCalled();
   });
 
   it("offers per kind the providers serving it and shows the chosen one's fields", async () => {
@@ -1577,6 +1647,38 @@ describe("SetupPage", () => {
       ).not.toBeInTheDocument();
     },
   );
+
+  it("names the server machine in a check of what that machine holds", async () => {
+    // "This machine" is the server's, not the browser's: the check says which.
+    const user = userEvent.setup();
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ github_enabled: true }));
+    vi.mocked(runScenarioDiagnostics).mockResolvedValue(
+      scenarioResponse({
+        ok: false,
+        checks: [
+          diagnosticCheck({
+            status: "error",
+            section: "github",
+            code: "provider_secret",
+            target: "GITHUB_TOKEN",
+            message: "GITHUB_TOKEN is missing",
+          }),
+        ],
+      }),
+    );
+    renderSetupPage("/setup?section=verification");
+
+    await user.click(
+      await screen.findByRole("button", { name: t("overview.scenarioDiagnostics.run") }),
+    );
+
+    const description = t("overview.diagnosticChecks.provider_secret.description", {
+      target: "GITHUB_TOKEN",
+      machine: "studio",
+    });
+    expect(description).toContain("studio");
+    expect((await screen.findAllByText(description)).length).toBeGreaterThan(0);
+  });
 
   it("shows an alert when scenario diagnostics fail in verification section", async () => {
     const user = userEvent.setup();
@@ -2667,8 +2769,10 @@ describe("MembersSection", () => {
     );
     renderSetupPage("/setup?section=members");
 
-    const badge = await screen.findByText(t("setup.members.blockedHere"));
-    expect(screen.getAllByText(t("setup.members.blockedHere"))).toHaveLength(1);
+    const badge = await screen.findByText(t("setup.members.blockedHere", { machine: "studio" }));
+    expect(screen.getAllByText(t("setup.members.blockedHere", { machine: "studio" }))).toHaveLength(
+      1,
+    );
     await userEvent.hover(badge);
     expect(
       await screen.findByText("local path '/opt/nowhere' does not exist on this device"),
@@ -3214,7 +3318,7 @@ describe("MembersSection", () => {
         await screen.findByText(t("setup.members.githubAppRegistration.installed")),
       ).toBeInTheDocument();
       // The key never reaches the screen, so there is no path to ask for.
-      expect(screen.queryByLabelText(t("setup.members.privateKeyPath"))).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(t("setup.members.privateKey"))).not.toBeInTheDocument();
       for (const [label, value] of [
         ["setup.members.appId", "1978826"],
         ["setup.members.installationId", "86632391"],
@@ -3554,7 +3658,7 @@ describe("MembersSection", () => {
       expect(
         await screen.findByText(t("setup.members.githubAppRegistration.errors.expired")),
       ).toBeInTheDocument();
-      expect(screen.getByLabelText(t("setup.members.privateKeyPath"))).toBeInTheDocument();
+      expect(screen.getByLabelText(t("setup.members.privateKey"))).toBeInTheDocument();
     });
 
     it("keeps the registration for another save when the save failed", async () => {
@@ -4052,7 +4156,7 @@ describe("MembersSection", () => {
     await selectGitHubAccountType(user, "GitHub Apps");
     expect(await screen.findByLabelText(t("setup.members.installationId"))).toBeInTheDocument();
     expect(screen.getByLabelText(t("setup.members.appId"))).toBeInTheDocument();
-    expect(screen.getByLabelText(t("setup.members.privateKeyPath"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t("setup.members.privateKey"))).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
   });
 
@@ -4138,7 +4242,7 @@ describe("MembersSection", () => {
     expect(await screen.findByText(t("setup.members.githubAuthNotRequired"))).toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.installationId"))).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.appId"))).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(t("setup.members.privateKeyPath"))).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(t("setup.members.privateKey"))).not.toBeInTheDocument();
     expect(screen.queryByLabelText(t("setup.members.accessToken"))).not.toBeInTheDocument();
 
     await user.click(await screen.findByRole("tab", { name: "Slack" }));
@@ -4354,6 +4458,8 @@ const PATROL_COMMAND_OPTIONS: CommandOption[] = [
   commandOption({
     command: "report",
     label: "Report",
+    source: "workspace",
+    path: "report.md",
     arguments: [
       { name: "target", kind: "positional", required: true, default: "" },
       { name: "--format", kind: "keyword", required: false, default: "" },
@@ -4539,6 +4645,27 @@ describe("PatrolSettingsEditor", () => {
       screen.getByRole("button", { name: t("setup.members.patrol.removeSchedule") }),
     );
     expect(await screen.findByText(t("setup.members.patrol.noSchedules"))).toBeInTheDocument();
+  });
+
+  it("links a workspace command's script to the command screen, keeping the path to copy", async () => {
+    const user = userEvent.setup();
+    await openPatrolTab(user);
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.patrol.addSchedule") }));
+
+    // A bundled template is not on the command screen: its path is only shown.
+    expect(await screen.findByText("workflows/ticket_driven_workflow.md")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "workflows/ticket_driven_workflow.md" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("commands.copyScriptPath") })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: t("commands.command") }));
+    await user.click(await screen.findByRole("option", { name: /Report \(report\)/ }));
+
+    const link = await screen.findByRole("link", { name: "report.md" });
+    expect(link).toHaveAttribute("href", "/commands?command=report");
+    expect(screen.getByRole("button", { name: t("commands.copyScriptPath") })).toBeInTheDocument();
   });
 
   it("converts catalog command args into the task_schedules payload", async () => {
@@ -5347,10 +5474,12 @@ describe("IntelligenceEditor (team default)", () => {
 
     await screen.findByText(t("setup.intelligence.tabs.cli"));
     expect(
-      screen.getAllByText(t("setup.intelligence.environment.toolCredentialsSaved")).length,
+      screen.getAllByText(
+        t("setup.intelligence.environment.toolCredentialsSaved", { machine: "studio" }),
+      ).length,
     ).toBeGreaterThan(0);
     for (const label of screen.getAllByText(
-      t("setup.intelligence.environment.toolCredentialsSaved"),
+      t("setup.intelligence.environment.toolCredentialsSaved", { machine: "studio" }),
     )) {
       if (label.classList.contains("detection")) {
         expect(label).toHaveStyle({ color: "var(--mantine-color-gray-6)" });
@@ -5460,7 +5589,7 @@ describe("IntelligenceEditor (member override)", () => {
       const card = await screen.findByRole(role, { name: "OpenAI Codex CLI" });
       const expectedSummary =
         model === null
-          ? t("setup.intelligence.lastTurn.noRecord")
+          ? t("setup.intelligence.lastTurn.noRecord", { machine: "studio" })
           : model || specified
             ? t("setup.intelligence.lastTurn.modelWithSource", {
                 model: model || t("setup.intelligence.lastTurn.modelNotReported"),
@@ -5479,19 +5608,19 @@ describe("IntelligenceEditor (member override)", () => {
         expect(card).toHaveTextContent(
           t("setup.intelligence.lastTurn.time", {
             time: new Date(timestamp).toLocaleString(i18n.language),
+            machine: "studio",
           }),
         );
       }
       if (model) expect(card).toHaveTextContent(model);
       expect(card).toHaveAccessibleDescription(
-        new RegExp(t("setup.intelligence.environment.toolCredentialsSaved")),
+        new RegExp(t("setup.intelligence.environment.toolCredentialsSaved", { machine: "studio" })),
       );
       if (model) expect(card).toHaveAccessibleDescription(new RegExp(model));
       const noRecordCard = screen.getByRole(role, { name: "Claude Code" });
-      expect(noRecordCard).toHaveTextContent(t("setup.intelligence.lastTurn.noRecord"));
-      expect(noRecordCard).toHaveAccessibleDescription(
-        new RegExp(t("setup.intelligence.lastTurn.noRecord")),
-      );
+      const noRecord = t("setup.intelligence.lastTurn.noRecord", { machine: "studio" });
+      expect(noRecordCard).toHaveTextContent(noRecord);
+      expect(noRecordCard).toHaveAccessibleDescription(new RegExp(noRecord));
     },
   );
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cloneWorkspaceFromHub, getWorkspaceSyncStatus, type ConfigStatus } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { HubConnector } from "./HubConnector";
 import { RequestErrorAlert } from "./RequestErrorAlert";
 import { syncQueryKey } from "./syncState";
@@ -25,6 +26,7 @@ export function CloneFromHubButton({
   onCloned: (status: ConfigStatus) => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const [opened, setOpened] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -73,7 +75,7 @@ export function CloneFromHubButton({
         title={t("sync.clone.title")}
       >
         <Stack gap="sm">
-          <Text size="sm">{t("sync.clone.body")}</Text>
+          <Text size="sm">{t("sync.clone.body", { machine })}</Text>
           <Group gap="xs">
             <Text size="sm">{t("sync.clone.destination")}</Text>
             <Code style={{ overflowWrap: "anywhere" }}>{destination}</Code>
@@ -93,7 +95,7 @@ export function CloneFromHubButton({
                     <Group gap="sm" key={workspaceId} wrap="nowrap">
                       <Code style={{ overflowWrap: "anywhere" }}>{workspaceId}</Code>
                       {workspaceId === currentWorkspaceId ? (
-                        <Badge size="xs">{t("sync.clone.current")}</Badge>
+                        <Badge size="xs">{t("sync.clone.current", { machine })}</Badge>
                       ) : null}
                       <Button
                         disabled={clone.isPending}

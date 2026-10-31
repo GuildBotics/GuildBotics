@@ -1,12 +1,16 @@
-type Connection = { base: string; token: string };
+// Every request goes to the server that served this page, under `/api`. The
+// HttpOnly session cookie authenticates it; the session's CSRF value is kept
+// only in this module's memory (never in storage) and goes with every write.
 
-/**
- * The one destination every request, stream and image takes. In Desktop only
- * the sidecar's own port notice sets it. The sidecar's exit closes it for good,
- * with the reason: an answer the gone backend sends late cannot reopen it.
- */
-let connection: Connection | Error | null = null;
+const API_PREFIX = "/api";
+
+let csrf = "";
 let apiLanguage = "en";
+
+/** Why the screens can no longer talk to the server. */
+export type ConnectionLoss = "signed_out" | "unreachable";
+
+const lossListeners = new Set<(loss: ConnectionLoss) => void>();
 
 /**
  * Name the display language on every request, so error sentences come back
@@ -16,41 +20,46 @@ export function setApiLanguage(language: string) {
   apiLanguage = language;
 }
 
-export function configureApi(token: string, base: string) {
-  if (connection instanceof Error) {
-    throw connection;
-  }
-  connection = { base, token };
+/** Be told when a request finds the session gone or the server unreachable. */
+export function onConnectionLost(listener: (loss: ConnectionLoss) => void): () => void {
+  lossListeners.add(listener);
+  return () => void lossListeners.delete(listener);
 }
 
-/** Close the connection for good: no path addresses a backend that is gone. */
-export function closeApi(reason: Error) {
-  connection = reason;
+/** Start this browser's session with an entry link's single-use code. */
+export async function enterSession(code: string): Promise<void> {
+  csrf = (await request<{ csrf: string }>("/session", { method: "POST", body: { code } })).csrf;
 }
 
-/**
- * The connection to address, throwing why there is none. A caller that awaited
- * something asks again before trusting what it got meanwhile.
- */
-export function connected(): Connection {
-  if (connection instanceof Error) {
-    throw connection;
+/** Take up this browser's session, if it has one. */
+export async function resumeSession(): Promise<boolean> {
+  try {
+    csrf = (await request<{ csrf: string }>("/session")).csrf;
+    return true;
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.code === "unauthorized") {
+      return false;
+    }
+    throw error;
   }
-  if (!connection) {
-    throw new Error("GuildBotics backend is not running.");
-  }
-  return connection;
 }
 
-export function memberAvatarUrl(personId: string, cacheBust?: number | string): string | undefined {
-  if (!connection || connection instanceof Error) {
-    return undefined;
-  }
-  const params = new URLSearchParams({ token: connection.token });
-  if (cacheBust !== undefined) {
-    params.set("t", String(cacheBust));
-  }
-  return `${connection.base}/config/members/${encodeURIComponent(personId)}/avatar?${params}`;
+/** A local app's request on the consent page, as the server checks it. */
+export type AppAuthorizationRequest = {
+  client: string;
+  redirect_uri: string;
+  state: string;
+  code_challenge: string;
+};
+
+/** Allow a local app: the address to send the browser to with its code. */
+export async function authorizeApp(body: AppAuthorizationRequest): Promise<{ redirect: string }> {
+  return request("/apps/authorizations", { method: "POST", body });
+}
+
+export function memberAvatarUrl(personId: string, cacheBust?: number | string): string {
+  const query = cacheBust === undefined ? "" : `?${new URLSearchParams({ t: String(cacheBust) })}`;
+  return `${API_PREFIX}/config/members/${encodeURIComponent(personId)}/avatar${query}`;
 }
 
 export type ConfigStatus = {
@@ -1943,22 +1952,11 @@ export async function uploadMemberAvatar(
   return uploadFile(`/config/members/${encodeURIComponent(personId)}/avatar`, file);
 }
 
-async function uploadFile<T>(path: string, file: File): Promise<T> {
+/** POST a file as multipart form data to an API path (relative to `/api`). */
+export async function uploadFile<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
-  const { base, token } = connected();
-  const response = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers: {
-      "X-GuildBotics-Session-Token": token,
-      "X-GuildBotics-Language": apiLanguage,
-    },
-    body: formData,
-  });
-  if (!response.ok) {
-    throw new ApiRequestError(await readError(response));
-  }
-  return response.json();
+  return (await send(path, { method: "POST", body: formData })).json();
 }
 
 export async function importAvatarFromProvider(
@@ -1971,18 +1969,13 @@ export async function importAvatarFromProvider(
   );
 }
 
-const TOKEN_SUBPROTOCOL = "guildbotics.session";
-
 export function subscribeEvents(
   onEvent: (event: RuntimeEvent) => void,
   onStatus?: (status: StreamStatus) => void,
 ): () => void {
-  const { base, token } = connected();
-  const url = new URL(`${base}/events`);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  // A WebSocket takes no header, and the server logs each handshake's URL, so
-  // the token travels as the subprotocol after the name the server selects.
-  const socket = new WebSocket(url.toString(), [TOKEN_SUBPROTOCOL, token]);
+  // The session cookie and the page's Origin authenticate the handshake.
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${scheme}//${window.location.host}${API_PREFIX}/events`);
   onStatus?.("connecting");
   socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
@@ -1993,24 +1986,55 @@ export function subscribeEvents(
   return () => socket.close();
 }
 
-async function request<T>(
+/** A JSON request to an API path (relative to `/api`). */
+export async function request<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const { base, token } = connected();
-  const response = await fetch(`${base}${path}`, {
+  const response = await send(path, {
     method: options.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-      "X-GuildBotics-Session-Token": token,
-      "X-GuildBotics-Language": apiLanguage,
-    },
+    headers: { "Content-Type": "application/json" },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  if (!response.ok) {
-    throw new ApiRequestError(await readError(response));
-  }
   return response.json();
+}
+
+type Outgoing = { method: string; headers?: Record<string, string>; body?: BodyInit };
+
+async function send(path: string, outgoing: Outgoing): Promise<Response> {
+  let response = await attempt(path, outgoing);
+  let error = response.ok ? null : await readError(response);
+  if (error?.code === "csrf_mismatch") {
+    // Another tab entered again and replaced the shared session cookie. The
+    // refusal came before anything ran, so the request goes once more.
+    csrf = (await request<{ csrf: string }>("/session")).csrf;
+    response = await attempt(path, outgoing);
+    error = response.ok ? null : await readError(response);
+  }
+  if (!error) {
+    return response;
+  }
+  if (response.status === 401) {
+    lossListeners.forEach((listener) => listener("signed_out"));
+  }
+  throw new ApiRequestError(error);
+}
+
+async function attempt(path: string, { headers, ...outgoing }: Outgoing): Promise<Response> {
+  const write = outgoing.method !== "GET";
+  try {
+    return await fetch(`${API_PREFIX}${path}`, {
+      ...outgoing,
+      headers: {
+        ...headers,
+        "X-GuildBotics-Language": apiLanguage,
+        ...(write && csrf ? { "X-GuildBotics-CSRF": csrf } : {}),
+      },
+    });
+  } catch (error) {
+    lossListeners.forEach((listener) => listener("unreachable"));
+    throw error;
+  }
 }
 
 async function readError(response: Response): Promise<ApiErrorPayload> {
@@ -2031,4 +2055,9 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
     message: `HTTP ${response.status}`,
     context: {},
   };
+}
+
+/** The name of the machine the server runs on, which "this machine" means. */
+export async function getServerMachineName(): Promise<string> {
+  return (await request<{ machine_name: string }>("/health")).machine_name;
 }

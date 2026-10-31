@@ -344,7 +344,6 @@ pub fn hide_quick_window(app: AppHandle) {
     }
 }
 
-#[tauri::command]
 pub fn show_main_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();

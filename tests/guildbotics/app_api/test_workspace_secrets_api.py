@@ -18,13 +18,13 @@ from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.hub.connection import HubLocation
 from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.secret_store import KeyringSecretStore
+from tests.guildbotics.app_api.owner import owner_token
 from tests.guildbotics.app_api.sync_client import workspace_sync_client
 from tests.guildbotics.secrets.fake_hub import FakeHub
 
 HTTP_OK = 200
 HTTP_CONFLICT = 409
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 TOKEN = "ghp-000111222333"
 WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
 
@@ -42,11 +42,13 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
     import httpx
     import uvicorn
 
+    from guildbotics.app_api.api import create_app
+    from guildbotics.app_api.auth import ServerAuth
     from guildbotics.hub import secret_transport
-    from guildbotics.utils.local_api import LocalApiEndpoint
+    from guildbotics.utils.local_api import API_PREFIX, PORT_ENV, base_url
 
     config = uvicorn.Config(
-        real_connected.app,
+        "",
         host="127.0.0.1",
         port=0,
         lifespan="off",
@@ -54,6 +56,13 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
         log_level="critical",
     )
     with config.bind_socket() as sock:
+        port = sock.getsockname()[1]
+        # The same runtime served on the port the server holds, as every
+        # program of the machine names it.
+        monkeypatch.setenv(PORT_ENV, str(port))
+        config.app = create_app(
+            auth=ServerAuth(port), runtime=real_connected.app.state.runtime
+        )
         server = uvicorn.Server(config)
         thread = threading.Thread(
             target=server.run, kwargs={"sockets": [sock]}, daemon=True
@@ -64,21 +73,12 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
             while not server.started:
                 assert time.monotonic() < deadline, "Local API startup timed out"
                 time.sleep(0.01)
-            port = sock.getsockname()[1]
             with httpx.Client(
-                base_url=f"http://127.0.0.1:{port}",
-                headers=AUTH_HEADERS,
+                base_url=base_url(port) + API_PREFIX,
+                headers={"Authorization": f"Bearer {owner_token(config.app)}"},
                 trust_env=False,
                 timeout=30,
             ) as browser:
-                health = browser.get("/health").json()
-                endpoint = LocalApiEndpoint(
-                    port=port,
-                    token="secret",
-                    service_instance_id=health["service_instance_id"],
-                    workspace=None,
-                )
-                endpoint.publish()
                 monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
                 _store().set("A_TOKEN", TOKEN)
                 response = browser.post(
@@ -112,13 +112,14 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
 
 def test_mac_hub_requires_desktop_with_localized_guidance(real_connected, monkeypatch):
     from guildbotics.hub import secret_transport
-    from guildbotics.utils import local_api
     from guildbotics.utils.i18n_tool import t
+    from guildbotics.utils.local_api import owner_token_path
 
     _store().set("A_TOKEN", TOKEN)
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
-    local_api.endpoint_path().unlink(missing_ok=True)
-    payload = _json(real_connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    # No credential for a server on this machine: no Desktop to delegate to.
+    owner_token_path(real_connected.app.state.auth.port).unlink()
+    payload = _json(real_connected.get("/workspace/secrets"))
     assert payload["hub_reachable"] is True
     assert payload["hub_secret_store"] == {
         "available": False,
@@ -128,7 +129,7 @@ def test_mac_hub_requires_desktop_with_localized_guidance(real_connected, monkey
     for operation in ("send", "fetch"):
         response = real_connected.post(
             f"/workspace/secrets/{operation}",
-            headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+            headers={"X-GuildBotics-Language": "ja"},
             json={"keys": []},
         )
         assert response.status_code == HTTP_CONFLICT
@@ -164,12 +165,9 @@ def real_connected(client: TestClient, idle_queue: None) -> TestClient:
     Transfers synchronize once on their own, so the queue's worker is not run.
     """
     del idle_queue
-    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/hub")
     assert (
-        client.post(
-            "/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}
-        ).status_code
-        == HTTP_OK
+        client.post("/workspace/sync/enable", json={"hub": {}}).status_code == HTTP_OK
     )
     return client
 
@@ -206,7 +204,7 @@ def test_a_workspace_with_no_hub_has_nothing_to_transfer(client: TestClient) -> 
     is no hub, so the screen shows none of the transfers."""
     _store().set("A_TOKEN", TOKEN)
 
-    payload = _json(client.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(client.get("/workspace/secrets"))
 
     assert payload["enabled"] is False
     assert payload["hub_reachable"] is False
@@ -215,7 +213,7 @@ def test_a_workspace_with_no_hub_has_nothing_to_transfer(client: TestClient) -> 
 
 
 def test_transferring_without_a_hub_is_refused_plainly(client: TestClient) -> None:
-    response = client.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    response = client.post("/workspace/secrets/send", json={})
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "workspace_sync_disabled"
@@ -231,7 +229,7 @@ def test_error_sentences_come_back_in_the_language_the_request_names(
     """The same refusal, in the language the screen said it is displaying."""
     response = client.post(
         "/workspace/secrets/send",
-        headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+        headers={"X-GuildBotics-Language": "ja"},
         json={},
     )
 
@@ -245,7 +243,7 @@ def test_error_sentences_come_back_in_the_language_the_request_names(
 def test_a_value_entered_here_is_waiting_to_be_sent(connected: TestClient) -> None:
     _store().set("A_TOKEN", TOKEN)
 
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
 
     assert _state(payload, "A_TOKEN")["status"] == "pending_send"
     assert _state(payload, "A_TOKEN")["hub_generation"] is None
@@ -264,7 +262,7 @@ def test_a_recorded_key_the_hub_holds_no_copy_of_is_not_shown_as_ready(
     # a rebuilt hub or a freshly connected workspace's keys arrive.
     store.confirm_shared({"A_TOKEN": 1}, sent={"A_TOKEN": TOKEN})
 
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
 
     assert _state(payload, "A_TOKEN")["status"] == "hub_behind"
     assert _state(payload, "A_TOKEN")["hub_generation"] is None
@@ -278,9 +276,7 @@ def test_sending_publishes_the_generation_and_names_no_value(
 ) -> None:
     _store().set("A_TOKEN", TOKEN)
 
-    response = connected.post(
-        "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-    )
+    response = connected.post("/workspace/secrets/send", json={"keys": ["A_TOKEN"]})
 
     payload = _json(response)
     assert payload["results"] == [{"key": "A_TOKEN", "status": "sent", "generation": 1}]
@@ -302,9 +298,7 @@ def test_a_send_that_could_not_be_recorded_says_what_settles_it(
 
     monkeypatch.setattr(KeyringSecretStore, "confirm_shared", refuse)
 
-    response = connected.post(
-        "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-    )
+    response = connected.post("/workspace/secrets/send", json={"keys": ["A_TOKEN"]})
 
     assert response.status_code == 500
     payload = response.json()
@@ -318,9 +312,7 @@ def test_sending_with_no_keys_sends_everything_waiting(connected: TestClient) ->
     store.set("A_TOKEN", TOKEN)
     store.set("B_TOKEN", "xoxb-second")
 
-    payload = _json(
-        connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
-    )
+    payload = _json(connected.post("/workspace/secrets/send", json={}))
 
     assert [result["key"] for result in payload["results"]] == ["A_TOKEN", "B_TOKEN"]
     assert payload["secrets"]["attention_count"] == 0
@@ -332,17 +324,15 @@ def test_a_device_that_holds_nothing_fetches_everything_in_one_call(
     """What a machine added to an existing workspace does: one action, no
     value retyped, and the values land in this machine's own secret store."""
     _store().set("A_TOKEN", TOKEN)
-    connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    connected.post("/workspace/secrets/send", json={})
     # This device forgets what it holds, the way a new machine never knew.
     (workspace / ".guildbotics" / "local" / "secrets.json").unlink()
     assert (
-        _state(
-            _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS)), "A_TOKEN"
-        )["status"]
+        _state(_json(connected.get("/workspace/secrets")), "A_TOKEN")["status"]
         == "missing"
     )
 
-    response = connected.post("/workspace/secrets/fetch", headers=AUTH_HEADERS, json={})
+    response = connected.post("/workspace/secrets/fetch", json={})
 
     payload = _json(response)
     assert payload["results"] == [
@@ -363,24 +353,20 @@ def test_a_hub_generation_the_workspace_has_not_recorded_is_not_adopted(
     same way on every device and survives the value being entered again."""
     store = _store()
     store.set("A_TOKEN", TOKEN)
-    connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    connected.post("/workspace/secrets/send", json={})
     # A second send reaches the hub and its generation is never recorded.
     store.set("A_TOKEN", "ghp-rotated")
-    connected.post(
-        "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-    )
+    connected.post("/workspace/secrets/send", json={"keys": ["A_TOKEN"]})
     _rewind_shared_generation(workspace, "A_TOKEN", 1)
 
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
 
     assert _state(payload, "A_TOKEN")["status"] == "unconfirmed"
     assert _state(payload, "A_TOKEN")["can_fetch"] is False
     assert payload["fetchable_keys"] == []
 
     refused = _json(
-        connected.post(
-            "/workspace/secrets/fetch", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-        )
+        connected.post("/workspace/secrets/fetch", json={"keys": ["A_TOKEN"]})
     )
 
     assert refused["results"] == [
@@ -397,16 +383,14 @@ def test_a_named_fetch_never_discards_a_value_waiting_to_be_sent(
     and the unsent value survives."""
     store = _store()
     store.set("A_TOKEN", TOKEN)
-    connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    connected.post("/workspace/secrets/send", json={})
     store.set("A_TOKEN", "ghp-not-sent-yet")
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
     assert _state(payload, "A_TOKEN")["status"] == "pending_send"
     assert _state(payload, "A_TOKEN")["can_fetch"] is False
 
     refused = _json(
-        connected.post(
-            "/workspace/secrets/fetch", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-        )
+        connected.post("/workspace/secrets/fetch", json={"keys": ["A_TOKEN"]})
     )
 
     assert refused["results"] == [
@@ -422,17 +406,13 @@ def test_a_send_settles_a_generation_no_one_recorded(
     """And the way out is the ordinary Send, from any machine holding a value."""
     store = _store()
     store.set("A_TOKEN", TOKEN)
-    connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    connected.post("/workspace/secrets/send", json={})
     store.set("A_TOKEN", "ghp-rotated")
-    connected.post(
-        "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-    )
+    connected.post("/workspace/secrets/send", json={"keys": ["A_TOKEN"]})
     _rewind_shared_generation(workspace, "A_TOKEN", 1)
 
     settled = _json(
-        connected.post(
-            "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
-        )
+        connected.post("/workspace/secrets/send", json={"keys": ["A_TOKEN"]})
     )
 
     assert settled["results"] == [{"key": "A_TOKEN", "status": "sent", "generation": 3}]
@@ -457,7 +437,7 @@ def test_the_screen_is_told_which_transfer_each_key_can_take(
 ) -> None:
     _store().set("A_TOKEN", TOKEN)
 
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
 
     assert _state(payload, "A_TOKEN")["can_send"] is True
     assert _state(payload, "A_TOKEN")["can_fetch"] is False
@@ -468,7 +448,7 @@ def test_the_screen_is_told_which_transfer_each_key_can_take(
 def test_the_response_names_which_machines_secret_store_answered(
     connected: TestClient,
 ) -> None:
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(connected.get("/workspace/secrets"))
 
     assert payload["hub_reachable"] is True
     assert payload["secret_store"] == {

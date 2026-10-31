@@ -10,7 +10,14 @@ import {
 } from "@mantine/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type DOMAttributes,
+  type RefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -20,6 +27,7 @@ import {
   type CommandInputGrantSuggestion,
   type CommandInputPathStatus,
 } from "../api/client";
+import { isTauriRuntime } from "../desktopWindow";
 import { isMacPlatform } from "../hotkeys/accelerator";
 import { openMainWindow } from "../hotkeys/hotkeyRuntime";
 
@@ -32,6 +40,8 @@ type CommandInputProps = Omit<TextareaProps, "onChange" | "value"> & {
 };
 
 type DropPosition = { x: number; y: number };
+
+type DragHandlers = Pick<DOMAttributes<HTMLDivElement>, "onDragOver" | "onDragLeave" | "onDrop">;
 
 /**
  * The settings screen where a grant that would open a dropped path is added:
@@ -72,6 +82,7 @@ export function CommandInput({
   const [dropActive, setDropActive] = useState(false);
   const [uploadsInFlight, setUploadsInFlight] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [folderRefused, setFolderRefused] = useState(false);
   /** Dropped paths the isolated agent environment cannot reach, awaiting the user's choice. */
   const [unreachable, setUnreachable] = useState<CommandInputPathStatus[]>([]);
 
@@ -181,7 +192,7 @@ export function CommandInput({
     };
   }, [acceptDroppedPaths, resolvedInputRef]);
 
-  const uploadPastedImage = useCallback(
+  const uploadCopy = useCallback(
     async (file: File) => {
       setUploadError(null);
       setUploadsInFlight((count) => count + 1);
@@ -197,8 +208,48 @@ export function CommandInput({
     [appendPaths],
   );
 
+  /**
+   * A browser drop hands over a copy of each file: the browser has no path
+   * the server machine could read, so the file travels as a pasted image does.
+   * A folder cannot travel that way; its server path is typed instead.
+   */
+  const browserDrop: DragHandlers = isTauriRuntime()
+    ? {}
+    : {
+        onDragOver: (event) => {
+          if (event.dataTransfer.types.includes("Files")) {
+            event.preventDefault();
+            setDropActive(true);
+          }
+        },
+        onDragLeave: (event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropActive(false);
+          }
+        },
+        onDrop: (event) => {
+          if (!event.dataTransfer.types.includes("Files")) {
+            return;
+          }
+          event.preventDefault();
+          setDropActive(false);
+          const items = Array.from(event.dataTransfer.items).filter((item) => item.kind === "file");
+          const folders = items.filter((item) => item.webkitGetAsEntry()?.isDirectory);
+          setFolderRefused(folders.length > 0);
+          for (const item of items) {
+            const file = folders.includes(item) ? null : item.getAsFile();
+            if (file) {
+              void uploadCopy(file);
+            }
+          }
+        },
+      };
+
   return (
-    <div className={dropActive ? "command-input command-input-drop-active" : "command-input"}>
+    <div
+      className={dropActive ? "command-input command-input-drop-active" : "command-input"}
+      {...browserDrop}
+    >
       <Textarea
         {...textareaProps}
         ref={resolvedInputRef}
@@ -212,13 +263,18 @@ export function CommandInput({
           const file = pastedImage(event.clipboardData.items);
           if (file) {
             event.preventDefault();
-            void uploadPastedImage(file);
+            void uploadCopy(file);
           }
         }}
       />
       {dropActive ? (
         <Text size="xs" c="blue" role="status">
-          {t("commands.inputFileDropActive")}
+          {t(isTauriRuntime() ? "commands.inputFileDropActive" : "commands.inputFileDropUpload")}
+        </Text>
+      ) : null}
+      {folderRefused ? (
+        <Text size="xs" c="red" role="alert">
+          {t("commands.inputFolderRefused")}
         </Text>
       ) : null}
       {unreachable.length ? (
@@ -312,8 +368,4 @@ function containsDropPoint(element: HTMLElement | null, position: DropPosition):
   const y = position.y / scale;
   const rect = element.getBoundingClientRect();
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-}
-
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
 }

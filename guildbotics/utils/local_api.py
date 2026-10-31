@@ -1,107 +1,185 @@
-"""Device-local discovery record for a running Desktop API, and the only way to
-reach that API with its session token."""
+"""How a client on this machine reaches the GuildBotics server's API, and the
+credential it carries there.
+
+The server listens on a fixed loopback port. On the machine it runs on, the
+owner token file beside its records is the credential: whoever can read the
+file is the owner. A machine that reaches the server through SSH forwarding
+cannot read that file, and holds a token of its own in its OS keychain instead,
+given through the consent screen.
+"""
 
 import hashlib
 import hmac
+import os
+import re
 import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from guildbotics.utils.fileio import atomic_write_text, get_machine_state_path
+from guildbotics.utils.fileio import get_machine_state_path
 
-TOKEN_HEADER = "X-GuildBotics-Session-Token"
-#: Offered before the token on a WebSocket, whose browser API sets no header;
-#: the server selects this name, so the token is never echoed back.
-TOKEN_SUBPROTOCOL = "guildbotics.session"
+DEFAULT_PORT = 8765
+#: Moves the port for every program on this machine at once: the server, its
+#: clients, and the Desktop that launches it.
+PORT_ENV = "GUILDBOTICS_SERVER_PORT"
+API_PREFIX = "/api"
 PROOF_PATH = "/local-api/proof"
 #: The nonce is fixed-length lowercase hex, so it can never contain the
 #: separator of the proof message.
 NONCE_PATTERN = "^[0-9a-f]{64}$"
+TOKEN_ID_PATTERN = "^[0-9a-f]{16}$"
+_TOKEN_PREFIX = "gbt"
+_KEYCHAIN_SERVICE = "guildbotics-server"
 _PROOF_TIMEOUT_SECONDS = 2.0
 
 
-class LocalApiEndpoint(BaseModel):
-    """A private endpoint; the token must never appear in logs or argv."""
-
-    model_config = ConfigDict(strict=True)
-
-    port: int = Field(gt=0, le=65535)
-    token: str = Field(min_length=1, repr=False)
-    service_instance_id: str = Field(min_length=1)
-    workspace: Path | None
-
-    def publish(self) -> None:
-        # atomic_write_text uses a private (0600) temporary file and rename.
-        atomic_write_text(endpoint_path(), self.model_dump_json())
-
-    def discard(self) -> None:
-        current = read_endpoint()
-        if current and current.service_instance_id == self.service_instance_id:
-            endpoint_path().unlink(missing_ok=True)
+def server_port() -> int:
+    """The port the server listens on, as this machine names it."""
+    raw = os.environ.get(PORT_ENV, "").strip() or str(DEFAULT_PORT)
+    if not raw.isdigit() or int(raw) not in range(1, 65536):
+        raise ValueError(f"{PORT_ENV} must name a TCP port, not {raw!r}.")
+    return int(raw)
 
 
-def endpoint_path() -> Path:
-    return get_machine_state_path("run", "app-api.json")
+def base_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}"
 
 
-def read_endpoint() -> LocalApiEndpoint | None:
-    try:
-        return LocalApiEndpoint.model_validate_json(endpoint_path().read_bytes())
-    except OSError, ValidationError:
+def server_directory(port: int) -> Path:
+    """Where the server on ``port`` keeps its credentials: one server, and so
+    one writer, per port."""
+    return get_machine_state_path("server", str(port))
+
+
+def owner_token_path(port: int) -> Path:
+    return server_directory(port) / "owner.token"
+
+
+def new_token() -> tuple[str, str, str]:
+    """A fresh token: its public id, its secret's digest, and its text."""
+    token_id = secrets.token_hex(8)
+    secret = secrets.token_urlsafe(32)
+    return token_id, token_digest(secret), f"{_TOKEN_PREFIX}_{token_id}_{secret}"
+
+
+def parse_token(text: str) -> tuple[str, str] | None:
+    """The id and the secret's digest of a token text, or None for no token."""
+    prefix, _, rest = text.strip().partition("_")
+    token_id, _, secret = rest.partition("_")
+    if (
+        prefix != _TOKEN_PREFIX
+        or not secret
+        or not re.fullmatch(TOKEN_ID_PATTERN, token_id)
+    ):
         return None
+    return token_id, token_digest(secret)
 
 
-def local_api_proof(token: str, nonce: str, service_instance_id: str) -> str:
-    """Return the HMAC that only the holder of ``token`` can compute.
+def token_digest(secret: str) -> str:
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def local_api_proof(digest: str, nonce: str, token_id: str) -> str:
+    """Return the HMAC that only the holder of a token's digest can compute.
 
     Every field before the last has a fixed length or a fixed value, so the
     newline-joined message has exactly one reading.
     """
-    message = f"guildbotics-local-api-proof\n{nonce}\n{service_instance_id}"
-    return hmac.new(token.encode(), message.encode(), hashlib.sha256).hexdigest()
+    message = f"guildbotics-local-api-proof\n{nonce}\n{token_id}"
+    return hmac.new(digest.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def client_tokens(port: int, *, consent: bool) -> Iterator[str]:
+    """The credentials this machine holds for the server on ``port``: the
+    owner token file of a server that ran here, then, with ``consent``, the
+    consent token.
+
+    Which one the server on the port knows only its proof can tell: an owner
+    file outlives its server, and the port may now lead to the Hub. The
+    keychain is read only when the owner file is missing or not taken.
+    """
+    try:
+        if owner := owner_token_path(port).read_text("utf-8").strip():
+            yield owner
+    except OSError:
+        pass
+    if not consent:
+        return
+    from keyring.errors import KeyringError
+
+    from guildbotics.utils.keychain import SecretStoreError, system_keychain
+
+    # A machine without a usable keychain (no backend, locked over SSH) holds
+    # no consent token: its callers then run where they are.
+    try:
+        token = system_keychain().get_password(_KEYCHAIN_SERVICE, _account(port))
+    except SecretStoreError, KeyringError:
+        return
+    if token:
+        yield token
+
+
+def keep_client_token(port: int, token: str) -> None:
+    """Keep the consent token in this machine's keychain."""
+    from guildbotics.utils.keychain import system_keychain
+
+    system_keychain().set_password(_KEYCHAIN_SERVICE, _account(port), token)
+
+
+def _account(port: int) -> str:
+    return f"127.0.0.1:{port}"
 
 
 @contextmanager
 def connect_local_api(
-    *, headers: dict[str, str] | None = None, timeout: float | None
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float | None,
+    consent: bool = False,
 ) -> Iterator[httpx.Client | None]:
-    """Yield a client carrying the session token, or None without sending it.
+    """Yield a client carrying this machine's credential, or None without
+    sending it.
 
-    Whatever listens on the recorded port first sees only a fresh nonce, and
-    the token is attached only after it answers with the proof for that nonce
-    and the recorded instance. A port taken over after the API exited, or a
+    Without ``consent`` only the owner file is offered, so only the server
+    running on this machine can answer: a caller that hands over this
+    machine's paths or secrets needs that one. With it, the consent token
+    reaches the server the port leads to, the Hub's through a forward.
+
+    Whatever listens on the port first sees only a token id and a fresh nonce,
+    and the token is attached only after it answers with the proof that it
+    knows the token's digest. A port taken over while the server is down, or a
     replayed answer, therefore never receives the token or anything sent with
-    it. The proof is the only evidence: a live PID or a health answer says
-    nothing about who holds the port.
+    it. The proof is the only evidence: a health answer says nothing about who
+    holds the port.
     """
-    endpoint = read_endpoint()
-    if endpoint is None:
-        yield None
-        return
+    port = server_port()
     with httpx.Client(
-        base_url=f"http://127.0.0.1:{endpoint.port}",
+        base_url=base_url(port) + API_PREFIX,
         headers=headers,
         trust_env=False,
         timeout=timeout,
     ) as client:
-        if not _proves_token(client, endpoint):
-            yield None
-            return
-        # Later requests usually reuse the connection the proof came over.
-        client.headers[TOKEN_HEADER] = endpoint.token
-        yield client
+        for token in client_tokens(port, consent=consent):
+            parsed = parse_token(token)
+            if parsed is not None and _proves_token(client, *parsed):
+                # Later requests usually reuse the connection the proof came over.
+                client.headers["Authorization"] = f"Bearer {token}"
+                yield client
+                return
+        yield None
 
 
-def _proves_token(client: httpx.Client, endpoint: LocalApiEndpoint) -> bool:
+def _proves_token(client: httpx.Client, token_id: str, digest: str) -> bool:
     nonce = secrets.token_hex(32)
-    expected = local_api_proof(endpoint.token, nonce, endpoint.service_instance_id)
+    expected = local_api_proof(digest, nonce, token_id)
     try:
         response = client.post(
-            PROOF_PATH, json={"nonce": nonce}, timeout=_PROOF_TIMEOUT_SECONDS
+            PROOF_PATH,
+            json={"token_id": token_id, "nonce": nonce},
+            timeout=_PROOF_TIMEOUT_SECONDS,
         )
         proof = response.raise_for_status().json().get("proof")
     except httpx.HTTPError, ValueError, AttributeError:

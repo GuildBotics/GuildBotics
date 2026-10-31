@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { readStackContext, test } from "./stack-context";
 
 // Journey ②: add a team member through the UI against the REAL backend.
 //
@@ -57,11 +57,11 @@ test("adds a second member through the UI and persists it to the backend", async
   // the list and the disk.
   const saveStarted = page.waitForRequest(
     (request) =>
-      new URL(request.url()).pathname === "/config/members" && request.method() === "POST",
+      new URL(request.url()).pathname === "/api/config/members" && request.method() === "POST",
   );
   const saved = page.waitForResponse(
     (response) =>
-      new URL(response.url()).pathname === "/config/members" &&
+      new URL(response.url()).pathname === "/api/config/members" &&
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Add member" }).click();

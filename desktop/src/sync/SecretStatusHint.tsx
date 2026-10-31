@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 
 import { getWorkspaceSecrets, type SyncScope } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { SECRETS_REFETCH_MS, secretNeedsAttention, secretsQueryKey } from "./secretState";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 
@@ -30,6 +31,7 @@ export function SecretStatusHint({
   scope?: SyncScope;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const secrets = useQuery({
     queryKey: secretsQueryKey(scope),
     queryFn: () => getWorkspaceSecrets(scope),
@@ -45,7 +47,7 @@ export function SecretStatusHint({
   return (
     <Group gap="xs" wrap="wrap">
       <Text c="dimmed" size="xs">
-        {t(`sync.secrets.hint.${state.status}`)}
+        {t(`sync.secrets.hint.${state.status}`, { machine })}
       </Text>
       <Anchor component={NavLink} size="xs" to={SYNC_SETTINGS_PATH} underline="hover">
         {t("sync.secrets.hint.link")}

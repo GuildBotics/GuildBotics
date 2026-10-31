@@ -1,0 +1,2 @@
+en:
+  not_built: "The GuildBotics screens are not built: %{path} is missing. Run `npm run build` in desktop/."

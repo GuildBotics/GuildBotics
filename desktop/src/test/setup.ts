@@ -1,19 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { createElement, forwardRef } from "react";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import type { TextareaProps } from "@mantine/core";
-
-import { configureApi } from "../api/client";
 
 // A findBy* wait, which defaults to 1 s: a render takes longer than that when
 // CI runs the suite beside other jobs on the same CPUs.
 configure({ asyncUtilTimeout: 5_000 });
-
-// Components render inside an app whose backend announced its port.
-beforeEach(() => {
-  configureApi("test-token", "http://127.0.0.1:8765");
-});
 
 afterEach(() => {
   cleanup();

@@ -11,18 +11,18 @@ if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   SIDECAR_PATH="${SIDECAR_PATH}.exe"
   CLI_PATH="${CLI_PATH}.exe"
 fi
-PORT="${GUILDBOTICS_SIDECAR_SMOKE_PORT:-8765}"
+# The sidecar takes its port from the environment, as it does in the app.
+export GUILDBOTICS_SERVER_PORT="${GUILDBOTICS_SERVER_PORT:-8765}"
+PORT="$GUILDBOTICS_SERVER_PORT"
 SMOKE_HOME="$(mktemp -d)"
 export HOME="$SMOKE_HOME"
 if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   export USERPROFILE="$(cygpath -w "$SMOKE_HOME")"
 fi
 
-# shellcheck source=scripts/desktop-token.sh
-source "$SCRIPT_DIR/desktop-token.sh"
-TOKEN="${GUILDBOTICS_SIDECAR_SMOKE_TOKEN:-$(guildbotics_random_token)}"
+OWNER_TOKEN="$SMOKE_HOME/.guildbotics/data/server/$PORT/owner.token"
 
-GUILDBOTICS_APP_API_TOKEN="$TOKEN" "$SIDECAR_PATH" --host 127.0.0.1 --port "$PORT" &
+"$SIDECAR_PATH" &
 SIDECAR_PID=$!
 cleanup() {
   kill "$SIDECAR_PID" 2>/dev/null || true
@@ -30,9 +30,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The sidecar writes its owner token before it listens. The header goes through
+# stdin, so the token never shows in the process list.
+healthy() {
+  [[ -r "$OWNER_TOKEN" ]] &&
+    printf 'Authorization: Bearer %s\n' "$(<"$OWNER_TOKEN")" |
+    curl -fsS -H @- "http://127.0.0.1:$PORT/api/health" >/dev/null
+}
+
+# The sidecar carries the screens it serves (desktop/sidecar/guildbotics.spec):
+# the page, and the script the page loads.
+serves_screens() {
+  local script
+  curl -fsS "http://127.0.0.1:$PORT/" -o "$SMOKE_HOME/index.html" &&
+    script="$(grep -o -m1 'src="/assets/[^"]*\.js"' "$SMOKE_HOME/index.html" | cut -d'"' -f2)" &&
+    curl -fsS "http://127.0.0.1:$PORT$script" -o /dev/null
+}
+
 for _ in $(seq 1 30); do
-  if curl -fsS -H "X-GuildBotics-Session-Token: $TOKEN" "http://127.0.0.1:$PORT/health" >/dev/null; then
+  if healthy; then
     echo "sidecar health check passed"
+    serves_screens || {
+      echo "the bundled Local API does not serve the screens" >&2
+      exit 1
+    }
     "$CLI_PATH" --help >/dev/null
     "$CLI_PATH" member --help >/dev/null
     # The bundle must carry the agent environment runtime: in this fresh home

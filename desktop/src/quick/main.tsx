@@ -1,13 +1,13 @@
 import { MantineProvider, createTheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { startBackend } from "../api/backend";
 import { comboboxThemeComponents } from "../comboboxTheme";
 import { onWorkspaceChange } from "../appEvents";
 import { followAppLanguage } from "../i18n";
 import "../i18n";
+import { EntryPage } from "../session/EntryPage";
 import { QuickRun } from "./QuickRun";
 import type { QuickRunTrigger } from "./quickRunState";
 import "@mantine/core/styles.css";
@@ -47,18 +47,11 @@ function QuickWindow() {
   // workspace, so a switch invalidates all of it.
   useEffect(() => onWorkspaceChange(() => void queryClient.invalidateQueries()), []);
 
-  // This window shares the sidecar the host already started; connecting is only
-  // about discovering its port and token.
-  const connection = useQuery({
-    queryKey: ["quick-run-connection"],
-    queryFn: async () => {
-      await startBackend();
-      return true;
-    },
-    retry: false,
-  });
-
-  return connection.isSuccess ? <QuickRun subscribe={subscribeToHotkey} /> : null;
+  return (
+    <EntryPage>
+      <QuickRun subscribe={subscribeToHotkey} />
+    </EntryPage>
+  );
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(

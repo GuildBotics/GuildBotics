@@ -1,7 +1,5 @@
-import { closeApi, configureApi, connected, setWorkspace } from "./client";
-
-const STATIC_TOKEN = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
-const STATIC_BASE = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
+import { isTauriRuntime } from "../desktopWindow";
+import { setWorkspace } from "./client";
 
 export type CliAgentSkillStatus =
   | "up_to_date"
@@ -49,68 +47,32 @@ export class BackendClosedError extends Error {
   }
 }
 
-const closedListeners = new Set<(error: BackendClosedError) => void>();
-let watchingForClose: Promise<unknown> | null = null;
-
-/** Be told, with the host's reason, once the backend has gone for good. */
-export function onBackendClosed(listener: (error: BackendClosedError) => void): () => void {
-  closedListeners.add(listener);
-  return () => closedListeners.delete(listener);
-}
-
 /**
- * Connect the frontend to the Local API backend.
+ * The entry link the Tauri host made for this window, once its backend is up.
  *
- * The sidecar process is owned by the Tauri (Rust) host: it is spawned once per
- * app process and killed when the app exits. The frontend only discovers the
- * port + session token via the `backend_info` command and reuses that running
- * backend. This avoids starting a second sidecar (and the resulting session
- * token / port collision) when a closed window is reopened. The host answers
- * only once the sidecar announced the port it bound, and owns the deadline for
- * that.
+ * The sidecar is owned by the host: it is spawned once per app process and
+ * killed when the app exits. The host answers `null` until the sidecar listens
+ * and an entry link to `next` is made, and owns the deadline for that.
  */
-export async function startBackend() {
-  // Dev / browser preview: the backend is started externally with a fixed token.
-  if (STATIC_TOKEN) {
-    configureApi(STATIC_TOKEN, STATIC_BASE);
-    await waitForHealth(Date.now() + 45_000);
-    return;
-  }
-
-  if (!isTauriRuntime()) {
-    throw new Error("GuildBotics backend is not configured for browser preview.");
-  }
-
-  // Listening first: the host does not repeat an exit that came before.
-  await watchForClose();
+export async function backendEntry(next: string): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");
   for (;;) {
-    const info = await invoke<{ port: number; token: string } | null>("backend_info").catch(
+    const entry = await invoke<{ url: string } | null>("backend_entry", { next }).catch(
       (closure: BackendClosure) => {
         throw new BackendClosedError(closure);
       },
     );
-    if (info) {
-      // Refused if the backend closed while this answer was on its way.
-      configureApi(info.token, `http://127.0.0.1:${info.port}`);
-      // The port is announced before the backend loads the workspace, which can
-      // wait on a keychain prompt; the host ends the wait if the backend goes.
-      await waitForHealth(Infinity);
-      return;
+    if (entry) {
+      return import.meta.env.DEV ? throughDevServer(entry.url) : entry.url;
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
 
-function watchForClose() {
-  watchingForClose ??= import("@tauri-apps/api/event").then(({ listen }) =>
-    listen<BackendClosure>("backend-closed", ({ payload }) => {
-      const error = new BackendClosedError(payload);
-      closeApi(error);
-      closedListeners.forEach((listener) => listener(error));
-    }),
-  );
-  return watchingForClose;
+/** The same page on the Vite dev server, which proxies `/api` and keeps HMR. */
+function throughDevServer(url: string) {
+  const { pathname, search, hash } = new URL(url);
+  return `${window.location.origin}${pathname}${search}${hash}`;
 }
 
 /**
@@ -134,9 +96,10 @@ export function letQuitsThrough(): () => void {
   return () => void listening.then((stop) => stop());
 }
 
-/** Whether the app itself can be started again, which brings a new backend. */
-export function canRestartApp() {
-  return isTauriRuntime();
+/** Send this Desktop window back to its bootstrap page, which enters again. */
+export async function enterAgain() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("enter_again");
 }
 
 export async function restartApp() {
@@ -151,11 +114,6 @@ export async function restartApp() {
  */
 export async function restartBackend(workspace: string) {
   await setWorkspace({ workspace_dir: workspace });
-}
-
-export async function stopBackend() {
-  // The sidecar lifecycle is owned by the Rust host (killed on app exit), so
-  // there is nothing for the frontend to tear down here.
 }
 
 export async function getCliAgentSkillStatuses(): Promise<CliAgentSkillStatusesResponse> {
@@ -174,32 +132,4 @@ export async function forceUpdateCliAgentSkill(
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CliAgentSkillState>("force_update_cli_agent_skill", { agent });
-}
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-async function waitForHealth(deadline: number) {
-  let lastError: unknown = null;
-  while (Date.now() < deadline) {
-    const { base, token } = connected();
-    let healthy = false;
-    try {
-      const response = await fetch(`${base}/health`, {
-        headers: { "X-GuildBotics-Session-Token": token },
-      });
-      healthy = response.ok;
-      lastError = healthy ? null : await response.text();
-    } catch (error) {
-      lastError = error;
-    }
-    // An answer that arrived after the backend closed confirms nothing.
-    connected();
-    if (healthy) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  throw new Error(`GuildBotics backend did not start: ${String(lastError)}`);
 }

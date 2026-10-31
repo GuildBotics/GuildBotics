@@ -49,9 +49,10 @@ Rust test wrapper はテスト時だけ Tauri の `bundle.resources` を空に�
 
 ## build
 
-Git Bash で repository root から実行します。
+Git Bash で repository root から実行します。Local API は自分が配る画面（`desktop/dist`）を同梱するので、先に画面を build します。
 
 ```bash
+(cd desktop && npm ci && npm run build)
 scripts/desktop-build-backend.sh
 scripts/desktop-smoke-sidecars.sh
 cd desktop
@@ -62,7 +63,7 @@ PyInstaller の program は 1 つの directory `desktop/src-tauri/binaries/guild
 
 NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成されます。Windows 用 Tauri overlay でも bundle target を NSIS に固定しているため、通常の Windows build が MSI を作ろうとすることはありません。
 
-`tauri dev` では `scripts/desktop-dev-tauri.sh` が実体の PyInstaller `.exe` sidecar を先に build します。frontend の反復を速くする場合は、1 つ目の Git Bash terminal で `scripts/desktop-dev-backend.sh`、別 terminal で Vite dev command を実行し、frontend 変更ごとの sidecar rebuild を避けます。
+`tauri dev` では `scripts/desktop-dev-tauri.sh` が画面と実体の PyInstaller `.exe` sidecar を先に build します。frontend の反復を速くする場合は、1 つ目の Git Bash terminal で `scripts/desktop-dev-backend.sh`、別 terminal で Vite dev command を実行し、frontend 変更ごとの sidecar rebuild を避けます。
 
 ## install と PATH
 

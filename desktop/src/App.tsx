@@ -102,6 +102,9 @@ import { useServiceProviders } from "./setup/providers";
 import { BranvilNavItem } from "./setup/providers/branvil/BranvilNavItem";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { openExternal } from "./openExternal";
+import { onWorkspaceChange } from "./appEvents";
+import { isTauriRuntime } from "./desktopWindow";
+import { ServerMachineBadge, useServerMachineLabel } from "./serverMachine";
 import { SetupPage } from "./setup/SetupPage";
 import { SyncAlerts } from "./sync/SyncAlerts";
 import { SyncIndicator } from "./sync/SyncIndicator";
@@ -153,6 +156,7 @@ export function App() {
   const closeGuard = useAppCloseGuard();
   useHostNavigation();
   useHotkeyRegistration();
+  useWorkspaceChangeReload();
   return (
     <main className="shell">
       <AppCloseBlockedModal
@@ -276,6 +280,7 @@ export function App() {
 
 function SystemAlertBand() {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const providers = useServiceProviders();
   const queryClient = useQueryClient();
   const alerts = useQuery({
@@ -324,7 +329,7 @@ function SystemAlertBand() {
           closeButtonLabel={t("systemAlerts.actions.dismiss")}
         >
           <Group align="center" gap="md" wrap="wrap">
-            <Text size="sm">{systemAlertMessage(t, alert, providers)}</Text>
+            <Text size="sm">{systemAlertMessage(t, alert, machine, providers)}</Text>
             {alert.actions.length > 0 && (
               <Group gap="xs">
                 {alert.actions.includes("diagnostics") ? (
@@ -396,6 +401,7 @@ const KEY_REFUSALS = ["authentication", "credit"] as const;
 export function systemAlertMessage(
   t: TFunction,
   alert: SystemAlert,
+  machine: string,
   providers: ProviderOption[] = [],
 ) {
   const message = t(`systemAlerts.codes.${alert.code}`, {
@@ -405,6 +411,7 @@ export function systemAlertMessage(
       providers.find((provider) => provider.name === alert.provider)?.title || alert.provider,
     count: alert.occurrence_count,
     reason: alert.reason,
+    machine,
   });
   const refusal = KEY_REFUSALS.find((reason) => reason === alert.reason);
   if (KEY_ALERTS.has(alert.code) && refusal) {
@@ -412,7 +419,7 @@ export function systemAlertMessage(
   }
   const fix = DEVICE_FIXES.find((part) => part === alert.setting);
   if (alert.code !== "agent_environment_unavailable" || !fix) return message;
-  return `${message} ${t(`systemAlerts.environmentFix.${fix}`)}`;
+  return `${message} ${t(`systemAlerts.environmentFix.${fix}`, { machine })}`;
 }
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
@@ -536,6 +543,15 @@ function runtimeUnitsStopping(status: RuntimeStatus) {
     isStopTimeoutPending(status.scheduler) ||
     isStopTimeoutPending(status.events)
   );
+}
+
+/**
+ * Reload what the screen shows once the server opens another workspace,
+ * whichever screen -- this one, another tab, a Desktop window -- switched it.
+ */
+function useWorkspaceChangeReload() {
+  const queryClient = useQueryClient();
+  useEffect(() => onWorkspaceChange(() => void queryClient.invalidateQueries()), [queryClient]);
 }
 
 /**
@@ -722,6 +738,7 @@ function IndexRedirect() {
 
 function ServicePage() {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const [initialPreferences] = useState(loadServicePreferences);
   const [scheduledSourceEnabled, setScheduledSourceEnabled] = useState(
@@ -882,7 +899,7 @@ function ServicePage() {
         ) : (
           <Tooltip
             disabled={!ownedElsewhere}
-            label={t("service.ownerElsewhere", { name: ownerDeviceName })}
+            label={t("service.ownerElsewhere", { name: ownerDeviceName, machine })}
             maw={340}
             multiline
           >
@@ -2999,7 +3016,10 @@ function ServiceKeepAwakeSettings() {
     <div className="service-unit-panel">
       <Group justify="space-between" align="center" wrap="nowrap">
         <div>
-          <Text fw={700}>{t("service.keepAwake.title")}</Text>
+          <Group gap="xs">
+            <Text fw={700}>{t("service.keepAwake.title")}</Text>
+            <ServerMachineBadge />
+          </Group>
           <Text c="dimmed" size="sm">
             {t("service.keepAwake.description")}
           </Text>
@@ -3308,24 +3328,6 @@ function formatTime(value: string | null | undefined) {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
-}
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-export async function openLocalFile(path: string) {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  const { open } = await import("@tauri-apps/plugin-shell");
-  await open(path);
-}
-
-export function localFileHref(path: string) {
-  const normalizedPath = path.replace(/\\/g, "/");
-  const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
-  return encodeURI(`${prefix}${normalizedPath}`);
 }
 
 export type CommandRunRecord = {

@@ -629,7 +629,7 @@ pre {
   width: 100%;
 }
 
-.command-script-path a {
+.command-script-path > :not(button) {
   display: block;
   flex: 1;
   min-width: 0;

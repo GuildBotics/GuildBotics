@@ -1,4 +1,4 @@
-import { connected, providerOperation } from "../../../api/client";
+import { providerOperation } from "../../../api/client";
 
 export type LaneMap = {
   ready: string;
@@ -91,10 +91,7 @@ export function resolveUser(reference: UserReference): Promise<ResolvedUser> {
 }
 
 export function startAppRegistration(body: AppRegistrationStart): Promise<AppRegistrationStatus> {
-  return providerOperation("github", "app-registrations", {
-    ...body,
-    callback_base_url: connected().base,
-  });
+  return providerOperation("github", "app-registrations", body);
 }
 
 export function getAppRegistration(state: string): Promise<AppRegistrationStatus> {

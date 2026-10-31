@@ -1,52 +1,101 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { announceWorkspaceChange, onWorkspaceChange } from "./appEvents";
+import type { RuntimeEvent } from "./api/client";
+import { onAppEvent, onWorkspaceChange } from "./appEvents";
+import { makeRuntimeEvent } from "./test/factories";
 
-const emit = vi.fn(async () => undefined);
-let listener: (() => void) | undefined;
-const unlisten = vi.fn();
-vi.mock("@tauri-apps/api/event", () => ({
-  emit: (...args: unknown[]) => emit(...(args as [])),
-  listen: async (_event: string, handler: () => void) => {
-    listener = handler;
-    return unlisten;
-  },
-}));
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  close = vi.fn();
+  onopen?: () => void;
+  onmessage?: (message: { data: string }) => void;
+  onerror?: () => void;
+  onclose?: () => void;
 
-describe("workspace change notifications", () => {
-  // Each window has its own query cache, so a switch has to be announced
-  // rather than left for the other window to notice.
+  constructor() {
+    FakeWebSocket.instances.push(this);
+  }
+
+  publish(event: RuntimeEvent) {
+    this.onmessage?.({ data: JSON.stringify(event) });
+  }
+}
+
+const sockets = () => FakeWebSocket.instances;
+
+describe("server announcements", () => {
+  // Each screen has its own query cache, so a change on the server reaches
+  // every one of them through the event stream, in a browser as in Desktop.
   beforeEach(() => {
-    emit.mockClear();
-    unlisten.mockClear();
-    listener = undefined;
-    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.useFakeTimers();
   });
 
-  it("announces the switch to the other windows", async () => {
-    await announceWorkspaceChange();
-
-    expect(emit).toHaveBeenCalledWith("app://workspace-changed");
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
-  it("runs the handler when another window switches", async () => {
+  it("runs the handler when the server opens another workspace", () => {
     const handler = vi.fn();
-    const stop = onWorkspaceChange(handler);
-    await vi.waitFor(() => expect(listener).toBeDefined());
+    const unsubscribe = onWorkspaceChange(handler);
 
-    listener!();
+    sockets()[0].publish(makeRuntimeEvent({ type: "command.started" }));
+    expect(handler).not.toHaveBeenCalled();
+    sockets()[0].publish(
+      makeRuntimeEvent({ type: "workspace.changed", payload: { workspace: "/w" } }),
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
 
-    expect(handler).toHaveBeenCalled();
-    stop();
-    expect(unlisten).toHaveBeenCalled();
+    unsubscribe();
+    expect(sockets()[0].close).toHaveBeenCalled();
   });
 
-  it("stays quiet outside the desktop shell", async () => {
-    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  it("tells hotkey changes apart from a workspace switch", () => {
+    const handler = vi.fn();
+    onAppEvent("hotkeys.changed", handler);
 
-    await announceWorkspaceChange();
+    sockets()[0].publish(makeRuntimeEvent({ type: "workspace.changed" }));
+    sockets()[0].publish(makeRuntimeEvent({ type: "hotkeys.changed" }));
 
-    expect(emit).not.toHaveBeenCalled();
-    expect(onWorkspaceChange(vi.fn())).toBeTypeOf("function");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("listens again shortly after the server closes the stream", () => {
+    const handler = vi.fn();
+    onWorkspaceChange(handler);
+
+    sockets()[0].onclose?.();
+    vi.advanceTimersByTime(1999);
+    expect(sockets()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(sockets()).toHaveLength(2);
+
+    // A server that is still down closes the new socket too; it keeps trying.
+    sockets()[1].onclose?.();
+    vi.advanceTimersByTime(2000);
+    expect(sockets()).toHaveLength(3);
+
+    sockets()[2].publish(makeRuntimeEvent({ type: "workspace.changed" }));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops listening for good once stopped", () => {
+    const unsubscribe = onWorkspaceChange(vi.fn());
+    sockets()[0].onclose?.();
+
+    // Stopping during the wait cancels the pending reconnect.
+    unsubscribe();
+    vi.advanceTimersByTime(2000);
+    expect(sockets()).toHaveLength(1);
+
+    // The close the stop itself causes does not reconnect either.
+    const again = onWorkspaceChange(vi.fn());
+    again();
+    sockets()[1].onclose?.();
+    vi.advanceTimersByTime(2000);
+    expect(sockets()).toHaveLength(2);
+    expect(sockets()[1].close).toHaveBeenCalledTimes(1);
   });
 });

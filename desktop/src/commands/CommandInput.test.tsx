@@ -392,3 +392,71 @@ describe("appendCommandInputPaths", () => {
     );
   });
 });
+
+describe("CommandInput in the browser", () => {
+  // A browser has no path the server machine could read: a dropped file is
+  // handed over as an uploaded copy, and a folder is refused.
+  beforeEach(() => {
+    uploadMock.mockReset();
+    checkMock.mockReset();
+    tauriDrag.handler = null;
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  });
+
+  function fileItem(file: File, directory = false) {
+    return {
+      kind: "file",
+      getAsFile: () => file,
+      webkitGetAsEntry: () => ({ isDirectory: directory }),
+    };
+  }
+
+  function dropItems(target: HTMLElement, items: ReturnType<typeof fileItem>[]) {
+    const dataTransfer = { types: ["Files"], items };
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+  }
+
+  it("uploads each dropped file and appends the copies' paths", async () => {
+    uploadMock
+      .mockResolvedValueOnce({ path: "/in/a-notes.md", guest_path: "/in/a-notes.md" })
+      .mockResolvedValueOnce({ path: "/in/b-shot.png", guest_path: "/in/b-shot.png" });
+    renderInput("describe");
+    const input = screen.getByRole("textbox", { name: t("commands.message") });
+    const notes = new File(["# notes"], "notes.md", { type: "text/markdown" });
+    const shot = new File(["pixels"], "shot.png", { type: "image/png" });
+
+    dropItems(input, [fileItem(notes), fileItem(shot)]);
+
+    await waitFor(() => expect(input).toHaveValue("describe\n/in/a-notes.md\n/in/b-shot.png"));
+    expect(uploadMock).toHaveBeenCalledWith(notes);
+    expect(uploadMock).toHaveBeenCalledWith(shot);
+    // No path is checked, and no copy-or-allow choice is offered.
+    expect(checkMock).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("group", { name: t("commands.inputPathUnreachable") }),
+    ).not.toBeInTheDocument();
+    expect(tauriDrag.handler).toBeNull();
+  });
+
+  it("refuses a dropped folder, asking for its server path, and still uploads the files", async () => {
+    uploadMock.mockResolvedValue({ path: "/in/a.md", guest_path: "/in/a.md" });
+    renderInput();
+    const input = screen.getByRole("textbox", { name: t("commands.message") });
+
+    dropItems(input, [fileItem(new File([], "project"), true), fileItem(new File(["a"], "a.md"))]);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(t("commands.inputFolderRefused"));
+    await waitFor(() => expect(input).toHaveValue("/in/a.md"));
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the drop hands over a copy while a file is dragged over", () => {
+    renderInput();
+    const input = screen.getByRole("textbox", { name: t("commands.message") });
+
+    fireEvent.dragOver(input, { dataTransfer: { types: ["Files"], items: [] } });
+
+    expect(screen.getByRole("status")).toHaveTextContent(t("commands.inputFileDropUpload"));
+  });
+});

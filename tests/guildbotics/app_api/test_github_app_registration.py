@@ -29,8 +29,8 @@ from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from tests.guildbotics.app_api.owner import ORIGIN, owner_client
 from tests.guildbotics.app_api.provider_doubles import (
-    AUTH_HEADERS,
     answer,
     route_web,
 )
@@ -40,7 +40,6 @@ HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
 HTTP_SERVER_ERROR = 500
-CALLBACK_BASE = "http://testserver"
 APP_ID = 1978826
 INSTALLATION_ID = 86632391
 BOT_USER_ID = 233270845
@@ -120,8 +119,8 @@ def client(tmp_path: Path, github: list[httpx.Request]) -> Iterator[TestClient]:
     team_dir = tmp_path / ".guildbotics/config/team"
     team_dir.mkdir(parents=True)
     (team_dir / "project.yml").write_text("language: en\n")
-    with TestClient(
-        create_app(session_token="secret", runtime=RuntimeStub(tmp_path)),  # type: ignore[arg-type]
+    with owner_client(
+        create_app(runtime=RuntimeStub(tmp_path)),  # type: ignore[arg-type]
         raise_server_exceptions=False,
     ) as client:
         yield client
@@ -134,9 +133,7 @@ def _start(client: TestClient, person_id: str = "alice") -> dict[str, Any]:
             "app_name": "my-bot",
             "person_id": person_id,
             "organization": "",
-            "callback_base_url": CALLBACK_BASE,
         },
-        headers=AUTH_HEADERS,
     )
     assert response.status_code == HTTP_OK
     return response.json()
@@ -146,12 +143,17 @@ def _status(client: TestClient, state: str) -> httpx.Response:
     return client.post(
         "/config/providers/github/app-registration",
         json={"state": state},
-        headers=AUTH_HEADERS,
     )
 
 
+def _browser(client: TestClient) -> TestClient:
+    """The user's browser coming back from GitHub, with no session cookie: a
+    SameSite=Strict cookie is not sent on a navigation from another site."""
+    return TestClient(client.app, base_url=ORIGIN)
+
+
 def _callback(client: TestClient, state: str) -> httpx.Response:
-    return client.get(
+    return _browser(client).get(
         f"{PAGES}/app-callback",
         params={"code": "tmp-code", "state": state},
         follow_redirects=False,
@@ -171,12 +173,17 @@ def test_the_registration_from_start_to_installation(
     started = _start(client)
     state = started["state"]
     assert started["status"] == "pending"
-    assert started["start_url"] == f"{CALLBACK_BASE}{PAGES}/app-manifest?state={state}"
+    assert started["start_url"] == f"{ORIGIN}{PAGES}/app-manifest?state={state}"
 
-    # The browser opens the start URL, which carries no session token, and
-    # the page posts the manifest to github.com at once.
-    manifest_page = client.get(started["start_url"].removeprefix(CALLBACK_BASE))
+    # The browser opens the start URL with no session, and the user's press
+    # of its button posts the manifest to github.com: the page runs no script,
+    # and its policy lets its form post there besides this server.
+    manifest_page = _browser(client).get(started["start_url"])
     assert manifest_page.status_code == HTTP_OK
+    assert "<script" not in manifest_page.text
+    policy = manifest_page.headers["content-security-policy"]
+    assert "form-action 'self' https://github.com;" in policy
+    assert "script-src 'self';" in policy
     action = re.search(r'action="([^"]+)"', manifest_page.text)
     assert action is not None
     assert unescape(action.group(1)) == (
@@ -186,7 +193,7 @@ def test_the_registration_from_start_to_installation(
     assert value is not None
     manifest = json.loads(unescape(value.group(1)))
     assert manifest["name"] == "my-bot"
-    assert manifest["redirect_url"] == f"{CALLBACK_BASE}{PAGES}/app-callback"
+    assert manifest["redirect_url"] == f"{ORIGIN}{PAGES}/app-callback"
 
     # GitHub sends the browser back with a one-time code, converted here; the
     # browser goes on to install the app.
@@ -226,9 +233,7 @@ def test_start_refuses_an_invalid_app_name(client: TestClient) -> None:
         json={
             "app_name": "x" * 35,
             "person_id": "alice",
-            "callback_base_url": CALLBACK_BASE,
         },
-        headers=AUTH_HEADERS,
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
@@ -258,7 +263,7 @@ def test_status_of_an_unknown_registration_is_not_found(client: TestClient) -> N
 def test_a_page_that_cannot_go_on_tells_the_user_to_retry_from_the_app(
     client: TestClient, github: list[httpx.Request], page: str, params: dict
 ) -> None:
-    response = client.get(f"{PAGES}/{page}", params=params)
+    response = _browser(client).get(f"{PAGES}/{page}", params=params)
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.headers["content-type"].startswith("text/html")
@@ -287,16 +292,13 @@ def _member(tmp_path: Path, **account: Any) -> dict[str, Any]:
 
 
 def _add(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
-    return client.post(
-        "/config/members", json=_member(tmp_path, **account), headers=AUTH_HEADERS
-    )
+    return client.post("/config/members", json=_member(tmp_path, **account))
 
 
 def _update(client: TestClient, tmp_path: Path, **account: Any) -> httpx.Response:
     return client.put(
         "/config/members/alice",
         json=_member(tmp_path, **account),
-        headers=AUTH_HEADERS,
     )
 
 
@@ -319,8 +321,6 @@ def test_member_save_stores_the_registered_key_and_ids(
     if save is _update:
         assert _add(client, tmp_path, account_type="").status_code == HTTP_OK
     registration = _installed(client)
-    other_key = tmp_path / "other.pem"
-    other_key.write_text("not the registered key")
 
     # What the form says of the app cannot pair with the registration's key.
     response = save(
@@ -329,7 +329,7 @@ def test_member_save_stores_the_registered_key_and_ids(
         app_registration_id=registration,
         app_id=1,
         installation_id=2,
-        private_key_path=str(other_key),
+        private_key="not the registered key",
     )
 
     assert response.status_code == HTTP_OK
@@ -344,7 +344,7 @@ def test_member_save_stores_the_registered_key_and_ids(
     }
     # The key never reaches the config, and the screen reads only that it is held.
     assert _pem() not in _person_file(tmp_path).read_text()
-    view = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    view = client.get("/config/members/alice").json()
     assert view["accounts"]["github"]["has_private_key"] is True
     # A saved registration is gone: naming it again stores nothing.
     again = save(client, tmp_path, app_registration_id=registration)

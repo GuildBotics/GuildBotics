@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 
 import type { CommandFileDetail, CommandFileExecutionStatus, TraceRecord } from "../api/client";
 import { CommandRunDetails, type CommandRunRecord } from "../App";
+import { isTauriRuntime } from "../desktopWindow";
 import { MemberSelector } from "../MemberSelector";
+import { useServerPathHint } from "../serverMachine";
 import { CommandInput } from "./CommandInput";
 import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorState";
 import { UnmetRequirements } from "./UnmetRequirements";
@@ -50,6 +52,8 @@ export type CommandRunPanelProps = {
  */
 export function CommandRunPanel(props: CommandRunPanelProps) {
   const { t } = useTranslation();
+  const serverPathHint = useServerPathHint();
+  const cwdHint = t("commands.cwdDescription", { cwd: props.workspaceCwd });
   const { file, members, executionStatus } = props;
 
   const inputs = file?.inputs;
@@ -128,7 +132,11 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
             <CommandInput
               required={messageRequired}
               label={t("commands.message")}
-              description={t("commands.messageDescription")}
+              description={t(
+                isTauriRuntime()
+                  ? "commands.messageDescription"
+                  : "commands.messageDescriptionUpload",
+              )}
               rows={3}
               resize="vertical"
               value={props.message}
@@ -146,7 +154,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
           {props.showAdvanced ? (
             <TextInput
               label={t("commands.cwd")}
-              description={t("commands.cwdDescription", { cwd: props.workspaceCwd })}
+              description={isTauriRuntime() ? cwdHint : `${serverPathHint} ${cwdHint}`}
               value={props.cwd}
               onChange={(event) => props.onCwdChange(event.currentTarget.value)}
             />

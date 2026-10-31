@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 from guildbotics.integrations.slack import app_manifest
 from guildbotics.integrations.slack import setup as slack_setup
 from tests.guildbotics.app_api.provider_doubles import (
-    AUTH_HEADERS,
     answer,
     route_web,
     saved_workspace,
@@ -69,9 +68,7 @@ def _tokens(requests: list[httpx.Request]) -> dict[str, str]:
 
 
 def test_start_returns_the_manifest_deep_link(client: TestClient) -> None:
-    response = client.post(
-        REGISTRATIONS, json={"app_name": "Alice Bot"}, headers=AUTH_HEADERS
-    )
+    response = client.post(REGISTRATIONS, json={"app_name": "Alice Bot"})
 
     assert response.status_code == HTTP_OK
     body = response.json()
@@ -94,9 +91,7 @@ def test_start_returns_the_manifest_deep_link(client: TestClient) -> None:
 def test_start_refuses_an_app_name_slack_cannot_take(
     client: TestClient, app_name: str, status_code: int, code: str
 ) -> None:
-    response = client.post(
-        REGISTRATIONS, json={"app_name": app_name}, headers=AUTH_HEADERS
-    )
+    response = client.post(REGISTRATIONS, json={"app_name": app_name})
 
     assert response.status_code == status_code
     assert response.json()["code"] == code
@@ -108,7 +103,6 @@ def test_verify_reports_bot_identity_and_workspace(
     response = client.post(
         VERIFY,
         json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
-        headers=AUTH_HEADERS,
     )
 
     assert response.status_code == HTTP_OK
@@ -150,7 +144,6 @@ def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
     response = client.post(
         VERIFY,
         json={"bot_token": "", "app_token": "", "person_id": "alice"},
-        headers=AUTH_HEADERS,
     )
 
     assert response.status_code == HTTP_OK
@@ -170,7 +163,7 @@ def test_verify_without_stored_tokens_reports_them_missing_without_calling_slack
 ) -> None:
     write_member(workspace, "alice", "person_type: agent\n", SLACK_BOT_TOKEN="xoxb-a")
 
-    response = client.post(VERIFY, json={"person_id": person_id}, headers=AUTH_HEADERS)
+    response = client.post(VERIFY, json={"person_id": person_id})
 
     body = response.json()
     assert body["bot_error"] == slack_setup.ERROR_MISSING
@@ -195,7 +188,6 @@ def test_verify_reports_slack_error_codes(
     response = client.post(
         VERIFY,
         json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
-        headers=AUTH_HEADERS,
     )
 
     body = response.json()
@@ -213,7 +205,6 @@ def test_verify_never_echoes_or_logs_the_tokens(
         response = client.post(
             VERIFY,
             json={"bot_token": BOT_TOKEN, "app_token": APP_TOKEN},
-            headers=AUTH_HEADERS,
         )
 
     assert BOT_TOKEN not in response.text

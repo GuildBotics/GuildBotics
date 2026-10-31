@@ -20,14 +20,15 @@ from fastapi.testclient import TestClient
 from guildbotics.app_api import api
 from guildbotics.integrations.branvil import setup as branvil_setup
 from guildbotics.integrations.branvil.owner_git import git_config
+from guildbotics.integrations.provider import page_path
 from guildbotics.setup import setup_service
 from guildbotics.utils.fileio import load_yaml_file
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from tests.guildbotics.app_api.owner import ORIGIN
 from tests.guildbotics.app_api.provider_doubles import (
-    AUTH_HEADERS,
     saved_workspace,
 )
 from tests.guildbotics.integrations.branvil_double import (
@@ -45,7 +46,6 @@ HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
 HTTP_SERVER_ERROR = 500
-CALLBACK_BASE = "http://127.0.0.1:5173"
 OPERATIONS = "/config/providers/branvil"
 SERVICES = {
     "code_hosting_service": {"name": "branvil", "workspace": "acme"},
@@ -77,19 +77,21 @@ def _operation(client: TestClient, operation: str, **body: Any) -> Any:
     response = client.post(
         f"{OPERATIONS}/{operation}",
         json={"base_url": BASE, **body},
-        headers=AUTH_HEADERS,
     )
     assert response.status_code == HTTP_OK, response.text
     return response.json()
 
 
 def _connect(client: TestClient) -> dict[str, Any]:
-    return _operation(client, "connect", callback_base_url=CALLBACK_BASE)
+    return _operation(client, "connect")
 
 
 def _return(client: TestClient, redirect: str) -> Any:
-    """The browser, sent back by Branvil to this local API."""
-    return client.get(redirect.removeprefix(CALLBACK_BASE))
+    """The browser, sent back by Branvil to this server as it reaches it, with
+    no session cookie: SameSite=Strict keeps it from a navigation from another
+    site."""
+    assert redirect.startswith(f"{ORIGIN}{page_path('branvil', 'connected')}?")
+    return TestClient(client.app).get(redirect)
 
 
 # -- the connection -----------------------------------------------------------
@@ -170,8 +172,7 @@ def test_connecting_to_where_no_branvil_answers_says_so_and_opens_nothing(
 
     response = client.post(
         f"{OPERATIONS}/connect",
-        json={"base_url": BASE, "callback_base_url": CALLBACK_BASE},
-        headers=AUTH_HEADERS,
+        json={"base_url": BASE},
     )
 
     assert response.status_code != HTTP_OK
@@ -268,7 +269,6 @@ def test_the_workspaces_are_listed_and_created(
     refused = client.post(
         f"{OPERATIONS}/workspaces/create",
         json={"base_url": BASE, "name": "acme"},
-        headers=AUTH_HEADERS,
     )
     assert refused.status_code == HTTP_BAD_REQUEST
     assert refused.json()["code"] == "branvil"
@@ -292,9 +292,7 @@ def test_branvils_gui_is_entered_by_a_link_the_admin_token_asks_for(
 
 
 def test_nothing_is_administered_without_the_connection(client: TestClient):
-    response = client.post(
-        f"{OPERATIONS}/workspaces", json={"base_url": BASE}, headers=AUTH_HEADERS
-    )
+    response = client.post(f"{OPERATIONS}/workspaces", json={"base_url": BASE})
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json() == {
@@ -321,13 +319,12 @@ def _add(client: TestClient, workspace: Path, body: dict[str, Any]) -> Any:
     return client.post(
         "/config/members",
         json={"config_dir": str(workspace / ".guildbotics/config"), **body},
-        headers=AUTH_HEADERS,
     )
 
 
 def _update(client: TestClient, workspace: Path, body: dict[str, Any]) -> Any:
     person_id = body["person_id"]
-    read = client.get(f"/config/members/{person_id}", headers=AUTH_HEADERS).json()
+    read = client.get(f"/config/members/{person_id}").json()
     return client.put(
         f"/config/members/{person_id}",
         json={
@@ -335,7 +332,6 @@ def _update(client: TestClient, workspace: Path, body: dict[str, Any]) -> Any:
             "expected_revisions": read["revisions"],
             **body,
         },
-        headers=AUTH_HEADERS,
     )
 
 
@@ -356,7 +352,7 @@ def test_saving_an_agent_creates_it_on_branvil_and_keeps_its_token(
     assert double.tokens[token]["member"] == "alice"
     assert double.members["alice"]["kind"] == "agent"
     assert _account_info(workspace, "alice")["branvil_username"] == "alice"
-    view = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    view = client.get("/config/members/alice").json()
     assert view["accounts"]["branvil"] == {"username": "alice", "has_token": True}
 
     # Saved again unchanged, the agent keeps the token Branvil takes.
@@ -381,7 +377,7 @@ def test_a_reissue_the_save_refuses_keeps_the_token_the_member_holds(
     connect_admin()
     _add(client, workspace, _member("alice"))
     token = _store().get("ALICE_BRANVIL_TOKEN")
-    read = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    read = client.get("/config/members/alice").json()
     renamed = _update(client, workspace, {**_member("alice"), "person_name": "Ali"})
     assert renamed.status_code == HTTP_OK
 
@@ -392,7 +388,6 @@ def test_a_reissue_the_save_refuses_keeps_the_token_the_member_holds(
             "expected_revisions": read["revisions"],
             **_member("alice", branvil={"username": "alice", "reissue": True}),
         },
-        headers=AUTH_HEADERS,
     )
 
     assert refused.status_code == HTTP_CONFLICT
@@ -591,17 +586,15 @@ def test_an_agents_github_credential_is_handed_to_branvil_on_every_save(
 
 
 def test_an_agents_github_app_is_handed_to_branvil(
-    client: TestClient, double: BranvilDouble, workspace: Path, tmp_path: Path
+    client: TestClient, double: BranvilDouble, workspace: Path
 ):
     connect_admin()
-    key = tmp_path / "app.pem"
-    key.write_text("PEM", encoding="utf-8")
     github = {
         "account_type": "github_apps",
         "username": "a[bot]",
         "app_id": 3,
         "installation_id": 7,
-        "private_key_path": str(key),
+        "private_key": "PEM",
     }
 
     assert _add(client, workspace, _member("alice", github=github)).status_code == (
@@ -619,7 +612,7 @@ def test_deleting_an_agent_revokes_its_tokens_on_branvil(
     connect_admin()
     _add(client, workspace, _member("alice", branvil={"username": MEMBER}))
 
-    response = client.delete("/identities/alice", headers=AUTH_HEADERS)
+    response = client.delete("/identities/alice")
 
     assert response.status_code == HTTP_OK
     assert double.labels(MEMBER) == ["cli"]
@@ -636,7 +629,7 @@ def test_taking_an_agent_out_of_a_workspace_keeps_its_token(
     _add(client, workspace, _member("alice"))
     token = _store().get("ALICE_BRANVIL_TOKEN")
 
-    response = client.delete("/config/members/alice", headers=AUTH_HEADERS)
+    response = client.delete("/config/members/alice")
 
     assert response.status_code == HTTP_OK
     assert not (workspace / ".guildbotics/config/team/members/alice").exists()
@@ -654,7 +647,7 @@ def test_an_agent_branvil_cannot_revoke_for_is_kept(
     _add(client, workspace, _member("alice"))
     _store().delete("BRANVIL_ADMIN_TOKEN")
 
-    response = client.delete("/identities/alice", headers=AUTH_HEADERS)
+    response = client.delete("/identities/alice")
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert (workspace / ".guildbotics/config/team/members/alice").exists()
@@ -668,15 +661,12 @@ def test_an_agent_branvil_cannot_revoke_for_is_kept(
 def _open_workspace(client: TestClient, root: Path) -> Path:
     """Select another workspace using the same services, as a second project."""
     root.mkdir()
-    selected = client.post(
-        "/workspace", json={"workspace_dir": str(root)}, headers=AUTH_HEADERS
-    )
+    selected = client.post("/workspace", json={"workspace_dir": str(root)})
     assert selected.status_code == HTTP_OK, selected.text
     config_dir = root / ".guildbotics/config"
     created = client.post(
         "/config/init",
         json={"config_dir": str(config_dir), "language": "en", "services": SERVICES},
-        headers=AUTH_HEADERS,
     )
     assert created.status_code == HTTP_OK, created.text
     return root
@@ -696,7 +686,7 @@ def test_workspaces_on_one_branvil_revoke_none_of_each_others_tokens(
 
     # The other workspace is connected already, and has alice once added.
     assert _operation(client, "connection")["status"] == "connected"
-    read = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    read = client.get("/config/members/alice").json()
     assert read["participating"] is False
     assert read["accounts"]["branvil"] == {"username": "alice", "has_token": True}
     joined = _add(
@@ -710,7 +700,7 @@ def test_workspaces_on_one_branvil_revoke_none_of_each_others_tokens(
     assert joined.status_code == HTTP_OK, joined.text
     saved = _update(client, other, _member("alice", branvil={"username": "alice"}))
     assert saved.status_code == HTTP_OK
-    left = client.delete("/config/members/alice", headers=AUTH_HEADERS)
+    left = client.delete("/config/members/alice")
     assert left.status_code == HTTP_OK
 
     assert _store().get("BRANVIL_ADMIN_TOKEN") == admin
@@ -729,7 +719,7 @@ def test_a_member_added_to_another_workspace_needs_no_reconnection(
     connect_admin()
     _add(client, workspace, _member("alice"))
     other = _open_workspace(client, workspace / "other")
-    read = client.get("/config/members/alice", headers=AUTH_HEADERS).json()
+    read = client.get("/config/members/alice").json()
 
     joined = _add(
         client,

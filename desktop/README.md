@@ -15,13 +15,13 @@ GuildBotics のデスクトップ GUI です。Tauri v2 + TypeScript frontend �
 ### ビルド
 
 ```bash
-# Python sidecar（Local API + CLI）のみ
+# Python sidecar（Local API + CLI）のみ（事前に画面の build が必要: cd desktop && npm ci && npm run build）
 scripts/desktop-build-backend.sh
 
 # Tauri パッケージのみ（事前に sidecar が必要）
 scripts/desktop-build-frontend.sh
 
-# sidecar と Tauri パッケージをまとめて build
+# 画面、sidecar、Tauri パッケージの順にまとめて build
 scripts/desktop-build-all.sh
 ```
 
@@ -45,23 +45,17 @@ scripts/desktop-dev-frontend.sh
 scripts/desktop-dev-tauri.sh
 ```
 
-> **ブラウザ preview（`desktop-dev-backend.sh` + `desktop-dev-frontend.sh`）と E2E は単一ユーザーのホストでのみ使ってください。** Vite は Local API の session token を配信物へ埋め込むため、同一ホストの別ユーザーや別ページから読み取られる可能性が構造的に残ります（token をランダム化してもこの前提は変わりません）。また画面は、固定ポートの相手が正規の Local API かを確かめずに token を送ります。共有ホストでは `scripts/desktop-dev-tauri.sh`（Tauri webview）を使ってください。配布版と同じく、sidecar が自分で bind して通知したポートにだけ接続します。
-
-backend の session token はコマンドライン引数では渡さず、`GUILDBOTICS_APP_API_TOKEN` 環境変数だけで受け取ります（未設定で起動するとエラー終了します）。`desktop-dev-backend.sh` は未設定なら起動ごとにランダムな token を生成し、`$TMPDIR/guildbotics-dev/<port>.token`（ディレクトリ 0700 / ファイル 0600、終了時に削除）へ書き出します。`desktop-dev-frontend.sh` は同じファイルから読み取るため、通常は token を意識する必要はありません。
-
-両ターミナルへ同じ値を export すれば、ファイル経由の受け渡しを使わずに固定できます。接続先ポートを変える場合も同様です。
+backend は `127.0.0.1` の固定ポートで待ち受けます。ポートは `GUILDBOTICS_SERVER_PORT`（既定 8765）で決まり、backend・CLI・Desktop・Vite dev server（`/api` の転送先）がすべて同じ変数を読みます。配布版の Desktop と開発版を同じマシンで同時に動かすときは、片方のポートを変えます。
 
 ```bash
-GUILDBOTICS_APP_API_PORT=8877 \
-scripts/desktop-dev-backend.sh
+GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-backend.sh
 
-GUILDBOTICS_APP_API_PORT=8877 \
-scripts/desktop-dev-frontend.sh
+GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
 ```
 
-backend が CORS で受け付けるブラウザ origin は起動側が指定します。`desktop-dev-backend.sh` の既定は Vite dev server の `http://localhost:1420,http://127.0.0.1:1420` で、`GUILDBOTICS_APP_API_ALLOWED_ORIGINS`（カンマ区切り）で上書きできます。Tauri の `tauri://localhost` は常に許可されます。
+ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420`）が画面を配り、`/api`（`/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
 
-`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
+`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。ウィンドウは同梱の `bootstrap.html` から入口リンクで UI へ移り、`tauri dev` では UI も Vite dev server から開きます。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
 
 開発用CLIは`uv run --project`でGuildBoticsのPython環境を選び、呼び出し元の作業ディレクトリを維持します。別リポジトリからの`member git ... --workspace-mode current`や相対パスも、その場所を基準に扱います。開発版のbuild-idはwrapperの内容から作るため、wrapperが変わればDesktopの次回起動時に新しいCLIが配置されます。ソースコードだけの変更は配置し直さなくても、次の実行からそのまま反映されます。
 
@@ -142,7 +136,7 @@ cd desktop
 npm run e2e
 ```
 
-`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
+`npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ画面を build（`vite build` で `desktop/dist`）→ スタックごとに backend（temp workspace）を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。画面は配布版と同じく backend が配ります。各テストは `guildbotics open` と同じ入口から入ります。harness が owner token（temp HOME の `~/.guildbotics/data/server/<port>/owner.token`）で `POST /api/session/links` を呼び、返った入口リンクを Playwright が開いてセッションの cookie を得ます（`desktop/e2e/stack-context.ts` の `test`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
 | spec                      | journey                                                                                                                                                                                                                                                                                        |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -154,7 +148,7 @@ npm run e2e
 | `e2e/decisions.spec.ts`   | チャット判定の共通 brain 割り当て → 保存 → reload 後も復元                                                                                                                                                                                                                                     |
 | `e2e/sync.spec.ts`        | ⑦ 既存ワークスペースの同期を有効化 → 複製の取得、⑧ Hub に先に届いた変更が勝ち後着は退避、⑨ 別の場所に再構築した Hub への再接続、⑩ Hub へ直接 push された変更の取り込み                                                                                                                         |
 | `e2e/environment.spec.ts` | ⑪ 実 microVM でコマンドを実行: 自力作成 → source 保存 → 画像の貼り付け（隔離環境の綴りのパス）→ 実行 → `/events` で成功と出力が届く。`.sh` の step は貼り付けたファイルを読み、出力を握ったままのプロセスを残してもコマンドは終わる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ走る |
-| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                                                                                                                                |
+| `e2e/failure.spec.ts`     | ⑥ 画面を開いたまま backend が止まる → 「届かない」通知 → 再起動 → retry で復帰                                                                                                                                                                                                                                              |
 
 補足:
 
@@ -168,9 +162,9 @@ npm run e2e
   ```
 
 - E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイル（`desktop/**`、`guildbotics/**`、`pyproject.toml`、`uv.lock`、workflow 自体）を変更する pull request、手動実行、nightly で実行します。workflow はすべての pull request で起動し、関連ファイルの変更が無ければ Playwright を省略します。required check は常に報告される `Desktop E2E gate` だけで、E2E が不要なら成功、必要なら head/base の両方が成功した場合だけ成功します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
-- 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
-- 各スタックの Local API token は harness が起動ごとにランダム生成し、stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）経由で spec へ渡します。CORS は各スタックの Vite origin だけを許可します。
-- `npm run e2e` も browser preview と同じ前提で、**単一ユーザーのホストでのみ実行してください**（Vite が token を配信物へ埋め込むため）。
+- 各スタックの backend のポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。backend は `127.0.0.1` だけで待ち受けます。
+- 各スタックの owner token はその temp HOME の下に backend が作り、spec は stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）が示す temp HOME から読みます。
+- `npx playwright test` を直接実行するときは、先に `npx vite build` で画面を build しておきます（harness は `desktop/dist/index.html` が無ければ起動しません）。
 - Tauri ネイティブ（packaged app / sidecar 起動 / file picker）の smoke は別ティアで、実 macOS または Linux + Tauri runtime が必要（§2〜§3 のビルド手順を参照）。
 
 ---
@@ -231,11 +225,12 @@ Linux の Tauri 実行に必要なパッケージはディストリビューシ�
 
 ### 2.1 Python sidecar（Local API + CLI）を build する
 
-GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。`_internal/guildbotics/` には package の `.py` のソースと隔離環境の依存の一覧も入ります（隔離環境の microVM がこの directory を mount して GuildBotics 自身のコードを動かすため）。通常は `scripts/desktop-build-backend.sh` を使います。
+GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。`_internal/guildbotics/` には package の `.py` のソースと隔離環境の依存の一覧も入ります（隔離環境の microVM がこの directory を mount して GuildBotics 自身のコードを動かすため）。Local API が配る画面（`desktop/dist` の Vite build）は `_internal/desktop/dist` に入ります。checkout で `guildbotics/` の隣に `desktop/` があるのと同じ位置で、Local API はそこから画面を読みます。そのため先に画面を build します（無ければ `scripts/desktop-build-backend.sh` はエラーで止まります）。通常は `scripts/desktop-build-backend.sh` を使います。
 
 ```bash
 # リポジトリルートで実行
 uv sync --extra test --extra dev
+(cd desktop && npm ci && npm run build)
 
 scripts/desktop-build-backend.sh
 
@@ -248,10 +243,10 @@ scripts/desktop-build-backend.sh
 > **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
 >
 > ```bash
-> TOKEN="$(openssl rand -hex 32)"
-> GUILDBOTICS_APP_API_TOKEN="$TOKEN" dist/guildbotics/guildbotics-app-api --host 127.0.0.1 --port 8765 &
-> curl -H "X-GuildBotics-Session-Token: $TOKEN" http://127.0.0.1:8765/health
-> # => {"status":"ok"}
+> dist/guildbotics/guildbotics-app-api &
+> printf 'Authorization: Bearer %s\n' "$(cat ~/.guildbotics/data/server/8765/owner.token)" |
+>   curl -H @- http://127.0.0.1:8765/api/health
+> # => {"status":"ok",...}
 > ```
 
 ### 2.2 frontend 依存をインストールしてパッケージを build する
