@@ -55,7 +55,7 @@ GUILDBOTICS_SERVER_PORT=8877 scripts/desktop-dev-frontend.sh
 
 ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420`）が画面を配り、`/api`（`/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
 
-`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。ウィンドウは同梱の `bootstrap.html` から入口リンクで UI へ移り、`tauri dev` では UI も Vite dev server から開きます。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。
+`desktop-dev-tauri.sh` は Tauri sidecar として Local API を起動します。ウィンドウは同梱の `bootstrap.html` から入口リンクで UI へ移り、`tauri dev` では UI も Vite dev server から開きます。起動前に `desktop/src-tauri/binaries/` へソース版 backend / CLI を実行する開発用 wrapper を生成するため、PyInstaller sidecar の事前 build は不要です。`guildbotics open` で開くブラウザには、backend が `desktop/dist` の画面を配ります。そのため、起動時に画面も build します（`vite build`）。起動したあとにソースを変えたら、ブラウザで見る前に `npx vite build` をもう一度実行するか、起動し直してください。
 
 開発用CLIは`uv run --project`でGuildBoticsのPython環境を選び、呼び出し元の作業ディレクトリを維持します。別リポジトリからの`member git ... --workspace-mode current`や相対パスも、その場所を基準に扱います。開発版のbuild-idはwrapperの内容から作るため、wrapperが変わればDesktopの次回起動時に新しいCLIが配置されます。ソースコードだけの変更は配置し直さなくても、次の実行からそのまま反映されます。
 
