@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +163,25 @@ describe("a page the server serves", () => {
       expect(screen.queryByText(t("session.guide.title"))).not.toBeInTheDocument();
     });
 
+    it("enters again when a retry finds the session it held gone", async () => {
+      let config: Answer = ok({ cwd: "/ws" });
+      let session: Answer = SESSION;
+      serve({ "GET /api/session": () => session, "GET /api/config/status": () => config });
+      const user = userEvent.setup();
+      renderPage("/");
+      await screen.findByText("Screen read /ws");
+      config = OFFLINE;
+      session = OFFLINE;
+      void getConfigStatus().catch(() => undefined);
+      const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
+
+      session = NO_SESSION;
+      await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+
+      await waitFor(() => expect(enterAgainMock).toHaveBeenCalled());
+      expect(screen.queryByText(t("session.guide.title"))).not.toBeInTheDocument();
+    });
+
     it("says how to enter, without entering again, when it never had a session", async () => {
       serve({ "GET /api/session": NO_SESSION });
 
@@ -179,6 +198,23 @@ describe("a page the server serves", () => {
 
       expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     });
+  });
+
+  it("keeps saying how to enter again when a later request cannot reach the server", async () => {
+    let config: Answer = ok({ cwd: "/ws" });
+    serve({ "GET /api/session": SESSION, "GET /api/config/status": () => config });
+    renderPage("/");
+    await screen.findByText("Screen read /ws");
+    config = NO_SESSION;
+    void getConfigStatus().catch(() => undefined);
+    await screen.findByText(t("session.guide.title"));
+
+    config = OFFLINE;
+    await act(() => getConfigStatus().catch(() => undefined));
+
+    expect(screen.getByText(t("session.guide.title"))).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Screen read/)).not.toBeInTheDocument();
   });
 
   it("keeps the screen under a notice while the server is unreachable, and reloads it on retry", async () => {

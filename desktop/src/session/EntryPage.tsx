@@ -46,14 +46,27 @@ export function EntryPage({ children }: { children: ReactNode }) {
 function AppSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const session = useQuery(SESSION_QUERY);
+  // Whether this page ever took up a session, apart from the latest reading.
+  const [held, setHeld] = useState(false);
+  if (session.data && !held) {
+    setHeld(true);
+  }
   const [lost, setLost] = useState<ConnectionLoss | null>(null);
-  useEffect(() => onConnectionLost(setLost), []);
+  // A session found gone stays gone: a later failure to reach the server
+  // does not bring the screen back.
+  useEffect(
+    () =>
+      onConnectionLost((loss) =>
+        setLost((previous) => (previous === "signed_out" ? previous : loss)),
+      ),
+    [],
+  );
 
   if (lost === "signed_out" || session.data === false) {
     return (
       <>
         <QuitsThrough />
-        {session.data && isTauriRuntime() ? <EnterAgain /> : <NoSessionGuide />}
+        {held && isTauriRuntime() ? <EnterAgain /> : <NoSessionGuide />}
       </>
     );
   }
