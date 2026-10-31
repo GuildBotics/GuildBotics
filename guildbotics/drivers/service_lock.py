@@ -4,11 +4,10 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Literal
+from typing import IO
 from uuid import uuid4
 
 from guildbotics.utils.advisory_lock import (
@@ -27,7 +26,6 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.keep_awake import KeepAwake
 from guildbotics.utils.log_utils import get_logger
 
-ServiceOwner = Literal["cli", "desktop"]
 LOCK_RETRY_SECONDS = 0.01
 #: The service's settings for this device, under the workspace's ``local/``:
 #: whether the machine sleeps while the service waits is a property of the
@@ -44,7 +42,6 @@ SETTING_POLL_SECONDS = 1.0
 class ServiceLockMetadata:
     pid: int
     service_instance_id: str
-    owner: ServiceOwner
     workspace: str
     started_at: str
 
@@ -55,17 +52,15 @@ class ServiceLockMetadata:
         try:
             pid = int(value["pid"])
             service_instance_id = str(value["service_instance_id"])
-            owner = value["owner"]
             workspace = str(value["workspace"])
             started_at = str(value["started_at"])
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             return None
-        if pid <= 0 or not service_instance_id or owner not in {"cli", "desktop"}:
+        if pid <= 0 or not service_instance_id:
             return None
         return cls(
             pid=pid,
             service_instance_id=service_instance_id,
-            owner=owner,
             workspace=workspace,
             started_at=started_at,
         )
@@ -127,23 +122,15 @@ class ServiceLock:
     def acquire(
         self,
         *,
-        owner: ServiceOwner,
         workspace: Path,
-        before_publish: Callable[[], None] | None = None,
     ) -> ServiceLockMetadata:
         with self._guard:
-            return self._acquire(
-                owner=owner,
-                workspace=workspace,
-                before_publish=before_publish,
-            )
+            return self._acquire(workspace=workspace)
 
     def _acquire(
         self,
         *,
-        owner: ServiceOwner,
         workspace: Path,
-        before_publish: Callable[[], None] | None,
     ) -> ServiceLockMetadata:
         if self._file is not None:
             if self._metadata is None:
@@ -164,18 +151,9 @@ class ServiceLock:
                 lock_file.close()
                 raise ServiceLockUnavailableError(metadata) from exc
 
-        if before_publish is not None:
-            try:
-                before_publish()
-            except Exception:
-                _unlock_file(lock_file)
-                lock_file.close()
-                raise
-
         metadata = ServiceLockMetadata(
             pid=os.getpid(),
             service_instance_id=uuid4().hex,
-            owner=owner,
             workspace=str(workspace.expanduser().resolve(strict=False)),
             started_at=datetime.now().astimezone().isoformat(),
         )
@@ -296,5 +274,5 @@ def _signature(path: Path) -> tuple[int, int, int]:
 def _read_metadata(handle: IO[str]) -> ServiceLockMetadata | None:
     try:
         return ServiceLockMetadata.from_dict(json.loads(_read_lock_data(handle)))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None

@@ -19,11 +19,17 @@ from guildbotics.secrets.hub_client import (
     SecretOffer,
 )
 from guildbotics.utils import local_api
-from guildbotics.utils.local_api import PROOF_PATH, LocalApiEndpoint
+from guildbotics.utils.local_api import (
+    API_PREFIX,
+    PROOF_PATH,
+    new_token,
+    owner_token_path,
+    parse_token,
+)
+from tests.guildbotics.app_api.owner import ORIGIN, owner_token
 
 WORKSPACE = "11111111-2222-3333-4444-555555555555"
-TOKEN = "test-session"
-HEADERS = {"X-GuildBotics-Session-Token": TOKEN}
+PROOF = API_PREFIX + PROOF_PATH
 VALUE = "synthetic-credential\r\n日本語\n"
 
 
@@ -50,21 +56,13 @@ def test_invalid_workspace_is_refused_before_discovery(
 
 
 @pytest.fixture
-def desktop(monkeypatch, tmp_path):
-    monkeypatch.setattr(local_api, "endpoint_path", lambda: tmp_path / "app-api.json")
+def desktop(monkeypatch):
     host.create_hub()
     host.create_workspace_repository(WORKSPACE)
-    app = create_app(session_token=TOKEN, runtime=AppRuntime(EventBus()))
-    client = TestClient(app, client=("127.0.0.1", 1234))
-    endpoint = LocalApiEndpoint(
-        port=8765,
-        token=TOKEN,
-        service_instance_id=client.get("/health", headers=HEADERS).json()[
-            "service_instance_id"
-        ],
-        workspace=None,
-    )
-    endpoint.publish()
+    # The Desktop's server keeps its owner token where the CLI of this machine
+    # reads it.
+    app = create_app(runtime=AppRuntime(EventBus()))
+    client = TestClient(app, base_url=ORIGIN + API_PREFIX, client=("127.0.0.1", 1234))
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
     requests = []
 
@@ -83,15 +81,16 @@ def desktop(monkeypatch, tmp_path):
         "Client",
         partial(httpx.Client, transport=httpx.MockTransport(exchange)),
     )
-    yield client, endpoint, requests
+    yield client, requests
     client.close()
 
 
 def test_ssh_cli_and_local_client_use_desktop_without_workspace_match(
     desktop, monkeypatch
 ):
-    _, endpoint, requests = desktop
-    assert endpoint.workspace is None
+    # The Hub's workspace is not the one the Desktop has selected: the client
+    # names it by its ID, and nothing compares the two.
+    client, requests = desktop
     local = LocalHubSecretClient(WORKSPACE)
     runner = CliRunner()
 
@@ -107,11 +106,14 @@ def test_ssh_cli_and_local_client_use_desktop_without_workspace_match(
     assert local.index().generations == {"A_TOKEN": 1}
     assert remote.fetch(["A_TOKEN"])[0].value == VALUE
     assert local.fetch(["A_TOKEN"])[0].value == VALUE
-    transfers = [r for r in requests if r.url.path.startswith("/hub/secrets/")]
-    proofs = [r for r in requests if r.url.path == PROOF_PATH]
+    transfers = [
+        r for r in requests if r.url.path.startswith(API_PREFIX + "/hub/secrets/")
+    ]
+    proofs = [r for r in requests if r.url.path == PROOF]
     assert len(transfers) == len(proofs) == 4
-    assert all(r.headers["X-GuildBotics-Session-Token"] == TOKEN for r in transfers)
-    assert not any("X-GuildBotics-Session-Token" in r.headers for r in proofs)
+    bearer = f"Bearer {owner_token(client.app)}"
+    assert all(r.headers["Authorization"] == bearer for r in transfers)
+    assert not any("Authorization" in r.headers for r in proofs)
     assert all(r.url.host == "127.0.0.1" for r in requests)
 
 
@@ -119,15 +121,17 @@ def test_ssh_cli_and_local_client_use_desktop_without_workspace_match(
 def test_desktop_unavailable_never_reads_or_writes_keychain(
     desktop, monkeypatch, failure
 ):
-    _, endpoint, requests = desktop
+    client, requests = desktop
+    token_file = owner_token_path(client.app.state.auth.port)
     if failure == "absent":
-        local_api.endpoint_path().unlink()
+        token_file.unlink()
     elif failure == "stale":
-        endpoint.service_instance_id = "old-instance"
-        endpoint.publish()
+        # A token of an earlier server, which this one never issued.
+        token_file.write_text(new_token()[2])
     elif failure == "unauthorized":
-        endpoint.token = "wrong-token"
-        endpoint.publish()
+        # The id this server knows, with a secret it does not.
+        token_id = parse_token(owner_token(client.app))[0]  # type: ignore[index]
+        token_file.write_text(f"gbt_{token_id}_wrong-secret")
     else:
 
         def disconnected(request):
@@ -155,30 +159,33 @@ def test_desktop_unavailable_never_reads_or_writes_keychain(
     )
     assert local.fetch(["A_TOKEN"])[0].status == "desktop_required"
     assert secret_host.generations(WORKSPACE) == {}
-    assert all(r.url.path == PROOF_PATH for r in requests)
+    assert all(r.url.path == PROOF for r in requests)
 
 
 def test_endpoint_refuses_nonloopback_and_malformed_requests(desktop, caplog):
-    client, _, _ = desktop
+    client, _ = desktop
+    headers = {"Authorization": f"Bearer {owner_token(client.app)}"}
     url = f"/hub/secrets/{WORKSPACE}/receive"
-    response = client.post(url, content=VALUE, headers=HEADERS)
+    response = client.post(url, content=VALUE, headers=headers)
     assert response.status_code == 400
     assert VALUE not in response.text and VALUE not in caplog.text
-    with TestClient(client.app, client=("192.0.2.1", 1234)) as remote:
-        assert remote.post(url, headers=HEADERS).status_code == 403
+    with TestClient(
+        client.app, base_url=ORIGIN + API_PREFIX, client=("192.0.2.1", 1234)
+    ) as remote:
+        assert remote.post(url, headers=headers).status_code == 403
     assert (
-        client.post("/hub/secrets/not-a-workspace/list", headers=HEADERS).status_code
+        client.post("/hub/secrets/not-a-workspace/list", headers=headers).status_code
         == 400
     )
 
 
 def test_post_is_not_retried_after_lost_response(desktop, monkeypatch):
-    client, _, _ = desktop
+    client, _ = desktop
     calls = []
 
     def exchange(request):
         calls.append(request.url.path)
-        if request.url.path == PROOF_PATH:
+        if request.url.path == PROOF:
             response = client.post(
                 PROOF_PATH, content=request.content, headers=dict(request.headers)
             )
@@ -195,4 +202,4 @@ def test_post_is_not_retried_after_lost_response(desktop, monkeypatch):
     )
     result = LocalHubSecretClient(WORKSPACE).send([SecretOffer("A_TOKEN", 1, VALUE)])
     assert result[0].status == "desktop_required"
-    assert calls == [PROOF_PATH, f"/hub/secrets/{WORKSPACE}/receive"]
+    assert calls == [PROOF, f"{API_PREFIX}/hub/secrets/{WORKSPACE}/receive"]

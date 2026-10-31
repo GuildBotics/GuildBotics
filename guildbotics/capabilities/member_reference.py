@@ -32,7 +32,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             (
                 "guildbotics member context --person <person> [--check-credentials]",
-                "Read role, profile, communication style, credentials, and this reference.",
+                "Read role, profile, communication style, the public team roster, credentials, and this reference.",
             ),
             (
                 "guildbotics member help",
@@ -45,6 +45,18 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "stage and branch with plain git yourself",
         [
             (
+                "guildbotics member git show --person <person> --repo <repository> "
+                "--path <path> [--path <path> ...]",
+                "Read literal paths on the code host's current default branch, without "
+                "a checkout. Files return UTF-8 content; directories (including '.') "
+                "return immediate entry names and kinds. Missing paths return kind "
+                "missing; binary or oversized objects omit content with status binary "
+                "or too_large. Results include default_branch and commit; output is "
+                "bounded by the member result limit. Uses the member credential on "
+                "the host, both interactively and inside a command, without a lease "
+                "or approval.",
+            ),
+            (
                 "guildbotics member git prepare --person <person> "
                 "(--issue-url <url> [--pr-url <url> | --repo <repository>] | --pr-url <url> "
                 "| --repo <repository> --branch <name>)",
@@ -53,6 +65,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "no repository), a PR head (--pr-url, alone or together with "
                 "--issue-url, which checks out the PR head), or an ad-hoc branch "
                 "(--repo --branch). A repository is named by its path. "
+                "Unfinished checkouts stay assigned to their work and requested branch; "
+                "idle checkouts of the same repository are reused with their build caches. "
+                "Call prepare every run and use the returned repo_path and branch: a path "
+                "from an earlier run may now belong to another work. Unfinished Git state "
+                "is kept, including an agent-created branch; an empty branch means detached HEAD. "
                 "Member workspaces are worked on only inside a running GuildBotics "
                 "command, whose isolated environment runs every git of them.",
             ),
@@ -83,16 +100,23 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics run repository/issue_inspect --person <person> url=<ticket_url>",
                 "Read a ticket, its comments, its lane on the board, its parent, "
-                "children, and the tickets it is blocked by or blocks, and the pull "
-                "requests that refer to it.",
+                "children, and the tickets it is blocked by or blocks, the files "
+                "attached to it (`attachments`; null with "
+                "`attachments_unavailable` saying why when they cannot be listed), "
+                "and the pull requests that refer to it.",
             ),
             (
                 "guildbotics member ticket read --person <person> --resource <name> "
-                "--subject <ticket_url> [--params <json>] [--continuation <value>]",
+                "--subject <ticket_url_or_tracker> [--params <json>] [--continuation <value>]",
                 "Read one bounded page of a ticket's resource: tickets (the ticket "
-                "itself: key, tracker, repository, lane, ...), ticket_comments, or "
-                "ticket_pull_requests (the code host's pull requests that refer to "
-                "it). Collections accept page_size (1-100). Results contain "
+                "itself: key, tracker, repository, lane, ...), ticket_comments, "
+                "ticket_attachments (the files its body and comments refer to: id, "
+                "name, media_type, size, and referenced_by, `body` or a comment id), "
+                "or ticket_pull_requests (the code host's pull requests that refer to "
+                "it), or tracker_tickets (subject: tracker path; conditions: text "
+                "with all whitespace-separated terms in title/body, state "
+                "open|closed|all, label, page_size; items: URL, key, title, state, "
+                "lane, labels, updated_at). Collections accept page_size (1-100). Results contain "
                 "normalized items and continuation; reuse identical conditions for the "
                 "next page. HTTP methods, headers, and GraphQL are not accepted.",
             ),
@@ -103,26 +127,45 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member ticket create --person <person> --tracker <tracker> "
                 "--title <title> --content-file <file> [--label <name> ...] "
-                "[--add-to-board|--no-add-to-board] --human-approved",
+                "[--add-to-board|--no-add-to-board] [--interactive] [--assignee <person_id>] "
+                "[--lane new|ready|in_progress] [--parent <ticket_url>] "
+                "[--blocked-by <ticket_url> ...] --human-approved",
                 "Open a follow-up ticket a human asked for, in the tracker a ticket's "
                 "read names (`tracker`); a board that keeps every ticket refuses "
-                "`--no-add-to-board`.",
+                "`--no-add-to-board`. Creation settings are covered by the human's approval. "
+                "The lane defaults to ready with a parent or blockers, new otherwise; "
+                "interactive work starting now uses --interactive --assignee <person_id> "
+                "--lane in_progress. Unsupported providers refuse --interactive.",
             ),
             (
                 "guildbotics member ticket update --person <person> --url <ticket_url> "
                 "[--content-file <file>] [--title <title>] [--add-label <name> ...] "
                 "[--remove-label <name> ...] "
                 "[--state open|closed [--state-reason completed|not_planned] --human-approved] "
+                "[--interactive|--no-interactive --human-approved] "
                 "[--parent <ticket_url>] [--add-blocked-by <ticket_url> ...] "
                 "[--remove-blocked-by <ticket_url> ...]",
-                "Change a ticket's body, title, labels, state, parent, or the tickets "
+                "Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets "
                 "it is blocked by; empty content removes the body, and an empty "
-                "`--parent` the parent.",
+                "`--parent` the parent. Changing interactive mode requires a human's "
+                "request or approval for that ticket (--human-approved). Unsupported "
+                "providers refuse either flag. Reads and updates return the ticket's own "
+                "interactive setting and interactive_ancestor URL; clearing the setting "
+                "does not override an interactive ancestor. Report that inherited state "
+                "to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した"
+                "場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。",
             ),
             (
                 "guildbotics member ticket reaction add --person <person> --url <ticket_url> "
                 "--comment-id <id> --reaction ack|agree|celebrate|support",
                 "React to a comment of the ticket, by the id its read gave it.",
+            ),
+            (
+                "guildbotics member ticket attachment download --person <person> "
+                "--url <ticket_url> --id <attachment_id> [--dest <dir>]",
+                "Download a size-limited file the ticket refers to, by the id its "
+                "ticket_attachments read gave it, as a file of the destination named "
+                "as it was attached; remove repository files after reading.",
             ),
         ],
     ),
@@ -168,12 +211,14 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member pr update --person <person> --url <pr_url> "
-                "[--content-file <file>] [--title <title>] [--drop-issue-links]",
-                "Change a PR's body or title. Body replacement preserves the ticket "
-                "links the existing body carries as the code host reads them; new "
-                "links to the same ticket take precedence. Empty content keeps only "
-                "the links. --drop-issue-links requires content and disables "
-                "preservation.",
+                "[--content-file <file>] [--title <title>] "
+                "[--issue-url <url> ... [--closes-issue|--refs-issue] | --drop-issue-links]",
+                "Change a PR's body, title, or ticket links. --issue-url replaces all "
+                "links with those tickets; --closes-issue closes all of them on merge "
+                "and --refs-issue only refers (the default). --drop-issue-links removes "
+                "all links without requiring a body. Without either option, body "
+                "replacement preserves existing ticket links and ignores new "
+                "managed link lines in the body.",
             ),
             (
                 "guildbotics member pr comment --person <person> --url <pr_url> --content-file <file>",
@@ -328,7 +373,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "Run completion — workflow runs only",
+        "Run completion — workflow and command runs only",
         [
             (
                 "guildbotics member chat noop --person <person> --content-file <file>",
@@ -341,14 +386,25 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member task complete --person <person> "
-                "--status done|asking|blocked|awaiting_checks --content-file <file>",
-                "Finish the ticket workflow run on its ticket with evidence, "
-                "revalidating affected PR readiness before accepting done, or end "
-                "it to await the PRs' pending checks, which resume it.",
+                "--status done|asking|blocked [--waiting-for <person_id> ...] --content-file <file>",
+                "Finish a run other than a chat event's with evidence, revalidating "
+                "affected PR readiness before accepting done. For asking/blocked, "
+                "use the context roster: name the next member to act by person_id "
+                "and address them on the item with their service mention spelling. "
+                "The CLI validates whether their patrol receives any item you commented on. "
+                "Human members are recorded and notified; omit only for people outside the team. "
+                "Without a recipient, the CLI says the owner will be notified.",
             ),
             (
                 "guildbotics member task status --person <person>",
-                "Inspect the ticket run's recorded evidence.",
+                "Inspect the run's recorded evidence.",
+            ),
+            (
+                "guildbotics member checks await --person <person> "
+                "--content-file <file>",
+                "End any run -- a ticket's, a chat thread's, or a command's -- "
+                "to await its own PRs' pending checks: a notice on each PR, from "
+                "which the patrol resumes the run's work once they settle.",
             ),
         ],
     ),
@@ -366,22 +422,42 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Inspect first: read the current ticket / PR / thread with the bundled repository inspections or member chat inspect "
     "commands before acting. Fields owned by the code host or the chat (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
-    "inspect output.",
+    "inspect output. When a ticket has attachments, such as screenshots of a "
+    "defect or a screen to build, download each one the work depends on with "
+    "`member ticket attachment download` and look at it before acting: what "
+    "it shows is part of the request, not something to guess from the text.",
     "Ground repository judgments in the repository's own guidelines: before "
     "drafting or creating a ticket for a repository, or settling a design or "
     "implementation policy for one, read its agent and contributor guidelines "
     "(AGENTS.md, CLAUDE.md, CONTRIBUTING, or equivalents) and align the outcome "
-    "with them. The version on the origin default branch is canonical: with an "
-    "existing checkout, run `git fetch origin` and read `git show "
-    "origin/<default-branch>:<file>` instead of trusting possibly stale "
-    "working-tree files; without one, create a checkout first with `member git "
-    "prepare` (its output reports the default branch).",
+    "with them. The version on the code host's current default branch is canonical: "
+    "read it with `guildbotics member git show --person <person> "
+    "--repo <repository> --path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md`. "
+    "Use `--path .` to discover other guideline names and repeat --path to read "
+    "several at once. This works with or without a checkout and reports the "
+    "default branch and commit read; do not rely on possibly stale working-tree files.",
     "When addressing PR review feedback, follow the Handling review feedback "
     "procedure below before editing.",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
     'code change. When one fails, never stop at "unrelated to this change": '
-    "identify the cause, write the issue draft it deserves, and hand that draft to "
-    "the requester for a decision instead of registering it or fixing it yourself.",
+    "identify the cause and follow the ticket-search procedure below before "
+    "drafting an issue. Do not register or fix an unrelated issue yourself.",
+    "Before drafting or proposing a new ticket, including a draft for a failed "
+    "check, search the same tracker with `member ticket read --resource "
+    'tracker_tickets --subject <tracker> --params \'{"text":"<terms>","state":"all"}\'`. '
+    "Search with a few short term sets (component or command plus symptom), including "
+    "synonyms and English/Japanese variants, rather than one long phrase: `text` "
+    "requires all terms to match. Follow every continuation with identical conditions "
+    "for each term set. "
+    "A failed or incomplete search is not no matches. If an open ticket covers "
+    "the same issue, do not present a draft: comment there with the new findings "
+    "and tell the requester its URL. If only a closed ticket matches, do not "
+    "reopen it or comment on it: present a complete new draft and reference the "
+    "closed ticket in Related. If no open match was found and the search fails or is "
+    "incomplete, still present the complete draft, stating the conditions tried and "
+    "that duplicates could not be ruled out; reference any closed match in Related. "
+    "If a completed search finds no match, present the draft as before. "
+    "Ticket creation still requires a human's explicit approval.",
     "Inside a workflow or delegated command's isolated environment, the turn ends "
     "with your final answer, and whatever still runs in the environment stops with "
     "it: the completion notice of a background job never arrives. Run a long "
@@ -397,17 +473,28 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "create`. Pass `--issue-url` once for each ticket the PR works on, and add "
     "`--closes-issue` only when every one of those tickets is complete once this PR "
     "merges into the branch that receives its work. `--closes-issue` applies to all "
-    "of them, so with it link only the tickets the merge completes and refer to any "
-    "other on a standalone line in the body. "
+    "of them, so with it link only the tickets the merge completes. Mention any "
+    "other tickets in ordinary body prose, for example `Parent ticket: <url>`, "
+    "rather than managed link lines such as `Refs #43` or `Refs <url>`: managed "
+    "link lines may be removed when replacing ticket links. "
     "A child ticket can therefore be closed by a PR to its parent's feature "
     "branch: pass the child with `--issue-url <child> --closes-issue` and refer to "
-    "the parent ticket on a standalone line in the body. A PR from that feature "
+    "the parent ticket in ordinary body prose as above. A PR from that feature "
     "branch to the default branch closes the parent ticket. Keep the default "
     "reference for stacked PRs, partial steps, and tracking or parent tickets "
     "that the merge does not complete. A merge into a branch other than the default "
     "branch closes no ticket automatically, so after a human merges a child "
     "PR into a feature branch, follow the manual-close rule below. A closing link "
     "only states intent and does not by itself authorize closing the ticket.",
+    "When a PR's completion conditions are met after its creation, replace its "
+    "ticket links with `member pr update --issue-url <url> --closes-issue`, "
+    "repeating --issue-url only for tickets this merge completes. This replaces "
+    "the entire link list, and --closes-issue applies to every supplied ticket; "
+    "reference-only tickets, including unfinished parents, must stay outside "
+    "that list. Mention them in ordinary body prose as above, not managed "
+    "`Refs` lines; supply the revised body in the same update if needed. "
+    "Use --refs-issue to make every supplied ticket a reference instead, or "
+    "--drop-issue-links to remove all links.",
     "When creating new PR inline feedback, first inspect the PR with "
     "`repository/pr_inspect include_diff=true`, then use `member pr "
     "review-comment --head <head_sha>` with explicit diff coordinates from "
@@ -421,21 +508,24 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "If a check fails, use `repository/pr_checks failed_logs=true` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
     "check CI again. Do not report the work complete unless `readiness` is `ready`: "
-    "for every open PR, every observed check must succeed, the head must not be behind "
-    "the current base, and the checked head SHA must still be current. Closed and merged "
-    "PRs are not completion targets, but their CI rollup, checks, and failed logs remain "
-    "available for inspection. `rollup=no_checks` is visible and does not block a "
+    "for every open PR, resolve its `completion_blockers`. `base_out_of_date` means "
+    "the host requires an up-to-date head. The checked head SHA must still be current. "
+    "Closed and merged PRs are not completion targets, but their CI rollup, checks, "
+    "and failed logs remain available for inspection. `rollup=no_checks` is visible and does not block a "
     "repository whose base also has no checks; if the base has checks, an empty head is "
     "treated as registration pending. If an unrelated failure or an unavailable "
     "check blocks completion, follow the failure-handling rule above and report that blocker. "
-    "In a ticket workflow run, do not wait for CI in the turn: when pending checks "
-    "(`checks_pending`) are the only blocker left, finish the run with `member task "
-    "complete --status awaiting_checks`, and the patrol resumes the work once the "
-    "checks finish or the head moves.",
+    "In any workflow or command run -- a ticket's, a chat thread's, or a command's -- "
+    "do not wait for CI in the turn: when pending checks (`checks_pending`) are the "
+    "only blocker left, "
+    "end the run with `member checks await`, whose summary says where the outcome is "
+    "to be reported, and the patrol resumes the run's work once the checks finish or "
+    "the head moves.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating ticket or PR for ticket-driven work, the review thread or PR "
-    "conversation for PR review work, the chat thread for chat-driven work. "
+    "conversation for PR review work, the chat thread for chat-driven work, the "
+    "destination the command names for command-driven work. "
     "Avoid duplicate posts and posts explicitly marked as unnecessary.",
     "Before finishing, maintain memory according to the rules below.",
 ]
@@ -511,15 +601,27 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Say what the member thinks the priority should be, and why, in the ticket comment, PR "
     "comment, or thread where the work was requested, and leave the recording to a human.",
     "What the inspect commands read maps to writes like this: `ticket update` writes body, "
-    "title, labels, state, `parent`, and `blocked_by`, and `pr update` writes body and "
+    "title, labels, state, `interactive`, `parent`, and `blocked_by`, and `pr update` writes body and "
     "title. A ticket's `children` and `blocks` change by updating those tickets: a child "
     "names its parent, a blocked ticket the tickets it is blocked by. A parent is meant to "
     "be completed only once its children are closed, and a ticket to be started only once "
     "the tickets it is blocked by are closed: the patrol does not start a blocked ticket, "
     "and a service may refuse either. Assignees and the "
     "lane are read-only on purpose, because who takes a ticket is assigned by a human on "
-    "the board; PR state, draft, and base are read-only for the same reason (the "
-    "patrol itself makes a PR a draft only at the automatic re-review limit, and only a "
+    "the board. The exception is ticket creation: --human-approved covers the initial "
+    "assignee (any roster member, including humans), lane, interactive mode, parent, "
+    "and blockers requested in the conversation. Creating a ticket never authorizes "
+    "changing the assignment or lane of an existing ticket. Changing an existing ticket's "
+    "interactive mode requires a human's explicit request or approval for that ticket "
+    "and --human-approved, because it changes whether patrol starts work automatically. "
+    "例外として、作成時の担当者 (人を含む名簿のメンバー)、レーン、対話指定、親、依存先の指定は "
+    "--human-approved の承認に含まれる。既存チケットの担当者とレーンの変更は承認しない。 "
+    "既存チケットの対話指定の切り替えも巡回の自動着手を変える人の判断なので、そのチケットへの "
+    "人の依頼か承認と --human-approved が必要。 "
+    "PR state, draft, and base are read-only for the same reason (the "
+    "host ticket selector makes a PR a draft at the automatic re-review limit, "
+    "records it in Activity and announces it on the PR and in the reviewer's "
+    "work-stop chat channels; only a "
     "human marks it ready for review again).",
     "Pass every free-form write body, message, reason, or run summary through "
     "`--content-file <file>`. Create a dedicated directory exclusively, outside the "

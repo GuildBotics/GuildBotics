@@ -70,3 +70,51 @@ def test_an_archive_naming_its_destination_itself_is_refused(tmp_path, name) -> 
     done = _unpack(_archive({name or "./": b""}), tmp_path / "artifact")
 
     assert done.returncode == 1
+
+
+def test_the_environment_writes_an_attachment_as_one_file(tmp_path) -> None:
+    destination = tmp_path / "out"
+    run = [sys.executable, "-m", "guildbotics.capabilities.artifact_archive"]
+
+    done = subprocess.run(
+        [*run, str(destination), "screen.png", "atc_1"],
+        input=b"png",
+        capture_output=True,
+        check=False,
+    )
+    again = subprocess.run(
+        [*run, str(destination), "screen.png", "atc_1"],
+        input=b"other",
+        capture_output=True,
+        check=False,
+    )
+
+    assert done.returncode == 0, done.stderr
+    written = destination.resolve() / "screen.png"
+    assert json.loads(done.stdout) == {
+        "destination": str(destination.resolve()),
+        "files": [str(written)],
+    }
+    assert (again.returncode, written.read_bytes()) == (1, b"png")
+    assert b"already exists" in again.stderr
+
+
+@pytest.mark.parametrize(
+    "name", ["../up.png", "a/b.png", "a\b.png", "c:d.png", "..", " ", "a\nb"]
+)
+def test_an_attachment_not_named_by_one_plain_file_name_is_written_by_its_id(
+    tmp_path, name
+) -> None:
+    written = artifact_archive.place_attachment(
+        io.BytesIO(b"png"), tmp_path / "out", name, "atc_1"
+    )
+
+    assert written == (tmp_path / "out" / "atc_1").resolve()
+    assert [path.name for path in tmp_path.rglob("*")] == ["out", "atc_1"]
+
+
+def test_an_attachment_with_no_plain_file_name_at_all_is_refused(tmp_path) -> None:
+    with pytest.raises(artifact_archive.ArtifactError, match="no safe file name"):
+        artifact_archive.place_attachment(
+            io.BytesIO(b"png"), tmp_path, "../a.png", "../b"
+        )

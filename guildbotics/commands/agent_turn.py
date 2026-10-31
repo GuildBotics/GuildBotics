@@ -24,11 +24,6 @@ class RunLedger(Protocol):
         """The run the command records to."""
         ...
 
-    @property
-    def work_kind(self) -> str:
-        """The kind of work the run does."""
-        ...
-
     def require_completion(self) -> None:
         """Raise unless the run has recorded a terminal completion."""
 
@@ -67,8 +62,8 @@ async def run_agent_turn(
     attempt budget through ``max_completion_attempts``.
 
     ``invoke`` receives the attempt's execution context and the prompt
-    parameters derived from the run record for that attempt: a chat turn gets
-    ``previous_attempt_evidence``, the actions its run has already taken,
+    parameters derived from the run record for that attempt: a turn answering
+    a chat event gets ``previous_attempt_evidence``, the actions its run has already taken,
     re-read before every attempt so a session that had to be recreated does
     not repeat them. These parameters replace any the workflow passed under
     the same name.
@@ -81,11 +76,6 @@ async def run_agent_turn(
             caller is responsible for reporting the failure to the requester.
     """
     context = dict(execution_context)
-    if ledger.work_kind not in {"ticket", "chat"}:
-        raise ValueError(
-            "Completion-managed agent turns require work_kind 'ticket' or 'chat'."
-        )
-
     attempts = _positive_int(context.get("max_completion_attempts"), 1)
     first_attempt = _positive_int(context.get("attempt"), 1)
     retry_invoke_exceptions = bool(context.get("retry_invoke_exceptions", True))
@@ -104,9 +94,9 @@ async def run_agent_turn(
             "continuation_input": _continuation_input(ledger, context),
         }
         try:
-            response = await invoke(turn_context, _turn_parameters(ledger))
+            response = await invoke(turn_context, _turn_parameters(ledger, context))
         except Exception as exc:
-            _raise_rate_limit(exc)
+            _raise_terminal_failure(exc)
             if retry_invoke_exceptions:
                 last_error = exc
                 continue
@@ -115,7 +105,7 @@ async def run_agent_turn(
         try:
             ledger.require_completion()
         except Exception as exc:
-            _raise_rate_limit(exc)
+            _raise_terminal_failure(exc)
             ledger.record_completion_missing(dispatch_attempt, attempts, str(exc))
             last_error = exc
             continue
@@ -126,8 +116,14 @@ async def run_agent_turn(
     raise CompletionRetryExhausted(attempts, last_error)
 
 
-def _turn_parameters(ledger: RunLedger) -> dict[str, str]:
-    if ledger.work_kind != "chat":
+def _answers_chat_event(context: Mapping[str, Any]) -> bool:
+    """Whether the turn answers a chat event, as a chat workflow's does; a run
+    resumed in a chat thread's work answers none."""
+    return bool(context.get("event_id"))
+
+
+def _turn_parameters(ledger: RunLedger, context: Mapping[str, Any]) -> dict[str, str]:
+    if not _answers_chat_event(context):
         return {}
     evidence = [
         item for item in ledger.evidence() if item["evidence_type"] != "chat_batch"
@@ -140,7 +136,7 @@ def _turn_parameters(ledger: RunLedger) -> dict[str, str]:
 
 
 def _continuation_input(ledger: RunLedger, context: Mapping[str, Any]) -> str:
-    if ledger.work_kind == "chat":
+    if _answers_chat_event(context):
         return t(
             "commands.workflows.common.agent_chat_continuation",
             run_id=ledger.run_id,
@@ -152,11 +148,13 @@ def _continuation_input(ledger: RunLedger, context: Mapping[str, Any]) -> str:
 def _positive_int(value: Any, default: int) -> int:
     try:
         return max(1, int(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
-def _raise_rate_limit(exc: Exception) -> None:
-    found = find_cli_agent_execution_error(exc, category="rate_limited")
-    if found is not None:
-        raise found from exc
+def _raise_terminal_failure(exc: Exception) -> None:
+    for category in ("rate_limited", "timeout"):
+        if (
+            found := find_cli_agent_execution_error(exc, category=category)
+        ) is not None:
+            raise found from exc

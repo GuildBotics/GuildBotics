@@ -8,11 +8,12 @@ import pytest
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import load_command_metadata, parse_command_access
 from guildbotics.commands.python_command import _load_python_module
-from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.port import ServiceError, ServiceUnsupported
 from guildbotics.runtime.resources import ReadPage
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.local_code_host import (
+    attachment,
     comment,
     local_member,
     pull_request,
@@ -81,6 +82,10 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
                 page({"id": "1"}, continuation="comments-2"),
                 page({"id": "2"}),
             ],
+            "ticket_attachments": [
+                page({"id": "a1"}, continuation="attachments-2"),
+                page({"id": "a2"}),
+            ],
             "ticket_pull_requests": [
                 page(linked, other, continuation="prs-2"),
                 page({**linked, "title": "Fix, read again"}),
@@ -91,12 +96,14 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
         await command("issue_inspect").main(service.context(), TICKET_URL)
     )
     assert result["comments"] == [{"id": "1"}, {"id": "2"}]
+    assert result["attachments"] == [{"id": "a1"}, {"id": "a2"}]
+    assert "attachments_unavailable" not in result
     assert result["labels"] == ["bug"] and result["assignees"] == ["aiko"]
     assert result["linked_pull_request_candidates"] == [
         {**linked, "title": "Fix, read again"},
         other,
     ]
-    # The ticket and its comments are the ticket service's; the pull requests
+    # The ticket, its comments and attachments are the ticket service's; the pull requests
     # that refer to it, the code host's. Every read is of the ticket's URL.
     assert [
         (name, resource, subject) for name, resource, subject, _ in service.calls
@@ -104,6 +111,8 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
         ("tickets", "tickets", TICKET_URL),
         ("tickets", "ticket_comments", TICKET_URL),
         ("tickets", "ticket_comments", TICKET_URL),
+        ("tickets", "ticket_attachments", TICKET_URL),
+        ("tickets", "ticket_attachments", TICKET_URL),
         ("code", "ticket_pull_requests", TICKET_URL),
         ("code", "ticket_pull_requests", TICKET_URL),
     ]
@@ -112,14 +121,32 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 @pytest.mark.asyncio
 async def test_issue_inspect_reads_a_local_ticket_and_the_prs_that_refer_to_it():
     member = local_member()
-    url = ticket(1, title="Login", comments=[comment("someone", "it fails")])
+    parent = ticket(4, interactive=True)
+    screen = attachment("screen-1", b"PNG!")
+    url = ticket(
+        1,
+        title="Login",
+        parent=parent,
+        comments=[comment("someone", f"it fails: ![screen]({screen})", id="c-1")],
+    )
     pr = pull_request(2, "ticket/T-1", tickets=[{"url": url, "closes": False}])
     pull_request(3, "elsewhere")
 
     result = json.loads(await command("issue_inspect").main(member, url))
 
     assert (result["url"], result["key"], result["title"]) == (url, "T-1", "Login")
-    assert [c["body"] for c in result["comments"]] == ["it fails"]
+    assert result["interactive"] is False
+    assert result["interactive_ancestor"] == parent
+    assert [c["body"] for c in result["comments"]] == [f"it fails: ![screen]({screen})"]
+    assert result["attachments"] == [
+        {
+            "id": "screen-1",
+            "name": "screen.png",
+            "media_type": "image/png",
+            "size": 4,
+            "referenced_by": ["c-1"],
+        }
+    ]
     assert [pull["url"] for pull in result["linked_pull_request_candidates"]] == [pr]
 
 
@@ -219,6 +246,7 @@ async def test_checks_displays_host_result_verbatim(readiness):
         "checks_expected": True,
         "rollup": "no_checks",
         "head_sha": "head",
+        "checks": [{"name": "gate", "details": "Conflicts: src/one.py"}],
         "failed_logs": [{"log": "failure", "truncated": True}],
     }
     service = Pages({"pull_request_readiness": [page(result)]})
@@ -241,6 +269,7 @@ async def test_partial_failure_is_not_an_empty_or_complete_issue(resource):
     pages = {
         "tickets": [page({"title": "Ticket"})],
         "ticket_comments": [page()],
+        "ticket_attachments": [page()],
         "ticket_pull_requests": [page()],
     }
     pages[resource] = [
@@ -291,13 +320,49 @@ async def test_empty_issue_data_is_complete():
         {
             "tickets": [page({"title": "Ticket"})],
             "ticket_comments": [page()],
+            "ticket_attachments": [page()],
             "ticket_pull_requests": [page()],
         }
     )
     result = json.loads(
         await command("issue_inspect").main(service.context(), TICKET_URL)
     )
-    assert result["comments"] == result["linked_pull_request_candidates"] == []
+    assert (
+        result["comments"]
+        == result["attachments"]
+        == result["linked_pull_request_candidates"]
+        == []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        [ServiceUnsupported("No attachments here")],
+        [page({"id": "a1"}, continuation="next"), ServiceError("No attachments here")],
+    ],
+)
+async def test_attachments_that_cannot_be_listed_leave_the_ticket_with_the_reason(
+    failure,
+):
+    """A service that keeps no attachments, or fails to list them, does not
+    hide the rest of the ticket; the inspection says the attachments are
+    not there and why, rather than that there are none."""
+    service = Pages(
+        {
+            "tickets": [page({"title": "Ticket"})],
+            "ticket_comments": [page({"id": "1"})],
+            "ticket_attachments": failure,
+            "ticket_pull_requests": [page()],
+        }
+    )
+    result = json.loads(
+        await command("issue_inspect").main(service.context(), TICKET_URL)
+    )
+    assert result["comments"] == [{"id": "1"}]
+    assert result["attachments"] is None
+    assert result["attachments_unavailable"] == "No attachments here"
 
 
 @pytest.mark.parametrize("name", ["issue_inspect", "pr_inspect", "pr_checks"])

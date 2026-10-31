@@ -15,7 +15,7 @@ member CLI see one shape from every provider.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -56,6 +56,15 @@ class PageQuery(ReadModel):
     node: str = Field(default="", max_length=256)
 
 
+class TicketSearchQuery(ReadModel):
+    """Tickets of a tracker, with every whitespace-separated term required."""
+
+    text: str = Field(default="", max_length=256)
+    state: Literal["open", "closed", "all"] = "open"
+    label: str = Field(default="", max_length=256)
+    page_size: int = Field(default=30, ge=1, le=100)
+
+
 WorkKind = Literal["ticket", "pull_request"]
 
 
@@ -72,12 +81,24 @@ class WorkTarget(ReadModel):
 
 
 Lane = Literal["new", "ready", "in_progress", "done"]
+ActorName = NewType("ActorName", str)
+"""A public service account name, resolved through the member roster."""
 
 
 class TicketRelative(WorkTarget):
     """A ticket another ticket is related to, with its state."""
 
     state: str
+
+
+class TicketSummary(WorkTarget):
+    """One search result, without the ticket's unbounded body or relations."""
+
+    key: str
+    state: str
+    lane: Lane | None
+    labels: list[str]
+    updated_at: str
 
 
 class Ticket(WorkTarget):
@@ -91,7 +112,7 @@ class Ticket(WorkTarget):
     repository: str | None
     body: str
     state: str
-    assignees: list[str]
+    assignees: list[ActorName]
     labels: list[str]
     #: The ticket's lane on the board; ``None`` when it is not on it.
     lane: Lane | None
@@ -103,13 +124,20 @@ class Ticket(WorkTarget):
     blocked_by: list[TicketRelative]
     #: The tickets this one must be closed before.
     blocks: list[TicketRelative]
+    #: The ticket's own interactive setting. An ancestor can keep it
+    #: interactive even when this is false.
+    interactive: bool
+    #: URL of the nearest interactive ancestor, if any.
+    interactive_ancestor: str | None
 
 
 class PullRequest(WorkTarget):
     repository: str
     body: str
     state: str
-    assignees: list[str]
+    assignees: list[ActorName]
+    author: ActorName
+    requested_reviewers: list[ActorName]
     labels: list[str]
     #: ``assistant`` when the member wrote it, as for comments.
     author_type: str
@@ -126,7 +154,7 @@ class PullRequest(WorkTarget):
 class Comment(ReadModel):
     id: str
     body: str
-    author: str
+    author: ActorName
     author_type: str
     created_at: str | None
     url: str | None
@@ -134,6 +162,19 @@ class Comment(ReadModel):
 
 class ThreadComment(Comment):
     reply_to_id: str | None
+
+
+class Attachment(ReadModel):
+    """A file a ticket's body or comments refer to, such as a screenshot."""
+
+    id: str
+    #: The name it was attached by; not a path.
+    name: str
+    media_type: str
+    #: Its size in bytes.
+    size: int
+    #: Where it is referred to: ``body``, or the id of a comment.
+    referenced_by: list[str]
 
 
 class TicketPullRequest(ReadModel):
@@ -152,7 +193,7 @@ ReviewVerdict = Literal["approve", "request_changes", "comment"]
 class Review(ReadModel):
     id: str
     body: str
-    author: str
+    author: ActorName
     author_type: str
     #: What the reviewer decided; ``dismissed`` when the decision was set aside.
     verdict: ReviewVerdict | Literal["dismissed"]
@@ -196,6 +237,7 @@ class Check(ReadModel):
     status: str
     conclusion: str | None
     details_url: str
+    details: str | None = Field(default=None, exclude_if=_absent)
 
 
 class CompletionBlocker(ReadModel):
@@ -281,8 +323,11 @@ ReadSubject = Literal["ticket", "pull_request", "repository"]
 #: Every resource, by what it is part of, with the schema of one of its items.
 RESOURCES_BY_SUBJECT: dict[ReadSubject, dict[str, type[ReadModel]]] = {
     "ticket": {
+        # Unlike the detail resources, this subject is a tracker path.
+        "tracker_tickets": TicketSummary,
         "tickets": Ticket,
         "ticket_comments": Comment,
+        "ticket_attachments": Attachment,
         "ticket_pull_requests": TicketPullRequest,
     },
     "pull_request": {
@@ -308,7 +353,9 @@ RESOURCE_SUBJECTS: dict[str, ReadSubject] = {
 }
 #: The resources the ticket service reads; the code host reads the others,
 #: the pull requests of a ticket among them.
-TICKET_RESOURCES = frozenset({"tickets", "ticket_comments"})
+TICKET_RESOURCES = frozenset(
+    {"tracker_tickets", "tickets", "ticket_comments", "ticket_attachments"}
+)
 #: The resources that are one item, read without pagination.
 DETAIL_RESOURCES = frozenset({"tickets", "pull_requests", "pull_request_readiness"})
 
@@ -355,9 +402,10 @@ def read_conditions(
 
     dependency_alerts follows DependencyAlertQuery: with an ``id`` it reads
     that one alert, with no other condition and no continuation. Readiness
-    accepts failed_logs and log_tail_bytes. Other collections take page_size
-    (1-100), and thread comments also the ``node`` id of their thread. One
-    item is read without conditions or continuation.
+    accepts failed_logs and log_tail_bytes. tracker_tickets follows
+    TicketSearchQuery with a tracker path as its subject. Other collections
+    take page_size (1-100), and thread comments also the ``node`` id of their
+    thread. One item is read without conditions or continuation.
 
     Raises:
         ServiceError: If the read is not one a service answers.
@@ -370,6 +418,8 @@ def read_conditions(
     try:
         if not isinstance(given, dict):
             raise ValueError
+        if resource == "tracker_tickets":
+            return TicketSearchQuery.model_validate(given).model_dump()
         if resource == "dependency_alerts":
             query = DependencyAlertQuery.model_validate(given)
             if query.id and (query.model_fields_set != {"id"} or continuation):
@@ -385,5 +435,5 @@ def read_conditions(
         if bool(conditions["node"]) != (resource == "review_thread_comments"):
             raise ValueError
         return conditions
-    except (ValueError, ValidationError):
+    except ValueError, ValidationError:
         raise ServiceError(t("integrations.resources.parameters")) from None

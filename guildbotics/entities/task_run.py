@@ -32,8 +32,8 @@ and is repeated only when the user starts it again.
 
 
 #: How a run's member says it ended: the work is done, it asks the requester
-#: something, it is blocked, or -- a ticket run only -- it stopped to await the
-#: checks of its pull request, which resume it when they settle.
+#: something, it is blocked, or -- whatever its work -- it stopped to await the
+#: checks of its pull requests, which resume the work when they settle.
 TaskRunCompletion = Literal["done", "asking", "blocked", "awaiting_checks"]
 TASK_RUN_COMPLETIONS: tuple[TaskRunCompletion, ...] = get_args(TaskRunCompletion)
 
@@ -47,6 +47,7 @@ class TaskRunResult(BaseModel):
     subject_id: str
     subject_url: str = ""
     status: TaskRunCompletion
+    waiting_for: list[str] = Field(default_factory=list)
 
 
 class TaskRunRecord(BaseModel):

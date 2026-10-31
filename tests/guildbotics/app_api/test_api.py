@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 import pytest
 import wakepy
@@ -15,12 +15,8 @@ from fastapi.testclient import TestClient
 from yaml import safe_load
 
 from guildbotics.app_api import lifecycle as lifecycle_module
-from guildbotics.app_api.api import (
-    TAURI_ORIGINS,
-    TEARDOWN_BUDGET_SECONDS,
-    TOKEN_HEADER,
-    create_app,
-)
+from guildbotics.app_api.api import TEARDOWN_BUDGET_SECONDS, create_app
+from guildbotics.app_api.auth import SECURITY_HEADERS
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
@@ -74,9 +70,10 @@ from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.setup.setup_service import SimpleProjectSetupService
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.correlation import trace_scope
-from guildbotics.utils.local_api import PROOF_PATH, TOKEN_SUBPROTOCOL
+from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH
 from guildbotics.utils.person_id import IDENTITY_FILE, identity_members_dir
 from guildbotics.utils.secret_store import KeyringSecretStore, identity_secret_store
+from guildbotics.workspace.identity import set_device_display_name
 from tests.guildbotics.members import write_member
 
 HTTP_OK = 200
@@ -86,10 +83,17 @@ from tests.guildbotics.app_api.command_doubles import (
     RunContext,
     stub_commands,
 )
+from tests.guildbotics.app_api.owner import (
+    EVENTS_URL,
+    ORIGIN,
+    browser_client,
+    owner_client,
+)
 from tests.guildbotics.local_chat import at, chat_event
 
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_INTERNAL_SERVER_ERROR = 500
 HTTP_CONFLICT = 409
@@ -97,8 +101,6 @@ THREAD_WAIT_SECONDS = 10.0
 DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 GITHUB_APPS_USER_ID = 42
-
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
 
 def _chat_person(
@@ -131,9 +133,14 @@ def _chat_context(members: list[Any]) -> Any:
     return type("ContextStub", (), {"team": team})()
 
 
-def _client(runtime: "RuntimeStub") -> TestClient:
-    """Build a TestClient bound to a stubbed runtime with a fixed token."""
-    return TestClient(create_app(session_token="secret", runtime=runtime))
+def _client(runtime: RuntimeStub) -> TestClient:
+    """Build a TestClient of the owner bound to a stubbed runtime."""
+    return owner_client(create_app(runtime=runtime))
+
+
+def _anonymous(app: FastAPI) -> TestClient:
+    """A client of the server's origin carrying no credential."""
+    return TestClient(app, base_url=ORIGIN)
 
 
 def test_registered_workspaces_are_listed_and_removal_preserves_files(
@@ -148,13 +155,12 @@ def test_registered_workspaces_are_listed_and_removal_preserves_files(
     workspace.mkdir()
     register_workspace(workspace)
     client = _client(RuntimeStub(tmp_path))
-    response = client.get("/device/workspaces", headers=AUTH_HEADERS)
+    response = client.get("/device/workspaces")
     assert response.status_code == HTTP_OK
     assert str(workspace) in response.json()
     response = client.request(
         "DELETE",
         "/device/workspaces",
-        headers=AUTH_HEADERS,
         json={"workspace_dir": str(workspace)},
     )
     assert response.status_code == HTTP_OK
@@ -173,7 +179,6 @@ def test_selected_workspace_registration_cannot_be_removed(tmp_path):
     response = _client(RuntimeStub(tmp_path)).request(
         "DELETE",
         "/device/workspaces",
-        headers=AUTH_HEADERS,
         json={"workspace_dir": str(tmp_path)},
     )
     assert response.status_code == HTTP_BAD_REQUEST
@@ -210,7 +215,6 @@ def test_registration_removal_needs_no_access_to_obsolete_path(
     response = _client(RuntimeStub(path if active else tmp_path)).request(
         "DELETE",
         "/device/workspaces",
-        headers=AUTH_HEADERS,
         json={"workspace_dir": str(path)},
     )
     assert response.status_code == (HTTP_BAD_REQUEST if active else HTTP_OK)
@@ -239,10 +243,8 @@ def test_api_starts_unselected_when_input_store_cannot_be_initialized(
         )
 
     monkeypatch.setattr(store, "_start", fail)
-    with TestClient(
-        create_app(session_token="secret", command_input_file_store=store)
-    ) as client:
-        response = client.get("/config/status", headers=AUTH_HEADERS)
+    with owner_client(create_app(command_input_file_store=store)) as client:
+        response = client.get("/config/status")
         assert response.status_code == HTTP_OK
         assert response.json()["workspace"] is None
         assert response.json()["workspace_problem"] == ""
@@ -264,25 +266,19 @@ def test_status_poll_retries_only_failed_input_store(tmp_path, monkeypatch):
         original()
 
     monkeypatch.setattr(store, "_start", start)
-    with TestClient(
+    with owner_client(
         create_app(
-            session_token="secret",
             runtime=RuntimeStub(tmp_path),
             command_input_file_store=store,
         )
     ) as client:
-        first = client.get("/config/status", headers=AUTH_HEADERS)
+        first = client.get("/config/status")
         assert first.json()["input_store_problem"]
         refused = False
-        recovered = client.get("/config/status", headers=AUTH_HEADERS)
+        recovered = client.get("/config/status")
         assert recovered.json()["input_store_problem"] == ""
         count = len(attempts)
-        assert (
-            client.get("/config/status", headers=AUTH_HEADERS).json()[
-                "input_store_problem"
-            ]
-            == ""
-        )
+        assert client.get("/config/status").json()["input_store_problem"] == ""
         assert len(attempts) == count
 
 
@@ -572,16 +568,14 @@ class RuntimeStub:
 
 
 def test_shutdown_asks_the_hosting_server_to_exit(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
     requested: list[bool] = []
     app.state.request_shutdown = lambda: requested.append(True)
 
-    with TestClient(app) as client:
-        unauthorized = client.post("/shutdown")
+    with owner_client(app) as client:
+        unauthorized = _anonymous(app).post(API_PREFIX + "/shutdown")
         assert requested == []
-        response = client.post(
-            "/shutdown", headers={"X-GuildBotics-Session-Token": "secret"}
-        )
+        response = client.post("/shutdown")
 
     assert unauthorized.status_code == HTTP_UNAUTHORIZED
     assert response.status_code == HTTP_ACCEPTED
@@ -613,13 +607,14 @@ def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
     )
 
 
-def test_health_reports_the_service_and_its_workspace(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+def test_health_reports_the_service_its_workspace_and_its_machine(
+    tmp_path: Path,
+) -> None:
+    app = create_app(runtime=RuntimeStub(tmp_path))
+    set_device_display_name("Studio Mac")
 
-    with TestClient(app) as client:
-        response = client.get(
-            "/health", headers={"X-GuildBotics-Session-Token": "secret"}
-        )
+    with owner_client(app) as client:
+        response = client.get("/health")
 
     assert response.status_code == HTTP_OK
     assert response.json()["status"] == "ok"
@@ -627,17 +622,19 @@ def test_health_reports_the_service_and_its_workspace(tmp_path: Path) -> None:
     assert response.json()["workspace"] == str(
         app.state.runtime.get_config_status().workspace
     )
+    # What the screens mean by "this machine", whichever machine the browser
+    # runs on.
+    assert response.json()["machine_name"] == "Studio Mac"
 
 
 def test_workspace_change_updates_runtime_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/workspace",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"workspace_dir": str(workspace)},
         )
 
@@ -921,12 +918,11 @@ def test_app_runtime_command_options_extract_markdown_arguments(
 
 
 def test_command_run_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/run",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"command": "hello"},
         )
 
@@ -943,15 +939,13 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
     runtime = RuntimeStub(tmp_path)
     store = CommandInputFileStore(root=tmp_path / "tmp")
     app = create_app(
-        session_token="secret",
         runtime=runtime,
         command_input_file_store=store,
     )
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/input-files",
-            headers=AUTH_HEADERS,
             files={"file": ("clipboard.png", b"image-data", "image/png")},
         )
 
@@ -969,17 +963,15 @@ def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
 ) -> None:
     store = CommandInputFileStore(root=tmp_path / "tmp")
     app = create_app(
-        session_token="secret",
         runtime=RuntimeStub(tmp_path),
         command_input_file_store=store,
     )
     source = tmp_path / "report.md"
     source.write_text("hello", encoding="utf-8")
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/input-files/copy",
-            headers=AUTH_HEADERS,
             json={"path": str(source)},
         )
         assert response.status_code == HTTP_OK
@@ -991,7 +983,6 @@ def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
 
         refused = client.post(
             "/commands/input-files/copy",
-            headers=AUTH_HEADERS,
             json={"path": str(tmp_path)},
         )
 
@@ -1004,7 +995,7 @@ def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
 def test_command_input_paths_report_what_a_turn_would_reach(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
     home = Path.home()
     reachable = home / "Documents/GuildBotics/tmp/a.png"
     reachable.parent.mkdir(parents=True)
@@ -1014,10 +1005,9 @@ def test_command_input_paths_report_what_a_turn_would_reach(
     unreachable = outside / "shot.png"
     unreachable.write_bytes(b"x")
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/input-paths",
-            headers=AUTH_HEADERS,
             json={"paths": [str(reachable), str(unreachable), str(outside)]},
         )
 
@@ -1056,39 +1046,45 @@ def test_command_input_paths_report_what_a_turn_would_reach(
 def test_command_input_file_upload_runs_sync_io_outside_event_loop(
     tmp_path: Path,
 ) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
     route = next(
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/commands/input-files"
+        if isinstance(route, APIRoute)
+        and route.path == API_PREFIX + "/commands/input-files"
     )
 
     assert not inspect.iscoroutinefunction(route.endpoint)
 
 
-def test_command_input_file_upload_rejects_non_image(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+def test_command_input_file_upload_takes_any_file_a_browser_drops(
+    tmp_path: Path,
+) -> None:
+    """A browser cannot hand over a path, so a dropped file arrives as an
+    upload, whatever its type."""
+    store = CommandInputFileStore(root=tmp_path / "tmp")
+    app = create_app(runtime=RuntimeStub(tmp_path), command_input_file_store=store)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/input-files",
-            headers=AUTH_HEADERS,
             files={"file": ("document.pdf", b"pdf", "application/pdf")},
         )
 
-    assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["code"] == "command_input_file_invalid"
+        assert response.status_code == HTTP_OK
+        saved = Path(response.json()["path"])
+        assert saved.name.endswith("-document.pdf")
+        assert saved.read_bytes() == b"pdf"
 
 
 def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/author",
-            headers=AUTH_HEADERS,
             json={
                 "mode": "edit",
                 "conversation_id": "authoring-1",
@@ -1125,12 +1121,11 @@ def test_command_authoring_uses_runtime(tmp_path: Path) -> None:
 
 def test_command_authoring_create_allows_ai_to_choose_identity(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/author",
-            headers=AUTH_HEADERS,
             json={
                 "mode": "create",
                 "conversation_id": "authoring-2",
@@ -1148,12 +1143,11 @@ def test_command_authoring_create_allows_ai_to_choose_identity(tmp_path: Path) -
 
 
 def test_command_authoring_edit_requires_existing_identity(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/author",
-            headers=AUTH_HEADERS,
             json={
                 "mode": "edit",
                 "conversation_id": "authoring-3",
@@ -1166,7 +1160,7 @@ def test_command_authoring_edit_requires_existing_identity(tmp_path: Path) -> No
 
 def test_command_authoring_apply_uses_reviewed_changes(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     change = {
         "operation": "create",
         "command": "helper",
@@ -1177,10 +1171,9 @@ def test_command_authoring_apply_uses_reviewed_changes(tmp_path: Path) -> None:
         "expected_revision": "",
     }
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/author/apply",
-            headers=AUTH_HEADERS,
             json={"changes": [change]},
         )
 
@@ -1190,12 +1183,11 @@ def test_command_authoring_apply_uses_reviewed_changes(tmp_path: Path) -> None:
 
 
 def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.get(
             "/commands/options",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1204,12 +1196,11 @@ def test_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
 
 
 def test_routine_command_options_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.get(
             "/commands/routine-options",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1224,7 +1215,6 @@ def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
     stub = RuntimeStub(tmp_path)
     event_bus = stub.event_bus
     app = create_app(
-        session_token="secret",
         runtime=stub,
     )
     with trace_scope("manual", trace_id="request-1"):
@@ -1234,10 +1224,8 @@ def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
         )
 
     with (
-        TestClient(app) as client,
-        client.websocket_connect(
-            "/events", subprotocols=[TOKEN_SUBPROTOCOL, "secret"]
-        ) as websocket,
+        browser_client(app) as client,
+        client.websocket_connect(EVENTS_URL) as websocket,
     ):
         event = websocket.receive_json()
 
@@ -1248,12 +1236,11 @@ def test_event_stream_replays_trace_id(tmp_path: Path) -> None:
 
 
 def test_command_error_uses_stable_error_shape(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/commands/run",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"command": "missing"},
         )
 
@@ -1266,12 +1253,11 @@ def test_command_error_uses_stable_error_shape(tmp_path: Path) -> None:
 
 
 def test_scheduler_start_event_queue_source_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/scheduler/start",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "sources": {"scheduled": False, "routine": False, "event_queue": True}
             },
@@ -1283,16 +1269,14 @@ def test_scheduler_start_event_queue_source_uses_runtime(tmp_path: Path) -> None
 
 
 def test_transcript_settings_endpoints_use_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         status = client.get(
             "/transcripts/settings",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         updated = client.put(
             "/transcripts/settings",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"detail": "full", "retention_days": 14},
         )
 
@@ -1305,12 +1289,11 @@ def test_transcript_settings_endpoints_use_runtime(tmp_path: Path) -> None:
 
 
 def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/scheduler/start",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "sources": {"scheduled": False, "routine": False, "event_queue": False}
             },
@@ -1325,12 +1308,11 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
 
 def test_cli_agent_usage_endpoint_reads_one_tool(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.get(
             "/intelligences/cli-agents/codex/usage?refresh=true",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1394,12 +1376,11 @@ async def test_app_runtime_cli_agent_usage_reads_the_named_tool(
 
 
 def test_scenario_diagnostics_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/diagnostics/scenario",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1410,12 +1391,11 @@ def test_scenario_diagnostics_endpoint_uses_runtime(tmp_path: Path) -> None:
 
 
 def test_scenario_diagnostics_endpoint_accepts_person_id(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/diagnostics/scenario?person_id=alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1425,13 +1405,12 @@ def test_scenario_diagnostics_endpoint_accepts_person_id(tmp_path: Path) -> None
 def test_config_init_endpoint_writes_project_without_github(tmp_path: Path) -> None:
     from guildbotics.utils.secret_store import KeyringSecretStore
 
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
     config_dir = tmp_path / ".guildbotics/config"
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/config/init",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "language": "en",
@@ -1453,7 +1432,7 @@ def test_config_project_endpoints_read_and_update_non_destructively(
     tmp_path: Path,
 ) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     team_dir = config_dir / "team"
     team_dir.mkdir(parents=True, exist_ok=True)
@@ -1506,10 +1485,9 @@ def test_config_project_endpoints_read_and_update_non_destructively(
         )
     )
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         get_response = client.get(
             "/config/project",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert get_response.status_code == HTTP_OK
         payload = get_response.json()
@@ -1528,7 +1506,6 @@ def test_config_project_endpoints_read_and_update_non_destructively(
 
         put_response = client.put(
             "/config/project",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "language": "ja",
@@ -1550,7 +1527,6 @@ def test_config_project_endpoints_read_and_update_non_destructively(
 
         reread = client.get(
             "/config/project",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         ).json()
 
     updated_project = safe_load((team_dir / "project.yml").read_text())
@@ -1590,13 +1566,12 @@ def test_config_project_update_without_services_removes_them(tmp_path: Path) -> 
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json={"config_dir": str(config_dir), "language": "en", "services": {}},
     )
 
     assert response.status_code == HTTP_OK
     assert "services" not in safe_load(project_file.read_text())
-    assert client.get("/config/project", headers=AUTH_HEADERS).json()["services"] == {}
+    assert client.get("/config/project").json()["services"] == {}
 
 
 @pytest.mark.parametrize(
@@ -1627,7 +1602,6 @@ def test_config_project_update_rejects_invalid_services(
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json={"config_dir": str(config_dir), "language": "en", "services": services},
     )
 
@@ -1637,12 +1611,11 @@ def test_config_project_update_rejects_invalid_services(
 
 
 def test_roles_endpoint_returns_template_roles(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.get(
             "/config/roles?language=ja",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
@@ -1663,16 +1636,15 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
     tmp_path: Path,
 ) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     (config_dir / "team").mkdir(parents=True, exist_ok=True)
     (config_dir / "team/project.yml").write_text("language: en")
     runtime.config_status.project_file_exists = True
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         get_response = client.get(
             "/config/intelligences",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert get_response.status_code == HTTP_OK
         payload = get_response.json()
@@ -1690,7 +1662,6 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         }
         update_response = client.put(
             "/config/intelligences",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "model_mapping": payload["model_mapping"],
@@ -1704,7 +1675,6 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
 
         member_response = client.get(
             "/config/intelligences?person_id=alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert member_response.status_code == HTTP_OK
         member_payload = member_response.json()
@@ -1721,7 +1691,6 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
         }
         member_update = client.put(
             "/config/intelligences",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "person_id": "alice",
@@ -1748,7 +1717,6 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
 
         inherit_reset = client.put(
             "/config/intelligences",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "person_id": "alice",
@@ -1768,7 +1736,7 @@ def test_intelligence_config_endpoints_read_update_and_member_inherit(
 
 def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     write_member(
         config_dir,
@@ -1811,10 +1779,9 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
     store.set("ALICE_SLACK_BOT_TOKEN", "xoxb-a")
     store.set("ALICE_SLACK_APP_TOKEN", "xapp-a")
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         get_response = client.get(
             "/config/members/alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert get_response.status_code == HTTP_OK
         payload = get_response.json()
@@ -1843,7 +1810,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
 
         put_response = client.put(
             "/config/members/alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "expected_revisions": payload["revisions"],
@@ -1875,6 +1841,7 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
                 },
                 "chat_channels": ["C09999999"],
                 "chat_channel_participation": {"C09999999": "muted"},
+                "work_stop_notification_channels": ["C09999999"],
             },
         )
         assert put_response.status_code == HTTP_OK
@@ -1911,8 +1878,13 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         assert member["message_channels"][0]["chat"] == {
             "enabled": True,
             "participation": "muted",
+            "notify_work_stops": True,
             "channel_id": "C09999999",
         }
+        saved = client.get(
+            "/config/members/alice",
+        )
+        assert saved.json()["work_stop_notification_channels"] == ["C09999999"]
         assert store.get("ALICE_GITHUB_ACCESS_TOKEN") == "token-b"
         assert store.get("ALICE_SLACK_BOT_TOKEN") == "xoxb-b"
         assert store.get("ALICE_SLACK_APP_TOKEN") == "xapp-b"
@@ -1921,7 +1893,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         # Taken out of the workspace, the member keeps its identity...
         removed = client.delete(
             "/config/members/alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert removed.status_code == HTTP_OK
         assert not (config_dir / "team/members/alice").exists()
@@ -1930,7 +1901,6 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
         # ...until it is deleted, credentials and all.
         deleted = client.delete(
             "/identities/alice",
-            headers={"X-GuildBotics-Session-Token": "secret"},
         )
         assert deleted.status_code == HTTP_OK
     assert not (identity_members_dir() / "alice").exists()
@@ -1940,17 +1910,16 @@ def test_member_config_endpoints_read_update_delete(tmp_path: Path) -> None:
 
 def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     (config_dir / "team").mkdir(parents=True, exist_ok=True)
     (config_dir / "team/project.yml").write_text("language: en")
     runtime.config_status.project_file_exists = True
 
     wrong_config_dir = tmp_path / "wrong/.guildbotics/config"
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/config/members",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(wrong_config_dir),
                 "person_type": "",
@@ -1968,16 +1937,15 @@ def test_member_create_uses_existing_runtime_config_dir(tmp_path: Path) -> None:
 
 def test_default_person_endpoint_writes_runtime_config_dir(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     write_member(config_dir, {"person_id": "alice", "name": "Alice"})
     (config_dir / "team/project.yml").write_text("language: en")
     runtime.config_status.project_file_exists = True
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.put(
             "/config/project/default-person",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"person_id": "alice"},
         )
         assert response.status_code == HTTP_OK
@@ -1988,7 +1956,6 @@ def test_default_person_endpoint_writes_runtime_config_dir(tmp_path: Path) -> No
 
         unknown = client.put(
             "/config/project/default-person",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={"person_id": "ghost"},
         )
 
@@ -1998,14 +1965,13 @@ def test_default_person_endpoint_writes_runtime_config_dir(tmp_path: Path) -> No
 
 def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
     config_dir = tmp_path / ".guildbotics/config"
     env_file = tmp_path / ".env"
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/config/members",
-            headers={"X-GuildBotics-Session-Token": "secret"},
             json={
                 "config_dir": str(config_dir),
                 "person_type": "",
@@ -2127,7 +2093,7 @@ def test_app_runtime_scheduler_start_stop_lifecycle(
     release = threading.Event()
 
     class BlockingScheduler:
-        instances: ClassVar[list["BlockingScheduler"]] = []
+        instances: ClassVar[list[BlockingScheduler]] = []
 
         def __init__(
             self,
@@ -2263,7 +2229,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
         return object()
 
     class RunningEventListener:
-        instances: ClassVar[list["RunningEventListener"]] = []
+        instances: ClassVar[list[RunningEventListener]] = []
 
         def __init__(
             self,
@@ -2292,7 +2258,7 @@ def test_app_runtime_event_listener_start_stop_lifecycle(
     scheduler_release = threading.Event()
 
     class RunningScheduler:
-        instances: ClassVar[list["RunningScheduler"]] = []
+        instances: ClassVar[list[RunningScheduler]] = []
 
         def __init__(
             self,
@@ -2399,7 +2365,7 @@ def test_app_runtime_marks_event_listener_failed_on_stop_timeout(
         return object()
 
     class StuckEventListener:
-        instances: ClassVar[list["StuckEventListener"]] = []
+        instances: ClassVar[list[StuckEventListener]] = []
 
         def __init__(
             self,
@@ -2580,19 +2546,25 @@ def _http_routes(app: FastAPI) -> set[tuple[str, str]]:
     }
 
 
-#: Every route a request reaches without the session token, each because its
-#: caller cannot send one: the proof is asked before the client trusts the
-#: port, a provider's page is opened by the user's browser, and FastAPI serves
-#: its own schema pages. The WebSocket carries the token in its subprotocol
-#: (``test_api_ws.py``) and the avatar image checks it in the query too
-#: (``test_avatar.py``).
-TOKEN_FREE_ROUTES = {
-    ("POST", PROOF_PATH),
+#: Every route a request reaches without a credential, each because its caller
+#: holds none yet: the proof is asked before the client trusts the port, an
+#: entry code and a consent code are themselves the credential, a provider's
+#: page is opened by a browser coming back from another site (no SameSite=Strict
+#: cookie), the screens hold no data, and FastAPI serves its own schema pages.
+#: The WebSocket needs the session cookie and this origin (``test_api_ws.py``).
+UNAUTHENTICATED_ROUTES = {
+    ("POST", API_PREFIX + PROOF_PATH),
+    ("POST", API_PREFIX + "/session"),
+    ("POST", API_PREFIX + "/apps/token"),
     *(
         ("GET", page_path(provider.name, name))
         for provider in PROVIDERS.values()
         if provider.setup
         for name in provider.setup.pages
+    ),
+    *(
+        ("GET", path)
+        for path in ("/", "/index.html", "/quick.html", "/-/enter", "/-/authorize")
     ),
     ("GET", "/openapi.json"),
     ("GET", "/docs"),
@@ -2601,14 +2573,18 @@ TOKEN_FREE_ROUTES = {
 }
 
 
-@pytest.mark.parametrize("headers", [None, {"X-GuildBotics-Session-Token": "wrong"}])
-def test_every_route_but_the_token_free_ones_refuses_a_request_without_the_token(
+@pytest.mark.parametrize(
+    "headers", [None, {"Authorization": "Bearer gbt_0123456789abcdef_wrong"}]
+)
+def test_every_route_but_the_unauthenticated_ones_refuses_a_request_without_a_credential(
     tmp_path: Path, headers: dict[str, str] | None
 ) -> None:
     """The population is the routing table, so a route registered outside the
-    token-checking router, or a token-free one put inside it, fails here."""
-    client = _client(RuntimeStub(tmp_path))
-    routes = _http_routes(cast(FastAPI, client.app))
+    authenticating router, or an unauthenticated one put inside it, fails
+    here."""
+    app = create_app(runtime=RuntimeStub(tmp_path))
+    client = _anonymous(app)
+    routes = _http_routes(app)
 
     refused = set()
     for method, path in routes:
@@ -2616,14 +2592,27 @@ def test_every_route_but_the_token_free_ones_refuses_a_request_without_the_token
         response = client.request(method, url, headers=headers, json={})
         if response.status_code == HTTP_UNAUTHORIZED:
             assert response.json() == {
-                "code": "invalid_session_token",
-                "message": "Invalid session token.",
+                "code": "unauthorized",
+                "message": (
+                    "This request has no valid session or token. Open GuildBotics "
+                    "again with `guildbotics open` on the server machine."
+                ),
                 "context": {},
             }
             refused.add((method, path))
 
-    assert TOKEN_FREE_ROUTES <= routes
-    assert refused == routes - TOKEN_FREE_ROUTES
+    assert UNAUTHENTICATED_ROUTES <= routes
+    assert refused == routes - UNAUTHENTICATED_ROUTES
+
+
+def test_every_api_route_lives_under_the_api_prefix(tmp_path: Path) -> None:
+    """The screens and provider pages share the origin; the API is only the
+    ``/api`` part of it."""
+    routes = _http_routes(create_app(runtime=RuntimeStub(tmp_path)))
+
+    outside = {path for _, path in routes - UNAUTHENTICATED_ROUTES}
+    assert outside
+    assert all(path.startswith(API_PREFIX + "/") for path in outside)
 
 
 def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
@@ -2631,12 +2620,12 @@ def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
         def get_team_summary(self) -> TeamSummary:
             raise RuntimeError("boom")
 
-    client = TestClient(
-        create_app(session_token="secret", runtime=BoomStub(tmp_path)),
+    client = owner_client(
+        create_app(runtime=BoomStub(tmp_path)),
         raise_server_exceptions=False,
     )
 
-    response = client.get("/team", headers=AUTH_HEADERS)
+    response = client.get("/team")
 
     assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
     assert response.json() == {
@@ -2646,81 +2635,57 @@ def test_unexpected_error_maps_to_internal_error(tmp_path: Path) -> None:
     }
 
 
-def test_unexpected_error_response_carries_cors_headers(tmp_path: Path) -> None:
-    """Without them the browser hides the body and the app shows a bare failure."""
+def test_unexpected_error_response_carries_the_security_headers(
+    tmp_path: Path,
+) -> None:
+    """The error is built inside the guard, so it leaves with the headers
+    every response carries, and still with no CORS header."""
 
     class BoomStub(RuntimeStub):
         def get_team_summary(self) -> TeamSummary:
             raise RuntimeError("boom")
 
-    client = TestClient(
-        create_app(
-            session_token="secret",
-            allowed_origins=["http://localhost:1420"],
-            runtime=BoomStub(tmp_path),
-        ),
-        raise_server_exceptions=False,
+    client = owner_client(
+        create_app(runtime=BoomStub(tmp_path)), raise_server_exceptions=False
     )
 
-    response = client.get(
-        "/team", headers={**AUTH_HEADERS, "Origin": "http://localhost:1420"}
-    )
+    response = client.get("/team", headers={"Origin": ORIGIN})
 
     assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
-    assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+    assert response.json()["code"] == "internal_error"
+    for name, value in SECURITY_HEADERS.items():
+        assert response.headers[name] == value
+    assert not any(name.startswith("access-control-") for name in response.headers)
 
 
-def _preflight(client: TestClient, origin: str):
-    return client.options(
+@pytest.mark.parametrize(
+    "origin",
+    [
+        # Where the packaged Desktop and the Vite preview used to serve the
+        # screens from: the windows now load them from the server itself.
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:1420",
+        "http://localhost:9999",
+    ],
+)
+def test_a_preflight_from_another_origin_is_refused_without_cors(
+    tmp_path: Path, origin: str
+) -> None:
+    client = owner_client(create_app(runtime=RuntimeStub(tmp_path)))
+
+    response = client.options(
         "/team",
         headers={
             "Origin": origin,
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": TOKEN_HEADER,
+            "Access-Control-Request-Headers": "Authorization",
         },
     )
 
-
-def test_preflight_rejects_an_unlisted_localhost_origin(tmp_path: Path) -> None:
-    """Any page on the host used to pass; only the launcher's origins may now."""
-    client = TestClient(
-        create_app(
-            session_token="secret",
-            allowed_origins=["http://127.0.0.1:1420"],
-            runtime=RuntimeStub(tmp_path),
-        )
-    )
-
-    response = _preflight(client, "http://localhost:9999")
-
-    assert "access-control-allow-origin" not in response.headers
-
-
-@pytest.mark.parametrize("origin", TAURI_ORIGINS)
-def test_preflight_allows_a_packaged_tauri_origin_without_configuration(
-    tmp_path: Path, origin: str
-) -> None:
-    client = TestClient(
-        create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-    )
-
-    response = _preflight(client, origin)
-
-    assert response.headers["access-control-allow-origin"] == origin
-
-
-def test_preflight_allows_an_origin_injected_by_the_launcher(tmp_path: Path) -> None:
-    client = TestClient(
-        create_app(
-            session_token="secret",
-            allowed_origins=["http://127.0.0.1:1421"],
-            runtime=RuntimeStub(tmp_path),
-        )
-    )
-
-    response = _preflight(client, "http://127.0.0.1:1421")
-
-    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:1421"
+    assert response.status_code == HTTP_FORBIDDEN
+    assert response.json()["code"] == "origin_mismatch"
+    assert not any(name.startswith("access-control-") for name in response.headers)
 
 
 # --- config / workspace --------------------------------------------------
@@ -2728,13 +2693,10 @@ def test_preflight_allows_an_origin_injected_by_the_launcher(tmp_path: Path) -> 
 
 def test_workspace_change_rejects_missing_directory(tmp_path: Path) -> None:
     missing = tmp_path / "nope"
-    client = TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
+    client = owner_client(create_app(runtime=AppRuntime(EventBus())))
 
     response = client.post(
         "/workspace",
-        headers=AUTH_HEADERS,
         json={"workspace_dir": str(missing)},
     )
 
@@ -2747,13 +2709,10 @@ def test_workspace_change_rejects_missing_directory(tmp_path: Path) -> None:
 def test_workspace_change_rejects_non_directory(tmp_path: Path) -> None:
     file_path = tmp_path / "file.txt"
     file_path.write_text("hello")
-    client = TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus()))
-    )
+    client = owner_client(create_app(runtime=AppRuntime(EventBus())))
 
     response = client.post(
         "/workspace",
-        headers=AUTH_HEADERS,
         json={"workspace_dir": str(file_path)},
     )
 
@@ -2766,7 +2725,7 @@ def test_workspace_change_rejects_non_directory(tmp_path: Path) -> None:
 def test_config_roles_rejects_invalid_language(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/config/roles?language=fr", headers=AUTH_HEADERS)
+    response = client.get("/config/roles?language=fr")
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     payload = response.json()
@@ -2788,7 +2747,6 @@ def test_config_init_maps_setup_service_error(
 
     response = client.post(
         "/config/init",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
             "language": "en",
@@ -2810,7 +2768,7 @@ def test_config_init_maps_setup_service_error(
 def test_config_project_get_reports_project_not_found(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/config/project", headers=AUTH_HEADERS)
+    response = client.get("/config/project")
 
     assert response.status_code == HTTP_BAD_REQUEST
     payload = response.json()
@@ -2834,7 +2792,6 @@ def test_config_project_update_maps_setup_service_error(
 
     response = client.put(
         "/config/project",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
             "language": "en",
@@ -2856,7 +2813,7 @@ def test_member_config_get_reports_missing_member_before_project_init(
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/config/members/alice", headers=AUTH_HEADERS)
+    response = client.get("/config/members/alice")
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "person_not_found"
@@ -2867,7 +2824,6 @@ def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:
 
     response = client.put(
         "/config/members/alice",
-        headers=AUTH_HEADERS,
         json={
             "config_dir": str(tmp_path / ".guildbotics/config"),
             "person_type": "machine_user",
@@ -2895,7 +2851,7 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
 ) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/config/providers", headers=AUTH_HEADERS)
+    response = client.get("/config/providers")
 
     assert response.status_code == HTTP_OK
     # ``local`` is the reference provider and has no setup, so it is not offered.
@@ -2925,16 +2881,17 @@ def test_config_providers_lists_the_providers_the_setup_screens_offer(
     ]
 
 
-def test_provider_pages_are_served_without_the_session_token(tmp_path: Path) -> None:
-    """A page is opened by the user's browser, which carries no token."""
-    client = _client(RuntimeStub(tmp_path))
+def test_provider_pages_are_served_without_a_session(tmp_path: Path) -> None:
+    """A page is opened by a browser coming back from another site, which
+    sends no SameSite=Strict session cookie."""
+    client = _anonymous(create_app(runtime=RuntimeStub(tmp_path)))
 
     response = client.get(
-        "/providers/github/pages/app-manifest", params={"state": "unknown"}
+        page_path("github", "app-manifest"), params={"state": "unknown"}
     )
 
     # The page itself answers: an unknown registration is its error page,
-    # not the API's token refusal.
+    # not the API's refusal.
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.headers["content-type"].startswith("text/html")
     assert "GitHub App registration was not found or has expired." in response.text
@@ -2967,7 +2924,7 @@ def test_a_setup_error_from_an_operation_is_rendered_in_the_screen_language(
 
     response = client.post(
         "/config/providers/github/resolve-user",
-        headers={**AUTH_HEADERS, "X-GuildBotics-Language": language},
+        headers={"X-GuildBotics-Language": language},
         json={"account_type": "machine_user", "identity": "alice"},
     )
 
@@ -2984,7 +2941,6 @@ def test_an_operation_request_is_validated_by_its_model(tmp_path: Path) -> None:
 
     response = client.post(
         "/config/providers/github/resolve-user",
-        headers=AUTH_HEADERS,
         json={"account_type": "robot", "identity": "alice"},
     )
 
@@ -2999,7 +2955,6 @@ def test_resolve_user_refuses_a_github_apps_identity_that_is_not_an_app_url(
 
     response = client.post(
         "/config/providers/github/resolve-user",
-        headers=AUTH_HEADERS,
         json={"account_type": "github_apps", "identity": "https://example.com/x"},
     )
 
@@ -3025,7 +2980,6 @@ def test_resolve_user_answers_with_the_github_user(
 
     response = client.post(
         "/config/providers/github/resolve-user",
-        headers=AUTH_HEADERS,
         json={
             "account_type": "github_apps",
             "identity": "https://github.com/organizations/acme/settings/apps/my-app",
@@ -3111,7 +3065,6 @@ def test_status_options_read_the_named_board_with_a_member_who_can_reach_it(
 ) -> None:
     response = _client(board_runtime).post(
         "/config/providers/github/status-options",
-        headers=AUTH_HEADERS,
         json={"url": BOARD_URL},
     )
 
@@ -3143,7 +3096,6 @@ def test_a_board_that_cannot_be_named_is_unavailable(
     """The form then falls back to typing lane names."""
     response = _client(board_runtime).post(
         f"/config/providers/github/{operation}",
-        headers=AUTH_HEADERS,
         json={"url": "https://github.com/acme/repo"},
     )
 
@@ -3157,7 +3109,6 @@ def test_agent_field_reports_the_registered_and_missing_members(
 ) -> None:
     response = _client(board_runtime).post(
         "/config/providers/github/agent-field",
-        headers=AUTH_HEADERS,
         json={"url": BOARD_URL},
     )
 
@@ -3176,7 +3127,6 @@ def test_agent_field_ensure_adds_the_missing_members(
 ) -> None:
     response = _client(board_runtime).post(
         "/config/providers/github/agent-field/ensure",
-        headers=AUTH_HEADERS,
         json={"url": BOARD_URL},
     )
 
@@ -3192,7 +3142,7 @@ def test_agent_field_ensure_adds_the_missing_members(
 def test_config_intelligences_reports_project_not_found(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/config/intelligences", headers=AUTH_HEADERS)
+    response = client.get("/config/intelligences")
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "project_not_found"
@@ -3201,7 +3151,7 @@ def test_config_intelligences_reports_project_not_found(tmp_path: Path) -> None:
 def test_model_providers_available_before_project_init(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/intelligences/model-providers", headers=AUTH_HEADERS)
+    response = client.get("/intelligences/model-providers")
 
     assert response.status_code == HTTP_OK
     providers = {entry["provider"]: entry for entry in response.json()["providers"]}
@@ -3222,7 +3172,6 @@ def test_config_intelligences_update_maps_setup_service_error(
 
     response = client.put(
         "/config/intelligences",
-        headers=AUTH_HEADERS,
         json={"config_dir": str(tmp_path / ".guildbotics/config")},
     )
 
@@ -3242,7 +3191,6 @@ def test_scheduler_start_scheduled_and_routine_sources_endpoint(tmp_path: Path) 
 
     response = client.post(
         "/scheduler/start",
-        headers=AUTH_HEADERS,
         json={"sources": {"scheduled": True, "routine": True, "event_queue": False}},
     )
 
@@ -3254,7 +3202,7 @@ def test_scheduler_start_scheduled_and_routine_sources_endpoint(tmp_path: Path) 
 def test_scheduler_start_both_endpoint(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.post("/scheduler/start", headers=AUTH_HEADERS, json={})
+    response = client.post("/scheduler/start", json={})
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "running"
@@ -3265,7 +3213,7 @@ def test_scheduler_stop_endpoint(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
     client = _client(runtime)
 
-    response = client.post("/scheduler/stop", headers=AUTH_HEADERS)
+    response = client.post("/scheduler/stop")
 
     assert response.status_code == HTTP_OK
     assert response.json()["scheduler"]["state"] == "stopped"
@@ -3279,7 +3227,6 @@ def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
 
     response = client.post(
         "/scheduler/stop",
-        headers=AUTH_HEADERS,
         json={"force": True},
     )
 
@@ -3287,10 +3234,50 @@ def test_scheduler_stop_endpoint_accepts_force(tmp_path: Path) -> None:
     assert runtime.stop_force is True
 
 
+def test_scheduler_stop_acknowledges_before_waiting_and_can_escalate(
+    tmp_path, monkeypatch
+):
+    from guildbotics.drivers.app_api_lock import (
+        hold_backend_lock,
+        read_backend_metadata,
+    )
+
+    runtime = RuntimeStub(tmp_path)
+    entered = threading.Event()
+    cancelled = threading.Event()
+    completed = threading.Event()
+    stages = []
+
+    def stop(*, force=False):
+        stages.append(force)
+        if force:
+            cancelled.set()
+        else:
+            entered.set()
+            assert cancelled.wait(5)
+            completed.set()
+        return runtime.get_scheduler_status()
+
+    monkeypatch.setattr(runtime, "stop_scheduler", stop)
+    app = create_app(runtime=runtime)
+    client = owner_client(app)
+    with hold_backend_lock() as backend:
+        app.state.on_service_stop = backend.request_stop
+        graceful = client.post("/scheduler/stop", json={"wait": False})
+        assert graceful.status_code == HTTP_OK
+        assert entered.wait(5)
+        assert read_backend_metadata().stop_requested is True
+        assert not cancelled.is_set()
+        forced = client.post("/scheduler/stop", json={"force": True, "wait": False})
+        assert forced.status_code == HTTP_OK
+        assert completed.wait(5)
+    assert stages == [False, True]
+
+
 def test_chat_receive_state_reset_endpoint_uses_runtime(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.post("/chat/receive-state/reset", headers=AUTH_HEADERS)
+    response = client.post("/chat/receive-state/reset")
 
     assert response.status_code == HTTP_OK
     assert response.json() == {"members_reset": 2, "channels_reset": 5}
@@ -3387,7 +3374,6 @@ def test_transcript_settings_reject_invalid_retention(
 
     response = client.put(
         "/transcripts/settings",
-        headers=AUTH_HEADERS,
         json={"detail": "standard", "retention_days": retention_days},
     )
 
@@ -3398,7 +3384,7 @@ def test_transcript_settings_reject_invalid_retention(
 def test_runtime_debug_status_endpoint(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.get("/runtime/debug", headers=AUTH_HEADERS)
+    response = client.get("/runtime/debug")
 
     assert response.status_code == HTTP_OK
     body = response.json()
@@ -3412,7 +3398,6 @@ def test_runtime_debug_update_endpoint(tmp_path: Path) -> None:
 
     response = client.put(
         "/runtime/debug",
-        headers=AUTH_HEADERS,
         json={"enabled": True},
     )
 
@@ -3440,16 +3425,12 @@ def test_the_service_keep_awake_setting_applies_to_a_running_service_at_once(
     holder = lifecycle_lock if holder_owner == "desktop" else ServiceLock(lock_path)
     monkeypatch.setattr(lifecycle_module, "ServiceLock", lambda: lifecycle_lock)
     client = _client(AppRuntime(EventBus()))
-    holder.acquire(owner=holder_owner, workspace=workspace)
+    holder.acquire(workspace=workspace)
     try:
-        before = client.get("/service/keep-awake", headers=AUTH_HEADERS)
-        turned_on = client.put(
-            "/service/keep-awake", headers=AUTH_HEADERS, json={"enabled": True}
-        )
+        before = client.get("/service/keep-awake")
+        turned_on = client.put("/service/keep-awake", json={"enabled": True})
         awake_on = _wait_until(lambda: wakepy.modecount() == 1)
-        turned_off = client.put(
-            "/service/keep-awake", headers=AUTH_HEADERS, json={"enabled": False}
-        )
+        turned_off = client.put("/service/keep-awake", json={"enabled": False})
         awake_off = _wait_until(lambda: wakepy.modecount() == 0)
     finally:
         holder.release()
@@ -3486,9 +3467,7 @@ def test_command_options_reports_person_not_found(tmp_path: Path) -> None:
 
     client = _client(PersonStub(tmp_path))
 
-    response = client.get(
-        "/commands/options", headers=AUTH_HEADERS, params={"person": "ghost"}
-    )
+    response = client.get("/commands/options", params={"person": "ghost"})
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json() == {
@@ -3509,9 +3488,7 @@ def test_command_run_conflict_returns_409(tmp_path: Path) -> None:
 
     client = _client(ConflictStub(tmp_path))
 
-    response = client.post(
-        "/commands/run", headers=AUTH_HEADERS, json={"command": "hello"}
-    )
+    response = client.post("/commands/run", json={"command": "hello"})
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json() == {
@@ -3527,7 +3504,7 @@ def test_command_run_conflict_returns_409(tmp_path: Path) -> None:
 def test_verify_endpoint_uses_runtime(tmp_path: Path) -> None:
     client = _client(RuntimeStub(tmp_path))
 
-    response = client.post("/verify", headers=AUTH_HEADERS)
+    response = client.post("/verify")
 
     assert response.status_code == HTTP_OK
     payload = response.json()
@@ -3538,12 +3515,11 @@ def test_verify_endpoint_uses_runtime(tmp_path: Path) -> None:
 
 def test_diagnostics_troubleshoot_uses_runtime(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/diagnostics/troubleshoot",
-            headers=AUTH_HEADERS,
             json={
                 "conversation_id": "conv-1",
                 "message": "Why did this fail?",
@@ -3564,12 +3540,11 @@ def test_diagnostics_troubleshoot_uses_runtime(tmp_path: Path) -> None:
 
 def test_diagnostics_troubleshoot_defaults_the_focus_to_absent(tmp_path: Path) -> None:
     runtime = RuntimeStub(tmp_path)
-    app = create_app(session_token="secret", runtime=runtime)
+    app = create_app(runtime=runtime)
 
-    with TestClient(app) as client:
+    with owner_client(app) as client:
         response = client.post(
             "/diagnostics/troubleshoot",
-            headers=AUTH_HEADERS,
             json={"conversation_id": "conv-1", "message": "Why?"},
         )
 
@@ -3591,12 +3566,10 @@ def test_diagnostics_troubleshoot_defaults_the_focus_to_absent(tmp_path: Path) -
 def test_diagnostics_troubleshoot_rejects_invalid_requests(
     tmp_path: Path, body: dict
 ) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/diagnostics/troubleshoot", headers=AUTH_HEADERS, json=body
-        )
+    with owner_client(app) as client:
+        response = client.post("/diagnostics/troubleshoot", json=body)
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
 
@@ -3664,7 +3637,7 @@ async def test_a_desktop_run_reads_the_files_its_session_handed_over(
     for the command's microVM to mount read-only."""
     runtime = AppRuntime(EventBus())
     store = CommandInputFileStore(root=tmp_path / "inputs")
-    create_app(session_token="secret", runtime=runtime, command_input_file_store=store)
+    create_app(runtime=runtime, command_input_file_store=store)
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="bot", name="Bot", is_active=True)],

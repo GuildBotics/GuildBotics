@@ -9,8 +9,8 @@ workflow ``status`` it carries when they apply) or a reaction to one (``reaction
 messages they react to. A thread is named by its first message, so a message
 that starts one has its own id as ``thread_id``.
 
-A member is the user of its ``person_id``, and mentions one as
-``@<person_id>``. A message is addressed by
+A member is the user ``local-<person_id>``, and mentions one as
+``@local-<person_id>``. A message is addressed by
 ``local://chat/<channel_id>/<message_id>``, with ``?thread=<thread_id>`` when it
 is a reply.
 
@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from guildbotics.entities.team import Person
 from guildbotics.integrations.event_listener import EventListener
+from guildbotics.integrations.local.identity import member_identity
 from guildbotics.runtime.chat_service import (
     ChatEvent,
     ChatEventPage,
@@ -189,7 +190,7 @@ class LocalChatService(ChatService):
 
     async def get_bot_identity(self) -> ChatIdentity:
         return ChatIdentity(
-            user_id=self._person.person_id,
+            user_id=member_identity(self._person).name,
             display_name=self._person.name,
             workspace=NAME,
         )
@@ -198,7 +199,7 @@ class LocalChatService(ChatService):
         return []
 
     def self_user_id(self, person: Person) -> str:
-        return person.person_id
+        return member_identity(person).name
 
     def parse_message_url(self, url: str) -> ChatMessageRef:
         parsed = urlparse(url)
@@ -281,7 +282,7 @@ class LocalChatService(ChatService):
             "message_id": message_id,
             "thread_id": thread_id or message_id,
             "occurred_at": occurred_at.isoformat(),
-            "author": self._person.person_id,
+            "author": member_identity(self._person).name,
             "text": text,
             "bot": True,
         }
@@ -307,7 +308,7 @@ class LocalChatService(ChatService):
             raise ServiceNotFound(
                 f"Local chat message was not found: {channel_id}/{message_id}"
             )
-        mine = {"reaction": reaction, "author": self._person.person_id}
+        mine = {"reaction": reaction, "author": member_identity(self._person).name}
         # Reacting again is the same reaction, as a hosted chat keeps it.
         if mine not in target["reactions"]:
             append(channel_id, {**mine, "message_id": message_id})

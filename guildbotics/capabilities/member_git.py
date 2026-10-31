@@ -1,4 +1,4 @@
-"""Commit, push, and prepare the repositories a member works in.
+"""Read, commit, push, and prepare the repositories a member works in.
 
 A member's clone (``--workspace-mode member``) is written by the command's
 turns, and a repository decides what its git runs: hooks, filters, where a
@@ -10,6 +10,9 @@ repository of the host's own per repository of the code host that no
 environment mounts, and toward the URL the code host gives it. The two exchange history as git bundles:
 data, which the host takes only under the branch it checked.
 
+Reading the default branch needs no clone or command environment: the host
+fetches into that same private repository and reads immutable git objects.
+
 The repository open in the user's own session (``--workspace-mode current``)
 is theirs: its commit runs on the host, under their configuration and hooks.
 Its push does not: the host takes the branch's history into its own
@@ -20,37 +23,45 @@ run).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
-import subprocess
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
-from urllib.parse import quote
+
+from pydantic import BaseModel, ConfigDict
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_repository import open_pull_request_readiness
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.repository_scope import valid_path
+from guildbotics.local_git import GitError, GitResult, LocalGit, known_commits
 from guildbotics.runtime.code_hosting_service import CodeHostingService, GitCredential
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
     GuestResult,
+    Work,
     current_member_invocation,
 )
 from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.resources import MAX_PAGE_BYTES
 from guildbotics.runtime.ticket_service import TicketService
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import (
+    atomic_write_text,
     get_member_clone_path,
     get_workspace_local_path,
     host_temporary_directory,
 )
+from guildbotics.utils.i18n_tool import t
 
 #: The most a bundle a member's clone sends the host may be; more is refused.
 MAX_GIT_BUNDLE_BYTES = 1 << 30
@@ -64,9 +75,25 @@ _OBJECT_NAME = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _FETCH_REFSPECS = ("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*")
 #: The references a clone is given of the host's repository.
 _SHARED_REFS = ("refs/remotes/origin/", "refs/tags/")
+_PUBLISHED_REFS = "refs/guildbotics/published/"
+#: Bound object reads; the serialized result budget below also accounts for escaping.
+MAX_GIT_SHOW_BYTES = MAX_PAGE_BYTES // 2
+#: Git operations that can be pending even when status is clean.
+_GIT_IDLE = (
+    "for state in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD MERGE_AUTOSTASH "
+    "rebase-merge rebase-apply sequencer BISECT_LOG index.lock HEAD.lock "
+    "packed-refs.lock config.lock shallow.lock; do "
+    'p=$(git rev-parse --git-path "$state") || exit 2; '
+    '[ ! -e "$p" ] || exit 1; done'
+)
+#: Distinguish a missing prerequisite from an import or reference-update failure.
+_BUNDLE_PREREQUISITES_MISSING = 3
 #: Store a bundle read from stdin in the clone, without touching its references.
 _UNBUNDLE = (
-    'f="$(mktemp)" || exit 1; cat >"$f" && git bundle unbundle "$f" >/dev/null;'
+    'f="$(mktemp)" || exit 1; cat >"$f" || { rm -f "$f"; exit 1; }; '
+    'git bundle verify "$f" >/dev/null || { rm -f "$f"; '
+    f"exit {_BUNDLE_PREREQUISITES_MISSING}; }}; "
+    'git bundle unbundle "$f" >/dev/null;'
     ' s=$?; rm -f "$f"; exit $s'
 )
 #: Replace the clone's remote-tracking references with those read from stdin.
@@ -74,6 +101,15 @@ _SET_REFS = (
     "git for-each-ref --format='delete %(refname)' refs/remotes/origin/"
     " | git update-ref --no-deref --stdin && git update-ref --no-deref --stdin"
 )
+
+
+class _Checkout(BaseModel):
+    """The host's repository and current assignment of one reusable slot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    repository: str
+    owner: str
+    branch: str
 
 
 @dataclass(frozen=True)
@@ -159,20 +195,9 @@ class _Git(Protocol):
     ) -> GuestResult: ...
 
 
-class _HostGit:
+class _HostGit(LocalGit):
     """git run on the host, in a repository the host may trust: the user's
     own, or one of the host's own that nothing else writes."""
-
-    def __init__(
-        self,
-        cwd: Path,
-        timeout: Callable[[], float] | None = None,
-        config: tuple[str, ...] = (),
-    ) -> None:
-        self.cwd = cwd
-        self._timeout = timeout
-        #: ``-c`` options every git run here starts with.
-        self._config = [option for item in config for option in ("-c", item)]
 
     def __call__(
         self,
@@ -182,22 +207,11 @@ class _HostGit:
         stdout: Path | None = None,
         ok: Iterable[int] = (0,),
     ) -> GuestResult:
-        assert stdout is None, "the host writes its own files with git itself"
         try:
-            ran = subprocess.run(
-                ["git", *self._config, *args],
-                cwd=self.cwd,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})},
-                input=stdin.read_bytes() if isinstance(stdin, Path) else stdin,
-                capture_output=True,
-                timeout=self._timeout() if self._timeout else None,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise MemberCapabilityError(f"git {args[0]} ran out of time.") from exc
-        except GuestProcessError as exc:
+            ran = super().__call__(*args, env=env, stdin=stdin, stdout=stdout, ok=ok)
+        except (GitError, GuestProcessError) as exc:
             raise MemberCapabilityError(str(exc)) from exc
-        return _checked(args, GuestResult(ran.returncode, ran.stdout, ran.stderr), ok)
+        return GuestResult(ran.returncode, ran.stdout, ran.stderr)
 
 
 class _GuestGit:
@@ -281,6 +295,18 @@ class _Origin:
         self._connected(
             "fetch", "-q", "--prune", "origin", *_FETCH_REFSPECS, credential=credential
         )
+        self.remember_public(self.refs(*_SHARED_REFS).values())
+
+    def remember_public(self, names: Iterable[str]) -> None:
+        """Keep confirmed public history after remote refs disappear or move."""
+        self.git(
+            "update-ref",
+            "--stdin",
+            stdin="".join(
+                f"update {_PUBLISHED_REFS}{name} {name}\n"
+                for name in sorted(set(names))
+            ).encode(),
+        )
 
     def push(self, refspec: str, credential: GitCredential | None) -> GuestResult:
         return self._connected(
@@ -335,6 +361,56 @@ class _Origin:
             self.git("rev-parse", "--verify", f"refs/heads/{branch}").stdout
         )
 
+    def show_path(self, commit: str, path: str) -> dict[str, Any]:
+        """Read a literal path at one immutable commit, without checking it out."""
+        if path == ".":
+            name = f"{commit}^{{tree}}"
+            kind = "directory"
+        else:
+            listed = self.git(
+                "--literal-pathspecs", "ls-tree", "-z", commit, "--", path
+            ).stdout
+            if not listed:
+                return {"path": path, "kind": "missing"}
+            header, _ = listed.rstrip(b"\0").split(b"\t", 1)
+            mode, _, oid = header.decode().split()
+            name = _object_name(oid.encode())
+            kind = _tree_kind(mode)
+        item: dict[str, Any] = {"path": path, "kind": kind}
+        if kind == "submodule":
+            return {**item, "commit": name}
+        size = int(self.git("cat-file", "-s", name).stdout)
+        item["size"] = size
+        if size > MAX_GIT_SHOW_BYTES:
+            return {**item, "status": "too_large"}
+        if kind == "directory":
+            entries = []
+            for entry in self.git("ls-tree", "-z", name).stdout.split(b"\0"):
+                if entry:
+                    header, filename = entry.split(b"\t", 1)
+                    entries.append(
+                        {
+                            "name": filename.decode(errors="replace"),
+                            "kind": _tree_kind(header.split()[0].decode()),
+                        }
+                    )
+            return {**item, "status": "ok", "entries": entries}
+        content = self.git("cat-file", "blob", name).stdout
+        try:
+            decoded = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return {**item, "status": "binary"}
+        if b"\0" in content:
+            return {**item, "status": "binary"}
+        return {**item, "status": "ok", "content": decoded}
+
+
+def _tree_kind(mode: str) -> str:
+    """The kind of a git tree entry; links are never followed."""
+    return {"040000": "directory", "120000": "symlink", "160000": "submodule"}.get(
+        mode, "file"
+    )
+
 
 class MemberGitWorkspaceService:
     def __init__(
@@ -367,6 +443,69 @@ class MemberGitWorkspaceService:
     def code(self) -> CodeHostingService:
         return self._code()
 
+    async def show(self, repository: str, paths: Iterable[str]) -> dict[str, Any]:
+        """Read the code host's default branch using only the host's repository."""
+        if not valid_path(repository):
+            raise MemberCapabilityError(f"Invalid repository: {repository!r}")
+        paths = list(paths)
+        for path in paths:
+            if (
+                not path
+                or PurePosixPath(path).is_absolute()
+                or ".." in PurePosixPath(path).parts
+                or "\\" in path
+                or "\0" in path
+            ):
+                raise MemberCapabilityError(t("capabilities.member_git.invalid_path"))
+        paths = [str(PurePosixPath(path)) for path in paths]
+        # Reserve enough metadata space even if every requested object is omitted.
+        if (
+            not paths
+            or len(json.dumps([repository, paths])) + 128 * len(paths)
+            > MAX_PAGE_BYTES // 4
+        ):
+            raise MemberCapabilityError(t("capabilities.member_git.show_request_large"))
+        deadline = current_member_invocation().deadline
+        deadline = deadline if deadline is not None else time.monotonic() + 300
+
+        def remaining() -> float:
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise MemberCapabilityError(t("capabilities.member_git.show_timeout"))
+            return seconds
+
+        branch = await self.code.default_branch(repository)
+        credential = await self.code.git_credential()
+        with self._locked(self.host_root, remaining()):
+            self._branch_name(remaining, branch)
+            origin = await self._origin(self.host_root, repository, remaining)
+            origin.fetch(credential)
+            commit = _object_name(
+                origin.git(
+                    "rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"
+                ).stdout
+            )
+            result: dict[str, Any] = {
+                "repository": repository,
+                "default_branch": branch,
+                "commit": commit,
+                "items": [],
+            }
+            used = len(json.dumps(result))
+            for path in paths:
+                item = origin.show_path(commit, path)
+                size = len(json.dumps(item))
+                # The remaining quarter covers metadata of subsequent omitted items.
+                if ("content" in item or "entries" in item) and (
+                    used + size > MAX_PAGE_BYTES * 3 // 4
+                ):
+                    item.pop("content", None)
+                    item.pop("entries", None)
+                    item["status"] = "too_large"
+                used += len(json.dumps(item)) + 2
+                result["items"].append(item)
+        return result
+
     async def prepare(
         self,
         issue_url: str | None = None,
@@ -379,6 +518,9 @@ class MemberGitWorkspaceService:
         # work with no ticket). Ticket anchoring is a ticket-workflow contract,
         # not a capability requirement.
         guest = self._guest()
+        work = current_member_invocation().work
+        if work is None:
+            raise MemberCapabilityError(t("capabilities.member_git.work_required"))
         if pr_url:
             mode = "pull_request_review"
             head = await self.code.pull_request_head(pr_url)
@@ -412,30 +554,44 @@ class MemberGitWorkspaceService:
             self._branch_name(guest.remaining, default_branch)
             origin = await self._origin(self.host_root, repository, guest.remaining)
             origin.fetch(credential)
-            # The clone's place is the repository's whole path, so repositories
-            # of one name in two namespaces have one each.
-            repo_path = self.workspace_root.joinpath(*repository.split("/"))
-            _GuestGit(guest, guest.path(self.workspace_root))(
-                "init", "-q", "--", repository
-            )
-            clone = _GuestGit(guest, guest.path(repo_path))
-            git_user, git_email = self._git_identity()
-            for key, value in (
-                ("remote.origin.url", origin.url),
-                ("remote.origin.fetch", _FETCH_REFSPECS[0]),
-                ("user.name", git_user),
-                ("user.email", git_email),
-            ):
-                clone("config", "--replace-all", key, value)
             refs = origin.refs(*_SHARED_REFS)
-            _send(origin, clone, refs)
-            # What the host pushes the clone to is its own record of what the
-            # clone was prepared from.
-            (self.host_root / "checkouts").mkdir(parents=True, exist_ok=True)
-            _checkout_record(self.host_root, repository).write_text(
-                repository, encoding="utf-8"
+            public = origin.refs(*_SHARED_REFS, _PUBLISHED_REFS)
+            assignment = _Checkout(
+                repository=repository, owner=_work_id(work), branch=branch
             )
-            _check_out(clone, branch, default_branch, refs)
+            checkout, previous, reusable = self._select_checkout(
+                guest, origin, public, assignment
+            )
+            repo_path = self.workspace_root / checkout
+            root = _GuestGit(guest, guest.path(self.workspace_root))
+            clone = _GuestGit(guest, guest.path(repo_path))
+            initialized = previous is not None and _initialized_checkout(root, checkout)
+            if not initialized:
+                # Register a new slot before initialization so an interrupted
+                # prepare is resumed instead of leaving an unowned directory.
+                _save_checkout(self.host_root, checkout, assignment)
+                root("init", "-q", "--", checkout)
+            if not initialized or checkout in reusable:
+                git_user, git_email = self._git_identity()
+                for key, value in (
+                    ("remote.origin.url", origin.url),
+                    ("remote.origin.fetch", _FETCH_REFSPECS[0]),
+                    ("user.name", git_user),
+                    ("user.email", git_email),
+                ):
+                    clone("config", "--replace-all", key, value)
+            _send(origin, clone, refs)
+            if not initialized or checkout in reusable:
+                remote = f"refs/remotes/origin/{branch}"
+                start = (
+                    remote
+                    if remote in refs
+                    else f"refs/remotes/origin/{default_branch}"
+                )
+                clone("checkout", "-q", "--track=direct", "-B", branch, start, "--")
+            branch = _branch(clone)
+            _save_checkout(self.host_root, checkout, assignment)
+            self._prune_checkouts(root, checkout, reusable, repository)
         return {
             "repository": repository,
             "repo_path": str(repo_path),
@@ -445,6 +601,71 @@ class MemberGitWorkspaceService:
             "pr_url": pr_url or "",
             "mode": mode,
         }
+
+    def _select_checkout(
+        self,
+        guest: CommandGuest,
+        origin: _Origin,
+        public: Mapping[str, str],
+        assignment: _Checkout,
+    ) -> tuple[str, _Checkout | None, list[str]]:
+        """Retain unfinished assignments and borrow a warm idle slot otherwise."""
+        records = {
+            path.stem: _Checkout.model_validate_json(path.read_text(encoding="utf-8"))
+            for path in sorted((self.host_root / "checkouts").glob("*.json"))
+        }
+        owned = ""
+        reusable = []
+        root = _GuestGit(guest, guest.path(self.workspace_root))
+        for name, record in records.items():
+            if record.repository != assignment.repository:
+                continue
+            if record == assignment:
+                owned = name
+            clone = _GuestGit(guest, guest.path(self.workspace_root / name))
+            if _initialized_checkout(root, name) and _reusable_checkout(
+                origin, clone, public
+            ):
+                reusable.append(name)
+        if owned or reusable:
+            name = owned or reusable[0]
+            return name, records[name], reusable
+        number = 0
+        unavailable = records.keys() | {
+            path.stem for path in (self.host_root / "discarded").glob("*.json")
+        }
+        while (name := _checkout_id(assignment.repository, number)) in unavailable:
+            number += 1
+        return name, None, reusable
+
+    def _prune_checkouts(
+        self, root: _GuestGit, selected: str, reusable: list[str], repository: str
+    ) -> None:
+        """Keep one warm idle slot beside retained work; delete only in the guest."""
+        keep = {selected}
+        if selected not in reusable:
+            keep.update(reusable[:1])
+        discarded = self.host_root / "discarded"
+        discarded.mkdir(parents=True, exist_ok=True)
+        for name in reusable:
+            if name in keep:
+                continue
+            # Moving the record is the durable decision to discard this slot.
+            # Git may be gone after a partial rm, so cleanup must not re-read it.
+            _checkout_record(self.host_root, name).replace(discarded / f"{name}.json")
+        for record in sorted(discarded.glob("*.json")):
+            assignment = _Checkout.model_validate_json(
+                record.read_text(encoding="utf-8")
+            )
+            if assignment.repository != repository:
+                continue
+            name = record.stem
+            try:
+                root.run(("sh", "-c", 'rm -rf -- "$1"', "guildbotics-prune", name))
+            except MemberCapabilityError as exc:
+                self.logger.warning("Could not remove idle checkout %s: %s", name, exc)
+                continue
+            record.unlink()
 
     async def publish(self, repo_path: Path, message: str) -> PublishResult:
         return await self._publish(repo_path, message, workspace_mode="member")
@@ -472,8 +693,10 @@ class MemberGitWorkspaceService:
         guest = self._guest()
         repo_path = self._clone_path(repo_path)
         with self._locked(self.host_root, guest.remaining()):
+            clone = _GuestGit(guest, guest.path(repo_path))
+            self._checkout_assignment(clone)
             return self._commit(
-                _GuestGit(guest, guest.path(repo_path)),
+                clone,
                 repo_path,
                 message,
                 lambda name: self._branch_name(guest.remaining, name),
@@ -497,7 +720,7 @@ class MemberGitWorkspaceService:
         """
         if workspace_mode == "current":
             repo_path = self._current_repo(repo_path, cwd or Path.cwd())
-            source: _Git = _HostGit(repo_path)
+            source: _GuestGit | _HostGit = _HostGit(repo_path)
             # Repositories of its own, so that the user's push and a
             # command's git never wait for each other.
             root = self.host_root / "current"
@@ -519,16 +742,35 @@ class MemberGitWorkspaceService:
             ensure_chat_current(self.person.person_id)
             credential = await self.code.git_credential()
             origin.fetch(credential)
-            sha = (
-                _receive(source, origin, branch)
-                if isinstance(source, _GuestGit)
-                else _exchange(origin, source, repo_path, branch)
-            )
-            pushed, commits = self._push(origin, branch, credential)
-            if pushed:
-                tracking = f"refs/remotes/origin/{branch}"
-                origin.git("update-ref", tracking, sha)
-                source("update-ref", tracking, sha)
+            push_failed = False
+            try:
+                sha = (
+                    _receive(source, origin, branch)
+                    if isinstance(source, _GuestGit)
+                    else _receive_current(origin, source, branch)
+                )
+                pushed, commits = self._push(origin, branch, credential)
+                # Retain confirmed publication after squash or branch deletion.
+                origin.remember_public([sha])
+                if pushed:
+                    tracking = f"refs/remotes/origin/{branch}"
+                    origin.git("update-ref", tracking, sha)
+                    if isinstance(source, _GuestGit):
+                        source("update-ref", tracking, sha)
+            except Exception:
+                push_failed = True
+                raise
+            finally:
+                if isinstance(source, _HostGit):
+                    # A rejected push still reports the fetched remote history.
+                    try:
+                        _send_current(origin, source)
+                    except Exception as exc:
+                        if not push_failed:
+                            raise
+                        self.logger.warning(
+                            "Could not return origin tracking refs: %s", exc
+                        )
         pull_requests: list[dict[str, Any]] = []
         pull_requests_error = None
         try:
@@ -610,7 +852,7 @@ class MemberGitWorkspaceService:
         url = await self.code.clone_url(repository)
         return _Origin(root, repository, url, timeout)
 
-    def _push_destination(self, git: _Git) -> str:
+    def _push_destination(self, git: LocalGit) -> str:
         """The repository the user's ``origin`` pushes to, as git resolves it
         (``pushurl``, ``pushInsteadOf``). Only that name is taken from it.
 
@@ -618,8 +860,7 @@ class MemberGitWorkspaceService:
             MemberCapabilityError: If it pushes elsewhere than to one
                 repository of the code host.
         """
-        listed = git("remote", "get-url", "--push", "--all", "origin").stdout
-        remotes = listed.decode(errors="replace").splitlines()
+        remotes = git.push_urls()
         repository = (
             self.code.repository_from_remote(remotes[0]) if len(remotes) == 1 else None
         )
@@ -674,6 +915,20 @@ class MemberGitWorkspaceService:
         worktree's is the clone it was added to); where that pushes is the
         host's own record.
         """
+        assignment = self._checkout_assignment(clone)
+        if assignment is None:
+            raise MemberCapabilityError(
+                "This repository was not checked out with `member git prepare`;"
+                " only a prepared clone can be pushed."
+            )
+        return assignment.repository
+
+    def _checkout_assignment(self, clone: _GuestGit) -> _Checkout | None:
+        """Reject a stale path after its registered slot changed owners.
+
+        Unregistered repositories can be committed inside the environment,
+        but only prepared checkouts can be pushed.
+        """
         common = PurePosixPath(
             clone("rev-parse", "--path-format=absolute", "--git-common-dir")
             .stdout.decode()
@@ -681,18 +936,22 @@ class MemberGitWorkspaceService:
         )
         root = PurePosixPath(clone.guest.path(self.workspace_root))
         place = common.parent
-        repository = (
-            "/".join(place.relative_to(root).parts)
-            if place.is_relative_to(root)
-            else ""
-        )
-        record = _checkout_record(self.host_root, repository)
-        if common.name != ".git" or not valid_path(repository) or not record.is_file():
+        record = _checkout_record(self.host_root, place.name)
+        if common.name != ".git" or place.parent != root:
+            return None
+        if not record.is_file():
+            if (self.host_root / "discarded" / record.name).is_file():
+                raise MemberCapabilityError(
+                    t("capabilities.member_git.checkout_reassigned")
+                )
+            return None
+        assignment = _Checkout.model_validate_json(record.read_text(encoding="utf-8"))
+        work = current_member_invocation().work
+        if work is None or assignment.owner != _work_id(work):
             raise MemberCapabilityError(
-                "This repository was not checked out with `member git prepare`;"
-                " only a prepared clone can be pushed."
+                t("capabilities.member_git.checkout_reassigned")
             )
-        return record.read_text(encoding="utf-8")
+        return assignment
 
     def _current_repo(self, repo_path: Path, cwd: Path) -> Path:
         repo_path = repo_path.expanduser().resolve()
@@ -809,9 +1068,33 @@ class MemberGitWorkspaceService:
         return True, commits
 
 
-def _checkout_record(root: Path, repository: str) -> Path:
-    """Where the host records what the clone of ``repository`` pushes to."""
-    return root / "checkouts" / quote(repository, safe="")
+def _work_id(work: Work) -> str:
+    """The host-owned work's identity, independent of its current run."""
+    return hashlib.sha256(json.dumps([work.kind, work.identity]).encode()).hexdigest()
+
+
+def _checkout_id(repository: str, number: int) -> str:
+    """A bounded slot name, independent of the work that borrows it."""
+    key = json.dumps([repository, number])
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _checkout_record(root: Path, checkout: str) -> Path:
+    """Where the host records which repository a prepared checkout pushes to."""
+    return root / "checkouts" / f"{checkout}.json"
+
+
+def _save_checkout(root: Path, name: str, assignment: _Checkout) -> None:
+    atomic_write_text(_checkout_record(root, name), assignment.model_dump_json())
+
+
+def _initialized_checkout(root: _GuestGit, name: str) -> bool:
+    return (
+        root(
+            "-C", name, "rev-parse", "-q", "--verify", "HEAD", ok=(0, 1, 128)
+        ).returncode
+        == 0
+    )
 
 
 def _refs(git: _Git, *prefixes: str) -> dict[str, str]:
@@ -826,10 +1109,15 @@ def _refs(git: _Git, *prefixes: str) -> dict[str, str]:
 
 
 def _current_branch(git: _Git) -> str:
-    head = git("symbolic-ref", "-q", "HEAD", ok=range(256)).stdout.decode().strip()
-    if not head.startswith("refs/heads/"):
+    branch = _branch(git)
+    if not branch:
         raise MemberCapabilityError("The repository is not on a branch.")
-    return head.removeprefix("refs/heads/")
+    return branch
+
+
+def _branch(git: _Git) -> str:
+    head = git("symbolic-ref", "-q", "HEAD", ok=(0, 1, 128)).stdout.decode().strip()
+    return head.removeprefix("refs/heads/") if head.startswith("refs/heads/") else ""
 
 
 def _object_name(output: bytes) -> str:
@@ -839,8 +1127,8 @@ def _object_name(output: bytes) -> str:
     return name
 
 
-def _present(clone: _GuestGit, names: Iterable[str]) -> set[str]:
-    """Which of ``names`` the clone holds, as far as it says."""
+def _present(clone: Callable[..., GitResult], names: Iterable[str]) -> set[str]:
+    """Which of ``names`` the repository holds, as far as it says."""
     asked = set(names)
     listed = clone(
         "cat-file",
@@ -853,56 +1141,136 @@ def _present(clone: _GuestGit, names: Iterable[str]) -> set[str]:
 
 def _send(origin: _Origin, clone: _GuestGit, refs: Mapping[str, str]) -> None:
     """Give the clone the host's references and the history it lacks of them."""
-    held = _present(clone, refs.values())
-    wanted = sorted(ref for ref, name in refs.items() if name not in held)
-    if wanted:
-        with host_temporary_directory("guildbotics-bundle-") as tmp:
-            bundle = Path(tmp, "send.bundle")
-            origin.git(
-                "bundle",
-                "create",
-                "-q",
-                str(bundle),
-                "--stdin",
-                stdin="".join(
-                    f"{line}\n"
-                    for line in (*wanted, *(f"^{name}" for name in sorted(held)))
-                ).encode(),
-            )
-            clone.run(("sh", "-c", _UNBUNDLE), stdin=bundle)
+    _send_objects(origin, clone, refs)
+    tags = _refs(clone, "refs/tags/")
     clone.run(
         ("sh", "-c", _SET_REFS),
         stdin="".join(
-            f"update {ref} {name}\n" for ref, name in sorted(refs.items())
+            f"update {ref} {name}\n"
+            for ref, name in sorted(refs.items())
+            if ref not in tags
         ).encode(),
     )
 
 
-def _exchange(origin: _Origin, user: _Git, repo: Path, branch: str) -> str:
-    """Bring the user's own repository and the host's up to date with each
-    other, and name the commit ``branch`` is pushed at.
+def _send_objects(origin: _Origin, clone: _GuestGit, refs: Mapping[str, str]) -> None:
+    """Give the clone history without replacing any of its references."""
+    held = _present(clone, refs.values())
+    wanted = sorted(ref for ref, name in refs.items() if name not in held)
+    if wanted:
+        known = _present(origin.git, known_commits(clone))
+        with host_temporary_directory("guildbotics-bundle-") as tmp:
+            bundle = Path(tmp, "send.bundle")
+            origin.git.write_bundle(
+                bundle, (*wanted, *(f"^{name}" for name in sorted(known)))
+            )
+            received = clone.run(
+                ("sh", "-c", _UNBUNDLE),
+                stdin=bundle,
+                ok=(0, _BUNDLE_PREREQUISITES_MISSING),
+            )
+            if received.returncode == _BUNDLE_PREREQUISITES_MISSING:
+                bundle.unlink()
+                origin.git.write_bundle(bundle, wanted)
+                clone.run(("sh", "-c", _UNBUNDLE), stdin=bundle)
 
-    The user's repository is given what the host fetched of the remote, as
-    its own ``git fetch`` would have; the host takes ``branch`` from the
-    repository's path, and only its own ``refs/heads/<branch>`` changes.
-    Neither carries a credential.
 
-    Raises:
-        MemberCapabilityError: If the branch has no commit.
-    """
+def _reusable_checkout(
+    origin: _Origin, clone: _GuestGit, public: Mapping[str, str]
+) -> bool:
+    """Whether no unfinished state or unpublished history would change owners."""
+    try:
+        if clone(
+            "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"
+        ).stdout or not _branch(clone):
+            return False
+        if any(
+            entry and entry[:1] != b"H"
+            for entry in clone("ls-files", "-v", "-z").stdout.split(b"\0")
+        ):
+            return False
+        if clone.run(("sh", "-c", _GIT_IDLE), ok=(0, 1)).returncode:
+            return False
+        worktrees = clone("worktree", "list", "--porcelain", "-z").stdout.split(b"\0")
+        if sum(field.startswith(b"worktree ") for field in worktrees) != 1:
+            return False
+        refs = _refs(clone)
+        if "refs/stash" in refs:
+            return False
+        _send_objects(origin, clone, public)
+        revisions = [
+            "HEAD",
+            *sorted(
+                {
+                    name
+                    for ref, name in refs.items()
+                    if not ref.startswith("refs/remotes/")
+                }
+            ),
+            *(f"^{name}" for name in sorted(set(public.values()))),
+        ]
+        return not clone(
+            "rev-list",
+            "--objects",
+            "--max-count=1",
+            "--stdin",
+            stdin=("\n".join(revisions) + "\n").encode(),
+        ).stdout
+    except MemberCapabilityError:
+        # An unreadable checkout is retained for its owner, never discarded
+        # or allowed to prevent another work from getting a slot.
+        return False
+
+
+def _receive_current(origin: _Origin, user: LocalGit, branch: str) -> str:
+    """Receive a local branch as a bundle, retrying missing prerequisites."""
     ref = f"refs/heads/{branch}"
-    user(
-        "fetch",
-        "-q",
-        "--no-tags",
-        "--",
-        str(origin.git.cwd),
-        "+refs/remotes/origin/*:refs/remotes/origin/*",
-    )
-    if user("rev-parse", "-q", "--verify", f"{ref}^{{commit}}", ok=(0, 1)).returncode:
-        raise MemberCapabilityError(f"Branch '{branch}' has no commit to push.")
-    origin.git("fetch", "-q", "--no-tags", "--", str(repo), f"+{ref}:{ref}")
+    with host_temporary_directory("guildbotics-bundle-") as tmp:
+        bundle = Path(tmp, "receive.bundle")
+        try:
+            transferred = user.branch_bundle(branch, origin.refs().values(), bundle)
+            if transferred:
+                verified = origin.git("bundle", "verify", str(bundle), ok=range(256))
+                if verified.returncode:
+                    bundle.unlink()
+                    user.branch_bundle(branch, (), bundle)
+                    origin.git("bundle", "verify", str(bundle))
+                # Take only the validated branch, never arbitrary refs or tags.
+                origin.git(
+                    "fetch", "-q", "--no-tags", "--", str(bundle), f"+{ref}:{ref}"
+                )
+            else:
+                sha = _object_name(
+                    user("rev-parse", "--verify", "-q", f"{ref}^{{commit}}").stdout
+                )
+                origin.git("update-ref", ref, sha)
+        except GitError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
     return origin.head(branch)
+
+
+def _send_current(origin: _Origin, user: LocalGit) -> None:
+    """Return tracking refs and only the history the user's repository lacks."""
+    refs = origin.refs("refs/remotes/origin/")
+    if not refs:
+        return
+    held = _present(user, refs.values())
+    wanted = sorted(ref for ref, name in refs.items() if name not in held)
+    with host_temporary_directory("guildbotics-bundle-") as tmp:
+        try:
+            bundle = None
+            if wanted:
+                known = _present(origin.git, known_commits(user))
+                bundle = Path(tmp, "send.bundle")
+                origin.git.write_bundle(
+                    bundle, (*wanted, *(f"^{name}" for name in sorted(known)))
+                )
+                if not user.verify_bundle(bundle):
+                    bundle.unlink()
+                    origin.git.write_bundle(bundle, wanted)
+            user.update_tracking(bundle, refs)
+        except GitError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
 
 
 def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:
@@ -935,42 +1303,6 @@ def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:
         # branch is taken, never the tags git would otherwise follow.
         origin.git("fetch", "-q", "--no-tags", "--", str(bundle), f"+{ref}:{ref}")
     return origin.head(branch)
-
-
-def _check_out(
-    clone: _GuestGit, branch: str, default_branch: str, refs: Mapping[str, str]
-) -> None:
-    """Check ``branch`` out afresh, as ``prepare`` does every time.
-
-    What is not committed is dropped. A branch on the remote follows it,
-    keeping local commits it only lacks; one that diverged is reset to it.
-    A new branch starts from the default branch, which is brought up to date.
-    """
-    remote = f"refs/remotes/origin/{branch}"
-    clone("clean", "-fdq")
-    local = clone("rev-parse", "-q", "--verify", f"refs/heads/{branch}", ok=(0, 1))
-    if local.returncode == 0:
-        clone("checkout", "-q", "-f", branch, "--")
-        if (
-            remote in refs
-            and clone("merge", "-q", "--ff-only", remote, ok=range(256)).returncode
-        ):
-            clone("reset", "-q", "--hard", remote)
-    else:
-        start = remote if remote in refs else f"refs/remotes/origin/{default_branch}"
-        clone("checkout", "-q", "-f", "-b", branch, start, "--")
-    if remote in refs:
-        clone("branch", "-q", f"--set-upstream-to={remote}", branch)
-    if default_branch != branch:
-        # Best effort: a worktree of the clone may have it checked out.
-        clone(
-            "branch",
-            "-q",
-            "-f",
-            default_branch,
-            f"refs/remotes/origin/{default_branch}",
-            ok=range(256),
-        )
 
 
 @contextmanager

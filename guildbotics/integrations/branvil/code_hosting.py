@@ -5,14 +5,15 @@ Branvil keeps what is said on a pull request as it was sent -- a workflow
 status as the comment's ``meta`` -- and judges nothing of GuildBotics' own:
 the patrol's rules (:mod:`~guildbotics.integrations.pull_request_patrol`)
 and readiness (:mod:`~guildbotics.integrations.readiness`) are applied here
-to what it answers.
+to what it answers. A pull request that links an interactive ticket is
+reviewed as any other, but its author's part is left to the human working on
+that ticket with an agent.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from tempfile import TemporaryFile
 from typing import IO, Any
 
 from guildbotics.entities import Person, Service, Task, Team
@@ -20,16 +21,22 @@ from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
     BranvilItem,
+    Conflict,
+    interactive,
     segment,
     username,
 )
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
     Comment,
     PullRequest,
     Review,
     ReviewThread,
     patrol,
+    pull_request_work,
 )
 from guildbotics.integrations.readiness import (
     FAILED_CONCLUSIONS,
@@ -86,7 +93,20 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         if resource in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
         if resource == "dependency_alerts":
-            raise ServiceUnsupported(t("integrations.branvil.api.alerts"))
+            alerts = (
+                f"/repos/{segment(self.repository(subject))}/upstream/dependency-alerts"
+            )
+            if conditions["id"]:
+                alert = await self.get(f"{alerts}/{segment(conditions['id'])}")
+                return ReadPage.of(resource, [alert])
+            return await self.page(
+                resource,
+                alerts,
+                conditions,
+                continuation,
+                dict,
+                state=conditions["state"],
+            )
         if resource == "ticket_pull_requests":
             if not self.serves(subject):
                 raise ServiceUnsupported(
@@ -130,6 +150,8 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             "assignees": [],
             "labels": list(data.get("labels") or []),
             "author_type": self.author_type(data.get("author")),
+            "author": str(data.get("author") or ""),
+            "requested_reviewers": list(data.get("reviewers") or []),
             "head": str(data["head"]),
             "head_repository": str(data["head_repository"]),
             "head_sha": str(data.get("head_sha") or ""),
@@ -189,20 +211,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         tickets: Sequence[TicketLink],
     ) -> PullRequestCreated:
         repository = self.repository(repository)
-        links = []
-        for ticket in tickets:
-            url = ticket.url
-            if self.serves(url):
-                url = self.url(self.item(url, "ticket"))
-            elif ticket.closes:
-                raise ServiceUnsupported(
-                    t(
-                        "integrations.branvil.api.closes_foreign",
-                        repository=repository,
-                        url=url,
-                    )
-                )
-            links.append({"url": url, "closes": ticket.closes})
+        links = await self._ticket_links(repository, tickets)
         answer = await self.call(
             "POST",
             f"/repos/{segment(repository)}/pulls",
@@ -224,23 +233,47 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
             target=self.target(_pull_item(pull), pull),
         )
 
+    async def _ticket_links(
+        self, repository: str, tickets: Sequence[TicketLink]
+    ) -> list[dict[str, Any]]:
+        """Validate every link before creating or updating a pull request."""
+        links = []
+        for ticket in tickets:
+            url = ticket.url
+            item = self.item(url, "ticket") if self.serves(url) else None
+            linked = await self.get(item.api) if item is not None else None
+            if ticket.closes and (
+                linked is None
+                or str(linked["repository"]).casefold() != repository.casefold()
+            ):
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.branvil.api.closes_foreign",
+                        repository=repository,
+                        url=url,
+                    )
+                )
+            if item is not None:
+                url = self.url(item)
+            links.append({"url": url, "closes": ticket.closes})
+        return links
+
     async def update_pull_request(
         self,
         url: str,
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         item = self.item(url, "pull_request")
-        changes = {"body": body, "title": title}
+        changes: dict[str, Any] = {"body": body, "title": title}
+        if tickets is not None:
+            changes["tickets"] = await self._ticket_links(item.place, tickets)
         data = await self.call(
             "PATCH",
             item.api,
-            {
-                **{key: value for key, value in changes.items() if value is not None},
-                "drop_ticket_links": drop_ticket_links,
-            },
+            {key: value for key, value in changes.items() if value is not None},
         )
         return PullRequestUpdated(
             body=str(data.get("body") or ""), target=self.target(item, data)
@@ -344,6 +377,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
                 str(report["base_sha"]),
                 int(report["behind_by"]),
                 str(current["base_sha"]),
+                requires_up_to_date=False,
             )
         return readiness_of(
             target=self.target(item, current),
@@ -355,6 +389,7 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
                     "status": str(check["status"]),
                     "conclusion": check.get("conclusion"),
                     "details_url": str(check.get("details_url") or ""),
+                    "details": str(check.get("details") or ""),
                 }
                 for check in report["checks"]
             ],
@@ -416,16 +451,8 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         too_large = ServiceError(
             t("integrations.branvil.api.artifact_too_large", name=name, limit=limit)
         )
-        async with self.client().stream("GET", path) as response:
-            if int(response.headers.get("content-length") or 0) > limit:
-                raise too_large
-            with TemporaryFile() as archive:
-                async for chunk in response.aiter_bytes():
-                    if archive.tell() + len(chunk) > limit:
-                        raise too_large
-                    archive.write(chunk)
-                archive.seek(0)
-                yield ArtifactRef(name=name, id=f"{head}/{name}"), archive
+        async with self.download(path, limit, too_large) as archive:
+            yield ArtifactRef(name=name, id=f"{head}/{name}"), archive
 
     # -- the git remote -----------------------------------------------------
 
@@ -474,9 +501,27 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
 
     # -- the pull request patrol --------------------------------------------
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        check_path(self.workspace, item.place, provider=PROVIDER)
+        while True:
+            pull = await self.get(item.api)
+            if pull["draft"] or pull["state"] != "open":
+                return False
+            try:
+                await self.call(
+                    "PATCH", item.api, {"draft": True, "revision": pull["revision"]}
+                )
+            except Conflict:
+                # The revision precondition is checked inside Branvil's
+                # write transaction. Re-read the winner, never claim its work.
+                continue
+            return True
+
     async def pull_request_candidates(self) -> list[Task]:
-        """Every open, ready PR in the scope that involves the member, oldest
-        update first, that asks something of it."""
+        """Every open, ready PR in the scope that involves the member and asks
+        something of it, in Branvil's order: what waits for least once the
+        member's work is done comes first."""
         entries = await self.items("/pulls", involves="me", state="open", draft="false")
         return [
             task
@@ -491,20 +536,51 @@ class BranvilCodeHostingService(BranvilApi, CodeHostingService):
         pull = await self.get(item.api)
         return await self._work(pull, await self.get(f"{item.api}/activity"))
 
+    async def can_receive_work(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        if not in_scope(self.workspace, item.place):
+            return False
+        pull = await self.get(item.api)
+        if not pull.get("head_sha"):
+            return False
+        me = member_identity(self.person).name
+        if _name(pull) == me and await self._interactive(pull):
+            return False
+        activity = await self.get(f"{item.api}/activity")
+        return pull_request_work(self._snapshot(item, pull, activity), me) in {
+            FEEDBACK,
+            REVIEW,
+        }
+
     async def _work(
         self, pull: dict[str, Any], activity: dict[str, Any]
     ) -> Task | None:
         if not pull.get("head_sha"):
             return None  # the head branch is gone: there is nothing to work on
         item = _pull_item(pull)
-        return await patrol(
+        me = member_identity(self.person).name
+        task = await patrol(
             self,
             self._snapshot(item, pull, activity),
-            username(self.person).casefold(),
+            me,
             provider=PROVIDER,
             person_id=self.person.person_id,
-            draft=lambda: self.call("PATCH", item.api, {"draft": True}),
         )
+        if task is not None and _name(pull) == me and await self._interactive(pull):
+            return None
+        return task
+
+    async def _interactive(self, pull: dict[str, Any]) -> bool:
+        """Whether ``pull`` links an interactive ticket: a human works on it
+        with an agent, so the patrol leaves the author's work on the pull
+        request -- its feedback and its checks -- to them. A link that is
+        not to this Branvil names no ticket of it."""
+        for link in pull["tickets"]:
+            if self.serves(link["url"]) and interactive(
+                await self.get(self.item(link["url"], "ticket").api)
+            ):
+                return True
+        return False
 
     def _snapshot(
         self, item: BranvilItem, pull: dict[str, Any], activity: dict[str, Any]

@@ -44,7 +44,6 @@ HTTP_OK = 200
 HTTP_CONFLICT = 409
 HTTP_BAD_REQUEST = 400
 
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 CONFIG = "config/team/project.yml"
 
 
@@ -167,7 +166,6 @@ def test_desktop_owner_transfer_accepts_only_this_device(
 
     response = client.post(
         "/workspace/service-owner/transfer",
-        headers=AUTH_HEADERS,
         json={"device_id": "0198ab00-0000-7000-8000-000000000002"},
     )
 
@@ -179,7 +177,7 @@ def test_desktop_owner_transfer_accepts_only_this_device(
 
 
 def test_a_machine_reports_that_it_hosts_no_hub(client: TestClient) -> None:
-    payload = _json(client.get("/hub", headers=AUTH_HEADERS))
+    payload = _json(client.get("/hub"))
 
     assert payload["hosted"] is False
     assert payload["workspace_ids"] == []
@@ -188,21 +186,19 @@ def test_a_machine_reports_that_it_hosts_no_hub(client: TestClient) -> None:
 def test_making_this_machine_a_hub_reports_an_address_to_share(
     client: TestClient,
 ) -> None:
-    payload = _json(client.post("/hub", headers=AUTH_HEADERS))
+    payload = _json(client.post("/hub"))
 
     assert payload["hosted"] is True
     assert payload["ssh_endpoint"]
-    assert (
-        _json(client.get("/hub", headers=AUTH_HEADERS))["hub_id"] == payload["hub_id"]
-    )
+    assert _json(client.get("/hub"))["hub_id"] == payload["hub_id"]
 
 
 @pytest.mark.usefixtures("idle_queue")
 def test_a_local_hub_reports_the_workspaces_it_holds(client: TestClient) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    client.post("/hub")
+    client.post("/workspace/sync/enable", json={"hub": {}})
 
-    payload = _json(client.post("/hub/inspect", headers=AUTH_HEADERS, json={}))
+    payload = _json(client.post("/hub/inspect", json={}))
 
     assert payload["is_local"] is True
     assert payload["host_key_trusted"] is True
@@ -218,16 +214,14 @@ def test_this_machine_is_not_offered_as_a_hub_unless_it_hosts_one(
     nothing in it does, so without this the caller is led on to registering
     with a hub that is not there.
     """
-    response = client.post("/hub/inspect", headers=AUTH_HEADERS, json={})
+    response = client.post("/hub/inspect", json={})
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "hub_not_hosted"
 
 
 def test_an_address_that_names_nothing_is_refused(client: TestClient) -> None:
-    response = client.post(
-        "/hub/inspect", headers=AUTH_HEADERS, json={"endpoint": "not a host"}
-    )
+    response = client.post("/hub/inspect", json={"endpoint": "not a host"})
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "invalid_hub_endpoint"
@@ -237,7 +231,7 @@ def test_an_address_that_names_nothing_is_refused(client: TestClient) -> None:
 
 
 def test_a_workspace_starts_out_unsynchronized(client: TestClient) -> None:
-    payload = _json(client.get("/workspace/sync", headers=AUTH_HEADERS))
+    payload = _json(client.get("/workspace/sync"))
 
     assert payload["enabled"] is False
     assert payload["state"] == "disabled"
@@ -248,11 +242,9 @@ def test_a_workspace_starts_out_unsynchronized(client: TestClient) -> None:
 def test_enabling_registers_the_workspace_and_starts_the_queue(
     client: TestClient, workspace: Path
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/hub")
 
-    payload = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    payload = _json(client.post("/workspace/sync/enable", json={"hub": {}}))
 
     assert payload["enabled"] is True
     assert payload["hub_url"]
@@ -276,8 +268,8 @@ def test_enabling_connects_the_identities_to_the_same_hub(
     """The members' identities are one repository on the hub for every
     workspace: the first workspace gives it, a second one joins it, and
     neither appears among the hub's workspaces."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
     identities = LocalSyncRepository(get_identity_root())
     assert _hub_repository(identities) == identity_id
@@ -287,11 +279,9 @@ def test_enabling_connects_the_identities_to_the_same_hub(
     (other / ".guildbotics/config").mkdir(parents=True)
     (other / ".guildbotics/config/team").mkdir()
     (other / ".guildbotics/config/team/project.yml").write_text("name: other\n")
-    selected = client.post(
-        "/workspace", headers=AUTH_HEADERS, json={"workspace_dir": str(other)}
-    )
+    selected = client.post("/workspace", json={"workspace_dir": str(other)})
     assert selected.status_code == HTTP_OK, selected.text
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
 
     assert host.read_hub().identity_id == identity_id  # type: ignore[union-attr]
     assert identity_id not in host.list_workspace_ids()
@@ -305,12 +295,12 @@ def test_a_connected_workspace_brings_its_identities_to_its_hub(
     """A workspace connected before its identities were -- or on a machine
     whose identities lost their hub -- connects them the next time its queue
     starts, rather than only when synchronization is enabled again."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     identities = LocalSyncRepository(get_identity_root())
     identities.clear_remote()
 
-    _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+    _json(client.post("/workspace/sync/retry"))
 
     identity_id = host.read_hub().identity_id  # type: ignore[union-attr]
     assert _hub_repository(identities) == identity_id
@@ -322,8 +312,8 @@ def test_shutting_down_stops_the_identities_queue_too(
 ) -> None:
     """A workspace switch leaves it running; the end of the process does not,
     or a cycle is cut off in the middle of a commit."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     assert activation._identity_manager is not None
 
     workspace_sync.WorkspaceSyncService().shutdown()
@@ -342,9 +332,7 @@ def test_enabling_without_a_hub_reports_why(
     identifier -- which it then keeps for good -- before it can discover there
     is no hub to register with.
     """
-    response = client.post(
-        "/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}
-    )
+    response = client.post("/workspace/sync/enable", json={"hub": {}})
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "hub_not_hosted"
@@ -357,25 +345,21 @@ def test_a_hub_that_does_not_hold_this_workspace_has_nothing_to_preview(
     """The caller already knows it would be a registration, from the hub's own
     workspace list, and a preview must not make this workspace a repository to
     answer a question with one possible answer."""
-    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/hub")
 
-    response = client.post(
-        "/workspace/sync/preview", headers=AUTH_HEADERS, json={"hub": {}}
-    )
+    response = client.post("/workspace/sync/preview", json={"hub": {}})
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "sync_preview_unavailable"
-    assert (
-        _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["enabled"] is False
-    )
+    assert _json(client.get("/workspace/sync"))["enabled"] is False
 
 
 def test_a_preview_before_a_first_connection_leaves_no_repository(
     client: TestClient, workspace: Path
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/hub")
 
-    client.post("/workspace/sync/preview", headers=AUTH_HEADERS, json={"hub": {}})
+    client.post("/workspace/sync/preview", json={"hub": {}})
 
     assert not (workspace / ".guildbotics" / ".git").exists()
     assert not (workspace / ".guildbotics" / "state" / "workspace.json").exists()
@@ -400,7 +384,6 @@ def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
     with held_lock(sync_lock_path(workspace)):
         response = client.post(
             "/workspace/sync/preview",
-            headers=AUTH_HEADERS,
             json={"hub": {}, "workspace_id": identity.workspace_id},
         )
 
@@ -412,7 +395,7 @@ def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
 def test_retrying_an_unsynchronized_workspace_changes_nothing(
     client: TestClient,
 ) -> None:
-    payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+    payload = _json(client.post("/workspace/sync/retry"))
 
     assert payload["enabled"] is False
 
@@ -428,7 +411,7 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     """
     del memory_sync
 
-    payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+    payload = _json(client.post("/workspace/sync/retry"))
 
     assert payload["enabled"] is True
     assert payload["last_error_code"] is None
@@ -445,8 +428,8 @@ def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
     are what open those files, so that runtime stops before the directory
     moves.
     """
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    client.post("/hub")
+    client.post("/workspace/sync/enable", json={"hub": {}})
     service = client.app.state.runtime.workspace_sync_service
     runtime = service._relay_runtime
     assert runtime is not None
@@ -454,7 +437,7 @@ def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
     service._stop_relay()
     hub_root().rename(hub_root().with_name("gone"))
 
-    payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+    payload = _json(client.post("/workspace/sync/retry"))
 
     assert payload["state"] == "unreachable"
     assert payload["last_error_code"] == "HubCommandError"
@@ -551,16 +534,13 @@ def test_status_operations_keep_one_workspace_while_a_switch_starts(
 def test_a_copy_becomes_the_selected_workspace(
     client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    client.post("/hub")
+    enabled = _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     destination = tmp_path / "second"
 
     payload = _json(
         client.post(
             "/workspace/sync/clone",
-            headers=AUTH_HEADERS,
             json={
                 "hub": {},
                 "workspace_id": enabled["workspace_id"],
@@ -581,10 +561,8 @@ def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
     that field opens the folder -- which writes this device's diagnostics under
     ``local/``. Refusing on the directory rather than on its content made the
     screen's own way of naming a destination the one that could not work."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    client.post("/hub")
+    enabled = _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     destination = tmp_path / "second"
     scratch = destination / ".guildbotics" / "local" / "run"
     scratch.mkdir(parents=True)
@@ -593,7 +571,6 @@ def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
     payload = _json(
         client.post(
             "/workspace/sync/clone",
-            headers=AUTH_HEADERS,
             json={
                 "hub": {},
                 "workspace_id": enabled["workspace_id"],
@@ -618,7 +595,6 @@ def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
 
     response = client.post(
         "/workspace/sync/clone",
-        headers=AUTH_HEADERS,
         json={
             "hub": {},
             "workspace_id": identity.workspace_id,
@@ -658,11 +634,11 @@ def test_the_displaced_commits_this_device_holds_are_reported(
     """The warning has to be able to end, and the refs are what says whether it
     should: nothing deletes them on its own, so a device holding none is a
     device with nothing left for the user to look at."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    client.post("/hub")
+    client.post("/workspace/sync/enable", json={"hub": {}})
     rejection_id = _reject(workspace)
 
-    payload = _json(client.get("/workspace/sync", headers=AUTH_HEADERS))
+    payload = _json(client.get("/workspace/sync"))
 
     held = payload["rejected_changes"]
     assert [item["rejection_id"] for item in held] == [rejection_id]
@@ -680,15 +656,11 @@ def test_the_user_can_say_they_are_done_with_a_displaced_commit(
     """Discarding is the one thing the screen can offer without reading the
     content, and the only way the warning ends: the recovery procedure itself
     leaves the ref in place on purpose."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    client.post("/hub")
+    client.post("/workspace/sync/enable", json={"hub": {}})
     rejection_id = _reject(workspace)
 
-    payload = _json(
-        client.post(
-            f"/workspace/sync/rejections/{rejection_id}/discard", headers=AUTH_HEADERS
-        )
-    )
+    payload = _json(client.post(f"/workspace/sync/rejections/{rejection_id}/discard"))
 
     assert payload["rejected_changes"] == []
 
@@ -700,25 +672,21 @@ def test_the_identities_displaced_commits_are_reported_and_discarded_apart(
     """Two machines editing the same member displace one of the edits in the
     identities' repository, not the workspace's: it is listed, and discarded,
     there -- and appears in Activity as the identities'."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     rejection_id = _reject(get_identity_root())
 
-    identities = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+    identities = _json(client.get("/identities/sync"))
     assert identities["enabled"] is True
     assert [item["rejection_id"] for item in identities["rejected_changes"]] == [
         rejection_id
     ]
     assert identities["rejected_changes"][0]["paths"] == [CONFIG]
-    assert (
-        _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["rejected_changes"]
-        == []
-    )
+    assert _json(client.get("/workspace/sync"))["rejected_changes"] == []
     now = datetime.now(UTC)
     activity = _json(
         client.get(
             "/activity/history",
-            headers=AUTH_HEADERS,
             params={
                 "start": (now - timedelta(days=1)).isoformat(),
                 "end": (now + timedelta(days=1)).isoformat(),
@@ -734,7 +702,6 @@ def test_the_identities_displaced_commits_are_reported_and_discarded_apart(
     payload = _json(
         client.post(
             f"/identities/sync/rejections/{rejection_id}/discard",
-            headers=AUTH_HEADERS,
         )
     )
 
@@ -749,12 +716,12 @@ def test_a_displaced_commit_outlives_the_identities_leaving_the_hub(
     """Being connected and holding a displaced commit are independent: the
     identities off the workspace's hub still list, and discard, what this
     machine holds."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     rejection_id = _reject(get_identity_root())
     LocalSyncRepository(get_identity_root()).clear_remote()
 
-    payload = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+    payload = _json(client.get("/identities/sync"))
 
     assert payload["state"] == "not_connected"
     assert [item["rejection_id"] for item in payload["rejected_changes"]] == [
@@ -764,7 +731,6 @@ def test_a_displaced_commit_outlives_the_identities_leaving_the_hub(
     discarded = _json(
         client.post(
             f"/identities/sync/rejections/{rejection_id}/discard",
-            headers=AUTH_HEADERS,
         )
     )
     assert discarded["state"] == "not_connected"
@@ -821,8 +787,8 @@ def test_a_displaced_commit_outlives_synchronization_being_off(
 ) -> None:
     """A repository with no hub and no queue running still holds what it set
     aside, so the answer about it lists that for the user to discard."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     root = workspace if scope == "workspace" else get_identity_root()
     rejection_id = _reject(root)
     service = client.app.state.runtime.workspace_sync_service
@@ -831,7 +797,7 @@ def test_a_displaced_commit_outlives_synchronization_being_off(
     for repository_root in (workspace, get_identity_root()):
         LocalSyncRepository(repository_root).clear_remote()
 
-    payload = _json(client.get(f"/{scope}/sync", headers=AUTH_HEADERS))
+    payload = _json(client.get(f"/{scope}/sync"))
 
     assert payload["enabled"] is False
     assert [item["rejection_id"] for item in payload["rejected_changes"]] == [
@@ -840,7 +806,7 @@ def test_a_displaced_commit_outlives_synchronization_being_off(
 
 
 def test_identities_without_a_hub_are_not_synchronized(client: TestClient) -> None:
-    payload = _json(client.get("/identities/sync", headers=AUTH_HEADERS))
+    payload = _json(client.get("/identities/sync"))
 
     assert payload["enabled"] is False
     assert payload["state"] == "disabled"
@@ -853,8 +819,8 @@ def test_identities_a_hub_cannot_hold_are_reported_with_its_words(
     """A hub from before it held identities is reached -- the workspace
     synchronizes with it -- but refuses them. That shows as identities not
     connected, in the hub's own words, until a retry finds it updated."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    client.post("/hub")
+    _json(client.post("/workspace/sync/enable", json={"hub": {}}))
     LocalSyncRepository(get_identity_root()).clear_remote()
     claim = workspace_sync.connection.claim_hub_identity
 
@@ -863,17 +829,15 @@ def test_identities_a_hub_cannot_hold_are_reported_with_its_words(
 
     monkeypatch.setattr(workspace_sync.connection, "claim_hub_identity", old_hub)
 
-    refused = _json(client.post("/identities/sync/retry", headers=AUTH_HEADERS))
+    refused = _json(client.post("/identities/sync/retry"))
 
     assert refused["state"] == "not_connected"
     assert refused["last_error_detail"] == "Error: No such command 'identity'."
-    assert _json(client.get("/identities/sync", headers=AUTH_HEADERS)) == refused
-    assert _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["state"] == (
-        "idle"
-    )
+    assert _json(client.get("/identities/sync")) == refused
+    assert _json(client.get("/workspace/sync"))["state"] == ("idle")
 
     monkeypatch.setattr(workspace_sync.connection, "claim_hub_identity", claim)
-    connected = _json(client.post("/identities/sync/retry", headers=AUTH_HEADERS))
+    connected = _json(client.post("/identities/sync/retry"))
 
     assert connected["state"] == "idle"
     assert connected["last_error_detail"] is None
@@ -887,9 +851,7 @@ def test_a_rejection_id_that_names_no_ref_is_refused(
     not one of ours is turned away before it gets there."""
     del memory_sync
 
-    response = client.post(
-        "/workspace/sync/rejections/heads-main/discard", headers=AUTH_HEADERS
-    )
+    response = client.post("/workspace/sync/rejections/heads-main/discard")
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "sync_discard_failed"
@@ -899,7 +861,7 @@ def test_a_rejection_id_that_names_no_ref_is_refused(
 
 
 def test_this_device_reports_no_key_before_one_is_made(client: TestClient) -> None:
-    payload = _json(client.get("/hub/ssh-key", headers=AUTH_HEADERS))
+    payload = _json(client.get("/hub/ssh-key"))
 
     assert payload["exists"] is False
     assert payload["public_key"] == ""
@@ -914,7 +876,6 @@ def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
 
     response = client.post(
         "/workspace/sync/clone",
-        headers=AUTH_HEADERS,
         json={
             "hub": {"endpoint": "hub.invalid"},
             "workspace_id": identity.workspace_id,
@@ -929,11 +890,10 @@ def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
 def test_a_workspace_identifier_that_is_not_one_is_refused(
     client: TestClient, tmp_path: Path
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/hub")
 
     response = client.post(
         "/workspace/sync/clone",
-        headers=AUTH_HEADERS,
         json={
             "hub": {},
             "workspace_id": "../../etc",
@@ -973,7 +933,6 @@ def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
 
     response = client.post(
         "/workspace/sync/hub",
-        headers=AUTH_HEADERS,
         json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
@@ -1003,14 +962,13 @@ def test_the_queue_is_running_again_after_a_failed_hub_change(
 
     response = client.post(
         "/workspace/sync/hub",
-        headers=AUTH_HEADERS,
         json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
     assert response.status_code == HTTP_CONFLICT
     assert paused == [True], "the failure did not happen inside the pause"
     assert current_sync_manager() is not None
-    assert _json(client.get("/workspace/sync", headers=AUTH_HEADERS))["enabled"] is True
+    assert _json(client.get("/workspace/sync"))["enabled"] is True
 
 
 def test_a_queue_that_will_not_stop_blocks_the_hub_change(
@@ -1027,7 +985,6 @@ def test_a_queue_that_will_not_stop_blocks_the_hub_change(
 
     response = client.post(
         "/workspace/sync/hub",
-        headers=AUTH_HEADERS,
         json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
@@ -1041,9 +998,7 @@ def test_a_queue_that_will_not_stop_blocks_the_hub_change(
 def test_trusting_a_hub_requires_the_confirmed_fingerprint(
     client: TestClient,
 ) -> None:
-    response = client.post(
-        "/hub/trust", headers=AUTH_HEADERS, json={"endpoint": "hub.local"}
-    )
+    response = client.post("/hub/trust", json={"endpoint": "hub.local"})
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "host_key_not_confirmed"
@@ -1062,7 +1017,6 @@ def test_a_hub_offering_a_different_key_asks_the_user_to_look_again(
 
     response = client.post(
         "/hub/trust",
-        headers=AUTH_HEADERS,
         json={"endpoint": "hub.local", "fingerprint": "SHA256:confirmed"},
     )
 
@@ -1078,7 +1032,7 @@ def test_the_device_list_is_empty_until_this_machine_joins_one(
 ) -> None:
     """A workspace with no hub publishes no device record, so there is nothing
     to list -- not even this machine."""
-    payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+    payload = _json(client.get("/workspace/devices"))
 
     assert payload["devices"] == []
     assert payload["device_id"]
@@ -1090,7 +1044,7 @@ def test_this_machine_appears_once_it_has_a_record(
     del memory_sync
     workspace_sync.WorkspaceSyncService().activate()
 
-    payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+    payload = _json(client.get("/workspace/devices"))
 
     assert [device["is_self"] for device in payload["devices"]] == [True]
     assert payload["devices"][0]["device_id"] == payload["device_id"]
@@ -1107,7 +1061,7 @@ def test_activation_republishes_the_current_device_key_fingerprint(
     monkeypatch.setattr(workspace_sync, "_key_fingerprint", lambda: None)
     workspace_sync.WorkspaceSyncService().activate()
     assert (
-        _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"][0][
+        _json(client.get("/workspace/devices"))["devices"][0][
             "ssh_public_key_fingerprint"
         ]
         == ""
@@ -1118,7 +1072,7 @@ def test_activation_republishes_the_current_device_key_fingerprint(
     )
     workspace_sync.WorkspaceSyncService().activate()
 
-    devices = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"]
+    devices = _json(client.get("/workspace/devices"))["devices"]
     assert devices[0]["ssh_public_key_fingerprint"] == "SHA256:current-device"
 
 
@@ -1131,20 +1085,17 @@ def test_renaming_this_machine_publishes_the_new_name(
     payload = _json(
         client.post(
             "/workspace/devices/self",
-            headers=AUTH_HEADERS,
             json={"display_name": "  Work laptop  "},
         )
     )
 
     assert [device["display_name"] for device in payload["devices"]] == ["Work laptop"]
-    stored = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
+    stored = _json(client.get("/workspace/devices"))
     assert stored["devices"][0]["display_name"] == "Work laptop"
 
 
 def test_a_blank_device_name_is_refused(client: TestClient) -> None:
-    response = client.post(
-        "/workspace/devices/self", headers=AUTH_HEADERS, json={"display_name": "   "}
-    )
+    response = client.post("/workspace/devices/self", json={"display_name": "   "})
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "device_name_invalid"

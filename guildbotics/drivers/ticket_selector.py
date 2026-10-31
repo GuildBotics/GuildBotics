@@ -6,7 +6,9 @@ manual run -- selects its ticket here and runs the workflow through
 ``ChatSelector``. The selector owns what surrounds the AI CLI turn: moving the
 ticket to the working lane, the run id and completion budget the turn is driven
 with, and the status comment a failed or rate-limited run leaves on the ticket.
-The workflow only runs the turn with the input selected here.
+The workflow only runs the turn with the input selected here. When the work
+the run leaves waits for a person, the selector has the member announce it in
+chat.
 """
 
 from __future__ import annotations
@@ -17,7 +19,14 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
+from guildbotics.capabilities.review_limits import record_review_limit
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.work_stops import (
+    StopReason,
+    WorkStop,
+    completed_stop,
+    notify_work_stop,
+)
 from guildbotics.capabilities.workflow_rate_limits import (
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
@@ -27,6 +36,8 @@ from guildbotics.drivers.execution import failure_status
 from guildbotics.entities import Person, Task
 from guildbotics.entities.team import Service
 from guildbotics.integrations import pull_request_patrol
+from guildbotics.intelligences.agent_runtime.models import TURN_TIMEOUT_SECONDS
+from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import WorkflowStatus
@@ -35,7 +46,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
     WorkflowSource,
 )
-from guildbotics.utils.correlation import require_trace, set_attributes
+from guildbotics.utils.correlation import require_trace, set_attributes, trace_scope
 from guildbotics.utils.i18n_tool import t
 
 TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
@@ -59,7 +70,13 @@ class TicketSelector:
                 if _has_code_host(context)
                 else []
             )
-            return [*pull_requests, *await context.get_ticket_service().candidates()]
+            actionable = []
+            for task in pull_requests:
+                if task.trigger_reason == pull_request_patrol.REVIEW_LIMIT:
+                    await self._hand_over_at_review_limit(context, task)
+                else:
+                    actionable.append(task)
+            return [*actionable, *await context.get_ticket_service().candidates()]
         finally:
             await context.aclose()
 
@@ -75,6 +92,9 @@ class TicketSelector:
                 else context.get_ticket_service().refresh(candidate)
             )
             if task is None:
+                return None
+            if task.trigger_reason == pull_request_patrol.REVIEW_LIMIT:
+                await self._hand_over_at_review_limit(context, task)
                 return None
             return self._invocation(person, task)
         finally:
@@ -94,10 +114,96 @@ class TicketSelector:
             What ``run_workflow`` returned, or ``None`` when there is no work.
         """
         candidates = await self.candidates(person)
-        invocation = await self.refresh(person, candidates[0]) if candidates else None
-        if invocation is None:
-            return None
-        return await self.run(person, invocation, run_workflow)
+        for candidate in candidates:
+            invocation = await self.refresh(person, candidate)
+            if invocation is not None:
+                return await self.run(person, invocation, run_workflow)
+        return None
+
+    async def _hand_over_at_review_limit(self, context: Context, task: Task) -> None:
+        """Settle one decision in its own trace, regardless of the caller's.
+
+        This is host selection work, never an agent turn: it takes no member
+        lease or TaskRun. The provider's conversion elects the one caller
+        allowed to announce it. An unavailable service defers silently;
+        other conversion failures announce failure, then leave selection
+        free to continue to the next real task.
+        """
+        with trace_scope(
+            "review_limit",
+            person_id=context.person.person_id,
+            command=pull_request_patrol.REVIEW_LIMIT,
+            attributes=task.trace_attributes(),
+        ) as trace:
+            try:
+                record_review_limit(task, "review_limit.started")
+                code = context.get_code_hosting_service()
+                assert task.pull_request_url
+                error = None
+                try:
+                    converted = await code.convert_pull_request_to_draft(
+                        task.pull_request_url
+                    )
+                except Exception as exc:
+                    # The hand-over remains autonomous even when a manual
+                    # command caused the selection of an unrelated PR.
+                    if failure_status(exc, "routine") == "deferred":
+                        raise
+                    error = exc
+                else:
+                    if not converted:
+                        record_review_limit(task, "review_limit.finished")
+                        return
+                reason: StopReason = "failed" if error else "review_limit"
+                written = None
+                comment_error: BaseException | None = None
+                try:
+                    written = await code.comment(
+                        task.pull_request_url,
+                        t(
+                            "integrations.pull_request_patrol.review_limit_draft_failed",
+                            count=pull_request_patrol.MAX_REVIEW_ROUNDS,
+                        )
+                        if error
+                        else t(
+                            "integrations.pull_request_patrol.review_limit_reached",
+                            count=pull_request_patrol.MAX_REVIEW_ROUNDS,
+                        ),
+                        status=WorkflowStatus(
+                            reason=reason,
+                            person_id=context.person.person_id,
+                            run_id=trace.trace_id,
+                            subject=task.pull_request_url,
+                        ),
+                    )
+                except BaseException as exc:
+                    comment_error = exc
+                comment_url = (written.url or "") if written else ""
+                if error is None:
+                    record_review_limit(
+                        task,
+                        "pull_request.review_limit",
+                        comment_url=comment_url,
+                        comment_error=comment_error,
+                    )
+                if comment_error is not None and not isinstance(
+                    comment_error, Exception
+                ):
+                    raise comment_error
+                await notify_work_stop(
+                    context, WorkStop.of(task, reason, trace.trace_id, comment_url)
+                )
+                if error is not None:
+                    raise error
+            except BaseException as exc:
+                if failure_status(exc, "routine") == "deferred":
+                    record_review_limit(task, "review_limit.deferred", error=exc)
+                else:
+                    record_review_limit(task, "review_limit.failed", error=exc)
+                if not isinstance(exc, Exception):
+                    raise
+            else:
+                record_review_limit(task, "review_limit.finished")
 
     async def run(
         self,
@@ -110,7 +216,18 @@ class TicketSelector:
         The run is its trace: the route that took the ticket recorded the run
         under the trace id, and the member's completion lands on that same
         record. A run the patrol resumed for its PR's checks ends their wait
-        unless it awaits them again (:func:`_settle_checks`).
+        unless it awaits them again (:func:`_settle_checks`); it runs in the
+        work the awaiting run did, and answers for the PR whatever that work
+        is. A run of autonomous
+        work that ends asking or blocked, or fails and says so on its item,
+        waits for an answer. Unless it names only active agent recipients,
+        the member announces it in chat, once, since the
+        member's comment keeps the work out of selection until someone
+        answers. That holds while the comment is all the item waits on: on the
+        member's own PR, any thread whose last word is someone else's keeps it
+        selected (:func:`~guildbotics.integrations.pull_request_patrol.pull_request_work`),
+        so a run that asks in a conversation comment and leaves such a thread
+        unanswered is taken up, and announced, again on every patrol.
 
         A rate limit is reported on the ticket and recorded, then settled here
         instead of re-raised as chat does: the status comment keeps the ticket
@@ -127,8 +244,24 @@ class TicketSelector:
         context = self._context.clone_for(person)
         try:
             try:
-                if task.status == Task.READY and task.id is not None:
+                if (
+                    not (invocation.work and invocation.work.kind == "ticket_mention")
+                    and task.status == Task.READY
+                    and task.id is not None
+                ):
                     await context.get_ticket_service().move(task, "in_progress")
+                if task.resumes is not None:
+                    # What the run answers for, whatever work it resumes.
+                    RunStore().append_evidence(
+                        run_id,
+                        RunStore.CHECKS_RESUMED_EVIDENCE,
+                        {
+                            "target": {
+                                "kind": "pull_request",
+                                "url": task.url,
+                            }
+                        },
+                    )
                 result = await run_workflow(
                     replace(
                         invocation,
@@ -142,11 +275,17 @@ class TicketSelector:
             except Exception as exc:
                 if failure_status(exc, self._source) == "deferred":
                     raise
-                notice = await self._settle_failure(context, invocation, run_id, exc)
+                notice = await self._settle_failure(
+                    context, task, invocation, run_id, exc
+                )
                 if notice is None:
                     raise
                 return notice
             await _settle_checks(context, task, run_id)
+            if self._source != "manual" and (
+                stop := completed_stop(task, run_id, context.team)
+            ):
+                await notify_work_stop(context, stop)
             return result
         finally:
             await context.aclose()
@@ -154,11 +293,13 @@ class TicketSelector:
     async def _settle_failure(
         self,
         context: Context,
+        task: Task,
         invocation: WorkflowInvocation,
         run_id: str,
         exc: Exception,
     ) -> str | None:
-        """Report a failed run on its ticket.
+        """Report a failed run on its ticket, and announce in chat that the
+        work waits for a person once that report landed.
 
         Returns:
             The notice of a settled rate limit; ``None`` for a failure the
@@ -168,7 +309,15 @@ class TicketSelector:
         person_id = context.person.person_id
         ticket_url = str(invocation.payload["ticket_url"])
         if rate_limit is None:
-            body = await _task_error_message(context)
+            error_text = (
+                t(
+                    "drivers.task_scheduler.turn_timeout",
+                    hours=TURN_TIMEOUT_SECONDS // 3600,
+                )
+                if find_cli_agent_execution_error(exc, category="timeout") is not None
+                else t("drivers.task_scheduler.task_error")
+            )
+            body = await _task_error_message(context, error_text)
             status = WorkflowStatus(
                 reason="failed", person_id=person_id, run_id=run_id, subject=ticket_url
             )
@@ -184,13 +333,18 @@ class TicketSelector:
             )
         # The status is said where the work came from: a pull request on the
         # code host, a ticket on the ticket service.
+        written = None
         with suppress(Exception):
-            await (
+            written = await (
                 context.get_code_hosting_service()
                 if invocation.payload["pull_request_url"]
                 else context.get_ticket_service()
             ).comment(ticket_url, body, status=status)
         if rate_limit is None:
+            if written is not None and self._source != "manual":
+                await notify_work_stop(
+                    context, WorkStop.of(task, "failed", run_id, written.url or "")
+                )
             return None
         record_workflow_rate_limited(
             person_id=person_id,
@@ -203,13 +357,33 @@ class TicketSelector:
         return body
 
     def _invocation(self, person: Person, task: Task) -> WorkflowInvocation:
+        """The run of ``task``, in the work it is: a ticket's, or -- for a PR
+        whose checks the member awaits -- the work the awaiting run did, whose
+        conversation it continues, with that run's summary of where the work
+        came from as far as this device has it: a run whose record has not
+        arrived, or which never recorded a summary, gives none, and the work
+        is resumed all the same rather than held by a record that may never
+        come."""
         assert task.url
         ticket_url = task.url
+        resumes = task.resumes
+        if resumes is not None:
+            work = Work(resumes.work_kind, resumes.work_identity)
+        elif (
+            task.assignee != person.person_id and task.trigger_reason == "issue_mention"
+        ):
+            work = Work("ticket_mention", ticket_url)
+        else:
+            work = Work.of_ticket(ticket_url)
         payload = {
             "task": task.model_dump(),
             "ticket_url": ticket_url,
             "pull_request_url": task.pull_request_url or "",
             "trigger_reason": task.trigger_reason or "",
+            "awaited_run_id": resumes.run_id if resumes is not None else "",
+            "awaited_summary": (
+                RunStore().summary(resumes.run_id) if resumes is not None else ""
+            ),
         }
         return WorkflowInvocation(
             command=TICKET_WORKFLOW_COMMAND,
@@ -217,7 +391,7 @@ class TicketSelector:
             source=self._source,
             trigger_type="ticket",
             payload=payload,
-            work=Work.of_ticket(ticket_url),
+            work=work,
         )
 
 
@@ -226,7 +400,7 @@ async def _settle_checks(context: Context, task: Task, run_id: str) -> None:
     that PR's checks again: the wait is the member's latest status notice on
     the PR, and whatever the run itself wrote there, or awaited elsewhere, it
     would resume the member on every patrol."""
-    if task.trigger_reason != pull_request_patrol.CHECKS or not task.pull_request_url:
+    if task.resumes is None or not task.pull_request_url:
         return
     # Like a failure's notice, this one cannot fail the run that ended: the
     # wait it leaves resumes the member on the next patrol instead.
@@ -259,14 +433,13 @@ def _max_agent_attempts() -> int:
         return _DEFAULT_MAX_ATTEMPTS
 
 
-async def _task_error_message(context: Context) -> str:
+async def _task_error_message(context: Context, error_text: str) -> str:
     """The reader-facing failure comment, in the member's voice.
 
     The traceback is logged (trace-scoped ERROR) by the route that ran the
     command; the ticket comment stays a safe message with no local paths or
     internal details.
     """
-    error_text = t("drivers.task_scheduler.task_error")
     try:
         from guildbotics.intelligences.functions import talk_as
 

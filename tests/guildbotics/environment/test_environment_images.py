@@ -72,7 +72,7 @@ class _Image:
 @pytest.fixture
 def sdk(monkeypatch: pytest.MonkeyPatch) -> type[_Image]:
     _Image.handles = [
-        _handle("node:22.23.2-bookworm", "sha256:" + "a" * 64, 381),
+        _handle("node:24.22.1-bookworm", "sha256:" + "a" * 64, 381),
         _handle("local/agent:1", "sha256:" + "c" * 64, 900, architecture="amd64"),
         _handle("broken:latest", None),
     ]
@@ -86,7 +86,7 @@ def test_images_are_listed_by_reference_with_their_config_digest(sdk) -> None:
     """The config digest is the identity that survives save and load; an
     image the runtime cannot describe is left out rather than misnamed."""
     assert list_images() == (
-        ImageInfo("node:22.23.2-bookworm", "sha256:" + "a" * 64, "arm64", 381),
+        ImageInfo("node:24.22.1-bookworm", "sha256:" + "a" * 64, "arm64", 381),
         ImageInfo("local/agent:1", "sha256:" + "c" * 64, "amd64", 900),
     )
 

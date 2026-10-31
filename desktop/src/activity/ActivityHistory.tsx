@@ -1720,6 +1720,7 @@ function eventIcon(type: ActivityHistoryEvent["type"]) {
     case "pr_merge":
       return <GitMerge size={12} />;
     case "pr_closed":
+    case "pr_draft":
       return <GitPullRequest size={12} />;
     case "push":
       return <Upload size={12} />;
@@ -1739,6 +1740,7 @@ function eventColor(type: ActivityHistoryEvent["type"]): string {
     pr_create: "info",
     pr_merge: "info",
     pr_closed: "danger",
+    pr_draft: "warning",
     push: "warning",
     issue_create: "info",
     issue_resolve: "success",

@@ -77,10 +77,44 @@ guildbotics member git push --person <person_id> --repo-path <current_repo_path>
 
 Run `member git commit` without `member git push` when the user asks for a commit without a push.
 
+## Creating a ticket and starting it in the conversation
+
+When the user explicitly asks to create a ticket and implement it in the same
+interactive session, create it with `--interactive --assignee <active_person_id>
+--lane in_progress --human-approved`. Use the roster's `person_id` for
+`--assignee`; the CLI resolves the ticket provider's account, including human
+members when the user names one. These initial settings are part of the user's
+approval to create the ticket. Do not create it ready and then set interactive
+mode or assignment separately: patrol could take the intermediate state.
+
+対話中に「チケットを作成してそのまま実装」と指示されたら、作成時に
+`--interactive --assignee <自分のperson_id> --lane in_progress --human-approved`
+を指定する。ユーザーが別の担当を指定した場合は人を含む名簿の person_id を使う。
+作成時の指定はチケット作成の承認に含まれる。既存チケットの担当やレーンは変更しない。
+
+Pass `--parent <ticket_url>` and repeated `--blocked-by <ticket_url>` when
+requested. Without `--lane`, the default is `ready` with a parent or blockers,
+and `new` otherwise, with or without `--interactive`. An ordinary assigned
+ticket in `ready` need not be interactive. Providers that do not support
+interactive tickets refuse `--interactive` before creating anything.
+
+When the user asks to work on an existing ticket interactively, use
+`member ticket update --person <person_id> --url <ticket_url> --interactive
+--human-approved`. When they ask to return it to automatic patrol, use
+`--no-interactive --human-approved`. Keep its assignee and lane unchanged.
+Read and report the result: `interactive` is the ticket's own setting, and
+an `interactive_ancestor` URL means it remains interactive through inheritance
+even after `--no-interactive`. Unsupported providers refuse either flag.
+
+既存のチケットを対話で進めるよう人が依頼したら、
+`ticket update --interactive --human-approved` を使う。自動巡回へ戻す依頼には
+`--no-interactive --human-approved` を使い、担当者とレーンは変えない。
+`interactive_ancestor` があれば、自身の指定を解除しても対話のままであることを伝える。
+
 ## Definition of Done
 
 Before sending your final interactive reply, complete the standard work procedure from the member capabilities in the user's current repository: verification of code changes, the requested publishing steps (commit, push, PR, comments, replies, or reactions), and memory maintenance.
-When the work created, reused, or updated an open PR, run `guildbotics run repository/pr_checks` after the final push and do not report completion unless its `readiness` is `ready`. Successful observed checks alone are insufficient: the PR head must include the current base and the checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
+When the work created, reused, or updated an open PR, run `guildbotics run repository/pr_checks` after the final push and do not report completion unless its `readiness` is `ready`. Resolve its `completion_blockers`; `base_out_of_date` requires updating the head only when the host requires it. The checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
 Then write the final reply in the active member's voice.
 
 ## Interactive Memory Obligations

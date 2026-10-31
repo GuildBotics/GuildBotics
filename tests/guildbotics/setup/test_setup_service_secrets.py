@@ -206,54 +206,47 @@ class TestPersonSecrets:
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
-        pem_file = tmp_path / "alice.pem"
-        pem_file.write_text("-----BEGIN RSA PRIVATE KEY-----\npem\n")
+        pem = "-----BEGIN RSA PRIVATE KEY-----\npem"
 
         SimplePersonSetupService().save_person(
             _person_input(
                 config_dir,
-                accounts=_github(
-                    account_type="github_apps", private_key_path=pem_file, app_id=7
-                ),
+                accounts=_github(account_type="github_apps", private_key=pem, app_id=7),
             )
         )
 
         store = identity_secret_store()
-        assert store.get("ALICE_GITHUB_PRIVATE_KEY") == pem_file.read_text()
+        assert store.get("ALICE_GITHUB_PRIVATE_KEY") == pem
         identity = load_yaml_file(_identity_file())
         assert identity["account_info"]["github_app_id"] == "7"
-        assert pem_file.exists()
+        assert pem not in _identity_file().read_text()
 
         snapshot = SimplePersonSetupService().read_person_config(
             config_dir=config_dir, person_id="alice"
         )
         assert snapshot.accounts["github"]["has_private_key"] is True
 
-    @pytest.mark.parametrize("content", [None, b"\xff\xfe"])
-    def test_save_person_rejects_an_unreadable_key_file_before_writing(
-        self, fake_keyring, tmp_path, content
+    def test_save_person_rejects_an_account_the_provider_refuses_before_writing(
+        self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
-        pem_file = tmp_path / "alice.pem"
-        if content is not None:
-            pem_file.write_bytes(content)
 
         with pytest.raises(SetupError) as exc_info:
             SimplePersonSetupService().save_person(
                 _person_input(
                     config_dir,
                     accounts=_github(
-                        access_token="ghp-secret", private_key_path=pem_file
+                        access_token="ghp-secret", app_registration_id="unknown"
                     ),
                 )
             )
 
-        assert exc_info.value.code == "github_private_key_unreadable"
+        assert exc_info.value.code == "github_app_registration_not_found"
         assert not (config_dir / "team" / "members" / "alice").exists()
         assert not _identity_file().parent.exists()
         assert identity_secret_store().keys() == []
 
-    def test_save_person_rejects_an_unreadable_key_file_before_changing_the_member(
+    def test_save_person_rejects_an_account_the_provider_refuses_before_changing_the_member(
         self, fake_keyring, tmp_path
     ):
         config_dir = self._workspace(tmp_path)
@@ -270,13 +263,12 @@ class TestPersonSecrets:
                     config_dir,
                     person_name="Alice 2",
                     accounts=_github(
-                        access_token="ghp-new",
-                        private_key_path=tmp_path / "missing.pem",
+                        access_token="ghp-new", app_registration_id="unknown"
                     ),
                 )
             )
 
-        assert exc_info.value.code == "github_private_key_unreadable"
+        assert exc_info.value.code == "github_app_registration_not_found"
         assert identity_secret_store().get("ALICE_GITHUB_ACCESS_TOKEN") == "ghp-old"
         assert {path: path.read_bytes() for path in files} == before
 

@@ -8,11 +8,11 @@ import {
   BRANVIL_BASE_URL,
   ORIGIN,
   branvilKey,
-  enterBranvil,
   getConnection,
   startConnection,
   type Connection,
 } from "./api";
+import { openBranvil } from "./openBranvil";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -73,7 +73,7 @@ export function BranvilConnection() {
     setConsent(started.state);
     await openExternal(started.url);
   });
-  const open = run(async () => openExternal((await enterBranvil()).url));
+  const open = run(openBranvil);
   const connected = connection?.status === "connected";
 
   return (

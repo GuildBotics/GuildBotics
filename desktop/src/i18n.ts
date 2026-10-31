@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
 import { setApiLanguage } from "./api/client";
+import { isTauriRuntime } from "./desktopWindow";
 import { providerResources } from "./setup/providers/resources";
 
 export type AppLanguage = "en" | "ja";
@@ -63,20 +64,54 @@ const resources = {
           english: "English",
           japanese: "Japanese",
         },
+        serverMachine: {
+          fallback: "the server machine",
+          tooltip:
+            '"This machine" here is {{machine}}, the machine the GuildBotics server runs on.',
+          pathHint: "Enter a path on {{machine}}, the machine the GuildBotics server runs on.",
+        },
         loading: {
           title: "Starting GuildBotics",
-          failed: "GuildBotics could not start",
-          stopped: "GuildBotics stopped working",
-          retry: "Retry",
+          closed: "GuildBotics is not running",
           restart: "Restart GuildBotics",
           reasons: {
+            cli_managed:
+              "The backend is running through the CLI. Run guildbotics stop in a terminal, then choose Restart GuildBotics.",
+            backend_in_use:
+              "Another Desktop backend is already running. Close it, then choose Restart GuildBotics.",
             exited: "The backend exited ({{detail}}).",
             timeout: "The backend did not start within {{detail}} seconds.",
             invalid_notice: "The backend reported an invalid port ({{detail}}).",
             duplicate_notice: "The backend reported its port twice.",
             spawn_failed: "The backend could not be launched ({{detail}}).",
+            entry_failed: "The backend started, but no entry link came back from it ({{detail}}).",
           },
           logPath: "Bootstrap log",
+        },
+      },
+      session: {
+        retry: "Retry",
+        guide: {
+          title: "Open GuildBotics from the server machine",
+          run: "Run this on the machine the GuildBotics server runs on. It opens GuildBotics in that machine's browser:",
+          remote:
+            "If this browser is on another machine, run this in a terminal on the browser's machine (<server> is the server machine's SSH host), then paste the printed link into this browser's address bar:",
+          expired: "This link has already been used or has expired. Get a new one.",
+        },
+        unreachable: {
+          title: "Cannot reach GuildBotics",
+          body: "The GuildBotics server does not answer. Check that it is running, then retry. What is on the screen stays as it is.",
+        },
+        authorize: {
+          title: "Allow {{client}} to use GuildBotics?",
+          rights:
+            "{{client}} gets the same rights as you on this GuildBotics server. Allowing it again replaces the access it had.",
+          returns: "After you choose, you return to {{address}}.",
+          allow: "Allow",
+          deny: "Deny",
+          invalid: "This request from an app is not valid ({{fields}}). Start again from the app.",
+          enterFirst:
+            "To allow {{client}}, open GuildBotics in this browser first. Within 10 minutes, entering brings you back to this page.",
         },
       },
       sync: {
@@ -114,11 +149,11 @@ const resources = {
         clone: {
           action: "Take a copy from a hub",
           title: "Take a copy from a hub",
-          body: "Create a workspace here from one the hub already holds. Use this on a machine that has no workspace yet; a machine that already has one connects it instead.",
+          body: "Create a workspace on {{machine}} from one the hub already holds. Use this on a machine that has no workspace yet; a machine that already has one connects it instead.",
           destination: "Created in:",
           chooseTitle: "Which workspace to take",
           take: "Take",
-          current: "Open on this machine",
+          current: "Open on {{machine}}",
           empty: "This hub holds no workspace yet.",
           failed: "Could not take a copy",
         },
@@ -131,9 +166,9 @@ const resources = {
           endpointHint:
             "The machine hosting the hub, as user@host. GuildBotics decides where the repositories live on it.",
           inspect: "Look up",
-          useLocal: "Use the hub on this machine",
+          useLocal: "Use the hub on {{machine}}",
           useLocalHint:
-            "This machine hosts a hub, so a workspace here reaches it without a network.",
+            "{{machine}} hosts a hub, so a workspace on it reaches the hub without a network.",
           failed: "Could not connect",
           chooseTitle: "What to do with this workspace",
           register: "Register this workspace on the hub",
@@ -141,9 +176,9 @@ const resources = {
           join: "Join…",
         },
         hostKey: {
-          title: "Confirm this machine's host key",
+          title: "Confirm the hub machine's host key",
           body: "Select the fingerprint that matches the one shown on the hub machine. Nothing is sent until it matches.",
-          changedTitle: "This machine is offering a different host key",
+          changedTitle: "The hub machine is offering a different host key",
           changedBody:
             "A key was already stored for this address, and none of the keys being offered is it. Reinstalling the hub machine does that — so does something else answering in its place. Confirm the fingerprint on the hub machine itself before selecting it.",
           confirm: "This is the one",
@@ -205,9 +240,9 @@ const resources = {
             "To look at the content first, follow the recovery procedure in the README on this machine. Discard it once you are done with it.",
           discardConfirm: "Discard",
           cancel: "Cancel",
-          alert_one: "One change of yours was set aside and is still held on this machine.",
+          alert_one: "One change of yours was set aside and is still held on {{machine}}.",
           alert_other:
-            "{{count}} changes of yours were set aside and are still held on this machine.",
+            "{{count}} changes of yours were set aside and are still held on {{machine}}.",
           alertTitle: {
             identities: "Members' changes set aside",
             workspace: "Changes set aside",
@@ -245,7 +280,7 @@ const resources = {
           none: "No service owner has been claimed.",
           self: "This machine owns the service",
           hint: "Ownership never moves automatically. Transfer it only after confirming the service on the owner machine has stopped.",
-          takeOver: "Take over on this machine",
+          takeOver: "Take over on {{name}}",
           connection: {
             unknown: "Connection unknown",
             online: "Online",
@@ -270,8 +305,8 @@ const resources = {
         },
         secrets: {
           title: {
-            identities: "Members' credentials on this machine",
-            workspace: "This workspace's credentials on this machine",
+            identities: "Members' credentials on {{machine}}",
+            workspace: "This workspace's credentials on {{machine}}",
           },
           scope: {
             identities:
@@ -336,8 +371,8 @@ const resources = {
               title: "The hub could not be reached",
               body: "The states below are what this machine knows on its own. Credentials can be sent and fetched again once the hub answers.",
             },
-            attention_one: "1 credential needs attention on this machine.",
-            attention_other: "{{count}} credentials need attention on this machine.",
+            attention_one: "1 credential needs attention on {{machine}}.",
+            attention_other: "{{count}} credentials need attention on {{machine}}.",
           },
           refused: {
             title_one: "1 credential was not transferred",
@@ -360,7 +395,7 @@ const resources = {
             ready: "this machine already holds the shared value",
           },
           hint: {
-            missing: "Not on this machine",
+            missing: "Not on {{machine}}",
             outdated: "Updated elsewhere",
             pending_send: "Not sent to the hub",
             conflict: "Changed on two machines",
@@ -381,11 +416,12 @@ const resources = {
         state: {
           synced: {
             label: "In sync",
-            detail: "This machine and the hub hold the same content.",
+            detail: "{{machine}} and the hub hold the same content.",
           },
           sending: {
             label: "Waiting to send",
-            detail: "Changes made here have not reached the hub yet. They are sent automatically.",
+            detail:
+              "Changes made on {{machine}} have not reached the hub yet. They are sent automatically.",
           },
           receiving: {
             label: "Receiving",
@@ -397,13 +433,13 @@ const resources = {
               "This workspace still works, and changes are kept until they can be synchronized with the hub.",
           },
           local_error: {
-            label: "Sync failed on this machine",
+            label: "Sync failed on {{machine}}",
             detail:
-              "This workspace still works. Something on this machine is keeping synchronization from running, and changes are kept until it is fixed.",
+              "This workspace still works. Something on {{machine}} is keeping synchronization from running, and changes are kept until it is fixed.",
           },
           unsendable: {
             label: "Changes that cannot be sent",
-            detail: "Some files cannot be shared until they are repaired on this machine.",
+            detail: "Some files cannot be shared until they are repaired on {{machine}}.",
           },
           invalid_shared_state: {
             label: "Shared data problem",
@@ -413,7 +449,7 @@ const resources = {
           update_required: {
             label: "Update required",
             detail:
-              "Another machine is running a newer version of GuildBotics, and this one cannot read what it wrote.",
+              "Another machine is running a newer version of GuildBotics, and {{machine}} cannot read what it wrote.",
           },
           not_connected: {
             label: "Not connected to the hub",
@@ -424,20 +460,20 @@ const resources = {
         },
         alerts: {
           unreachable:
-            "Synchronization with the hub is failing. Local work continues, and sharing resumes automatically once the cause is resolved.",
+            "Synchronization with the hub is failing. Work on {{machine}} continues, and sharing resumes automatically once the cause is resolved.",
           local_error:
-            "Synchronization is failing because of something on this machine. Check the file or folder shown in Error details. Sharing resumes automatically once it is fixed.",
+            "Synchronization is failing because of something on {{machine}}. Check the file or folder shown in Error details. Sharing resumes automatically once it is fixed.",
           unsendable_one: "One change cannot be sent until the file is repaired.",
           unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
           invalid_shared_state:
             "Synchronization stopped because the shared content could not be reconciled.",
-          update_required: "Update GuildBotics on this machine to keep sharing.",
+          update_required: "Update GuildBotics on {{machine}} to keep sharing.",
           not_connected:
             "The workspace synchronizes, but the members' names and accounts do not reach the other machines. Update GuildBotics on the hub machine, then retry.",
         },
         live: {
           updateRequiredTitle: "Live state client update required",
-          updateRequired: "Update GuildBotics on this machine to read the current live state.",
+          updateRequired: "Update GuildBotics on {{machine}} to read the current live state.",
         },
         counts: {
           ahead_one: "1 change waiting to be sent",
@@ -468,10 +504,10 @@ const resources = {
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
-          agent_environment_unavailable: "This device cannot run AI CLI turns: {{reason}}",
+          agent_environment_unavailable: "{{machine}} cannot run AI CLI turns: {{reason}}",
           agent_environment_tool_unavailable: "Check this AI CLI tool: {{reason}}",
           agent_environment_slot_blocked:
-            "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
+            "The AI CLI slot {{command}} of {{person}} cannot start on {{machine}}: {{reason}}",
           agent_environment_image_differs: "{{reason}}",
         },
         keyRefusals: {
@@ -482,11 +518,11 @@ const resources = {
         },
         environmentFix: {
           runtime:
-            'This device cannot host the agent execution environment; see "What You Need" in the README.',
+            '{{machine}} cannot host the agent execution environment; see "What You Need" in the README.',
           declaration:
             'Fix the "Environment declaration" under "Agent execution environment", then build again.',
           image:
-            'Load the declared base image on this device with the command under "Agent execution environment".',
+            'Load the declared base image on {{machine}} with the command under "Agent execution environment".',
           snapshot: 'Press "Build" under "Agent execution environment".',
         },
         actions: {
@@ -573,6 +609,7 @@ const resources = {
           pr_create: "PR created",
           pr_merge: "PR merged",
           pr_closed: "PR closed",
+          pr_draft: "PR drafted at review limit",
           push: "Push",
           issue_create: "Issue created",
           issue_resolve: "Issue resolved",
@@ -587,7 +624,7 @@ const resources = {
         noTargetBody:
           "Select patrol commands, scheduled commands, or event triggers before starting.",
         ownerElsewhere:
-          "The service owner is another machine ({{name}}). To run the service on this machine, take over ownership in Setup → Sync.",
+          "The service owner is another machine ({{name}}). To run the service on {{machine}}, take over ownership in Setup → Sync.",
         keepAwake: {
           title: "Keep this machine awake",
           description:
@@ -780,6 +817,8 @@ const resources = {
             system_finished: "System finished",
             session_pointer: "Session transcript",
             chat_receive_state_reset: "Chat receive state reset",
+            workspace_changed: "Workspace switched",
+            hotkeys_changed: "Shortcuts saved",
             network_egress_candidate: "Network destination candidate",
           },
           messages: {
@@ -967,6 +1006,7 @@ const resources = {
           workspaceDescription:
             "GuildBotics keeps this project's settings and state here (.guildbotics/).",
           choose: "Choose",
+          registered: "Choose registered",
         },
         intelligence: {
           tabs: {
@@ -984,7 +1024,7 @@ const resources = {
           providerDescription: "Choose the default LLM provider.",
           defaultCliAgent: "Default AI CLI tool",
           inferenceFailure: {
-            summary: "Latest call failed: {{reason}} ({{time}} · This machine)",
+            summary: "Latest call failed: {{reason}} ({{time}} · {{machine}})",
             responseWithStatus: "Provider's answer (status {{status}}): {{response}}",
             response: "Provider's answer: {{response}}",
             categories: {
@@ -998,13 +1038,13 @@ const resources = {
           lastTurn: {
             specified: "Explicitly configured",
             default: "Default selection",
-            noRecord: "No run record available on this machine",
+            noRecord: "No run record available on {{machine}}",
             defaultModelNotReported: "Default selection (model name not reported)",
             modelNotReported: "Model name not reported",
             modelWithSource: "{{model}} ({{source}})",
             effort: "Effort: {{effort}}",
             effortUnknown: "Unknown",
-            time: "Last run: {{time}} · This machine",
+            time: "Last run: {{time}} · {{machine}}",
           },
           apiKeyLabel: "{{provider}} API key",
           apiKeyButtonLabel: "Configure {{provider}} API key",
@@ -1103,7 +1143,7 @@ const resources = {
             dns: "DNS resolvers",
             dnsHost: "This device's resolvers",
             toolNotProvisioned: "Not available in the environment yet",
-            toolCredentialsSaved: "Credentials saved on this device",
+            toolCredentialsSaved: "Credentials saved on {{machine}}",
             toolAuthenticationFailed: "Authentication failed. Log in again.",
             refresh: "Refresh display",
             recheck: "Check again",
@@ -1114,7 +1154,7 @@ const resources = {
             errorDetails: "Error details",
             recheckError:
               "Could not complete the check. The previous result is still shown. Try again.",
-            toolCredentialsMissing: "No credentials saved on this device",
+            toolCredentialsMissing: "No credentials saved on {{machine}}",
             loginHint: "To log in or log in again, run this command in a terminal:",
             loginRecheckHint: "After logging in, use Check again to verify usage retrieval.",
             copy: "Copy",
@@ -1127,11 +1167,11 @@ const resources = {
               image: "Base image",
               imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
               imageHint:
-                "An image loaded on this device (docker save → guildbotics environment image load), built FROM the default image or one with Debian's apt, Node.js with npm, curl, tar and git. Images are per CPU architecture: the declaration names one digest per architecture, and a device of another architecture builds the same Dockerfile itself and picks its image here too.",
-              imageUnavailable: "The images on this device cannot be read: {{problem}}",
-              imageNotHere: "declared, not loaded on this device",
+                "An image loaded on {{machine}} (docker save → guildbotics environment image load), built FROM the default image or one with Debian's apt, Node.js with npm, curl, tar and git. Images are per CPU architecture: the declaration names one digest per architecture, and a device of another architecture builds the same Dockerfile itself and picks its image here too.",
+              imageUnavailable: "The images on {{machine}} cannot be read: {{problem}}",
+              imageNotHere: "declared, not loaded on {{machine}}",
               imageNotDeclaredHere:
-                "{{reference}} is declared for {{declared}} but not for this device ({{architecture}}). Pick the image loaded here to declare it for {{architecture}}.",
+                "{{reference}} is declared for {{declared}} but not for {{machine}} ({{architecture}}). Pick the image loaded on {{machine}} to declare it for {{architecture}}.",
               imageDeclared: "Declared: {{digests}}",
               memory: "Memory (MiB)",
               memoryHint:
@@ -1142,7 +1182,7 @@ const resources = {
               positiveInteger: "Enter a whole number greater than zero.",
               nameservers: "DNS resolvers",
               nameserversHost:
-                "This device's resolvers, read when a turn starts (for networks that block outside DNS)",
+                "The resolvers of {{machine}}, read when a turn starts (for networks that block outside DNS)",
               nameserversList: "Fixed IPv4 addresses, shared as written",
               nameserversPlaceholder: "10.0.0.53",
               invalidNameserver: "Enter IPv4 addresses.",
@@ -1170,8 +1210,8 @@ const resources = {
             path: "Path",
             access: "Access",
             accessLabels: { read: "Read", read_write: "Read / write" },
-            presentHere: "On this device",
-            absentHere: "Not on this device",
+            presentHere: "On {{machine}}",
+            absentHere: "Not on {{machine}}",
             add: "Add",
             choose: "Choose a directory",
             accessFor: "Access to {{path}}",
@@ -1222,7 +1262,7 @@ const resources = {
         agentEnvironment: {
           title: "Agent execution environment",
           subtitle:
-            "See the effective environment formed by workspace-wide declarations and this device's state and access settings.",
+            "See the effective environment formed by workspace-wide declarations and the state and access settings of {{machine}}.",
           scope: {
             workspace: "Workspace-wide",
             device: "This device",
@@ -1264,7 +1304,7 @@ const resources = {
             "GuildBotics cannot run without an active member. Add at least one member before finishing setup.",
           memberActive: "Active",
           memberInactive: "Inactive",
-          blockedHere: "Cannot start on this device",
+          blockedHere: "Cannot start on {{machine}}",
           memberHuman: "Human",
           defaultPersonBadge: "Default",
           defaultPersonLabel: "Default executor",
@@ -1289,7 +1329,7 @@ const resources = {
           personIdFixedByAccount:
             "The member ID stays fixed while the {{provider}} account set up for it is pending.",
           personIdFixed:
-            "A member keeps its ID: other workspaces, on this machine or others, know the member by it.",
+            "A member keeps its ID: other workspaces, on {{machine}} or other machines, know the member by it.",
           scopeHint:
             "The name, character, avatar, and service accounts are the member's own, the same in every workspace. Roles, patrol, chat, and AI settings are for this workspace only.",
           joinLabel: "Add an existing member",
@@ -1341,6 +1381,8 @@ const resources = {
           chatChannelsEmpty: "No chat channels configured.",
           chatParticipationChannel: "Channel",
           chatParticipationPolicy: "When to join",
+          workStopNotifications: "Notify when work stops",
+          workStopNotificationsHint: "Post here when this member needs a person's response.",
           chatParticipationOptions: {
             social: "Join actively",
             strict: "Join when needed",
@@ -1505,16 +1547,16 @@ const resources = {
           agent_environment: {
             title: "Commands can run in the isolated environment",
             description:
-              "Every command runs in the isolated agent environment, and this device can start it.",
+              "Every command runs in the isolated agent environment, and {{machine}} can start it.",
           },
           cli_agent_environment: {
             title: "AI CLI tool can start",
             description:
-              "The isolated agent environment on this device can start the default AI CLI tool.",
+              "The isolated agent environment on {{machine}} can start the default AI CLI tool.",
           },
           provider_secret: {
             title: "A provider's workspace credential is held",
-            description: "{{target}} is held on this machine.",
+            description: "{{target}} is held on {{machine}}.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check passed",
@@ -1552,17 +1594,17 @@ const resources = {
           agent_environment: {
             title: "Commands cannot run in the isolated environment",
             description:
-              "Every command runs in the isolated agent environment, which this device cannot start now. See the reason below.",
+              "Every command runs in the isolated agent environment, which {{machine}} cannot start now. See the reason below.",
           },
           cli_agent_environment: {
             title: "Default AI CLI tool cannot start",
             description:
-              "The isolated agent environment on this device cannot start the default AI CLI tool. See the reason below.",
+              "The isolated agent environment on {{machine}} cannot start the default AI CLI tool. See the reason below.",
           },
           provider_secret: {
             title: "A provider's workspace credential is missing",
             description:
-              "{{target}} is not held on this machine. Connect again under Setup → Integrations, or fetch it from the Hub under Credentials on this machine.",
+              "{{target}} is not held on {{machine}}. Connect again under Setup → Integrations, or fetch it from the Hub under the credentials on {{machine}} in Setup → Sync.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check failed",
@@ -1718,6 +1760,11 @@ const resources = {
         inputPathCopy: "Hand over a copy",
         inputPathGrant: "Allow this folder",
         inputPathDismiss: "Do not use this file",
+        messageDescriptionUpload:
+          "Text passed to the command. Drop files or paste an image to hand over a copy: the agent's changes do not reach the original.",
+        inputFileDropUpload: "Drop to hand over a copy of the file",
+        inputFolderRefused:
+          "A folder cannot be dropped here. Type its path on the server machine instead.",
         inputPathHint:
           "Agents reach only the working directory and the folders allowed under Settings → AI. A read-only copy is kept by GuildBotics and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
@@ -1732,6 +1779,10 @@ const resources = {
         noMembersBody: "Enable at least one member in Settings before running commands.",
         openScript: "Open in external editor",
         copyScriptPath: "Copy path",
+        linkedCommandMissing: {
+          title: "Command not found",
+          body: "{{command}} is not among this workspace's commands.",
+        },
         authoring: {
           title: "AI assistant",
           open: "Ask AI",
@@ -1930,20 +1981,56 @@ const resources = {
           english: "English",
           japanese: "日本語",
         },
+        serverMachine: {
+          fallback: "サーバーのマシン",
+          tooltip:
+            "ここでの「このマシン」は、GuildBotics のサーバーが動いている {{machine}} です。",
+          pathHint: "GuildBotics のサーバーが動いている {{machine}} のパスを入力します。",
+        },
         loading: {
           title: "GuildBotics を起動しています",
-          failed: "GuildBotics を起動できませんでした",
-          stopped: "GuildBotics が停止しました",
-          retry: "再試行",
+          closed: "GuildBotics が動いていません",
           restart: "GuildBotics を再起動",
           reasons: {
+            cli_managed:
+              "CLI のバックエンドが動いています。ターミナルで guildbotics stop を実行してから「GuildBotics を再起動」を押してください。",
+            backend_in_use:
+              "別の Desktop のバックエンドが動いています。閉じてから「GuildBotics を再起動」を押してください。",
             exited: "バックエンドが終了しました（{{detail}}）。",
             timeout: "バックエンドが {{detail}} 秒以内に起動しませんでした。",
             invalid_notice: "バックエンドから不正なポートが通知されました（{{detail}}）。",
             duplicate_notice: "バックエンドがポートを 2 回通知しました。",
             spawn_failed: "バックエンドを起動できませんでした（{{detail}}）。",
+            entry_failed:
+              "バックエンドは起動しましたが、入口リンクを受け取れませんでした（{{detail}}）。",
           },
           logPath: "ブートログ",
+        },
+      },
+      session: {
+        retry: "再試行",
+        guide: {
+          title: "サーバーのマシンから GuildBotics を開いてください",
+          run: "GuildBotics のサーバーが動くマシンで、次のコマンドを実行してください。そのマシンのブラウザで GuildBotics が開きます。",
+          remote:
+            "このブラウザが別のマシンにあるときは、ブラウザのあるマシンのターミナルで次のコマンドを実行し（<server> はサーバーのマシンの SSH のホスト）、表示されたリンクをこのブラウザのアドレスバーに貼り付けてください。",
+          expired: "このリンクは使用済みか、期限が切れています。新しいリンクを取得してください。",
+        },
+        unreachable: {
+          title: "GuildBotics に接続できません",
+          body: "GuildBotics のサーバーが応答しません。サーバーが動いていることを確かめてから再試行してください。画面の内容はそのまま残ります。",
+        },
+        authorize: {
+          title: "{{client}} に GuildBotics の使用を許可しますか？",
+          rights:
+            "{{client}} は、この GuildBotics のサーバーであなたと同じ権限を持ちます。もう一度許可すると、それまでのアクセスは置き換わります。",
+          returns: "選ぶと {{address}} に戻ります。",
+          allow: "許可",
+          deny: "拒否",
+          invalid:
+            "アプリからの要求が正しくありません（{{fields}}）。アプリからやり直してください。",
+          enterFirst:
+            "{{client}} を許可するには、先にこのブラウザで GuildBotics を開いてください。10 分以内に開くと、このページに戻ります。",
         },
       },
       sync: {
@@ -1981,11 +2068,11 @@ const resources = {
         clone: {
           action: "Hub から取得して作成",
           title: "Hub から取得して作成",
-          body: "Hub にあるワークスペースから、このマシンにワークスペースを作ります。まだワークスペースが無いマシンで使う操作です。すでにある場合は、そのワークスペースを接続してください。",
+          body: "Hub にあるワークスペースから、{{machine}} にワークスペースを作ります。まだワークスペースが無いマシンで使う操作です。すでにある場合は、そのワークスペースを接続してください。",
           destination: "作成先:",
           chooseTitle: "取得するワークスペース",
           take: "取得する",
-          current: "このマシンで開いているワークスペース",
+          current: "{{machine}} で開いているワークスペース",
           empty: "この Hub にはまだワークスペースがありません。",
           failed: "取得できませんでした",
         },
@@ -1998,9 +2085,9 @@ const resources = {
           endpointHint:
             "Hub を動かしているマシンを user@host の形で指定します。マシン内のどこに置くかは GuildBotics が決めます。",
           inspect: "確認する",
-          useLocal: "このマシンの Hub を使う",
+          useLocal: "{{machine}} の Hub を使う",
           useLocalHint:
-            "このマシンは Hub を動かしているため、ここにあるワークスペースはネットワークを介さずに接続できます。",
+            "{{machine}} は Hub を動かしているため、そこにあるワークスペースはネットワークを介さずに接続できます。",
           failed: "接続できませんでした",
           chooseTitle: "このワークスペースをどうするか",
           register: "このワークスペースを Hub に登録する",
@@ -2008,9 +2095,9 @@ const resources = {
           join: "参加する…",
         },
         hostKey: {
-          title: "このマシンのホスト鍵を確認してください",
+          title: "Hub のマシンのホスト鍵を確認してください",
           body: "Hub マシン側に表示されている fingerprint と一致するものを選んでください。一致するまで何も送信しません。",
-          changedTitle: "このマシンは以前と違うホスト鍵を提示しています",
+          changedTitle: "Hub のマシンは以前と違うホスト鍵を提示しています",
           changedBody:
             "このアドレスには保存済みの鍵がありますが、提示されている鍵はどれもそれと一致しません。Hub マシンを再インストールした場合にこうなりますが、別のものが代わりに応答している場合も同じに見えます。Hub マシン自身で fingerprint を確認してから選んでください。",
           confirm: "これで合っています",
@@ -2072,8 +2159,8 @@ const resources = {
             "内容を先に確認する場合は、このマシンで README の回復手順を実行してください。確認が済んでから破棄してください。",
           discardConfirm: "破棄する",
           cancel: "キャンセル",
-          alert_one: "あなたの変更 1 件が退避され、このマシンに残っています。",
-          alert_other: "あなたの変更 {{count}} 件が退避され、このマシンに残っています。",
+          alert_one: "あなたの変更 1 件が退避され、{{machine}} に残っています。",
+          alert_other: "あなたの変更 {{count}} 件が退避され、{{machine}} に残っています。",
           alertTitle: {
             identities: "メンバーの退避された変更があります",
             workspace: "退避された変更があります",
@@ -2111,7 +2198,7 @@ const resources = {
           none: "サービスオーナーはまだ決まっていません。",
           self: "このマシンがサービスオーナーです",
           hint: "オーナーは自動では切り替わりません。オーナーのマシンでサービスが停止していることを確認してから引き継いでください。",
-          takeOver: "このマシンへ引き継ぐ",
+          takeOver: "{{name}} へ引き継ぐ",
           connection: {
             unknown: "接続状態不明",
             online: "オンライン",
@@ -2136,8 +2223,8 @@ const resources = {
         },
         secrets: {
           title: {
-            identities: "このマシンのメンバーの認証情報",
-            workspace: "このマシンのワークスペースの認証情報",
+            identities: "{{machine}} のメンバーの認証情報",
+            workspace: "{{machine}} のワークスペースの認証情報",
           },
           scope: {
             identities:
@@ -2202,8 +2289,8 @@ const resources = {
               title: "Hub に接続できませんでした",
               body: "以下の状態は、このマシンだけで分かる内容です。Hub に接続できるようになれば、送信・取得をやり直せます。",
             },
-            attention_one: "このマシンで対応が必要な認証情報が 1 件あります。",
-            attention_other: "このマシンで対応が必要な認証情報が {{count}} 件あります。",
+            attention_one: "{{machine}} で対応が必要な認証情報が 1 件あります。",
+            attention_other: "{{machine}} で対応が必要な認証情報が {{count}} 件あります。",
           },
           refused: {
             title_one: "転送できなかった認証情報が 1 件あります",
@@ -2227,7 +2314,7 @@ const resources = {
             ready: "このマシンはすでに共有されている値を持っています",
           },
           hint: {
-            missing: "このマシンに値がありません",
+            missing: "{{machine}} に値がありません",
             outdated: "値が更新されています",
             pending_send: "Hub マシンへ未送信",
             conflict: "2 台で変更されています",
@@ -2248,11 +2335,11 @@ const resources = {
         state: {
           synced: {
             label: "同期済み",
-            detail: "このマシンと Hub の内容が一致しています。",
+            detail: "{{machine}} と Hub の内容が一致しています。",
           },
           sending: {
             label: "送信保留",
-            detail: "このマシンでの変更がまだ Hub に届いていません。自動で送信されます。",
+            detail: "{{machine}} での変更がまだ Hub に届いていません。自動で送信されます。",
           },
           receiving: {
             label: "受信中",
@@ -2264,13 +2351,13 @@ const resources = {
               "このワークスペースはこのまま使えます。変更は Hub と同期できるまで保持されます。",
           },
           local_error: {
-            label: "このマシンの同期エラー",
+            label: "{{machine}} の同期エラー",
             detail:
-              "このワークスペースはこのまま使えます。このマシン側の原因で同期できないため、変更は原因が解消するまで保持されます。",
+              "このワークスペースはこのまま使えます。{{machine}} 側の原因で同期できないため、変更は原因が解消するまで保持されます。",
           },
           unsendable: {
             label: "送信できない変更",
-            detail: "一部のファイルは、このマシンで直すまで共有できません。",
+            detail: "一部のファイルは、{{machine}} で直すまで共有できません。",
           },
           invalid_shared_state: {
             label: "共有データ異常",
@@ -2279,7 +2366,7 @@ const resources = {
           update_required: {
             label: "更新が必要",
             detail:
-              "別のマシンが新しいバージョンの GuildBotics を使っており、このマシンでは内容を読めません。",
+              "別のマシンが新しいバージョンの GuildBotics を使っており、{{machine}} では内容を読めません。",
           },
           not_connected: {
             label: "Hub につなげません",
@@ -2290,19 +2377,19 @@ const resources = {
         },
         alerts: {
           unreachable:
-            "Hub と同期できません。このマシンでの作業は続けられ、原因が解消すると共有は自動で再開します。",
+            "Hub と同期できません。{{machine}} での作業は続けられ、原因が解消すると共有は自動で再開します。",
           local_error:
-            "このマシン側の原因で同期できません。「エラー内容」に表示されたファイルやフォルダを確認してください。直すと共有は自動で再開します。",
+            "{{machine}} 側の原因で同期できません。「エラー内容」に表示されたファイルやフォルダを確認してください。直すと共有は自動で再開します。",
           unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
           unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
           invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
-          update_required: "共有を続けるには、このマシンの GuildBotics を更新してください。",
+          update_required: "共有を続けるには、{{machine}} の GuildBotics を更新してください。",
           not_connected:
             "ワークスペースは同期していますが、メンバーの名前やアカウントは他のマシンへ届きません。Hub のマシンの GuildBotics を更新してから再試行してください。",
         },
         live: {
           updateRequiredTitle: "現在状態のクライアント更新が必要です",
-          updateRequired: "現在状態を読むには、このマシンのGuildBoticsを更新してください。",
+          updateRequired: "現在状態を読むには、{{machine}} の GuildBotics を更新してください。",
         },
         counts: {
           ahead_one: "送信待ちの変更 1 件",
@@ -2333,10 +2420,11 @@ const resources = {
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
-          agent_environment_unavailable: "この端末では AI CLI の turn を実行できません: {{reason}}",
+          agent_environment_unavailable:
+            "{{machine}} では AI CLI の turn を実行できません: {{reason}}",
           agent_environment_tool_unavailable: "AI CLIツールの状態を確認してください: {{reason}}",
           agent_environment_slot_blocked:
-            "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
+            "{{person}} の AI CLI スロット {{command}} は {{machine}} では起動できません: {{reason}}",
           agent_environment_image_differs: "{{reason}}",
         },
         keyRefusals: {
@@ -2347,11 +2435,11 @@ const resources = {
         },
         environmentFix: {
           runtime:
-            "この端末ではエージェント実行環境を用意できません。README の「必要なもの」を確認してください。",
+            "{{machine}} ではエージェント実行環境を用意できません。README の「必要なもの」を確認してください。",
           declaration:
             "「エージェント実行環境」の「環境の宣言」を直してから、もう一度ビルドしてください。",
           image:
-            "「エージェント実行環境」に表示されるコマンドで、宣言されたベースイメージをこの端末に読み込んでください。",
+            "「エージェント実行環境」に表示されるコマンドで、宣言されたベースイメージを {{machine}} に読み込んでください。",
           snapshot: "「エージェント実行環境」で「ビルド」を押してください。",
         },
         actions: {
@@ -2438,6 +2526,7 @@ const resources = {
           pr_create: "PR 作成",
           pr_merge: "PR マージ",
           pr_closed: "PR クローズ",
+          pr_draft: "再レビュー上限で Draft 化",
           push: "Push",
           issue_create: "Issue 作成",
           issue_resolve: "Issue 解決",
@@ -2518,6 +2607,7 @@ const resources = {
           workspaceDescription:
             "このフォルダに GuildBotics の設定と状態（.guildbotics/）を置きます。",
           choose: "選択",
+          registered: "登録済みから選択",
         },
         intelligence: {
           tabs: {
@@ -2535,7 +2625,7 @@ const resources = {
           providerDescription: "デフォルトの LLM プロバイダを選択します。",
           defaultCliAgent: "デフォルトの AI CLIツール",
           inferenceFailure: {
-            summary: "直近の呼び出しが失敗しました: {{reason}}（{{time}}・このマシン）",
+            summary: "直近の呼び出しが失敗しました: {{reason}}（{{time}}・{{machine}}）",
             responseWithStatus: "provider の応答（ステータス {{status}}）: {{response}}",
             response: "provider の応答: {{response}}",
             categories: {
@@ -2549,13 +2639,13 @@ const resources = {
           lastTurn: {
             specified: "明示的に設定",
             default: "デフォルト選択",
-            noRecord: "このマシンに実行記録がありません",
+            noRecord: "{{machine}} に実行記録がありません",
             defaultModelNotReported: "デフォルト選択（モデル名を取得できませんでした）",
             modelNotReported: "モデル名を取得できませんでした",
             modelWithSource: "{{model}}（{{source}}）",
             effort: "Effort: {{effort}}",
             effortUnknown: "不明",
-            time: "最後の実行: {{time}}・このマシン",
+            time: "最後の実行: {{time}}・{{machine}}",
           },
           apiKeyLabel: "{{provider}} APIキー",
           apiKeyButtonLabel: "{{provider}} APIキーを設定",
@@ -2654,7 +2744,7 @@ const resources = {
             dns: "DNS リゾルバ",
             dnsHost: "この端末のリゾルバ",
             toolNotProvisioned: "環境への導入は未対応",
-            toolCredentialsSaved: "この端末に認証情報保存済み",
+            toolCredentialsSaved: "{{machine}} に認証情報保存済み",
             toolAuthenticationFailed: "認証に失敗しました。再ログインしてください。",
             refresh: "表示を更新",
             recheck: "再確認",
@@ -2665,7 +2755,7 @@ const resources = {
             errorDetails: "エラー詳細",
             recheckError:
               "確認を完了できませんでした。前回の結果を表示しています。もう一度お試しください。",
-            toolCredentialsMissing: "この端末に認証情報未保存",
+            toolCredentialsMissing: "{{machine}} に認証情報未保存",
             loginHint: "ログイン・再ログインする場合は、ターミナルで次を実行してください。",
             loginRecheckHint:
               "ログイン後に「再確認」を押すと、利用レートを取得できるか確認できます。",
@@ -2679,11 +2769,11 @@ const resources = {
               image: "ベースイメージ",
               imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
               imageHint:
-                "この端末に読み込み済みの image（docker save → guildbotics environment image load）から選びます。既定 image を FROM にするか、Debian の apt・Node.js と npm・curl と tar・git を備えた image にしてください。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入ります。別アーキテクチャの端末では同じ Dockerfile を自分で build し、ここで選んでください。",
-              imageUnavailable: "この端末の image を読めません: {{problem}}",
-              imageNotHere: "宣言中。この端末に未読み込み",
+                "{{machine}} に読み込み済みの image（docker save → guildbotics environment image load）から選びます。既定 image を FROM にするか、Debian の apt・Node.js と npm・curl と tar・git を備えた image にしてください。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入ります。別アーキテクチャの端末では同じ Dockerfile を自分で build し、ここで選んでください。",
+              imageUnavailable: "{{machine}} の image を読めません: {{problem}}",
+              imageNotHere: "宣言中。{{machine}} に未読み込み",
               imageNotDeclaredHere:
-                "{{reference}} は {{declared}} 向けに宣言されていますが、この端末（{{architecture}}）向けには未宣言です。この端末に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
+                "{{reference}} は {{declared}} 向けに宣言されていますが、{{machine}}（{{architecture}}）向けには未宣言です。{{machine}} に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
               imageDeclared: "宣言: {{digests}}",
               memory: "メモリ（MiB）",
               memoryHint:
@@ -2694,7 +2784,7 @@ const resources = {
               positiveInteger: "1 以上の整数を入力してください。",
               nameservers: "DNS リゾルバ",
               nameserversHost:
-                "この端末のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",
+                "{{machine}} のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",
               nameserversList: "固定の IPv4 アドレス（書いたまま共有）",
               nameserversPlaceholder: "10.0.0.53",
               invalidNameserver: "IPv4 アドレスを入力してください。",
@@ -2722,8 +2812,8 @@ const resources = {
             path: "パス",
             access: "アクセス",
             accessLabels: { read: "読み取り", read_write: "読み書き" },
-            presentHere: "この端末にあり",
-            absentHere: "この端末にはなし",
+            presentHere: "{{machine}} にあり",
+            absentHere: "{{machine}} にはなし",
             add: "追加",
             choose: "ディレクトリを選択",
             accessFor: "{{path}} のアクセス",
@@ -2774,7 +2864,7 @@ const resources = {
         agentEnvironment: {
           title: "エージェント実行環境",
           subtitle:
-            "ワークスペース共通の宣言と、この端末の状態・アクセス設定を合成した実際の実行環境を確認します。",
+            "ワークスペース共通の宣言と、{{machine}} の状態・アクセス設定を合成した実際の実行環境を確認します。",
           scope: {
             workspace: "ワークスペース共通",
             device: "この端末",
@@ -2815,7 +2905,7 @@ const resources = {
             "有効メンバーが0人の状態ではGuildBoticsは実行できません。セットアップ完了前に1人以上追加してください。",
           memberActive: "有効",
           memberInactive: "無効",
-          blockedHere: "この端末では起動不可",
+          blockedHere: "{{machine}} では起動不可",
           memberHuman: "人間",
           defaultPersonBadge: "既定",
           defaultPersonLabel: "既定の実行者",
@@ -2840,7 +2930,7 @@ const resources = {
           personIdFixedByAccount:
             "このメンバー用の {{provider}} のアカウントを設定している間は、メンバー ID を変更できません。",
           personIdFixed:
-            "メンバー ID は変更できません。このマシンや他のマシンのワークスペースが、この ID でメンバーを指しているためです。",
+            "メンバー ID は変更できません。{{machine}} や他のマシンのワークスペースが、この ID でメンバーを指しているためです。",
           scopeHint:
             "名前・人格・アイコン・各サービスのアカウントは、すべてのワークスペースで共通です。役割・巡回・チャット・AI 設定は、このワークスペースだけの設定です。",
           joinLabel: "既存のメンバーを追加",
@@ -2891,6 +2981,8 @@ const resources = {
           chatChannelsEmpty: "チャットのチャンネルはまだ設定されていません。",
           chatParticipationChannel: "チャンネル",
           chatParticipationPolicy: "会話への参加条件",
+          workStopNotifications: "作業停止を通知する",
+          workStopNotificationsHint: "このメンバーが人の対応を待って止まったときに投稿します。",
           chatParticipationOptions: {
             social: "積極的に参加",
             strict: "必要なときだけ参加",
@@ -3028,7 +3120,7 @@ const resources = {
         noTargetTitle: "開始対象が選択されていません",
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
         ownerElsewhere:
-          "サービスオーナーは別のマシン（{{name}}）です。このマシンでサービスを実行するには、設定 → 同期 から引き継いでください。",
+          "サービスオーナーは別のマシン（{{name}}）です。{{machine}} でサービスを実行するには、設定 → 同期 から引き継いでください。",
         keepAwake: {
           title: "このマシンをスリープさせない",
           description:
@@ -3220,6 +3312,8 @@ const resources = {
             system_finished: "システム完了",
             session_pointer: "セッショントランスクリプト",
             chat_receive_state_reset: "チャット受信状態リセット",
+            workspace_changed: "ワークスペースの切り替え",
+            hotkeys_changed: "ショートカットの保存",
             network_egress_candidate: "ネットワーク接続先候補",
           },
           messages: {
@@ -3368,15 +3462,15 @@ const resources = {
           agent_environment: {
             title: "隔離環境でコマンドを実行できます",
             description:
-              "コマンドはすべて隔離環境の中で動きます。この端末は隔離環境を起動できます。",
+              "コマンドはすべて隔離環境の中で動きます。{{machine}} は隔離環境を起動できます。",
           },
           cli_agent_environment: {
             title: "AI CLIツールを起動できます",
-            description: "この端末の隔離環境で既定の AI CLIツールを起動できます。",
+            description: "{{machine}} の隔離環境で既定の AI CLIツールを起動できます。",
           },
           provider_secret: {
             title: "サービスのワークスペースの認証情報があります",
-            description: "このマシンに {{target}} があります。",
+            description: "{{machine}} に {{target}} があります。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に成功しました",
@@ -3413,17 +3507,17 @@ const resources = {
           agent_environment: {
             title: "隔離環境でコマンドを実行できません",
             description:
-              "コマンドはすべて隔離環境の中で動きますが、この端末は今は隔離環境を起動できません。理由を確認してください。",
+              "コマンドはすべて隔離環境の中で動きますが、{{machine}} は今は隔離環境を起動できません。理由を確認してください。",
           },
           cli_agent_environment: {
             title: "既定の AI CLIツールを起動できません",
             description:
-              "この端末の隔離環境で既定の AI CLIツールを起動できません。理由を確認してください。",
+              "{{machine}} の隔離環境で既定の AI CLIツールを起動できません。理由を確認してください。",
           },
           provider_secret: {
             title: "サービスのワークスペースの認証情報がありません",
             description:
-              "このマシンに {{target}} がありません。設定 → 連携でもう一度接続するか、「このマシンの認証情報」で Hub から取得してください。",
+              "{{machine}} に {{target}} がありません。設定 → 連携でもう一度接続するか、設定 → 同期 の {{machine}} の認証情報で Hub から取得してください。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に失敗しました",
@@ -3581,6 +3675,11 @@ const resources = {
         inputPathCopy: "コピーを渡す",
         inputPathGrant: "このフォルダを許可する",
         inputPathDismiss: "このファイルは使わない",
+        messageDescriptionUpload:
+          "この実行でコマンドへ渡す入力文です。ファイルのドロップと画像の貼り付けで、コピーを渡せます。エージェントの変更は元のファイルには反映されません。",
+        inputFileDropUpload: "ドロップしてファイルのコピーを渡す",
+        inputFolderRefused:
+          "フォルダはドロップできません。サーバーのマシンでのフォルダのパスを入力してください。",
         inputPathHint:
           "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは GuildBotics が読み取り専用で保持し、アプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",
@@ -3596,6 +3695,10 @@ const resources = {
           "コマンドを実行する前に、設定画面で少なくとも 1 人のメンバーを有効にしてください。",
         openScript: "外部エディタで開く",
         copyScriptPath: "パスをコピー",
+        linkedCommandMissing: {
+          title: "コマンドが見つかりません",
+          body: "{{command}} はこのワークスペースのコマンドにありません。",
+        },
         authoring: {
           title: "AIアシスタント",
           open: "AIに相談",
@@ -3752,10 +3855,6 @@ export function getInitialAppLanguage(): AppLanguage {
 
 /** Tauri event carrying a language change to the app's other windows. */
 const LANGUAGE_EVENT = "app://language-changed";
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 export async function setAppLanguage(language: AppLanguage) {
   localStorage.setItem(STORAGE_KEY, language);

@@ -10,6 +10,7 @@ from typing import Any
 
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
+from guildbotics.integrations.member_identity import MemberIdentity
 from guildbotics.integrations.provider import (
     Chat,
     Provider,
@@ -288,8 +289,15 @@ def _safe_error(prefix: str, exc: Exception) -> str:
     return f"{prefix}: {message}"
 
 
+def member_identity(person: Person) -> MemberIdentity:
+    """Public Slack names available without a bot credential."""
+    name = str(person.account_info.get("slack_user_id") or "").strip()
+    return MemberIdentity((name,), f"<@{name}>") if name else MemberIdentity()
+
+
 SLACK = Provider(
     name="slack",
+    member_identity=member_identity,
     secret_keys=frozenset({"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"}),
     account_info_keys=frozenset({"slack_user_id"}),
     chat_service=Chat(

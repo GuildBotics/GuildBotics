@@ -35,7 +35,7 @@ def run_on_desktop(
                 workspace.resolve()
             ):
                 return None
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPError, ValueError:
             return None
         try:
             response = client.post(
@@ -52,7 +52,7 @@ def run_on_desktop(
             if response.is_error:
                 try:
                     reason = str(response.json()["message"])
-                except (ValueError, KeyError, TypeError):
+                except ValueError, KeyError, TypeError:
                     reason = f"HTTP {response.status_code}: {response.text}"
                 raise click.ClickException(reason)
             payload = response.json()

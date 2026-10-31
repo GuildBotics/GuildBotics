@@ -7,16 +7,16 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App";
-import { configureApi } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
+import { EntryPage } from "../session/EntryPage";
 import { SetupPage } from "../setup/SetupPage";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
-const BASE = "http://127.0.0.1:8765";
-const TOKEN = "integration-token";
+const BASE = "/api";
+const CSRF = "integration-csrf";
 
 // jsdom lacks scrollIntoView, which Mantine's Combobox calls when opening a Select.
 if (!Element.prototype.scrollIntoView) {
@@ -28,9 +28,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 // ---------------------------------------------------------------------------
 // Mock HTTP boundary: a recording fetch that matches "METHOD /pathname" against
-// a route table and returns canned JSON. The real api/client builds the request
-// (URL, method, headers, JSON body, query string), so every recorded call
-// reflects exactly what the client would send over the wire.
+// a route table of API paths (after `/api`) and returns canned JSON. The real
+// api/client builds the request (URL, method, headers, JSON body, query
+// string), so every recorded call reflects exactly what the client would send
+// over the wire. The page takes up its session first, as a served page does.
 // ---------------------------------------------------------------------------
 
 type RecordedRequest = {
@@ -67,28 +68,35 @@ class MockServer {
   }
 
   private handle(input: string, init?: RequestInit): Response {
-    const url = new URL(input);
+    const url = new URL(input, window.location.href);
+    const pathname = url.pathname.replace(/^\/api(?=\/)/, "");
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = (init?.headers as Record<string, string>) ?? {};
     const body = init?.body == null ? undefined : JSON.parse(String(init.body));
     const record: RecordedRequest = {
       method,
       url: input,
-      pathname: url.pathname,
+      pathname,
       query: url.searchParams,
       headers,
       body,
     };
     this.requests.push(record);
 
-    if (url.pathname === "/health") {
+    if (pathname === url.pathname) {
+      throw new TypeError(`${input} is not an API path`);
+    }
+    if (pathname === "/session") {
+      return jsonResponse(200, { csrf: CSRF });
+    }
+    if (pathname === "/health") {
       return jsonResponse(200, { status: "ok" });
     }
-    const handler = this.routes.get(`${method} ${url.pathname}`);
+    const handler = this.routes.get(`${method} ${pathname}`);
     if (!handler) {
       return jsonResponse(404, {
         code: "not_found",
-        message: `No mock route for ${method} ${url.pathname}`,
+        message: `No mock route for ${method} ${pathname}`,
         context: {},
       });
     }
@@ -120,14 +128,14 @@ function jsonResponse(status: number, body: unknown): Response {
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   url: string;
-  protocols: string[];
+  protocols: unknown;
   close = vi.fn();
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
 
-  constructor(url: string, protocols: string[]) {
+  constructor(url: string, protocols?: unknown) {
     this.url = url;
     this.protocols = protocols;
     FakeWebSocket.instances.push(this);
@@ -299,16 +307,17 @@ function serviceServer(): MockServer {
 function renderApp(server: MockServer, path: string) {
   server.install();
   installWebSocket();
-  configureApi(TOKEN, BASE);
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[path]}>
-          <App />
-        </MemoryRouter>
+        <EntryPage>
+          <MemoryRouter initialEntries={[path]}>
+            <App />
+          </MemoryRouter>
+        </EntryPage>
       </QueryClientProvider>
     </TestMantineProvider>,
   );
@@ -317,16 +326,17 @@ function renderApp(server: MockServer, path: string) {
 function renderSetup(server: MockServer, path: string) {
   server.install();
   installWebSocket();
-  configureApi(TOKEN, BASE);
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[path]}>
-          <SetupPage />
-        </MemoryRouter>
+        <EntryPage>
+          <MemoryRouter initialEntries={[path]}>
+            <SetupPage />
+          </MemoryRouter>
+        </EntryPage>
       </QueryClientProvider>
     </TestMantineProvider>,
   );
@@ -334,7 +344,6 @@ function renderSetup(server: MockServer, path: string) {
 
 beforeEach(() => {
   localStorage.clear();
-  configureApi(TOKEN, BASE);
 });
 
 afterEach(() => {
@@ -342,11 +351,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
-  configureApi("", BASE);
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
-  it("sends the real POST /scheduler/start with token, JSON body and sources", async () => {
+  it("sends the real POST /scheduler/start with the CSRF value, JSON body and sources", async () => {
     const server = serviceServer();
     const user = userEvent.setup();
     renderApp(server, "/service");
@@ -357,7 +365,7 @@ describe("Service Runtime integration (real client + mock server)", () => {
     await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
     const call = server.requestsFor("POST", "/scheduler/start")[0];
     expect(call.url).toBe(`${BASE}/scheduler/start`);
-    expect(call.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    expect(call.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
     expect(call.headers["Content-Type"]).toBe("application/json");
     expect(call.body).toMatchObject({
       sources: { scheduled: true, routine: true, event_queue: true },
@@ -443,7 +451,7 @@ describe("Service Runtime integration (real client + mock server)", () => {
     await waitFor(() => expect(server.requestsFor("POST", "/scheduler/stop")).toHaveLength(1));
     const call = server.requestsFor("POST", "/scheduler/stop")[0];
     expect(call.url).toBe(`${BASE}/scheduler/stop`);
-    expect(call.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    expect(call.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
     expect(call.body).toBeUndefined();
   });
 
@@ -575,7 +583,7 @@ describe("Setup integration (real client + mock server)", () => {
     await waitFor(() => expect(server.requestsFor("POST", "/config/members")).toHaveLength(1));
     const memberCall = server.requestsFor("POST", "/config/members")[0];
     expect(memberCall.url).toBe(`${BASE}/config/members`);
-    expect(memberCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    expect(memberCall.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
     expect(memberCall.body).toMatchObject({
       person_id: "alice",
       person_name: "Alice",
@@ -588,6 +596,7 @@ describe("Setup integration (real client + mock server)", () => {
         slack: { bot_token: "", app_token: "" },
       },
       chat_channels: [],
+      work_stop_notification_channels: [],
       config_dir: "/workspace/.guildbotics/config",
     });
 
@@ -597,7 +606,7 @@ describe("Setup integration (real client + mock server)", () => {
     await waitFor(() => expect(server.requestsFor("POST", "/config/init")).toHaveLength(1));
     const initCall = server.requestsFor("POST", "/config/init")[0];
     expect(initCall.url).toBe(`${BASE}/config/init`);
-    expect(initCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    expect(initCall.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
     expect(initCall.body).toMatchObject({
       description: "Demo project",
       llm_api_type: "openai",
@@ -660,13 +669,13 @@ describe("Commands integration (real client + mock server)", () => {
     renderApp(server, "/commands");
     await screen.findByRole("heading", { name: t("commands.title") });
 
-    // The real client builds the list request with the session token header.
+    // The real client builds the list request; a read carries no CSRF value.
     await waitFor(() =>
       expect(server.requestsFor("GET", "/commands/files").length).toBeGreaterThan(0),
     );
     const listCall = server.requestsFor("GET", "/commands/files")[0];
     expect(listCall.url).toBe(`${BASE}/commands/files`);
-    expect(listCall.headers["X-GuildBotics-Session-Token"]).toBe(TOKEN);
+    expect(listCall.headers["X-GuildBotics-CSRF"]).toBeUndefined();
 
     // The detail request URL-encodes the opaque file id.
     await waitFor(() =>
@@ -689,7 +698,9 @@ describe("Commands integration (real client + mock server)", () => {
     // A pushed command lifecycle event over the (real-client) websocket drives
     // the history UI.
     const socket = FakeWebSocket.find("/events");
-    expect(socket.protocols).toEqual(["guildbotics.session", TOKEN]);
+    // The session cookie authenticates the stream: no token rides on it.
+    expect(socket.url).toBe(`ws://${window.location.host}/api/events`);
+    expect(socket.protocols).toBeUndefined();
     await waitFor(() => expect(socket.onmessage).not.toBeNull());
 
     socket.emit({

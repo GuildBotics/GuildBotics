@@ -20,7 +20,7 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.runtime.port import ServiceError
+from guildbotics.runtime.port import ServiceError, ServiceNotFound
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.github_services import (
     LOGIN,
@@ -200,15 +200,6 @@ def _past_the_review_limit() -> dict[str, Any]:
     )
 
 
-def _posted(github: _PatrolGitHub, index: int, at: str) -> dict[str, Any]:
-    """The member's comment ``index`` as the next snapshot shows it."""
-    return {
-        "author": {"login": LOGIN},
-        "body": github.comments_added[index][1],
-        "createdAt": at,
-    }
-
-
 @pytest.mark.asyncio
 async def test_own_pr_with_unanswered_review_thread_is_feedback_work(monkeypatch):
     github, service = _patrol(monkeypatch, _pull_request_node(threads=[_thread("x")]))
@@ -275,99 +266,27 @@ async def test_reviewed_pr_with_new_commits_is_review_work(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_review_limit_converts_the_pr_to_a_draft_then_announces_it(monkeypatch):
+async def test_review_limit_is_a_read_only_decision_for_the_selector(monkeypatch):
     node = _past_the_review_limit()
     github, service = _patrol(monkeypatch, node)
 
-    assert await _first_task(service) is None
-    assert node["isDraft"] is True
-    # The draft first, the notice after it.
-    assert github.writes == [
-        "POST /graphql",
-        f"POST /repos/{REPO}/issues/2/comments",
-    ]
-    [(url, body)] = github.comments_added
-    assert url == pull_url(2)
-    assert body.startswith("@other\n\n")
-    status = parse_workflow_status_comment(body)
-    assert status is not None
-    assert (status.reason, status.person_id, status.run_id, status.subject) == (
-        "review_limit",
-        "aiko",
-        "",
-        pull_url(2),
-    )
-    assert t("integrations.pull_request_patrol.review_limit_reached", count=3) in body
-
-    # The draft is the human's: neither patrol acts on it.
-    node["comments"]["nodes"].append(_posted(github, 0, "2026-01-09T00:00:00Z"))
-    assert await _first_task(service) is None
-    assert len(github.comments_added) == 1
-
-    # Ready for review again: the rounds start over from that point.
-    node["isDraft"] = False
-    node["readyForReview"] = {"nodes": [{"createdAt": "2026-01-10T00:00:00Z"}]}
-    resumed = await _first_task(service)
-    assert resumed is not None
-    assert resumed.trigger_reason == "pull_request_review"
-    assert github.conversions == 1
-
-
-@pytest.mark.asyncio
-async def test_a_failed_draft_conversion_holds_the_pr_without_the_limit_notice(
-    monkeypatch,
-):
-    node = _past_the_review_limit()
-    github, service = _patrol(monkeypatch, node)
-    github.draft_refused = True
-
-    assert await _first_task(service) is None
+    task = await _first_task(service)
+    assert task is not None and task.trigger_reason == "pull_request_review_limit"
+    refreshed = await service.refresh_pull_request(task)
+    assert refreshed is not None and refreshed.trigger_reason == task.trigger_reason
     assert not node.get("isDraft")
-    [(_, body)] = github.comments_added
-    status = parse_workflow_status_comment(body)
-    assert status is not None and status.reason == "failed"
-    assert (
-        t("integrations.pull_request_patrol.review_limit_draft_failed", count=3) in body
-    )
-
-    # The failure notice holds the PR until someone else acts on it.
-    node["comments"]["nodes"].append(_posted(github, 0, "2026-01-09T00:00:00Z"))
-    assert await _first_task(service) is None
-    assert len(github.comments_added) == 1
-
-    # Then the limit still stands, and the conversion is tried again.
-    node["comments"]["nodes"].append(
-        {
-            "author": {"login": "other"},
-            "body": "Fixed",
-            "createdAt": "2026-01-10T00:00:00Z",
-        }
-    )
-    github.draft_refused = False
-    assert await _first_task(service) is None
-    assert node["isDraft"] is True
-    status = parse_workflow_status_comment(github.comments_added[1][1])
-    assert status is not None and status.reason == "review_limit"
+    assert github.writes == []
+    assert github.comments_added == []
 
 
 @pytest.mark.asyncio
-async def test_marking_ready_after_a_failed_conversion_resumes_the_review(
-    monkeypatch,
-):
-    """A human may make the PR a draft by hand and then ready again; that
-    lifts the failure hold and starts the rounds over."""
+async def test_marking_ready_after_the_limit_restarts_the_count(monkeypatch):
     node = _past_the_review_limit()
     github, service = _patrol(monkeypatch, node)
-    github.draft_refused = True
-    assert await _first_task(service) is None
-    node["comments"]["nodes"].append(_posted(github, 0, "2026-01-09T00:00:00Z"))
-
     node["readyForReview"] = {"nodes": [{"createdAt": "2026-01-10T00:00:00Z"}]}
     resumed = await _first_task(service)
-
-    assert resumed is not None
-    assert resumed.trigger_reason == "pull_request_review"
-    assert len(github.comments_added) == 1
+    assert resumed is not None and resumed.trigger_reason == "pull_request_review"
+    assert github.writes == []
 
 
 @pytest.mark.asyncio
@@ -393,6 +312,7 @@ async def test_search_covers_both_roles_and_dedupes_oldest_first(monkeypatch):
         "author": [_search_item(3), _search_item(2)],
         "reviewed-by": [_search_item(2), _search_item(4)],
         "review-requested": [_search_item(1)],
+        "commenter": [_search_item(5)],
     }
     github = ScriptedGitHub().on(
         "GET",
@@ -408,9 +328,80 @@ async def test_search_covers_both_roles_and_dedupes_oldest_first(monkeypatch):
         f"is:pr is:open draft:false user:{OWNER} author:{LOGIN}",
         f"is:pr is:open draft:false user:{OWNER} reviewed-by:{LOGIN}",
         f"is:pr is:open draft:false user:{OWNER} review-requested:{LOGIN}",
+        f"is:pr is:open draft:false user:{OWNER} commenter:{LOGIN}",
     ]
     assert all(r.url.params["per_page"] == "100" for r in github.requests)
-    assert [item["number"] for item in items] == [1, 2, 3, 4]
+    assert [item["number"] for item in items] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_a_comment_participant_is_discovered_by_the_patrol(
+    monkeypatch,
+):
+    github, service = _patrol(
+        monkeypatch,
+        _pull_request_node(
+            author="other",
+            comments=[
+                {
+                    "author": {"login": LOGIN},
+                    "body": "A question",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "author": {"login": "other"},
+                    "body": "Please clarify",
+                    "createdAt": "2026-01-02T00:00:00Z",
+                },
+            ],
+        ),
+    )
+    # Search returns this PR only through its comment participant, not a review.
+    github.respond = ScriptedGitHub.respond.__get__(github)
+    github.on(
+        "GET",
+        "/search/issues",
+        lambda request: {
+            "items": [_search_item(2)]
+            if "commenter:" in request.url.params["q"]
+            else []
+        },
+    )
+    assert await service.can_receive_work(pull_url(2))
+    [task] = await service.pull_request_candidates()
+    assert task.pull_request_url == pull_url(2)
+    assert task.trigger_reason == "pull_request_review"
+    assert github.conversions == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_count", [0, 100])
+async def test_waiting_recipient_must_be_in_the_patrols_actual_discovery(
+    monkeypatch, other_count
+):
+    target = _pull_request_node(number=102, author="other", requested=[LOGIN])
+    github, service = _patrol(monkeypatch, target)
+    # The snapshot grants a requested-review role, but the actual search may
+    # omit it through its host filters or the patrol's first-page limit.
+    github.search_items = [_search_item(number) for number in range(1, other_count + 1)]
+    github.pull_request_nodes.update(
+        {
+            number: _pull_request_node(number=number)
+            for number in range(1, other_count + 1)
+        }
+    )
+    assert await service._pull_request_work(pull_url(102)) is not None
+    assert not await service.can_receive_work(pull_url(102))
+    assert await service.pull_request_candidates() == []
+    assert github.conversions == 0
+
+
+@pytest.mark.asyncio
+async def test_waiting_on_a_ticket_still_routes_to_the_ticket_service(monkeypatch):
+    github, service = _patrol(monkeypatch)
+    with pytest.raises(ServiceNotFound):
+        await service.can_receive_work(f"https://github.com/{REPO}/issues/42")
+    assert github.requests == []
 
 
 @pytest.mark.asyncio
@@ -423,4 +414,8 @@ async def test_search_failure_is_not_silently_downgraded(monkeypatch):
     with pytest.raises(ServiceError) as raised:
         await service.pull_request_candidates()
 
+    assert str(raised.value) == t("integrations.github.response.rejected")
+
+    with pytest.raises(ServiceError) as raised:
+        await service.can_receive_work(pull_url(2))
     assert str(raised.value) == t("integrations.github.response.rejected")

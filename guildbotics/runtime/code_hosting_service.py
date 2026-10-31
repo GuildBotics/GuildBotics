@@ -176,10 +176,14 @@ class CodeHostingService(ABC):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
-        """Change a pull request; a new body keeps the ticket links of the old
-        one unless ``drop_ticket_links``."""
+        """Change a pull request and optionally replace its ticket links.
+
+        ``tickets=None`` keeps existing links; a sequence replaces all links
+        (an empty sequence removes them). A link the host cannot close on
+        merge raises ``ServiceUnsupported`` before anything is written.
+        """
         raise NotImplementedError
 
     async def review(
@@ -287,10 +291,30 @@ class CodeHostingService(ABC):
 
     async def pull_request_candidates(self) -> list[Task]:
         """The open pull requests that ask something of the member, in patrol
-        order. One past the automatic re-review limit is handed to a human
-        instead."""
+        order. At the automatic re-review limit, a head the member has never
+        reviewed returns a ``pull_request_review_limit`` decision for the
+        ticket selector to settle; listing never drafts or announces it.
+        Statements and thread replies on an already reviewed head still
+        reach the member."""
         raise NotImplementedError
 
     async def refresh_pull_request(self, task: Task) -> Task | None:
-        """Re-read a pull request candidate immediately before it is dispatched."""
+        """Re-read a candidate before dispatch, possibly returning a review-limit
+        decision. Like listing candidates, this operation never writes."""
+        raise NotImplementedError
+
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        """Hand an open PR to a human, returning whether this call changed it.
+
+        An already draft or closed PR returns ``False``, including when
+        another reviewer or a human wins the conversion concurrently. Only
+        the call returning ``True`` may announce and record the hand-over.
+        Writes outside the configured scope are refused. This host operation
+        is not exposed to member commands or the command environment.
+        """
+        raise NotImplementedError
+
+    async def can_receive_work(self, url: str) -> bool:
+        """Whether the current conversation dispatches this PR to the member,
+        without drafting it or recording a patrol action."""
         raise NotImplementedError

@@ -26,6 +26,7 @@ vi.mock("../api/client", async () => {
     getWorkspaceSecrets: vi.fn(),
     fetchWorkspaceSecrets: vi.fn(),
     sendWorkspaceSecrets: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
   };
 });
 
@@ -94,7 +95,9 @@ describe("SecretsCard", () => {
 
     renderCard("identities");
 
-    expect(await screen.findByText(t("sync.secrets.title.identities"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.secrets.title.identities", { machine: "studio" })),
+    ).toBeInTheDocument();
     expect(getWorkspaceSecrets).toHaveBeenCalledWith("identities");
     await user.click(screen.getByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }));
     await waitFor(() =>
@@ -109,7 +112,9 @@ describe("SecretsCard", () => {
 
     await waitFor(() => expect(getWorkspaceSecrets).toHaveBeenCalled());
     await waitFor(() => expect(client.isFetching()).toBe(0));
-    expect(screen.queryByText(t("sync.secrets.title.workspace"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(t("sync.secrets.title.workspace", { machine: "studio" })),
+    ).not.toBeInTheDocument();
   });
 
   it("names each key's state without showing anything else about it", async () => {

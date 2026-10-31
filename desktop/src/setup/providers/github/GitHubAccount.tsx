@@ -1,5 +1,6 @@
 import {
   Button,
+  FileInput,
   PasswordInput,
   SegmentedControl,
   Select,
@@ -9,12 +10,13 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import type { TFunction } from "i18next";
+import { FileKey } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiRequestError } from "../../../api/client";
 import { SecretStatusHint } from "../../../sync/SecretStatusHint";
-import { FilePicker, RequiredLabel } from "../../formParts";
+import { RequiredLabel } from "../../formParts";
 import { MASKED_SECRET_PLACEHOLDER } from "../../secretInput";
 import type { FieldErrors, MemberAccountUi, MemberContext } from "../types";
 import { ensureAgentField, resolveUser, type AccountView, type AppRegistrationStatus } from "./api";
@@ -38,7 +40,9 @@ export type GitHubForm = {
   accessToken: string;
   installationId: string;
   appId: string;
-  privateKeyPath: string;
+  /** The private key file chosen in this form, with its PEM text: the save
+   * sends the text, since the backend cannot read a file of the browser's. */
+  privateKey: { file: File; pem: string } | null;
   /** A GitHub App registered from this form: once installed, the save names it
    * and the backend stores its key and IDs, so neither passes through here. */
   registration: AppRegistrationStatus | null;
@@ -56,7 +60,7 @@ const initial = (): GitHubForm => ({
   accessToken: "",
   installationId: "",
   appId: "",
-  privateKeyPath: "",
+  privateKey: null,
   registration: null,
   saveOutcome: null,
   setupMode: "create",
@@ -129,8 +133,8 @@ function errors(account: GitHubForm, context: MemberContext, t: Translate): Fiel
           ? t("setup.validation.githubAppIdInvalid")
           : t("setup.validation.githubAppIdRequired");
       }
-      if (!form.privateKeyPath.trim() && !form.stored.privateKey) {
-        result.privateKeyPath = t("setup.validation.githubPrivateKeyPathRequired");
+      if (!form.privateKey && !form.stored.privateKey) {
+        result.privateKey = t("setup.validation.githubPrivateKeyRequired");
       }
     }
   } else if (!form.username.trim()) {
@@ -179,6 +183,8 @@ function AccountPanel({
   const [resolving, setResolving] = useState(false);
   const set = (fields: Partial<GitHubForm>) =>
     onChange((current) => withRegistrationFlow({ ...current, ...fields }));
+  const choosePrivateKey = async (file: File | null) =>
+    set({ privateKey: file && { file, pem: await file.text() } });
   const isApp = form.accountType === "github_apps";
   const resolveInput = (isApp ? form.identity : form.username).trim();
   const canResolve =
@@ -354,12 +360,27 @@ function AccountPanel({
             error={fieldErrors.appId}
           />
           {form.registration ? null : (
-            <FilePicker
-              label={t("setup.members.privateKeyPath")}
-              withAsterisk={!form.stored.privateKey}
-              value={form.privateKeyPath}
-              onChange={(privateKeyPath) => set({ privateKeyPath })}
-              error={fieldErrors.privateKeyPath}
+            <FileInput
+              label={
+                form.stored.privateKey ? (
+                  t("setup.members.privateKey")
+                ) : (
+                  <RequiredLabel text={t("setup.members.privateKey")} />
+                )
+              }
+              aria-label={t("setup.members.privateKey")}
+              aria-required={!form.stored.privateKey}
+              accept=".pem"
+              clearable
+              leftSection={<FileKey size={16} />}
+              placeholder={
+                form.stored.privateKey
+                  ? MASKED_SECRET_PLACEHOLDER
+                  : t("setup.members.privateKeyPlaceholder")
+              }
+              value={form.privateKey?.file ?? null}
+              onChange={(file) => void choosePrivateKey(file)}
+              error={fieldErrors.privateKey}
             />
           )}
         </>
@@ -440,7 +461,7 @@ export const githubAccount: MemberAccountUi<GitHubForm> = {
     } else if (form.accountType === "github_apps") {
       account.installation_id = form.installationId ? Number(form.installationId) : undefined;
       account.app_id = form.appId ? Number(form.appId) : undefined;
-      account.private_key_path = form.privateKeyPath.trim() || undefined;
+      account.private_key = form.privateKey?.pem;
     }
     if (form.accountType === "machine_user") {
       account.access_token = form.accessToken.trim() || undefined;

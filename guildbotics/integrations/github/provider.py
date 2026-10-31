@@ -14,6 +14,7 @@ from guildbotics.integrations.github.github_utils import (
     get_github_account_type,
     get_github_username,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.integrations.github.setup import SETUP
 from guildbotics.integrations.github.ticket_service import GitHubTicketService
 from guildbotics.integrations.provider import (
@@ -305,6 +306,7 @@ def _safe_error(prefix: str, exc: Exception) -> str:
 
 
 GITHUB = Provider(
+    member_identity=member_identity,
     name="github",
     secret_keys=frozenset({"GITHUB_ACCESS_TOKEN", "GITHUB_PRIVATE_KEY"}),
     account_info_keys=frozenset(

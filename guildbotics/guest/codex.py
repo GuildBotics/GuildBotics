@@ -28,6 +28,7 @@ from guildbotics.guest.turn import (
     start_turn,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -104,7 +105,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         self,
         *,
         executable: str = "codex",
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(
             executable=executable, timeout=timeout, label="Codex App Server"
@@ -131,6 +132,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         )
         await publish(emit, policy_event)
         thread_id = await self._resolve_thread(context, conversation)
+        conversation.provider_session_id = thread_id
         self._active_thread_id = thread_id
         turn_settings = await self._turn_settings(context)
         effective_model, effective_effort = await self._effective_settings(
@@ -797,7 +799,7 @@ def _usage(raw: dict[str, Any]) -> dict[str, int]:
             try:
                 output[target] = int(raw[key])
                 break
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
     return output
 

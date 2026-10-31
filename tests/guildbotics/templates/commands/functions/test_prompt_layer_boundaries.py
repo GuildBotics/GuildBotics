@@ -225,9 +225,8 @@ def test_prompts_do_not_restate_member_reference_contracts():
         "machine_outputs",
         "memory record --pr",
         # The guideline-check contract (origin default branch is canonical,
-        # read via git fetch/show) lives in the member reference only.
-        "git fetch origin",
-        "git show origin",
+        # read through the member credential) lives in the reference only.
+        "member git show",
     )
     bodies = {
         (name, language): _prompt_body(name, language)
@@ -241,6 +240,19 @@ def test_prompts_do_not_restate_member_reference_contracts():
     for key, body in bodies.items():
         for sentinel in sentinels:
             assert sentinel not in body, (key, sentinel)
+
+
+def test_guidelines_use_member_git_show_without_a_checkout():
+    reference = capability_reference_text()
+    assert "member git show --person <person>" in reference
+    assert "--path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md" in reference
+    assert "with or without a checkout" in reference
+    for path in _agent_facing_files():
+        text = path.read_text(encoding="utf-8")
+        assert "git fetch origin" not in text, path
+        assert "git show origin/" not in text, path
+    assert "git fetch origin" not in reference
+    assert "git show origin/" not in reference
 
 
 @pytest.mark.parametrize(
@@ -422,14 +434,57 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         body = _prompt_body("handle_ticket", language)
         assert "repository/pr_checks" in body, language
         assert "`readiness`" in body, language
+        assert "`completion_blockers`" in body, language
+        assert "`base_out_of_date`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language
         # Pending checks end the run instead of a wait in the turn, and the
-        # run the patrol resumes for them reports its outcome on the PR.
-        assert "done|asking|blocked|awaiting_checks" in body, language
+        # run the patrol resumes for them continues its work and reports its
+        # outcome on the PR and where the work came from.
+        assert "--status done|asking|blocked --content-file" in body, language
+        assert "guildbotics member checks await --person" in body, language
+        assert "awaiting_checks" not in body, language
         assert "`checks_pending`" in body, language
         assert "`pull_request_checks`" in body, language
         assert "`pr comment`" in body, language
+        assert "<awaited_summary>{awaited_summary}</awaited_summary>" in body
+        # Whether the run resumes one is told by the awaited run, which is
+        # always there, not by its summary, which may not have arrived.
+        assert body.count("{awaited_run_id}") == 1, language
+        assert "`chat reply`" in body, language
+        assert "{chat_channel_id}" in body and "{chat_thread_id}" in body
+
+
+def test_review_verdict_finishes_done_and_waits_use_the_public_roster():
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_ticket", language)
+        reviewer = next(line for line in body.splitlines() if line.startswith("7. "))
+        assert "task complete --status done" in reviewer
+        assert "task complete --status asking" not in reviewer
+        assert "conditions in step 13" not in body
+        assert "手順 13 の条件" not in body
+        for number in (6, 13, 15):
+            line = next(
+                line for line in body.splitlines() if line.startswith(f"{number}. ")
+            )
+            assert "roster" in line or "名簿" in line
+            assert "person_id" in line
+
+
+def test_reviewer_runs_only_its_own_checks_and_not_the_ci_again():
+    for language, own, ci in (
+        (
+            "en",
+            "breaking the changed behavior on purpose",
+            "do not rerun what the repository's CI runs",
+        ),
+        ("ja", "わざと壊してテストが落ちることの確認", "リポジトリの CI が流す検査"),
+    ):
+        body = _prompt_body("handle_ticket", language)
+        reviewer = next(line for line in body.splitlines() if line.startswith("7. "))
+        assert own in reviewer, language
+        assert ci in reviewer, language
+        assert "relevant checks" not in reviewer and "関連する検査" not in reviewer
 
 
 def test_issue_comment_contract_not_in_chat_prompt():
@@ -493,6 +548,22 @@ def test_ticket_work_runs_at_high_effort_by_default():
         assert _frontmatter("handle_ticket", language)["effort"] == "high"
 
 
+def test_ticket_mentions_require_a_comment_and_exempt_repository_preparation():
+    english = _prompt_body("handle_ticket", "en")
+    japanese = _prompt_body("handle_ticket", "ja")
+    assert "For work other than `ticket_mention`" in english
+    assert "`ticket_mention` 以外の作業" in japanese
+    for body in (english, japanese):
+        instruction = body.split("15. ")[1].split("</instructions>")[0]
+        assert "guildbotics member ticket comment --content-file" in instruction
+        assert "guildbotics member task complete" in instruction
+        assert "done|asking|blocked" in instruction
+    assert "Do not prepare a repository, publish, or create a PR" in english
+    assert "リポジトリの準備・publish・PR 作成は行わない" in japanese
+    assert "mention the assignee" in english
+    assert "担当者をメンション" in japanese
+
+
 def test_chat_work_states_no_frontmatter_effort():
     """Chat effort is decided per event by the assessor, not fixed up front."""
     for language in ("en", "ja"):
@@ -507,15 +578,17 @@ def test_chat_judgment_owns_repository_work_criteria():
 
 
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
-    """The chat workspace has no checkout, so the prompt must route guideline
-    checks (issue #381) through `git prepare` — while the contract itself
+    """Each run must route guideline checks through its current prepared
+    checkout (issue #381), while the contract itself
     (origin default branch is canonical) stays in the member reference."""
     english = _prompt_body("handle_chat_event", "en")
     japanese = _prompt_body("handle_chat_event", "ja")
     assert "repository guideline check" in english
     assert "standard work procedure" in english
-    assert "repository ガイドライン確認" in japanese
+    assert "リポジトリのガイドライン確認" in japanese
     assert "標準作業手順" in japanese
+    assert "In each run" in english
+    assert "毎回" in japanese
 
 
 def test_agent_facing_layers_do_not_name_a_provider():

@@ -16,6 +16,7 @@ from guildbotics.integrations.github.async_client import (
     get_async_client,
     record_github_auth_failure,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.utils.secret_store import identity_secret_store
 
 HTTP_UNAUTHORIZED = 401
@@ -242,7 +243,7 @@ async def create_github_client(
                 private_key_pem=get_person_private_key_pem(person),
                 person_id=person.person_id,
             )
-        except (OSError, TypeError, ValueError):
+        except OSError, TypeError, ValueError:
             record_github_auth_failure(
                 person_id=person.person_id, code="invalid_app_credential"
             )
@@ -291,7 +292,7 @@ def get_person_name(members: list[Person], username: str) -> str:
         str: The person name.
     """
     for member in members:
-        if normalize_login(get_github_username(member)) == normalize_login(username):
+        if member_identity(member).matches(username):
             return member.name
     return ""
 
@@ -310,17 +311,7 @@ def get_agent_token(person: Person) -> str:
     Returns:
         str: The member's agent token.
     """
-    return f"⚙{person.person_id}"
-
-
-def normalize_login(login: str) -> str:
-    """Return a GitHub login in the form both APIs can be compared in.
-
-    REST names a GitHub App as ``<app>[bot]`` and that is what the member's
-    ``github_username`` holds, while GraphQL ``Actor.login`` drops the suffix.
-    Logins are case-insensitive on GitHub, so lower-case them too.
-    """
-    return login.lower().removesuffix("[bot]")
+    return member_identity(person).mention
 
 
 def get_author_type(person: Person, username: str) -> str:
@@ -334,9 +325,7 @@ def get_author_type(person: Person, username: str) -> str:
     Returns:
         str: The author type.
     """
-    if normalize_login(username) == normalize_login(
-        get_github_username(person, strict=True)
-    ):
+    if member_identity(person).matches(username):
         return Message.ASSISTANT
     return Message.USER
 

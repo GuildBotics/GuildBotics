@@ -4,6 +4,7 @@ from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local import chat
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local.chat import LocalChatService
 from guildbotics.runtime.chat_service import ChatIdentity, CredentialCheck
 from guildbotics.runtime.member_invocation import (
@@ -29,7 +30,7 @@ def _posts(channel_id: str) -> list[tuple[str, str]]:
     return [
         (line["text"], line["thread_id"])
         for line in lines(channel_id)
-        if line.get("author") == "aiko" and "reaction" not in line
+        if line.get("author") == username("aiko") and "reaction" not in line
     ]
 
 
@@ -39,7 +40,7 @@ async def test_identity_returns_stable_member_payload():
 
     assert result == {
         "service": "local",
-        "user_id": "aiko",
+        "user_id": username("aiko"),
         "display_name": "Aiko",
         "person_id": "aiko",
     }
@@ -51,7 +52,7 @@ async def test_post_resolves_channel_name_and_returns_evidence_payload():
         channel_id=None, channel_name="dev", body="hello team"
     )
 
-    [line] = [line for line in lines("dev") if line["author"] == "aiko"]
+    [line] = [line for line in lines("dev") if line["author"] == username("aiko")]
     assert _posts("dev") == [("hello team", line["message_id"])]
     assert result == {
         "service": "local",
@@ -182,7 +183,9 @@ async def test_reaction_add_adds_a_semantic_reaction_and_the_chat_refuses_others
     )
 
     reactions = [line for line in lines("dev") if "reaction" in line]
-    assert reactions == [{"reaction": "ack", "author": "aiko", "message_id": "0"}]
+    assert reactions == [
+        {"reaction": "ack", "author": username("aiko"), "message_id": "0"}
+    ]
     assert result["message_id"] == "0"
     assert result["reacted"] is True
 

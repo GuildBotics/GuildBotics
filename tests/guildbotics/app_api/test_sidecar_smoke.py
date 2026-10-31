@@ -1,10 +1,11 @@
 """Smoke tests for the Local API sidecar process.
 
 These tests launch ``python -m guildbotics.app_api`` as a real subprocess
-(the same entrypoint the desktop app spawns), poll ``/health`` until ready,
-and assert basic request handling plus a clean shutdown. They are hermetic:
-the server binds a dynamically chosen free port on ``127.0.0.1`` and uses a
-``tmp_path`` working directory, never the real home directory.
+(the same entrypoint the desktop app spawns), wait for its port notice, read
+the owner token it wrote, poll ``/api/health`` until ready, and assert basic
+request handling plus a clean shutdown. They are hermetic: the server listens
+on a free loopback port named by ``GUILDBOTICS_SERVER_PORT`` and keeps its
+records under a ``tmp_path`` home, never the real home directory.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ import httpx
 import pytest
 
 from guildbotics.app_api.server import PORT_NOTICE_PREFIX
+from guildbotics.drivers.app_api_lock import CONFLICT_NOTICE_PREFIX
+from guildbotics.utils.local_api import PORT_ENV
 
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
@@ -32,17 +35,19 @@ SHUTDOWN_TIMEOUT_SECONDS = 15.0
 POLL_INTERVAL_SECONDS = 0.2
 REQUEST_TIMEOUT_SECONDS = 5.0
 
-TOKEN = "smoke-test-token"
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": TOKEN}
-
 
 def _can_bind_localhost() -> bool:
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
+        _free_port()
         return True
     except OSError:
         return False
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 pytestmark = pytest.mark.skipif(
@@ -52,8 +57,11 @@ pytestmark = pytest.mark.skipif(
 
 
 class _Sidecar:
-    def __init__(self, base_url: str, process: subprocess.Popen[str]) -> None:
+    def __init__(
+        self, base_url: str, token: str, process: subprocess.Popen[str]
+    ) -> None:
         self.base_url = base_url
+        self.headers = {"Authorization": f"Bearer {token}"}
         self.process = process
 
 
@@ -71,24 +79,21 @@ def sidecar(tmp_path: Path) -> Iterator[_Sidecar]:
 def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
     # Fully hermetic: redirect HOME to the tmp tree and drop any inherited config
     # overrides so the subprocess never reads or writes the real ~/.guildbotics.
-    # The session token is only accepted through the environment, matching how
-    # every launcher (Tauri sidecar, dev scripts, e2e harness) hands it over.
-    env = {**os.environ, "HOME": str(home), "GUILDBOTICS_APP_API_TOKEN": TOKEN}
+    # The port comes from the environment, as every launcher hands it over.
+    requested = _free_port()
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        PORT_ENV: str(requested),
+    }
     for key in (
         "GUILDBOTICS_CONFIG_DIR",
         "GUILDBOTICS_WORKSPACE_ROOT",
     ):
         env.pop(key, None)
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "guildbotics.app_api",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "0",
-        ],
+        [sys.executable, "-m", "guildbotics.app_api"],
         cwd=str(startup_dir),
         env=env,
         stdout=subprocess.PIPE,
@@ -103,13 +108,20 @@ def _start_sidecar(startup_dir: Path, home: Path) -> _Sidecar:
         except BaseException:
             _terminate(process)
             raise
-    base_url = f"http://127.0.0.1:{port}"
     try:
-        _wait_for_health(base_url, process)
+        assert port == requested
+        # Written before the notice: whoever reads it is the owner.
+        token = (
+            (home / ".guildbotics/data/server" / str(port) / "owner.token")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+        sidecar = _Sidecar(f"http://127.0.0.1:{port}", token, process)
+        _wait_for_health(sidecar)
     except BaseException:
         _terminate(process)
         raise
-    return _Sidecar(base_url, process)
+    return sidecar
 
 
 def _read_port(process: subprocess.Popen[str]) -> int:
@@ -133,7 +145,8 @@ def _drain_output(process: subprocess.Popen[str]) -> str:
         return ""
 
 
-def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
+def _wait_for_health(sidecar: _Sidecar) -> None:
+    process = sidecar.process
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -144,8 +157,8 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
             )
         try:
             response = httpx.get(
-                f"{base_url}/health",
-                headers=AUTH_HEADERS,
+                f"{sidecar.base_url}/api/health",
+                headers=sidecar.headers,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             if response.status_code == HTTP_OK:
@@ -173,8 +186,8 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 
 def test_sidecar_health_returns_ok(sidecar: _Sidecar) -> None:
     response = httpx.get(
-        f"{sidecar.base_url}/health",
-        headers=AUTH_HEADERS,
+        f"{sidecar.base_url}/api/health",
+        headers=sidecar.headers,
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
 
@@ -183,23 +196,50 @@ def test_sidecar_health_returns_ok(sidecar: _Sidecar) -> None:
     assert response.json()["service_instance_id"]
 
 
-def test_sidecar_rejects_invalid_token(sidecar: _Sidecar) -> None:
+@pytest.mark.windows
+def test_second_backend_is_refused_even_on_a_different_port(sidecar, tmp_path):
+    port = _free_port()
+    environment = {**os.environ, PORT_ENV: str(port)}
+    for key in ("GUILDBOTICS_CONFIG_DIR", "GUILDBOTICS_WORKSPACE_ROOT"):
+        environment.pop(key, None)
+    second = subprocess.run(
+        [sys.executable, "-m", "guildbotics.app_api"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert second.returncode != 0
+    assert CONFLICT_NOTICE_PREFIX + "desktop" in second.stdout
+    assert PORT_NOTICE_PREFIX not in second.stdout
+    assert not (tmp_path / "home/.guildbotics/data/server" / str(port)).exists()
     response = httpx.get(
-        f"{sidecar.base_url}/health",
-        headers={"X-GuildBotics-Session-Token": "wrong-token"},
+        sidecar.base_url + "/api/health",
+        headers=sidecar.headers,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    assert response.status_code == HTTP_OK
+
+
+def test_sidecar_rejects_invalid_token(sidecar: _Sidecar) -> None:
+    token_id = sidecar.headers["Authorization"].split("_")[1]
+    response = httpx.get(
+        f"{sidecar.base_url}/api/health",
+        headers={"Authorization": f"Bearer gbt_{token_id}_wrong-secret"},
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
 
     assert response.status_code == HTTP_UNAUTHORIZED
-    assert response.json()["code"] == "invalid_session_token"
+    assert response.json()["code"] == "unauthorized"
 
 
 def test_sidecar_config_status_reports_the_command_working_directory(
     sidecar: _Sidecar, tmp_path: Path
 ) -> None:
     response = httpx.get(
-        f"{sidecar.base_url}/config/status",
-        headers=AUTH_HEADERS,
+        f"{sidecar.base_url}/api/config/status",
+        headers=sidecar.headers,
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
 
@@ -231,8 +271,8 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
     running_sidecar = _start_sidecar(startup, home)
     try:
         response = httpx.get(
-            f"{running_sidecar.base_url}/config/status",
-            headers=AUTH_HEADERS,
+            f"{running_sidecar.base_url}/api/config/status",
+            headers=running_sidecar.headers,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
 

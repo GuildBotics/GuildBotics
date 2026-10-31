@@ -50,6 +50,99 @@ async def _reasons(tickets) -> list[tuple[str | None, str | None]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interactive", [False, True])
+async def test_waiting_eligibility_reuses_ticket_selection_without_moving_it(
+    monkeypatch, interactive
+):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, lane="in_progress")
+    double.comment(url, "otota", "Please answer.")
+    double.tickets[url]["interactive"] = interactive
+    assert await tickets.can_receive_work(url) is not interactive
+    assert double.tickets[url]["lane"] == "in_progress"
+    assert bool(await tickets.candidates()) is not interactive
+    if not interactive:
+        double.comment(url, MEMBER, "Answered.")
+        assert not await tickets.can_receive_work(url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 60])
+async def test_other_assignees_mentions_use_one_workspace_query_without_scanning_cards(
+    monkeypatch, count
+):
+    double = BranvilDouble()
+    url = _ticket(double, lane="new")
+    double.assign(url, lane="new", name="otota")
+    double.comment(url, "otota", "@aiko Please provide context.")
+    for _ in range(count):
+        double._ticket(REPO, "Unrelated", "", [])
+    requested = []
+    respond = double.respond
+
+    def recorded(request):
+        requested.append((request.url.path, dict(request.url.params)))
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", recorded)
+    _, _, tickets = services(monkeypatch, double)
+    [task] = await tickets.candidates()
+    assert (task.url, task.assignee, task.trigger_reason) == (
+        url,
+        None,
+        "issue_mention",
+    )
+    assert [path for path, _ in requested] == [
+        f"/api/v1/workspaces/{SCOPE}/board/cards",
+        f"/api/v1/workspaces/{SCOPE}/tickets",
+    ]
+    assert requested[1][1]["mentions"] == "me"
+    await tickets.comment(url, "Context provided.")
+    double.comment(url, "otota", "Thanks.")
+    assert await tickets.refresh(task) is None
+    assert (double.tickets[url]["assignee"]["name"], double.tickets[url]["lane"]) == (
+        "otota",
+        "new",
+    )
+
+
+@pytest.mark.asyncio
+async def test_comment_edits_and_deletions_are_read_again_before_dispatch(monkeypatch):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, lane="in_progress")
+    original = double.comment(url, "otota", "Original")
+    [task] = await tickets.candidates()
+    assert [c.content for c in task.comments] == ["Original"]
+
+    # The GUI's edit replaces only the body; it is not a new comment.
+    original["body"] = "Edited"
+    [comment] = (await tickets.read("ticket_comments", url)).items
+    assert (comment["id"], comment["body"], comment["created_at"]) == (
+        original["id"],
+        "Edited",
+        original["created_at"],
+    )
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert [c.content for c in refreshed.comments] == ["Edited"]
+
+    # A deleted member status stops holding the ticket, including on refresh.
+    double.comment(url, MEMBER, "Failed", **_status("failed"))
+    assert await tickets.refresh(task) is None
+    double.entries[url]["comments"].pop()
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert [c.content for c in refreshed.comments] == ["Edited"]
+    double.entries[url]["comments"].clear()
+    assert (await tickets.read("ticket_comments", url)).items == []
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert refreshed.comments == []
+    [candidate] = await tickets.candidates()
+    assert candidate.comments == []
+
+
+@pytest.mark.asyncio
 async def test_a_ready_ticket_waits_after_the_members_word_until_someone_speaks(
     monkeypatch,
 ):
@@ -128,6 +221,50 @@ async def test_the_working_lane_takes_a_ticket_up_again_by_what_was_said(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lane", "body", "comments", "assignee", "reason"),
+    [
+        ("ready", "", [], MEMBER, "ready_lane"),
+        ("in_progress", "", [], MEMBER, "working_lane"),
+        (
+            "in_progress",
+            "",
+            [(MEMBER, "Should I add the check?"), ("otota", "Yes, please.")],
+            MEMBER,
+            "issue_comment",
+        ),
+        ("in_progress", "@aiko please", [], MEMBER, "issue_mention"),
+        ("new", "", [("otota", "@aiko Please help.")], "otota", "issue_mention"),
+    ],
+    ids=["ready", "working", "comment", "mention", "unassigned_mention"],
+)
+@pytest.mark.parametrize("depth", [0, 2], ids=["itself", "grandparent"])
+async def test_an_interactive_ticket_is_left_to_the_human_by_every_trigger(
+    monkeypatch, lane, body, comments, assignee, reason, depth
+):
+    double, _, tickets = services(monkeypatch)
+    url = _ticket(double, body, lane)
+    double.assign(url, lane, name=assignee)
+    for author, text in comments:
+        double.comment(url, author, text)
+    holder = double.ancestor(url, depth)
+    [task] = await tickets.candidates()
+    assert (task.url, task.trigger_reason) == (url, reason)
+    before = len(double.writes)
+
+    double.tickets[holder]["interactive"] = True
+    assert await tickets.candidates() == []
+    assert await tickets.refresh(task) is None
+    assert double.writes[before:] == []
+
+    double.tickets[holder]["interactive"] = False
+    assert await _reasons(tickets) == [(url, reason)]
+    refreshed = await tickets.refresh(task)
+    assert refreshed is not None
+    assert refreshed.trigger_reason == reason
+
+
+@pytest.mark.asyncio
 async def test_a_mention_is_a_word_of_its_own(monkeypatch):
     _, _, tickets = services(monkeypatch)
 
@@ -136,6 +273,111 @@ async def test_a_mention_is_a_word_of_its_own(monkeypatch):
     assert not tickets.mentions("cc @aiko-bot")
     assert not tickets.mentions("cc @aiko.bot")
     assert not tickets.mentions("mail aiko@example.com @aikox")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "mentions", "reason"),
+    [("@aiko", [], "working_lane"), ("Stored summons", ["AIKO"], "issue_mention")],
+)
+async def test_selection_uses_branvils_resolved_mentions(
+    monkeypatch, body, mentions, reason
+):
+    double, _, tickets = services(monkeypatch)
+    # The response is authoritative even when local text parsing would disagree.
+    monkeypatch.setattr(double, "_mentions", lambda _body: mentions)
+    url = _ticket(double, body=body, lane="in_progress")
+    assert await _reasons(tickets) == [(url, reason)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["candidates", "refresh"])
+@pytest.mark.parametrize("pull_state", [None, "open", "merged"])
+@pytest.mark.parametrize("when", ["before", "at", "after", "unknown", "invalid"])
+async def test_assignment_filters_comment_mentions_on_both_read_paths(
+    monkeypatch, route, pull_state, when
+):
+    double, code, tickets = services(monkeypatch)
+    url = double._ticket(REPO, "Work", "", [])["url"]
+    comment = double.comment(url, "otota", "@aiko earlier request")
+    if pull_state:
+        double.branch("feature")
+        pull = await code.create_pull_request(
+            REPO,
+            "feature",
+            "",
+            "Work",
+            "",
+            draft=False,
+            tickets=[TicketLink(url, False)],
+        )
+        if pull_state == "merged":
+            double.merge(pull.target.url)
+    double.assign(url, "in_progress")
+    assigned = double.tickets[url]["assignee"]["assigned_at"]
+    if when == "at":
+        comment["created_at"] = assigned
+    elif when == "after":
+        comment["created_at"] = double.now()
+    elif when in {"unknown", "invalid"}:
+        comment["created_at"] = None if when == "unknown" else "not-a-time"
+    if route == "candidates":
+        tasks = await tickets.candidates()
+    else:
+        refreshed = await tickets.refresh(
+            Task(url=url, title="Work", description="", status=Task.IN_PROGRESS)
+        )
+        tasks = [] if refreshed is None else [refreshed]
+    expected = (
+        "issue_comment"
+        if when != "before"
+        else "working_lane"
+        if pull_state is None
+        else None
+    )
+    assert [(task.url, task.trigger_reason) for task in tasks] == (
+        [(url, expected)] if expected else []
+    )
+    if tasks:
+        assert [message.content for message in tasks[0].comments] == [comment["body"]]
+    assert double.tickets[url]["lane"] == (
+        "done" if when == "before" and pull_state == "merged" else "in_progress"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["candidates", "refresh"])
+@pytest.mark.parametrize("timestamp", [None, "not-a-time"])
+@pytest.mark.parametrize("reason", ["failed", "rate_limited"])
+async def test_holding_status_comes_from_the_last_retained_comment(
+    monkeypatch, route, timestamp, reason
+):
+    double, code, tickets = services(monkeypatch)
+    url = double._ticket(REPO, "Held work", "", [])["url"]
+    fields = (
+        {"retry_after_at": "2100-01-01T00:00:00+00:00"}
+        if reason == "rate_limited"
+        else {}
+    )
+    held = double.comment(url, MEMBER, "Held", **_status(reason, **fields))
+    held["created_at"] = timestamp
+    double.comment(url, "otota", "Before assignment")
+    double.branch("feature")
+    pull = await code.create_pull_request(
+        REPO, "feature", "", "Work", "", draft=False, tickets=[TicketLink(url, False)]
+    )
+    double.merge(pull.target.url)
+    double.assign(url, "in_progress")
+    if route == "candidates":
+        assert await tickets.candidates() == []
+    else:
+        assert (
+            await tickets.refresh(
+                Task(url=url, title="Work", description="", status=Task.IN_PROGRESS)
+            )
+            is None
+        )
+    assert double.tickets[url]["lane"] == "in_progress"
 
 
 @pytest.mark.asyncio
@@ -159,6 +401,35 @@ async def test_a_working_ticket_with_a_pull_request_is_the_patrols(monkeypatch, 
     assert double.tickets[merged]["lane"] == "done"
     assert double.tickets[merged]["state"] == ("closed" if closes else "open")
     assert len(double.writes[before:]) == (0 if closes else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("merged", [False, True])
+@pytest.mark.parametrize("mention", [False, True])
+async def test_ticket_conversations_are_answered_before_a_linked_pr_takes_over(
+    monkeypatch, merged, mention
+):
+    double, code, tickets = services(monkeypatch)
+    url = _ticket(double, "@aiko please" if mention else "", lane="in_progress")
+    if not mention:
+        double.comment(url, MEMBER, "Should I add the check?")
+        double.comment(url, "otota", "Yes, please.")
+    double.branch("feature")
+    pull = await code.create_pull_request(
+        REPO, "feature", "", "Work", "", draft=False, tickets=[TicketLink(url, False)]
+    )
+    if merged:
+        double.merge(pull.target.url)
+
+    [task] = await tickets.candidates()
+    refreshed = await tickets.refresh(task)
+
+    assert refreshed is not None
+    assert refreshed.trigger_reason == ("issue_mention" if mention else "issue_comment")
+    assert double.tickets[url]["lane"] == "in_progress"
+    await tickets.comment(url, "Added the check.")
+    assert await tickets.refresh(task) is None
+    assert double.tickets[url]["lane"] == ("done" if merged else "in_progress")
 
 
 @pytest.mark.asyncio

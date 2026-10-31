@@ -1,69 +1,279 @@
-"""The ``start`` / ``stop`` / ``kill`` commands of the CLI-managed background service."""
+"""Launch and control the same backend that Desktop runs."""
 
 from __future__ import annotations
 
+import os
+import queue
 import signal
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 import click
+import httpx
 
 from guildbotics.cli._options import selected_workspace
-from guildbotics.cli.member import run_in_process
-from guildbotics.drivers.context import create_context
-from guildbotics.drivers.event_listener_runner import EventListenerRunner
-from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
-from guildbotics.drivers.live_state import LiveStatePort
-from guildbotics.drivers.relay_runtime import RelayRuntime
-from guildbotics.drivers.service_control import (
-    ServiceControlWatcher,
-    StopStage,
-    clear_stop_request,
-    write_stop_request,
+from guildbotics.drivers.app_api_lock import (
+    CONFLICT_NOTICE_PREFIX,
+    OWNER_ENV,
+    PORT_NOTICE_PREFIX,
+    inspect_backend_lock,
+    read_backend_metadata,
 )
-from guildbotics.drivers.service_lock import (
-    ServiceLock,
-    ServiceLockMetadata,
-    ServiceLockUnavailableError,
-    inspect_service_lock,
-)
-from guildbotics.drivers.service_owner import (
-    ServiceOwnerError,
-    create_relay_runtime,
-)
-from guildbotics.drivers.service_owner import (
-    prepare_service_owner as prepare_relay_service_owner,
-)
-from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.environment.member_broker import install_member_cli
-from guildbotics.observability.diagnostics_events import (
-    finish_system_session,
-    start_system_session,
-)
-from guildbotics.sync.activation import (
-    activate_identity_sync,
-    activate_workspace_sync,
-    deactivate_identity_sync,
-    deactivate_workspace_sync,
-)
-from guildbotics.sync.local_repository import LocalSyncRepository
-from guildbotics.sync.manager import GitSyncManager
-from guildbotics.utils.correlation import new_id
-from guildbotics.utils.fileio import get_machine_state_path
-from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.log_utils import get_logger
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import get_language, t
+from guildbotics.utils.local_api import connect_local_api, server_port
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
-from guildbotics.workspace.identity import ensure_device_identity
+
+POLL_SECONDS = 0.1
+STARTUP_TIMEOUT = 45.0
+STOP_STAGES = 2
 
 
-def _service_lock_path() -> Path:
-    return get_machine_state_path("run", "service.lock")
+class BackendUnavailableError(RuntimeError):
+    pass
 
 
-def _stop_request_path() -> Path:
-    return get_machine_state_path("run", "stop-request.json")
+class StartupInterruptedError(Exception):
+    pass
+
+
+def _call(
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    timeout: float | None = None,
+    method: str = "POST",
+) -> dict[str, Any]:
+    with connect_local_api(
+        headers={"Accept-Language": get_language()}, timeout=timeout
+    ) as client:
+        if client is None:
+            raise BackendUnavailableError(t("runtime.service_lock.api_unavailable"))
+        response = client.request(method, path, json=payload)
+        if response.is_error:
+            try:
+                error = response.json()
+            except ValueError:
+                error = None
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and message:
+                # Keep the HTTP error type: callers still own retry/cleanup.
+                raise httpx.HTTPStatusError(
+                    message, request=response.request, response=response
+                )
+        response.raise_for_status()
+        return dict(response.json())
+
+
+def _background(call: Callable[[], dict[str, Any]]) -> Future[dict[str, Any]]:
+    result: Future[dict[str, Any]] = Future()
+
+    def run() -> None:
+        try:
+            result.set_result(call())
+        except Exception as exc:
+            result.set_exception(exc)
+
+    threading.Thread(
+        target=run, name="guildbotics-cli-service-api", daemon=True
+    ).start()
+    return result
+
+
+def _backend_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        suffix = ".exe" if os.name == "nt" else ""
+        return [str(Path(sys.executable).with_name("guildbotics-app-api" + suffix))]
+    return [sys.executable, "-m", "guildbotics.app_api"]
+
+
+def _launch_backend(workspace: Path) -> tuple[subprocess.Popen[str], queue.Queue[str]]:
+    environment = dict(os.environ)
+    environment[GUILDBOTICS_WORKSPACE_ROOT] = str(workspace)
+    environment[OWNER_ENV] = "cli"
+    environment["GUILDBOTICS_APP_API_PARENT_PID"] = str(os.getpid())
+    process = subprocess.Popen(
+        _backend_command(),
+        env=environment,
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name != "nt",
+        creationflags=int(vars(subprocess)["CREATE_NEW_PROCESS_GROUP"])
+        if sys.platform == "win32"
+        else 0,
+    )
+    notices: queue.Queue[str] = queue.Queue()
+
+    def drain() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            if line.startswith((PORT_NOTICE_PREFIX, CONFLICT_NOTICE_PREFIX)):
+                notices.put(line.strip())
+            else:
+                click.echo(line, nl=False, err=True)
+
+    threading.Thread(
+        target=drain, name="guildbotics-cli-backend-output", daemon=True
+    ).start()
+    return process, notices
+
+
+def _wait_for_port(
+    process: subprocess.Popen[str],
+    notices: queue.Queue[str],
+    signals: list[int] | None = None,
+) -> None:
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while time.monotonic() < deadline:
+        if signals:
+            _report_interrupts(signals, 0)
+            raise StartupInterruptedError
+        try:
+            notice = notices.get(timeout=POLL_SECONDS)
+        except queue.Empty:
+            if process.poll() is not None:
+                break
+            continue
+        if notice == f"{PORT_NOTICE_PREFIX}{server_port()}":
+            return
+        if notice.startswith(CONFLICT_NOTICE_PREFIX):
+            raise click.ClickException(
+                _conflict_message(notice.removeprefix(CONFLICT_NOTICE_PREFIX))
+            )
+        break
+    raise click.ClickException(t("runtime.service_lock.start_failed"))
+
+
+def _conflict_message(owner: str) -> str:
+    key = "desktop_start" if owner == "desktop" else "already_running"
+    return t(f"runtime.service_lock.{key}")
+
+
+def _stop_requested(pid: int) -> bool:
+    metadata = read_backend_metadata()
+    return metadata is not None and metadata.pid == pid and metadata.stop_requested
+
+
+def _start_service(
+    process: subprocess.Popen[str], payload: dict[str, Any]
+) -> dict[str, Any]:
+    # The notice precedes workspace/keychain loading. User interaction is not
+    # counted against the bind deadline.
+    while process.poll() is None:
+        try:
+            return _call("/scheduler/start", payload=payload)
+        except BackendUnavailableError:
+            time.sleep(POLL_SECONDS)
+    raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
+
+
+def _report_interrupts(signals: list[int], reported: int) -> int:
+    """Describe each stop stage once, outside the signal handler."""
+    stages = min(len(signals), STOP_STAGES)
+    while reported < stages:
+        key = "stopping_after_work" if reported == 0 else "cancelling"
+        click.echo(t(f"runtime.service_lock.{key}"))
+        reported += 1
+    return reported
+
+
+def _supervise(
+    process: subprocess.Popen[str], payload: dict[str, Any], signals: list[int]
+) -> None:
+    # The port notice follows the backend's lock acquisition. On Windows a
+    # virtualenv launcher can have a different PID from the Python it runs.
+    metadata = read_backend_metadata()
+    if metadata is None:
+        raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
+    backend_pid = metadata.pid
+    starting = _background(lambda: _start_service(process, payload))
+    reported = 0
+    while not starting.done():
+        reported = _report_interrupts(signals, reported)
+        if len(signals) >= STOP_STAGES:
+            # Startup can be waiting on synchronization or a keychain prompt.
+            # No successful service start to drain yet; the second interrupt
+            # must still be able to end this attempt.
+            process.kill()
+            process.wait()
+            return
+        if process.poll() is not None:
+            raise BackendUnavailableError(t("runtime.service_lock.start_failed"))
+        time.sleep(POLL_SECONDS)
+    status = starting.result()
+    sent = 0
+    stopping: list[Future[dict[str, Any]]] = []
+    while True:
+        reported = _report_interrupts(signals, reported)
+        # A handler never performs I/O or waits, so a second signal can
+        # escalate while the graceful API request is blocked.
+        if len(signals) > sent and sent < STOP_STAGES:
+            force = sent > 0
+            sent = 2 if force else 1
+            stopping.append(
+                _background(partial(_call, "/scheduler/stop", payload={"force": force}))
+            )
+        intentional = bool(signals) or _stop_requested(backend_pid)
+        if process.poll() is not None:
+            if intentional:
+                return
+            raise BackendUnavailableError(t("runtime.service_lock.service_failed"))
+        for request in stopping:
+            if request.done():
+                request.result()
+        if sent == STOP_STAGES and stopping[-1].done():
+            # A force stop has its own bounded waits and may report a unit
+            # that could not stop. Finish by shutting down the backend rather
+            # than polling that failed unit forever.
+            return
+        units = [status["scheduler"], status["events"]]
+        if not any(unit["running"] for unit in units) and not status.get(
+            "has_active_work", False
+        ):
+            if intentional:
+                return
+            raise BackendUnavailableError(t("runtime.service_lock.service_failed"))
+        if any(unit["state"] == "failed" for unit in units) and not intentional:
+            raise BackendUnavailableError(t("runtime.service_lock.service_failed"))
+        time.sleep(POLL_SECONDS)
+        try:
+            status = _call("/scheduler/status", timeout=5, method="GET")
+        except BackendUnavailableError, httpx.HTTPError:
+            if (process.poll() is not None or not pid_exists(backend_pid)) and (
+                bool(signals) or _stop_requested(backend_pid)
+            ):
+                return
+            raise
+
+
+def _close_backend(process: subprocess.Popen[str], *, announced: bool) -> None:
+    if process.poll() is None:
+        budget = 5.0
+        if announced:
+            try:
+                reply = _call("/shutdown", timeout=5)
+                budget += float(reply["teardown_budget_seconds"])
+            except (BackendUnavailableError, httpx.HTTPError) as exc:
+                click.echo(str(exc), err=True)
+                process.terminate()
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=budget)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    if process.stdout is not None:
+        process.stdout.close()
 
 
 @click.command()
@@ -72,225 +282,66 @@ def _stop_request_path() -> Path:
     "only_target",
     type=click.Choice(["scheduler", "events"], case_sensitive=False),
     default=None,
-    help="Start only one runtime instead of both scheduler and event listener runner.",
+    help="Start only scheduled/routine work or event reception and work.",
 )
 @click.option(
     "--max-consecutive-errors",
-    type=int,
+    type=click.IntRange(min=1),
     default=3,
     help="Stop a worker after this many consecutive workflow errors.",
 )
-def start(
-    only_target: str | None,
-    max_consecutive_errors: int,
-) -> None:
-    """Start GuildBotics runtimes (scheduler and event listener runner)."""
+def start(only_target: str | None, max_consecutive_errors: int) -> None:
+    """Start the backend and its services; Desktop must be closed."""
     workspace = selected_workspace()
-    request_path = _stop_request_path()
-    service_lock = ServiceLock(_service_lock_path())
-    try:
-        metadata = service_lock.acquire(
-            owner="cli",
-            workspace=workspace,
-            before_publish=lambda: clear_stop_request(request_path),
-        )
-    except ServiceLockUnavailableError as exc:
+    locked, metadata = inspect_backend_lock()
+    if locked:
         raise click.ClickException(
-            _service_lock_conflict_message(exc.metadata)
-        ) from exc
+            _conflict_message(metadata.owner if metadata else "unknown")
+        )
+    signals: list[int] = []
 
-    relay_runtime: RelayRuntime | None = None
+    def handle(signum: int, frame: object) -> None:
+        signals.append(signum)
+
+    previous = {
+        sig: signal.signal(sig, handle) for sig in (signal.SIGINT, signal.SIGTERM)
+    }
+    process: subprocess.Popen[str] | None = None
+    announced = False
     try:
-        activate_identity_sync()
-        sync_manager = activate_workspace_sync(workspace)
-        relay_runtime = (
-            _prepare_service_owner(workspace, sync_manager)
-            if sync_manager is not None
-            else None
+        process, notices = _launch_backend(workspace)
+        _wait_for_port(process, notices, signals)
+        announced = True
+        _supervise(
+            process,
+            {
+                "sources": {
+                    "scheduled": only_target != "events",
+                    "routine": only_target != "events",
+                    "event_queue": only_target != "scheduler",
+                },
+                "max_consecutive_errors": max_consecutive_errors,
+            },
+            signals,
         )
-        _run_cli_background_service(
-            only_target=only_target,
-            max_consecutive_errors=max_consecutive_errors,
-            service_instance_id=metadata.service_instance_id,
-            request_path=request_path,
-            live_state=relay_runtime.publisher if relay_runtime is not None else None,
-            owner_check=relay_runtime.check_owner
-            if relay_runtime is not None
-            else None,
-        )
+    except StartupInterruptedError:
+        return
+    except (OSError, BackendUnavailableError, httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
     finally:
-        if relay_runtime is not None:
-            relay_runtime.stop()
-        if not deactivate_workspace_sync():
-            get_logger().warning("The synchronization queue did not stop cleanly.")
-        deactivate_identity_sync()
-        clear_stop_request(request_path)
-        service_lock.release()
-
-
-def _run_cli_background_service(
-    *,
-    only_target: str | None,
-    max_consecutive_errors: int,
-    service_instance_id: str,
-    request_path: Path,
-    live_state: LiveStatePort | None = None,
-    owner_check: Callable[[], bool | None] | None = None,
-) -> None:
-    start_system_session(new_id())
-    try:
-        _run_cli_background_service_session(
-            only_target=only_target,
-            max_consecutive_errors=max_consecutive_errors,
-            service_instance_id=service_instance_id,
-            request_path=request_path,
-            live_state=live_state,
-            owner_check=owner_check,
-        )
-    finally:
-        finish_system_session()
-
-
-def _prepare_service_owner(
-    workspace: Path, sync_manager: GitSyncManager
-) -> RelayRuntime | None:
-    """Settle synchronization, then require this device to own the service."""
-    status = sync_manager.synchronize()
-    if status.failure is not None:
-        raise click.ClickException(
-            "The service cannot start because workspace synchronization failed: "
-            f"{status.failure}"
-        )
-    repository = LocalSyncRepository(workspace)
-    remote_url = repository.remote_url()
-    if not remote_url:
-        return None
-    device_id = ensure_device_identity().device_id
-    runtime: RelayRuntime | None = None
-    try:
-        runtime = create_relay_runtime(
-            remote_url,
-            status.workspace_id,
-            device_id,
-            workspace_root=workspace,
-            on_head_updated=sync_manager.wake,
-        )
-        return prepare_relay_service_owner(runtime, device_id)
-    except ServiceOwnerError as exc:
-        if runtime is not None:
-            runtime.stop()
-        if exc.code == "service_owner_conflict":
-            current = exc.owner_device_id or "unknown"
-            message = (
-                "This device is not the service owner "
-                f"(current owner: {current}). Transfer ownership explicitly first."
-            )
-        else:
-            message = str(exc)
-        raise click.ClickException(f"The service cannot start: {message}") from exc
-
-
-def _run_cli_background_service_session(
-    *,
-    only_target: str | None,
-    max_consecutive_errors: int,
-    service_instance_id: str,
-    request_path: Path,
-    live_state: LiveStatePort | None = None,
-    owner_check: Callable[[], bool | None] | None = None,
-) -> None:
-    scheduler_sources_enabled = only_target in (None, "scheduler")
-    start_events = only_target in (None, "events")
-    start_member_worker = scheduler_sources_enabled or start_events
-
-    execution = TaskRunCoordinator(
-        ExecutionStatusPublisher(live_state),
-        owner_check=owner_check,
-    )
-
-    install_member_cli(run_in_process)
-    scheduler = (
-        TaskScheduler(
-            create_context(),
-            consecutive_error_limit=max_consecutive_errors,
-            scheduled_source_enabled=scheduler_sources_enabled,
-            routine_source_enabled=scheduler_sources_enabled,
-            event_queue_source_enabled=start_events,
-            execution_coordinator=execution,
-        )
-        if start_member_worker
-        else None
-    )
-    event_runner = EventListenerRunner(create_context()) if start_events else None
-
-    graceful_stop_started = threading.Event()
-
-    def _request_shutdown(*, cancel: bool) -> None:
-        # Signal-handler safe: only sets flags / schedules non-blocking stops
-        # and never joins, so the handler returns immediately and a second
-        # signal can still be delivered to escalate the stop.
-        if event_runner is not None:
-            event_runner.stop()
-        if scheduler is not None:
-            scheduler.request_shutdown(graceful=not cancel)
-
-    def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
-        if graceful_stop_started.is_set():
-            # Second signal: escalate like the GUI force stop and cancel the
-            # in-flight work the graceful stop is still waiting on. The main
-            # thread does the joining, so this handler must not block.
-            click.echo("Cancelling in-flight work...")
-            _request_shutdown(cancel=True)
-            return
-        graceful_stop_started.set()
-        click.echo(
-            f"Received signal {signum}. Waiting for in-flight work to finish "
-            "(send the signal again to cancel it)..."
-        )
-        _request_shutdown(cancel=False)
-
-    watcher = ServiceControlWatcher(
-        service_instance_id,
-        _request_shutdown,
-        path=request_path,
-    )
-
-    # Signals support foreground interrupts and external process supervisors.
-    # GuildBotics stop requests use the cross-platform control file above.
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
-
-    try:
-        watcher.start()
-        if event_runner is not None:
-            event_runner.start()
-        if scheduler is not None:
-            # Blocks until workers exit; the signal handler above only requests
-            # the stop, so the join that waits it out happens here in the main
-            # thread and remains interruptible by a second (escalating) signal.
-            scheduler.start()
-        if event_runner is not None:
-            _wait_for_event_runner(event_runner)
-    except KeyboardInterrupt:
-        _request_shutdown(cancel=False)
-    finally:
-        watcher.close()
-        if scheduler is not None:
-            scheduler.shutdown(graceful=True)
-        if event_runner is not None:
-            event_runner.stop()
-            event_runner.join(timeout=5.0)
-
-
-def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
-    while event_runner.is_alive():
-        time.sleep(1.0)
+        try:
+            if process is not None:
+                _close_backend(process, announced=announced)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 @click.command()
 @click.option(
     "--timeout",
     default=30,
+    type=click.IntRange(min=0),
     help="Seconds to wait at each stop stage",
 )
 @click.option(
@@ -299,93 +350,56 @@ def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
     help="Cancel in-flight work after timeout, then force terminate as a last resort",
 )
 def stop(timeout: int, force: bool) -> None:
-    """Gracefully stop a CLI-managed background service."""
-    selected_workspace()
-    status = inspect_service_lock(_service_lock_path())
-    if not status.locked:
+    """Stop CLI services through the local backend API and wait for its exit."""
+    locked, metadata = inspect_backend_lock()
+    if not locked:
         click.echo(t("runtime.service_lock.not_running"))
         return
-    metadata = status.metadata
     if metadata is None:
         raise click.ClickException(t("runtime.service_lock.invalid_metadata"))
     if metadata.owner == "desktop":
         raise click.ClickException(t("runtime.service_lock.desktop_managed"))
-
     pid = metadata.pid
     if not pid_exists(pid):
         raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
-
-    _write_service_stop_request(metadata, "graceful")
-
-    # Wait for graceful shutdown (the scheduler finishes in-flight work first).
-    if _wait_for_process_exit(pid, timeout):
-        click.echo(t("runtime.service_lock.stopped"))
-        return
-
+    for cancel in [False, True] if force else [False]:
+        try:
+            _call(
+                "/scheduler/stop", payload={"force": cancel, "wait": False}, timeout=5
+            )
+        except (BackendUnavailableError, httpx.HTTPError) as exc:
+            if pid_exists(pid):
+                raise click.ClickException(str(exc)) from exc
+        if _wait_for_process_exit(pid, timeout):
+            key = "stopped_after_cancel" if cancel else "stopped"
+            click.echo(t(f"runtime.service_lock.{key}"))
+            return
     if not force:
         click.echo(t("runtime.service_lock.stop_timeout"))
         return
-
-    # Escalate monotonically from graceful to cancellation, then force stop.
-    _write_service_stop_request(metadata, "cancel")
-    if _wait_for_process_exit(pid, timeout):
-        click.echo(t("runtime.service_lock.stopped_after_cancel"))
-        return
-
     try:
         force_terminate_pid(pid)
-    except Exception as e:
-        click.echo(t("runtime.service_lock.force_kill_failed", pid=pid, error=e))
-    else:
-        click.echo(t("runtime.service_lock.force_killed"))
-
-
-def _write_service_stop_request(
-    metadata: ServiceLockMetadata,
-    stage: StopStage,
-) -> None:
-    try:
-        write_stop_request(
-            metadata.service_instance_id,
-            stage,
-            _stop_request_path(),
-        )
-    except PermissionError as exc:
+    except OSError as exc:
         raise click.ClickException(
-            t("runtime.service_lock.permission_denied", pid=metadata.pid)
+            t("runtime.service_lock.force_kill_failed", pid=pid, error=exc)
         ) from exc
-    except TimeoutError as exc:
-        raise click.ClickException(
-            t("runtime.service_lock.control_timeout", pid=metadata.pid)
-        ) from exc
+    click.echo(t("runtime.service_lock.force_killed"))
 
 
 def _wait_for_process_exit(pid: int, timeout: float) -> bool:
-    deadline = time.time() + max(0, timeout)
-    while True:
-        if not pid_exists(pid):
-            return True
-        if time.time() >= deadline:
+    deadline = time.monotonic() + timeout
+    while pid_exists(pid):
+        if time.monotonic() >= deadline:
             return False
-        time.sleep(0.5)
+        time.sleep(POLL_SECONDS)
+    return True
 
 
 @click.command()
 @click.pass_context
 def kill(ctx: click.Context) -> None:
-    """Immediately force kill a CLI-managed background service.
+    """Cancel CLI services and force terminate the backend if needed.
 
     Equivalent to: `guildbotics stop --force --timeout 0`.
     """
     ctx.invoke(stop, timeout=0, force=True)
-
-
-def _service_lock_conflict_message(metadata: ServiceLockMetadata | None) -> str:
-    if metadata is None:
-        return t("runtime.service_lock.already_running")
-    return t(
-        "runtime.service_lock.already_running_with_owner",
-        owner=metadata.owner,
-        pid=metadata.pid,
-        workspace=metadata.workspace,
-    )

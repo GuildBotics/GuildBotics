@@ -1,0 +1,6 @@
+ja:
+  invalid_path: "親への移動、バックスラッシュ、NUL 文字を含まないリポジトリ内の相対パスを指定してください。"
+  show_request_large: "パスを 1 つ以上指定し、パスの一覧を member の結果の上限内に収めてください。"
+  show_timeout: "既定のブランチの読み取りが制限時間を超えました。"
+  work_required: "メンバーの作業ツリーを準備するには、実行中のコマンドの作業情報が必要です。"
+  checkout_reassigned: "この作業ツリーは現在の作業に割り当てられていません。この作業でmember git prepareを実行し、返されたrepo_pathを使ってください。"

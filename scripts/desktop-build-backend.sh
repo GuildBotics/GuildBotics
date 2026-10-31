@@ -13,6 +13,13 @@ PROGRAMS_DIR="desktop/src-tauri/binaries/guildbotics"
 
 cd "$REPO_ROOT"
 
+# The Local API carries the screens it serves (desktop/sidecar/guildbotics.spec).
+if [[ ! -f desktop/dist/index.html ]]; then
+  echo "Missing the built screens: desktop/dist/index.html" >&2
+  echo "Build them first: (cd desktop && npm ci && npm run build)" >&2
+  exit 1
+fi
+
 uv sync --extra test --extra dev
 
 uv run --with pyinstaller python -m PyInstaller \

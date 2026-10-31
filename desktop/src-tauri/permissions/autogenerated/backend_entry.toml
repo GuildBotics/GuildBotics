@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-backend-entry"
+description = "Enables the backend_entry command without any pre-configured scope."
+commands.allow = ["backend_entry"]
+
+[[permission]]
+identifier = "deny-backend-entry"
+description = "Denies the backend_entry command without any pre-configured scope."
+commands.deny = ["backend_entry"]

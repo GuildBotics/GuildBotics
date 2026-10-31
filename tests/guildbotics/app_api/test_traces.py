@@ -30,16 +30,16 @@ from guildbotics.observability.interactive_sessions import (
     InteractiveTraceSession,
 )
 from guildbotics.utils.correlation import current_trace, span_scope, trace_scope
+from tests.guildbotics.app_api.owner import owner_client
 
-HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 HTTP_OK = 200
 
 
 def _app(tmp_path: Path) -> tuple[TestClient, EventBus]:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
-    app = create_app(session_token="secret", runtime=AppRuntime(bus))
-    return TestClient(app), bus
+    app = create_app(runtime=AppRuntime(bus))
+    return owner_client(app), bus
 
 
 def _runtime_app(
@@ -49,10 +49,9 @@ def _runtime_app(
     bus = EventBus(store=store)
     runtime = AppRuntime(bus)
     app = create_app(
-        session_token="secret",
         runtime=runtime,
     )
-    return TestClient(app), bus, runtime, store
+    return owner_client(app), bus, runtime, store
 
 
 def _without_timestamp(item: dict[str, object]) -> dict[str, object]:
@@ -66,7 +65,7 @@ def test_traces_endpoint_lists_published_traces(tmp_path: Path) -> None:
         bus.publish_event("command.finished", {"command": "demo"})
 
     with client:
-        response = client.get("/diagnostics/traces", headers=HEADERS)
+        response = client.get("/diagnostics/traces")
 
     assert response.status_code == HTTP_OK
     traces = response.json()["traces"]
@@ -97,8 +96,8 @@ def test_traces_endpoint_titles_a_trace_by_its_work_target(tmp_path: Path) -> No
         bus.publish_event("command.started", {"command": "demo"})
 
     with client:
-        traces = client.get("/diagnostics/traces", headers=HEADERS).json()["traces"]
-        detail = client.get("/diagnostics/traces/t-ticket", headers=HEADERS).json()
+        traces = client.get("/diagnostics/traces").json()["traces"]
+        detail = client.get("/diagnostics/traces/t-ticket").json()
 
     listed = next(item for item in traces if item["trace_id"] == "t-ticket")
     assert listed["title"] == "診断ログの実行タイトルに作業対象を表示する"
@@ -113,9 +112,7 @@ def test_traces_endpoint_filters_by_source(tmp_path: Path) -> None:
         bus.publish_event("command.started", {})
 
     with client:
-        response = client.get(
-            "/diagnostics/traces", params={"source": "routine"}, headers=HEADERS
-        )
+        response = client.get("/diagnostics/traces", params={"source": "routine"})
 
     traces = response.json()["traces"]
     assert {trace["trace_id"] for trace in traces} == {"t2"}
@@ -154,11 +151,10 @@ def test_verify_is_recorded_as_a_diagnostics_trace(
     monkeypatch.setattr(runtime_module.VerifyService, "verify", _verify)
 
     with client:
-        assert client.post("/verify", headers=HEADERS).status_code == HTTP_OK
+        assert client.post("/verify").status_code == HTTP_OK
         response = client.get(
             "/diagnostics/traces",
             params={"source": "diagnostics"},
-            headers=HEADERS,
         )
 
     traces = response.json()["traces"]
@@ -206,14 +202,12 @@ def test_scenario_diagnostics_is_recorded_as_a_diagnostics_trace(
             client.post(
                 "/diagnostics/scenario",
                 params={"person_id": "alice"},
-                headers=HEADERS,
             ).status_code
             == HTTP_OK
         )
         response = client.get(
             "/diagnostics/traces",
             params={"source": "diagnostics"},
-            headers=HEADERS,
         )
 
     traces = response.json()["traces"]
@@ -243,7 +237,6 @@ def test_traces_endpoint_filters_by_exact_attribute(tmp_path: Path) -> None:
         response = client.get(
             "/diagnostics/traces",
             params={"attr_key": "target.label", "attr_value": "#42"},
-            headers=HEADERS,
         )
 
     assert {t["trace_id"] for t in response.json()["traces"]} == {"t1"}
@@ -257,7 +250,7 @@ def test_trace_detail_returns_ordered_records(tmp_path: Path) -> None:
         bus.publish_event("command.finished", {"command": "demo"})
 
     with client:
-        response = client.get("/diagnostics/traces/t1", headers=HEADERS)
+        response = client.get("/diagnostics/traces/t1")
 
     assert response.status_code == HTTP_OK
     body = response.json()
@@ -290,7 +283,7 @@ def test_trace_detail_collapses_assistant_streams(tmp_path: Path) -> None:
         )
 
     with client:
-        response = client.get("/diagnostics/traces/t1", headers=HEADERS)
+        response = client.get("/diagnostics/traces/t1")
 
     records = response.json()["records"]
     assert [record["payload"]["name"] for record in records] == ["completed"]
@@ -306,7 +299,7 @@ def test_global_endpoint_returns_unscoped_events_and_logs(tmp_path: Path) -> Non
         bus.publish_event("scheduler.running", {"state": "running"}, source="scheduler")
         with trace_scope("manual", trace_id="t1"):
             bus.publish_log("INFO", "scoped line")
-        response = client.get("/diagnostics/global", headers=HEADERS)
+        response = client.get("/diagnostics/global")
 
     records = response.json()["records"]
     messages = [record["message"] for record in records]
@@ -354,7 +347,6 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         )
 
     app = create_app(
-        session_token="secret",
         runtime=runtime,
     )
     # A workflow run is its shared task-run record, mirrored from its trace by
@@ -491,7 +483,7 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     }
     bus.publish_event("ticket.item", issue_closed, source="github")
     record_github("ticket.item", issue_closed, source="github")
-    client = TestClient(app)
+    client = owner_client(app)
 
     with client:
         response = client.get(
@@ -500,7 +492,6 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
                 "start": "2000-01-01T00:00:00Z",
                 "end": "2999-01-01T00:00:00Z",
             },
-            headers=HEADERS,
         )
 
     assert response.status_code == HTTP_OK
@@ -651,7 +642,6 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
                 "source": "issues/42",
                 "q": "Retry",
             },
-            headers=HEADERS,
         )
 
     assert response.status_code == HTTP_OK
@@ -675,7 +665,6 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
                 "action": "recall",
                 "q": "Retry",
             },
-            headers=HEADERS,
         )
 
     assert search_response.status_code == HTTP_OK
@@ -691,7 +680,6 @@ def test_memory_events_endpoint_filters_and_returns_body_preview(
         trace_response = client.get(
             "/diagnostics/memory-events",
             params={"trace_id": "memory-trace"},
-            headers=HEADERS,
         )
 
     assert trace_response.status_code == HTTP_OK
@@ -712,7 +700,7 @@ def test_trace_detail_merges_memory_events(
         bus.publish_event("command.finished", {"command": "demo"})
 
     with client:
-        response = client.get("/diagnostics/traces/memory-trace", headers=HEADERS)
+        response = client.get("/diagnostics/traces/memory-trace")
 
     assert response.status_code == HTTP_OK
     records = response.json()["records"]
@@ -904,8 +892,8 @@ def test_device_record_endpoints_read_the_persisted_records(tmp_path: Path) -> N
     client, _bus = _app(tmp_path)
 
     with client:
-        turns = client.get("/intelligences/cli-agents/last-turns", headers=HEADERS)
-        failures = client.get("/intelligences/inference-failures", headers=HEADERS)
+        turns = client.get("/intelligences/cli-agents/last-turns")
+        failures = client.get("/intelligences/inference-failures")
 
     assert turns.status_code == HTTP_OK
     assert turns.json() == [

@@ -38,7 +38,6 @@ jobs:
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
-          python-version: "3.12"
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -47,15 +46,20 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # The Python programs carry the screens the Local API serves.
+      - name: Build desktop screens
+        working-directory: desktop
+        run: npm run build
+
       - name: Build Python desktop binaries
         run: scripts/desktop-build-backend.sh
 
       - name: Smoke-test desktop sidecars
         run: scripts/desktop-smoke-sidecars.sh
-
-      - name: Install frontend dependencies
-        working-directory: desktop
-        run: npm ci
 
       - name: Build Linux desktop packages
         working-directory: desktop

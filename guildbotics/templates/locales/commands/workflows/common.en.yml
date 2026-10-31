@@ -12,7 +12,7 @@ en:
     - First run `guildbotics member context --person %{person_id}` and treat the capabilities section of its output (also available via `guildbotics member help`) as the source of truth for command syntax, safety rules, communication style, ticket/repository/git/chat writes, memory handling, and the standard work procedure.
     - Work in the isolated member workspace. Never use `--workspace-mode current`.
     - This run is non-interactive: never wait for a user. When information is missing, post the question on the ticket or PR (ticket/PR comment or review reply) or in the chat thread, then complete with status `asking`.
-    - When the run cannot proceed (missing credentials, access, or required context), write a safe summary and complete with status `blocked`.
+    - When the run cannot proceed (missing credentials, access, or required context), leave the comments the instructions below require for it, write a safe summary, and complete with status `blocked`.
     - Never return a success response before this run's required completion command has succeeded. If it fails, add the missing evidence or fail the agent run.
     - Never display, infer, store, or copy secrets.
     - Reply with exactly one AgentResponse JSON object. Its `message` must be a neutral machine summary of the run; never put member-voice conversational text or posted message bodies in it.

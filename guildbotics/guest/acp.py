@@ -33,6 +33,7 @@ from guildbotics.guest.turn import (
     start_turn,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -136,7 +137,7 @@ class AcpAdapterBase(JsonRpcAdapter):
         self,
         *,
         executable: str,
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(
             executable=executable,
@@ -199,6 +200,7 @@ class AcpAdapterBase(JsonRpcAdapter):
             ),
         )
         session_id = await self._resolve_session(context, conversation, emit)
+        conversation.provider_session_id = session_id
         self._active_session_id = session_id
         events: list[AgentEvent] = []
         chunks = _AssistantBuffer()

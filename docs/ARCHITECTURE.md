@@ -79,8 +79,7 @@ the host's `create_context()` the calls themselves
 (`environment/inference_host.py`), the guest's entry the command's window
 (`guest/window.py`). The member brokers (`environment/member_broker.py`) take
 the member CLI they run the same way: the environment does not import the CLI
-above it, and each host entry that runs commands (`cli/run.py`,
-`cli/service.py`, the Desktop's `app_api/runtime.py`) installs it with
+above it, and each host entry that runs commands (`cli/run.py`, the backend's `app_api/runtime.py`) installs it with
 `install_member_cli()`.
 
 Dependency rules (the contracts in `[tool.importlinter]`, checked by `lint-imports`):
@@ -174,18 +173,37 @@ Trust rules that follow from this shape:
 - The workflow does not trust the agent's natural-language stdout as the result. Only
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
+- A reviewer finishes with `done` after submitting a verdict, including request
+  changes. An author uses `asking` only when a reply is needed to continue.
+  For `asking` or `blocked`, `--waiting-for` records the next member's roster
+  person id. Validation checks the targets of the run's recorded comments, not
+  its entry point: a ticket run can ask a reviewer on its PR. An agent must be
+  reachable by the patrol on at least one such target; a human member is
+  accepted without a patrol or credentials. Only waits entirely for active
+  agents suppress the owner notification. When no recipient is named, the CLI
+  explicitly reports that the owner will be notified.
 - Ticket completion with `status=done` resolves the pull requests the run wrote to (run
   evidence), the ticket PR, and the code host's PRs that refer to the ticket
   (`ticket_pull_requests`), each only when the member authored it (the patrol resumes a
   member only for its own PRs), then revalidates each open PR against the code host's current state;
   closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
   logs remain available for inspection. Completion is rejected when observed CI fails or
-  remains pending, the head does not contain the current base, or the head/base changes
-  during the check. `rollup=no_checks` stays non-blocking when the current base also
-  has no checks, while checks on the base make an empty head a registration-pending blocker.
+  remains pending, the host requires an up-to-date head and the head is behind its base,
+  or the head/base changes during the check. `behind_by` and `out_of_date` report the
+  measured lag even when it does not block completion; `completion_blockers` names what
+  must be resolved. Check `details` preserve the host's explanation, including merge
+  conflicts without a failed job log. `rollup=no_checks` stays non-blocking when the
+  current base also has no checks, while checks on the base make an empty head a
+  registration-pending blocker.
   Interactive push/publish results expose compact readiness and blockers for matching open
   PRs; readiness lookup failure, including an HTTP transport failure, does not turn a
   successful push into a failed command.
+  The GitHub provider ignores measured lag only when the final PR read reports
+  `mergeable_state` as `clean`, `unstable`, or `has_hooks`. These states explicitly
+  describe a mergeable PR in GitHub's [merge state definitions](https://docs.github.com/en/graphql/reference/pulls#mergestatestatus).
+  Other states, including `blocked`, `unknown`, and missing or unrecognized values,
+  conservatively require an up-to-date head. They still return checks and failed logs;
+  a head with no measured lag is unaffected by merge state uncertainty.
 - Credentials are resolved by the member CLI itself from the active workspace (config +
   secret store), never inherited from the agent's environment — AI CLI tools strip or
   isolate `*TOKEN*`-like variables from subprocess environments, so inheritance cannot
@@ -209,7 +227,7 @@ service's API.
 | port | responsibility | called by |
 | --- | --- | --- |
 | `CodeHostingService` | repositories (git remote, default branch, push credential and scope, commit URL), pull requests (reads and writes, conversation comments, reviews, inline comments, replies, reactions), CI (readiness, failed logs, artifacts), repository information, the pull request patrol, the pull requests that refer to a ticket | `member pr / repo-info / git`, task completion, the patrol |
-| `TicketService` | tickets (reads and writes, a created one put in the board's new lane, comments, reactions) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
+| `TicketService` | tickets (reads and writes, a created one put in the board's new lane, comments, reactions, the files their bodies and comments refer to) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
 | `ChatService` | the chat: identity, history, posts and replies, reactions | `member chat`, the chat workflow |
 | `EventListener` | receiving the chat, one connection at a time | the chat receiving runner |
 
@@ -237,10 +255,18 @@ flowchart LR
 
 What every port shares (`runtime/port.py`, `runtime/resources.py`):
 
+- **People.** Ticket assignees, PR authors and requested reviewers, and comment,
+  review and thread authors use `ActorName`: a service account name, not a
+  GuildBotics person id. Each provider's descriptor exposes a credential-free
+  `member_identity(person)` with its public names (including API aliases) and
+  mention spelling. The patrol and author classification use that same identity.
+  `member context` publishes the team roster so agents can resolve these names
+  and address a teammate without guessing an id from an account name. The local
+  reference provider deliberately gives members names different from their ids.
 - **References.** Tickets and pull requests are named by their URLs; a read is
   `read(resource, subject)`, the subject being the item's URL or, for repository
   information, the repository's path, which the provider checks and spells (GitHub
-  `owner/repo`). Comments, reviews, threads, CI jobs, and artifacts are opaque string
+  `owner/repo`). Comments, reviews, threads, CI jobs, artifacts, and attachments are opaque string
   ids that mean something only together with their item's URL. A work target is
   `{kind: ticket | pull_request, url, title, label}`, `label` being the short reference
   the service shows it by (GitHub `#12`); shared code never builds one from a number. A
@@ -249,7 +275,8 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
 - **Failures.** `ServiceError` (a message fit for the user, never what the service
   answered or a credential), `ServiceNotFound` (not there, or not this service's), and
   `ServiceUnsupported` (the service cannot do it at all). Optional features — reactions
-  by meaning, `request_changes`, a ticket created off the board, artifacts, failed logs,
+  by meaning, `request_changes`, a ticket created off the board, artifacts, a ticket's
+  attachments, failed logs,
   `dependency_alerts`, the pull requests of another service's ticket, a link that closes
   a ticket on a merge — raise `ServiceUnsupported` when called; an empty result means
   read and found nothing.
@@ -259,7 +286,9 @@ What every port shares (`runtime/port.py`, `runtime/resources.py`):
   comments, the head the member read: on a moved head nothing is written.
 - **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
   its work came from; each provider carries it in its own form (a hidden comment marker,
-  message metadata) and gives it back on reading.
+  message metadata) and gives it back on reading. It also marks the notice a member posts
+  in its explicitly selected chat channels (`chat.notify_work_stops`) when its ticket or PR work stops to wait for a person, which the
+  ticket selector posts (`capabilities/work_stops.py`), so no member answers it.
 - **Write scope.** Each service's configuration names a scope (an owner on GitHub); a
   write goes only to a repository or tracker directly in it (`check_path`), a push only
   to the code host's.
@@ -299,6 +328,28 @@ purpose:
   (`TicketService.candidates()`), and each is re-read from the port it came
   from before it is dispatched; a failed or rate-limited run's status comment goes to
   that port too.
+  Unanswered mentions on open tickets outside the member's assignment are also
+  candidates, even outside the ready/working lanes. Providers resolve mentions;
+  `ticket_selection.mention_pending` considers a member's subsequent comment an
+  answer. These runs use `Work("ticket_mention", ticket_url)`: a separate conversation
+  that posts a comment and completes, without preparing a repository, publishing,
+  creating a PR, or moving the ticket. A response affecting the assignee's work
+  mentions that assignee. An external comment addressed only to other members
+  is excluded only from the assigned work's decision history. The task keeps the full
+  conversation; initial work, unanswered summons, held status and linked-PR completion
+  still use their own evidence. Comments without mentions keep the ordinary behavior.
+  GitHub uses `bodyHTML` / `body_html` mention links resolved by the host, plus configured
+  `⚙person_id` tokens outside code; raw Markdown `@` patterns are not mention evidence.
+  Discovery adds a workspace mention query for Branvil, one issue Search query
+  (`is:issue is:open user:<owner> mentions:<login>`) for GitHub, and a file scan for
+  local. GitHub reads comments only for assigned or search-matched issues. It paginates
+  search matches in updated order (100 per request, up to GitHub's 1,000-result limit),
+  so answered open issues do not permanently hide page 2. Incomplete, overflowing or
+  failed discovery is reported as a warning and returns no partial mention snapshot;
+  assigned ticket and PR work remains available. Replies do not remove search matches;
+  closing resolved issues reduces the count. Non-assigned discovery uses native
+  `@login` mentions; agent tokens continue to work on assigned tickets. Assignment and
+  unanswered mentions are rechecked before dispatch.
   Every route that runs it — the patrol, a scheduled command, a manual run
   (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
   and runs the workflow through `TicketSelector.run`, which owns what surrounds the
@@ -307,12 +358,19 @@ purpose:
   ticket, and the status comment of a failed or rate-limited run. The patrol selects
   outside any trace and dispatches each candidate in turn; a scheduled or manual run,
   or a routine that names the workflow with arguments, takes the ticket the patrol
-  would take next. The workflow only runs the turn. A turn does not wait for CI: when
-  pending checks are all that blocks completion, the member ends the run with
-  `member task complete --status awaiting_checks`, which leaves an `awaiting_checks`
-  status on each such PR; the patrol starts a `pull_request_checks` run once the checks
-  settle or the head moves, and `TicketSelector.run` ends that wait with a
-  `checks_settled` status unless the resumed run awaits the checks again.
+  would take next. The workflow only runs the turn. No run waits for CI in its turn,
+  whatever its work (a ticket, a chat thread, a command): when pending checks are all
+  that blocks its own PRs, the member ends the run with `member checks await`, which
+  leaves an `awaiting_checks` status on each such PR naming the run and its work
+  (`Work`'s kind and identity, from the run's grant), and records the run's completion.
+  The patrol starts a `pull_request_checks` run once the checks settle or the head
+  moves; while the wait lasts, any task the PR asks for (feedback that arrives
+  meanwhile too) runs in the work the status names (`Task.resumes`), so the run
+  continues that work's conversation and reports where the work came from, with the
+  awaiting run's summary as far as this device has it. `TicketSelector.run` ends the
+  wait with a `checks_settled` status unless the resumed run awaits the checks again.
+  Behavior that belongs to a run answering a chat event keys on that event, not on
+  the work's kind, since a resumed run in a chat thread's work answers none.
 - **Manual runs**: a command a person starts runs inside one boundary, whether the
   Desktop runs it (`AppRuntime._execute_command`) or a local `guildbotics run` does
   (`cli/run.py`): a `manual` trace, `TaskRunCoordinator.track_work(source="manual")`
@@ -338,22 +396,33 @@ Invariants:
 
 - Scheduler-managed work is serial per person: one worker thread per active member
   (`drivers/task_scheduler.py`) runs scheduled, routine, and queued-event work one at
-  a time. `runtime/person_lease.py` extends that guarantee to manual commands,
-  interactive sessions, and separate GuildBotics processes with one OS advisory lease
-  per person. The lease is taken in two places only: `track_work` in
-  `drivers/execution.py`, which every host run goes through (the scheduler's work, and
-  a manual command whether the Desktop or a local `guildbotics run` starts it), and the
-  interactive member CLI's own guard. Nested `member` writes require the exact delegated
-  lease/run identity; environment-variable presence alone never authorizes them.
+  a time. `runtime/person_lease.py` serializes non-read-only runs that use a member's
+  clone across manual commands and separate GuildBotics processes with one OS advisory
+  lease per person. Only `track_work` in `drivers/execution.py` takes the lease;
+  every host run goes through it (the scheduler's work, and a manual command whether
+  the Desktop or a local `guildbotics run` starts it). Interactive `member` commands
+  take no execution lease: shared state and git operations have their own locks,
+  and interactive sessions cannot use the member's clone. Nested `member` writes
+  require the exact delegated lease/run identity; environment-variable presence alone
+  never authorizes them.
   Read-only `member` commands declare that capability on their Click callback;
   undeclared commands fail closed as write-capable instead of being classified from
-  command-name strings.
-- The long-running background service is singleton per machine. CLI `guildbotics
-start` and the Desktop-managed service contend on the same OS advisory lock at
-  `<machine-state-root>/run/service.lock`; the lock covers scheduler workers and the
-  event listener together. The persistent file contains owner metadata for status and
-  CLI stop handling, but file existence is not a liveness signal. Desktop-owned
-  services must be stopped from Desktop rather than by signalling the sidecar PID.
+  command-name strings. Write-capable commands still perform one-shot synchronization
+  after execution, independently of the execution lease.
+- The backend is singleton per machine: Desktop and CLI `guildbotics start` launch
+  the same `guildbotics.app_api` child process. It holds
+  `<machine-state-root>/run/app-api.lock` from before binding through server exit.
+  The lock records owner (CLI/Desktop), PID and whether the API accepted a stop,
+  so the CLI parent can distinguish an intentional forced exit from a crash.
+  A failed contender reports the holder's owner to its launcher before exiting;
+  Desktop's Bootstrap asks a CLI owner to stop with `guildbotics stop`.
+  `service.lock` covers scheduler workers and event listeners only while active,
+  including keep-awake; it carries no CLI/Desktop owner. File existence alone
+  is never a liveness signal. CLI stop/kill use the local owner-token API and wait
+  for the backend lock's PID; a Desktop-owned backend is stopped from Desktop.
+  The CLI parent receives signals independently of the child process group: the
+  first requests a graceful drain, the second cancellation, then the parent shuts
+  the backend down. Failed startup and self-stopped services exit nonzero.
 - A member that finishes work while messages 3 and 5 arrive in one Slack thread
   reads the unread conversation through message 5 in its next run. The oldest
   queued event starts that run; selection combines queued messages with a fresh
@@ -399,6 +468,43 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   last worked on. A newer batch is delivered as new input; cursor regression,
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
+- An AI CLI turn stops after three hours (`TURN_TIMEOUT_SECONDS` in
+  `intelligences/agent_runtime/models.py`), with the same deadline for every
+  adapter. A `timeout` failure ends the run's completion attempts immediately.
+  The ticket selector leaves one explanation on the originating ticket or PR,
+  and autonomous runs announce the stop in chat. A later reply makes the work
+  selectable again through the usual patrol rules. The next run reuses the
+  work's healthy provider session and supplies its new instructions, including
+  its own completion requirement. Session IDs learned during an unfinished turn
+  are saved on timeout; the session store's normal rotation limits still apply.
+  `member git prepare` retains a checkout while its work has uncommitted changes,
+  unpublished history, a stash, an in-progress Git operation, special index flags,
+  detached HEAD, or
+  linked worktrees. Other work borrows an idle checkout of the same repository,
+  keeping ignored build caches such as `target` and `node_modules`; only when
+  none is available does it create another clone. After a successful prepare,
+  excess idle clones are removed inside the guest, keeping at most one beside
+  the retained checkouts. Before deletion, a slot's record moves to the host's
+  discarded registry. Cleanup failures are retried from that registry even when
+  the partial deletion has already removed Git metadata; those slot IDs cannot
+  be allocated again until cleanup finishes.
+  Publication is established from host-fetched references and successful pushes,
+  with their objects retained on the host after squash merges and ref deletion.
+  Guest remote-tracking references do not establish publication. Every idle
+  checkout starts at the requested remote branch or current default, including
+  after a force-push or branch deletion, and tracks that remote branch explicitly.
+  The same unfinished work keeps its HEAD, index and files. Host-only atomic slot
+  records name the repository and current work assignment. Every run calls prepare and
+  uses the returned `repo_path` and `branch` rather than a remembered path, which
+  may since have been reassigned. Member commit/push reject a registered slot
+  owned by another work. An empty `branch` denotes retained detached HEAD.
+  These files and provider sessions live on the device that ran the turn, so
+  resumption uses that device.
+
+  Older clone directories (`clones/<person>/<repository path>`, and the earlier
+  per-work hash directories) and their old plaintext checkout records are unused.
+  They may be removed manually after checking for uncommitted changes,
+  unpublished commits and other unfinished Git state that must first be kept.
 - Rate limits from AI CLI tools are detected in the isolated environment
   (`guest/cli_agent.py`), never amplified by in-process retries
   (`commands/agent_turn.py` raises them as they are), and recorded on the host by the
@@ -754,7 +860,7 @@ the process cwd or a member working clone.
 
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/service.lock` — state needed _before_ a workspace is chosen                  |
+| Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/app-api.lock`, `run/service.lock` — state needed _before_ a workspace is chosen                  |
 | Hub root           | `$HOME/.guildbotics/hub` (fixed, only on a machine that hosts a hub)                             | `hub.json` (including `identity_id`, the identities' repository), and per workspace `workspaces/<workspace_id>/`: the bare `repository.git`, `live/`, `service-owner.json`, the `head-updated` marker, `secret-generations.json` |
 | Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials and connection Secrets such as `BRANVIL_ADMIN_TOKEN`), `config/connections/branvil.yml` |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
@@ -1198,10 +1304,10 @@ access and member key spelling in the package.
   already stored on a lost device cannot be wiped from elsewhere, so they are issued
   again at their provider.
 - **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
-  requests, including those arriving over SSH, use Desktop's discovery record and
-  session token, once the Local API proved it holds that token (section 11). `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
+  requests, including those arriving over SSH, use the server's owner token, once the
+  server proved it knows that token (section 11). `POST /api/hub/secrets/{workspace_id}/{operation}` accepts `list`,
   `send`, or `receive` and passes framed bytes to `hub/secret_service.py`. It requires
-  a loopback peer and the session token, validates a registered Hub Workspace ID,
+  a loopback peer and the owner's credential, validates a registered Hub Workspace ID,
   and does not depend on the workspace open in Desktop. This binary transfer route
   is the sole exception to the rule excluding secret values from API responses.
   Values stay out of logs, diagnostics, validation errors, and screen responses.
@@ -1360,60 +1466,119 @@ access and member key spelling in the package.
 `desktop/` is a Tauri v2 + React (Mantine, TanStack Query) frontend; the repository is
 a monorepo on purpose.
 
-- **Local API boundary**: the GUI never reimplements the Python engine. It launches the
-  bundled backend (`python -m guildbotics.app_api`, FastAPI) and talks to it on
-  `127.0.0.1` via REST + WebSocket. Every request requires the per-process
-  `X-GuildBotics-Session-Token`; `/health` is the liveness probe. A browser
-  WebSocket cannot set that header, and uvicorn logs every handshake's path and
-  query, so `/events` takes the token as the second offered subprotocol after
-  `guildbotics.session`, which the server selects; the token is never in a URL the
-  server logs or echoed back. The launcher mints
-  that token and hands it over through `GUILDBOTICS_APP_API_TOKEN` — never argv, which
-  `ps` exposes to every other user on the host — and the server refuses to start
-  without it, consuming the variable on startup so the AI CLI agents it spawns from a
-  copy of its environment never inherit the token. Browser origins are equally
-  launcher-supplied: CORS allows the Tauri origin plus whatever
-  `GUILDBOTICS_APP_API_ALLOWED_ORIGINS` lists, so a page on an arbitrary localhost
-  port cannot reach the API.
-- **Who receives the token**: a loopback port is not owned by an OS user, so the token
-  goes only to a process that showed it holds the port or the token.
-  - Desktop starts the sidecar with `--port 0`. The sidecar binds, listens, and then
-    announces the port as the only line its stdout ever carries
-    (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards stdout is stderr. It announces
-    before loading the workspace, whose secrets can wait on a keychain prompt, so the
-    host's deadline measures binding only; the frontend waits on `/health` meanwhile. The host keeps one
-    connection state (`Starting` / `Ready(port)` / `Closed`) that only that notice makes
-    `Ready`. A missing notice after 45 seconds, an invalid or second notice, or the
-    sidecar's exit closes it for good, kills the sidecar, and sends `backend-closed` to
-    every window. `backend_info`, the host's own requests, and the frontend's HTTP,
-    WebSocket, and avatar URLs all take their destination from that state, so nothing
-    addresses a port after the sidecar is gone. The sidecar starts again only with the
-    app, so the window shows why it stopped and offers to restart the app
-    (`restart_app`). Closed is final in the frontend too: an answer the gone backend
-    sends late (`backend_info`, `/health`) cannot reopen the connection or finish the
-    start. While the App is not shown, quit requests go straight to `quit_app`.
-  - Host clients that find the Local API through `~/.guildbotics/data/run/app-api.json`
-    (`guildbotics run` delegation and macOS Hub Secret) go through
-    `utils/local_api.py`'s `connect_local_api()`. It first posts a fresh 32-byte nonce to
-    `/local-api/proof`, which takes no token and answers
-    `HMAC-SHA256(token, "guildbotics-local-api-proof\n" + nonce + "\n" + service_instance_id)`.
-    Only a matching proof for the recorded instance attaches the token; a stale record,
-    a replayed answer, a malformed answer, or a timeout sends neither the token nor
-    anything it guards. A live PID or a health answer is no evidence.
+- **Local API boundary**: the GUI never reimplements the Python engine. The backend
+  (`python -m guildbotics.app_api`, FastAPI) serves both the API under `/api` (REST,
+  and the `/api/events` WebSocket) and the screens themselves (the Vite build of
+  `desktop/`: `/`, `/quick.html`, `/assets/*`, and `/-/enter` and `/-/authorize`, which
+  the main page tells apart by path; `app_api/ui.py`). It listens on loopback only, on
+  one fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by default), which every program of
+  the machine reads from the environment: the server, its CLI clients, the Desktop
+  that launches it, and the Vite dev server that proxies `/api` to it. Other machines
+  reach it through SSH forwarding to the same port. The screens therefore work the same
+  in any browser and in the Desktop windows.
+- **Authentication** (`app_api/auth.py`, as Branvil's "Entering the GUI"): there is one
+  person, the owner, and no sign-in screen.
+  - The server keeps its records in `~/.guildbotics/data/server/<port>/` (`0700`):
+    `owner.token` (`0600`) and `auth.json` (tokens and sessions, by SHA-256 only). A
+    token is `gbt_<id>_<secret>`. Whoever can read `owner.token` is the owner. At every
+    start the server checks that the file still authenticates; when it is missing or
+    does not, it revokes the previous file token, ends every session, and writes a new
+    one. Only the process that bound the port opens these records, so a second
+    backend whose bind fails changes nothing.
+  - A client holding an owner token (`Authorization: Bearer`) asks
+    `POST /api/session/links` for an entry link, `{base}/-/enter#<code>` (32 random
+    bytes, single use, 60 s, in memory as its hash; `?next=` names a page of this
+    server). The code is in the fragment, so it is in no request line, log, or
+    `Referer`. The page removes it from the address bar and exchanges it at
+    `POST /api/session` for the session cookie `guildbotics_session_<port>` (`HttpOnly`,
+    `SameSite=Strict`, 30 days; the port is in the name because cookies are not
+    separated by port, which also keeps it apart from Branvil's `branvil_session`) and
+    its CSRF value. As in Branvil, a session ends after its 30 days however much it is
+    used, and the screen then says how to enter again. Every non-GET
+    request made with the cookie must carry `X-GuildBotics-CSRF`, else
+    `403 csrf_mismatch`. `guildbotics open [--print]` is that client on the command
+    line; the Desktop host is another.
+  - A machine that cannot read `owner.token` gets an owner token of its own through the
+    consent screen: `guildbotics connect` listens on a loopback port and opens
+    `/-/authorize` with its name, that `redirect_uri`, a `state`, and a PKCE `S256`
+    challenge; the owner allows it with a session (`POST /api/apps/authorizations`), and
+    the CLI exchanges the single-use, 60-second code bound to its name, address, and
+    challenge at `POST /api/apps/token` for a token labelled `app:<client>`, replacing
+    that client's previous one. The token is kept in the machine's OS keychain
+    (service `guildbotics-server`). `guildbotics open` offers `owner.token`, then that
+    token, and uses the first the server proves it knows (`utils/local_api.client_tokens`):
+    an owner file outlives its server, and the port may lead to the Hub by then. `run`
+    delegation and macOS Hub Secret hand over this machine's paths and secrets, so they
+    offer `owner.token` alone: only the server running on this machine knows it.
+  - The guard runs before every route, the screens included: `Host` must be
+    `127.0.0.1`, `localhost`, or `[::1]` with the port (else `421 misdirected`, against
+    DNS rebinding), and an `Origin` must be that same origin (else
+    `403 origin_mismatch`). No CORS header is ever sent. Every response carries
+    `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`,
+    `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, and
+    `Referrer-Policy: no-referrer`; a provider page that must post a form elsewhere
+    (the GitHub App manifest) widens `form-action` to that one origin and runs no script.
+    The WebSocket needs the session cookie and the server's own `Origin`.
+  - Unauthenticated are only the proof below, the two code exchanges, the screens
+    (which hold no data), and the provider pages a browser comes back to from another
+    site, which act on their unguessable `state`.
+- **Who receives a token**: a loopback port is not owned by an OS user, so a token goes
+  only to a process that showed it holds the port or knows the token.
+  - Desktop starts the sidecar on the fixed port (`GUILDBOTICS_SERVER_PORT`, 8765 by
+    default), which the sidecar reads from the environment it inherits. The sidecar
+    binds, listens, writes its owner token file, and then announces the port as the
+    only line its stdout ever carries (`GUILDBOTICS_APP_API_PORT=<port>`); afterwards
+    stdout is stderr. It announces before loading the workspace, whose secrets can wait
+    on a keychain prompt, so the host's deadline measures binding only. The host keeps
+    one connection state (`Starting` / `Ready` / `Closed`) that only a notice for the
+    port it asked for makes `Ready`; only then does it read
+    `~/.guildbotics/data/server/<port>/owner.token` and send it as
+    `Authorization: Bearer` (`/api/session/links`, `/api/shutdown`,
+    `/api/scheduler/status`). A missing notice after 45 seconds, a notice for another
+    port or a second one, or the sidecar's exit closes it for good, kills the sidecar,
+    and sends every window back to its bundled bootstrap page.
+  - Both windows first load that page (`bootstrap.html`; the quick window with
+    `?next=/quick.html`). It calls `backend_entry`: `null` while the sidecar starts, a
+    fresh entry link once it is ready (an entry link works once, so the host asks for
+    one each time), or why there is none. The page replaces itself with the link, so
+    the windows show the UI the backend serves and hold a session cookie like any
+    browser. Tauri treats that origin as remote: the host grants it what
+    `capabilities/default.json` grants the bundled UI (a runtime capability for
+    `http://127.0.0.1:<port>/*`), while the bootstrap page's own commands
+    (`backend_entry`, `bootstrap_log`, `restart_app`) stay with the bundled page. The
+    sidecar starts again only with the app, so the bootstrap page shows why it stopped
+    and offers to restart the app (`restart_app`). A window whose session has ended
+    goes back to its bootstrap page (`enter_again`, which navigates only to the page the
+    host recorded for that window) and enters again. While the App is not shown, quit
+    requests go straight to `quit_app`.
+  - Host clients (`guildbotics run` delegation, `guildbotics open`, and macOS Hub
+    Secret) go through `utils/local_api.py`'s `connect_local_api()`. For each token it
+    offers, it first posts the token's id and a fresh 32-byte nonce to
+    `/api/local-api/proof`, which takes no
+    token and answers `HMAC-SHA256(sha256(secret), "guildbotics-local-api-proof\n" +
+    nonce + "\n" + id)`. Only a matching proof attaches the token; a process that took
+    the port while the server was down knows no digest, so it, a replayed answer, a
+    malformed answer, or a timeout gets neither the token nor anything it guards. A
+    health answer is no evidence.
   - Remaining limits: a port the genuine server leaves after a client's proof can be
     taken before the client's next connection (later requests usually reuse the proved
-    connection). A browser redirected by GitHub App registration still reaches the
-    sidecar's port after the sidecar exited, carrying the one-time `code`. The browser
-    preview and E2E stack send their static token to a fixed port without a proof, so
-    they are for single-user hosts only.
-- **Runtime lifecycle**: the sidecar manages member workers / event listeners inside
-  its own process and reports states to the UI. Desktop and CLI `guildbotics start`
-  use the same machine-wide `service.lock`, so only one background service can own
-  scheduler workers / event listeners at a time. CLI `start` remains the headless
-  equivalent.
+    connection). A browser redirected back by GitHub App registration or Branvil's
+    consent reaches the port even after the server exited, carrying a one-time code.
+- **Runtime lifecycle**: the backend is the sole composition root for service
+  synchronization, relay, member workers and event listeners. Both Desktop and CLI
+  `guildbotics start` launch it (the module in development, the sibling bundled
+  `guildbotics-app-api` when packaged), passing their parent PID to the watchdog.
+  The backend owns `app-api.lock` for its lifetime and `service.lock` only while
+  services run. The CLI waits for its child's port notice, then uses the local
+  owner-token API; `--only` selects scheduler sources. `/scheduler/stop` defaults
+  to waiting; CLI stop/kill use `wait=false` to acknowledge the stop before draining
+  and wait for the process themselves, escalating with `force=true` if needed.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
   (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
   shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.
+  It carries the screens the Local API serves, the Vite build of `desktop/`, in
+  `_internal/desktop/dist` (beside `_internal/guildbotics/` as in a checkout), so the
+  screens are built first.
   Tauri bundles it as a resource and the app starts the Local API from it. The CLI is
   copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
   afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on

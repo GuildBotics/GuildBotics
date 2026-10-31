@@ -21,20 +21,24 @@ from pydantic import TypeAdapter, ValidationError
 
 from guildbotics.capabilities.artifact_archive import (
     MAX_ARTIFACT_BYTES,
+    MAX_ATTACHMENT_BYTES,
     ArtifactError,
     Unpacked,
-    extract_artifact,
     unpacked,
+    write_download,
 )
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.errors import MemberCapabilityError
-from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.task_runs import RunStore, work_subject
+from guildbotics.entities import Service
 from guildbotics.entities.message import Message
 from guildbotics.integrations import pull_request_patrol
+from guildbotics.integrations.factory import configured_providers
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
+    Work,
     current_member_invocation,
 )
 from guildbotics.runtime.port import (
@@ -49,7 +53,7 @@ from guildbotics.runtime.resources import (
     Readiness,
     ReviewVerdict,
 )
-from guildbotics.runtime.ticket_service import TicketService
+from guildbotics.runtime.ticket_service import CreateLane, TicketService
 from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -95,10 +99,40 @@ async def ticket_create(
     add_to_board: bool,
     labels: Sequence[str] = (),
     human_approved: bool = False,
+    *,
+    interactive: bool = False,
+    assignee: str | None = None,
+    lane: CreateLane | None = None,
+    parent: str | None = None,
+    blocked_by: Sequence[str] = (),
 ) -> dict[str, Any]:
-    _require_human_approval(human_approved, "Creating a ticket")
+    _require_human_approval(human_approved, t("cli.member.ticket_create"))
+    assigned_name = None
+    if assignee is not None:
+        member = next(
+            (m for m in context.team.members if m.person_id == assignee), None
+        )
+        service = context.team.project.get_service_name(Service.TICKET_SERVICE)
+        provider = next(
+            p for p in configured_providers(context.team) if p.name == service
+        )
+        identity = provider.member_identity(member) if member is not None else None
+        if identity is None or not identity.names:
+            raise MemberCapabilityError(
+                t("cli.member.ticket_assignee", person=assignee)
+            )
+        assigned_name = identity.name
     created = await _tickets(context).create_ticket(
-        tracker, title, body, _cleaned(labels), add_to_board=add_to_board
+        tracker,
+        title,
+        body,
+        _cleaned(labels),
+        add_to_board=add_to_board,
+        interactive=interactive,
+        assignee=assigned_name,
+        lane=lane,
+        parent=parent,
+        blocked_by=_cleaned(blocked_by),
     )
     return created.model_dump()
 
@@ -116,10 +150,13 @@ async def ticket_update(
     parent: str | None = None,
     add_blocked_by: Sequence[str] = (),
     remove_blocked_by: Sequence[str] = (),
+    interactive: bool | None = None,
 ) -> dict[str, Any]:
+    if interactive is not None:
+        _require_human_approval(human_approved, t("cli.member.ticket_interactive"))
     if state is not None:
         _require_human_approval(
-            human_approved, f"Changing the ticket state to '{state}'"
+            human_approved, t("cli.member.ticket_state", state=state)
         )
     add_labels, remove_labels = _cleaned(add_labels), _cleaned(remove_labels)
     add_blocked_by, remove_blocked_by = (
@@ -131,12 +168,10 @@ async def ticket_update(
         and title is None
         and state is None
         and parent is None
+        and interactive is None
         and not (add_labels or remove_labels or add_blocked_by or remove_blocked_by)
     ):
-        raise MemberCapabilityError(
-            "ticket update needs at least one of body, title, labels, state, "
-            "parent, or blockers."
-        )
+        raise MemberCapabilityError(t("cli.member.ticket_update_empty"))
     updated = await _tickets(context).update_ticket(
         url,
         body=body,
@@ -148,6 +183,7 @@ async def ticket_update(
         parent=parent,
         add_blocked_by=add_blocked_by,
         remove_blocked_by=remove_blocked_by,
+        interactive=interactive,
     )
     return updated.model_dump()
 
@@ -188,14 +224,12 @@ async def pr_update(
     body: str | None = None,
     title: str | None = None,
     *,
-    drop_ticket_links: bool = False,
+    tickets: Sequence[TicketLink] | None = None,
 ) -> dict[str, Any]:
-    if drop_ticket_links and body is None:
-        raise MemberCapabilityError("--drop-issue-links requires a body.")
-    if body is None and title is None:
-        raise MemberCapabilityError("pr update needs a body or a title.")
+    if body is None and title is None and tickets is None:
+        raise MemberCapabilityError("pr update needs a body, a title, or ticket links.")
     updated = await _code(context).update_pull_request(
-        url, body=body, title=title, drop_ticket_links=drop_ticket_links
+        url, body=body, title=title, tickets=tickets
     )
     return updated.model_dump()
 
@@ -256,8 +290,22 @@ async def artifact_download(
         raise MemberCapabilityError("Artifact name is required.")
     code = context.get_code_hosting_service()
     async with code.artifact(url, name, MAX_ARTIFACT_BYTES) as (ref, archive):
-        where = _unpack(archive, destination)
+        where = _write(archive, destination)
     return {**ref.model_dump(), **where}
+
+
+async def attachment_download(
+    context: Context, url: str, attachment_id: str, destination: Path
+) -> dict[str, Any]:
+    """Download one attachment the ticket refers to, as a file of
+    ``destination`` named as it was attached."""
+    tickets = context.get_ticket_service()
+    async with tickets.attachment(url, attachment_id, MAX_ATTACHMENT_BYTES) as (
+        attachment,
+        content,
+    ):
+        where = _write(content, destination, attachment.name, attachment.id)
+    return {**attachment.model_dump(), **where}
 
 
 async def open_pull_request_readiness(
@@ -282,14 +330,15 @@ async def open_pull_request_readiness(
 
 
 async def task_completion_readiness(
-    context: Context, ticket_url: str, evidence: list[dict[str, Any]]
+    context: Context, work: Work, evidence: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Revalidate every PR a ticket run is answerable for before completion.
+    """Revalidate every PR a run doing ``work`` is answerable for before
+    completion.
 
     Raises:
         MemberCapabilityError: If a target is not ready.
     """
-    results = [result for _, result in await _answered(context, ticket_url, evidence)]
+    results = [result for _, result in await _answered(context, work, evidence)]
     blocked = [result for result in results if result.readiness != "ready"]
     if blocked:
         raise MemberCapabilityError(
@@ -300,18 +349,20 @@ async def task_completion_readiness(
 
 
 async def await_checks(
-    context: Context, ticket_url: str, run_id: str, store: RunStore
+    context: Context, work: Work, run_id: str, store: RunStore
 ) -> list[dict[str, Any]]:
-    """End a ticket run to await its PRs' checks, saying so on each PR whose
-    checks are pending and recording that the run awaits them; the patrol
-    resumes the member for each once they settle.
+    """End a run doing ``work`` to await its PRs' checks, saying so on each PR
+    whose checks are pending and recording that the run awaits them; the
+    patrol resumes ``work`` for each once they settle.
 
     Raises:
         MemberCapabilityError: Unless pending checks are all that blocks the
             completion of the PRs the run answers for, none of them a draft:
             the patrol resumes nobody for a draft.
+        ChatUpdatesRequired: When the run answers a chat whose new input it
+            has not read; nothing is said or recorded then.
     """
-    answered = await _answered(context, ticket_url, store.evidence(run_id))
+    answered = await _answered(context, work, store.evidence(run_id))
     awaited = [(pr, result) for pr, result in answered if result.readiness != "ready"]
     if not awaited or any(
         pr["draft"] or blocker.code != "checks_pending"
@@ -326,13 +377,15 @@ async def await_checks(
                 or "No PR of the member's own is blocked."
             )
         )
+    code = _code(context)
     for _, result in awaited:
         await pull_request_patrol.await_checks(
-            context.get_code_hosting_service(),
+            code,
             result.target.url,
             person_id=context.person.person_id,
             run_id=run_id,
-            subject=ticket_url,
+            work=work,
+            subject=work_subject(work)[1],
             head=result.head_sha,
         )
         store.append_evidence(
@@ -344,21 +397,22 @@ async def await_checks(
 
 
 async def _answered(
-    context: Context, ticket_url: str, evidence: list[dict[str, Any]]
+    context: Context, work: Work, evidence: list[dict[str, Any]]
 ) -> list[tuple[dict[str, Any], Readiness]]:
-    """Every open PR a ticket run is answerable for, with its readiness: the
-    ticket itself when it is a PR, the PRs that refer to it, and the PRs the
-    run wrote to (evidence), each only when the member authored it. A
-    reviewer cannot make someone else's PR ready, and the patrol resumes the
-    member only for its own PRs, so no other PR's checks are the run's to
-    await.
+    """Every open PR a run doing ``work`` is answerable for, with its
+    readiness: for a ticket's work, the ticket itself when it is a PR, else
+    the PRs that refer to it; and for any work, the PRs the run wrote to,
+    found open, or was resumed for (evidence). Each counts only when the
+    member authored it. A reviewer cannot make someone else's PR ready, and
+    the patrol resumes the member only for its own PRs, so no other PR's
+    checks are the run's to await.
     """
+    urls = list(_pull_request_urls(evidence))
+    if work.kind != "ticket" and not urls:
+        return []
     code = context.get_code_hosting_service()
-    try:
-        urls = [(await code.read("pull_requests", ticket_url)).items[0]["url"]]
-    except ServiceNotFound:
-        urls = await _referring_pull_requests(code, ticket_url)
-    urls.extend(_pull_request_urls(evidence))
+    if work.kind == "ticket":
+        urls = [*await _ticket_pull_requests(code, work.identity), *urls]
     answered = []
     for url in dict.fromkeys(urls):
         pr = (await code.read("pull_requests", url)).items[0]
@@ -368,6 +422,15 @@ async def _answered(
         if result.readiness != "not_applicable":
             answered.append((pr, result))
     return answered
+
+
+async def _ticket_pull_requests(code: CodeHostingService, ticket_url: str) -> list[str]:
+    """The ticket itself when it is a pull request, else the pull requests
+    that refer to it."""
+    try:
+        return [(await code.read("pull_requests", ticket_url)).items[0]["url"]]
+    except ServiceNotFound:
+        return await _referring_pull_requests(code, ticket_url)
 
 
 def _blockers(results: list[Readiness]) -> str:
@@ -400,8 +463,8 @@ async def _referring_pull_requests(
 
 
 def _pull_request_urls(evidence: list[dict[str, Any]]) -> list[str]:
-    """The pull requests a run's evidence names: what it wrote to, and what
-    its pushes found open."""
+    """The pull requests a run's evidence names: what it wrote to, what its
+    pushes found open, and what it was resumed for."""
     urls: list[str] = []
     for record in evidence:
         payload = record.get("payload")
@@ -440,14 +503,13 @@ def _cleaned(labels: Sequence[str]) -> list[str]:
 def _require_human_approval(human_approved: bool, action: str) -> None:
     """Guard the writes that stay a human decision.
 
-    Opening and closing tickets shape the team's backlog, so the member may only
-    perform them on a human's instruction or approval. The flag is the member's
-    attestation that such an instruction exists in the originating conversation.
+    Creating tickets and changing their state or interactive mode are human
+    decisions. The flag attests that a human instruction or approval exists
+    in the originating conversation.
     """
     if not human_approved:
         raise MemberCapabilityError(
-            f"{action} requires a human instruction or approval. "
-            "Ask the human first, then re-run with --human-approved."
+            t("cli.member.human_approval_required", action=action)
         )
 
 
@@ -483,32 +545,36 @@ def _validate_review_comment_location(
 _UNPACKED = TypeAdapter(Unpacked)
 
 
-def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
-    """Unpack ``archive`` where the command that asked for it reads it: on
-    the host, or, for a command of an isolated environment, in that
-    environment (:mod:`.artifact_archive`), which the host writes nothing of.
+def _write(download: IO[bytes], destination: Path, *attachment: str) -> Unpacked:
+    """Write ``download`` where the command that asked for it reads it:
+    unpacked as an artifact, or, given an attachment's name and id, as that
+    attachment; on the host, or, for a command of an isolated environment, in
+    that environment (:mod:`.artifact_archive`), which the host writes
+    nothing of.
 
     Raises:
-        MemberCapabilityError: When the artifact cannot be unpacked safely,
-            or the environment could not unpack it.
+        MemberCapabilityError: When it cannot be written safely, or the
+            environment could not write it.
     """
     guest = current_member_invocation().guest
     if guest is None:
         try:
-            return unpacked(destination, extract_artifact(archive, destination))
+            files = write_download(download, destination, *attachment)
         except ArtifactError as exc:
             raise MemberCapabilityError(str(exc)) from exc
+        return unpacked(destination, files)
     # A process that ran out of time may still hold the copy open (on Windows
     # it cannot be deleted then); the failure is what the command reports.
-    with host_temporary_directory("guildbotics-artifact-") as held:
-        copy = Path(held) / "artifact.zip"
+    with host_temporary_directory("guildbotics-download-") as held:
+        copy = Path(held) / "download"
         with copy.open("wb") as file:
-            copyfileobj(archive, file)
+            copyfileobj(download, file)
         try:
             result = guest.run(
                 guest.python(
                     "guildbotics.capabilities.artifact_archive",
                     guest.path(destination),
+                    *attachment,
                 ),
                 cwd="/",
                 env={},
@@ -520,14 +586,14 @@ def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
     if result.returncode != 0:
         raise MemberCapabilityError(
             result.stderr.decode(errors="replace").strip()
-            or "The artifact could not be unpacked."
+            or "The download could not be written."
         )
     # What the environment wrote is its own to write: read as nothing more
-    # than where it says it unpacked.
+    # than where it says it wrote it.
     try:
         return _UNPACKED.validate_json(result.stdout)
     except ValidationError as exc:
         raise MemberCapabilityError(
-            "The environment reported the artifact unpacked in a form it cannot"
+            "The environment reported the download written in a form it cannot"
             " have been."
         ) from exc

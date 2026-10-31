@@ -544,6 +544,8 @@ async def test_detail_names_host_observed_target_and_fork_head(reader):
             "body": "",
             "state": "open",
             "assignees": ["aiko"],
+            "author": "aiko",
+            "requested_reviewers": [],
             "labels": ["bug"],
             "author_type": Message.ASSISTANT,
             "head": "feature",

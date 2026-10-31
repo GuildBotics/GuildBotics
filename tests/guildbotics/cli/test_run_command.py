@@ -34,10 +34,12 @@ from guildbotics.runtime.workflow_invocation import (
 from guildbotics.utils import local_api
 from guildbotics.utils.correlation import current_trace, set_attributes
 from guildbotics.utils.local_api import (
+    API_PREFIX,
+    PORT_ENV,
     PROOF_PATH,
-    TOKEN_HEADER,
-    LocalApiEndpoint,
     local_api_proof,
+    new_token,
+    owner_token_path,
 )
 from guildbotics.utils.safe_paths import normalize_host_path
 from tests.guildbotics.command_environment_doubles import machinery
@@ -49,6 +51,9 @@ from tests.guildbotics.runtime.test_context import (
 
 #: The commands the host starts run in this process.
 pytestmark = pytest.mark.usefixtures("configured_team", "commands_in_process")
+
+HEALTH = API_PREFIX + "/health"
+RUN = API_PREFIX + "/commands/run"
 
 
 def test_parse_command_spec_with_person():
@@ -65,15 +70,13 @@ def test_parse_command_spec_without_person():
 
 @pytest.fixture
 def desktop_route(tmp_path, monkeypatch):
-    monkeypatch.setattr(local_api, "endpoint_path", lambda: tmp_path / "app-api.json")
+    monkeypatch.delenv(PORT_ENV, raising=False)
     monkeypatch.setattr(run_module, "selected_workspace", lambda: tmp_path)
-    endpoint = LocalApiEndpoint(
-        port=8765,
-        token="test-token",
-        service_instance_id="instance",
-        workspace=tmp_path,
-    )
-    endpoint.publish()
+    # The Desktop's server on this machine keeps its owner token here.
+    token_id, digest, token = new_token()
+    owner_file = owner_token_path(8765)
+    owner_file.parent.mkdir(parents=True)
+    owner_file.write_text(token + "\n")
     calls = []
 
     async def local(*args):
@@ -85,13 +88,15 @@ def desktop_route(tmp_path, monkeypatch):
 
     def respond(handler):
         def request(req):
-            if req.url.path == PROOF_PATH:
-                assert TOKEN_HEADER not in req.headers
-                nonce = json.loads(req.content)["nonce"]
-                proof = local_api_proof("test-token", nonce, "instance")
+            assert req.url.host == "127.0.0.1" and req.url.port == 8765
+            if req.url.path == API_PREFIX + PROOF_PATH:
+                assert "Authorization" not in req.headers
+                body = json.loads(req.content)
+                assert body["token_id"] == token_id
+                proof = local_api_proof(digest, body["nonce"], token_id)
                 return httpx.Response(200, json={"proof": proof})
             calls.append((req.url.path, req))
-            assert req.headers[TOKEN_HEADER] == "test-token"
+            assert req.headers["Authorization"] == f"Bearer {token}"
             return handler(req)
 
         monkeypatch.setattr(
@@ -112,7 +117,7 @@ def desktop_route(tmp_path, monkeypatch):
             },
         )
 
-    return endpoint, calls, respond, healthy
+    return owner_file, calls, respond, healthy
 
 
 @pytest.mark.parametrize(
@@ -121,10 +126,10 @@ def desktop_route(tmp_path, monkeypatch):
 def test_cli_delegates_stdin_args_person_and_absolute_cwd(
     desktop_route, tmp_path, person_args
 ):
-    endpoint, calls, respond, healthy = desktop_route
+    owner_file, calls, respond, healthy = desktop_route
 
     def handler(req):
-        if req.url.path == "/health":
+        if req.url.path == HEALTH:
             return healthy(req)
         assert json.loads(req.content) == {
             "command": "ask",
@@ -145,7 +150,7 @@ def test_cli_delegates_stdin_args_person_and_absolute_cwd(
     )
     assert result.exit_code == 0, result.output
     assert result.stdout == "review output\n"
-    assert [path for path, _ in calls] == ["/health", "/commands/run"]
+    assert [path for path, _ in calls] == [HEALTH, RUN]
 
 
 @pytest.mark.parametrize(
@@ -161,9 +166,9 @@ def test_cli_delegates_stdin_args_person_and_absolute_cwd(
 def test_cli_runs_locally_only_when_no_matching_desktop(
     desktop_route, monkeypatch, state
 ):
-    endpoint, calls, respond, healthy = desktop_route
+    owner_file, calls, respond, healthy = desktop_route
     if state == "missing":
-        local_api.endpoint_path().unlink()
+        owner_file.unlink()
 
     def handler(req):
         if state == "connection":
@@ -183,7 +188,7 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
     assert calls[-1][0] == "local"
     # Locally, too, the command works where it was started.
     assert calls[-1][1][-1] == Path.cwd()
-    assert not any(path == "/commands/run" for path, _ in calls)
+    assert not any(path == RUN for path, _ in calls)
 
 
 @pytest.mark.parametrize(
@@ -252,10 +257,10 @@ def test_cli_runs_locally_as_the_named_member_in_cwd_after_loading_env(
     "failure", ["command_already_running", "work_rejected", "connection"]
 )
 def test_cli_never_runs_locally_after_post(desktop_route, failure):
-    endpoint, calls, respond, healthy = desktop_route
+    owner_file, calls, respond, healthy = desktop_route
 
     def handler(req):
-        if req.url.path == "/health":
+        if req.url.path == HEALTH:
             return healthy(req)
         if failure == "connection":
             raise httpx.ReadError("connection lost after sending")
@@ -280,11 +285,11 @@ def test_cli_never_runs_locally_after_post(desktop_route, failure):
 
 
 def test_cli_reports_plain_http_error_without_retry(desktop_route):
-    endpoint, calls, respond, healthy = desktop_route
+    owner_file, calls, respond, healthy = desktop_route
     respond(
         lambda req: (
             healthy(req)
-            if req.url.path == "/health"
+            if req.url.path == HEALTH
             else httpx.Response(500, text="Internal Server Error")
         )
     )
@@ -295,10 +300,10 @@ def test_cli_reports_plain_http_error_without_retry(desktop_route):
 
 
 def test_cli_preserves_default_cwd_and_empty_desktop_output(desktop_route):
-    endpoint, calls, respond, healthy = desktop_route
+    owner_file, calls, respond, healthy = desktop_route
 
     def handler(req):
-        if req.url.path == "/health":
+        if req.url.path == HEALTH:
             return healthy(req)
         assert json.loads(req.content)["cwd"] == str(Path.cwd())
         return httpx.Response(200, json={"trace_id": "run", "output": ""})
@@ -789,6 +794,7 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
         tmp_path / "commands/functions/answer.py",
         """
         from guildbotics.capabilities.task_runs import RunStore
+        from guildbotics.runtime.member_invocation import Work
 
         async def main(context, agent_execution_context):
             attempt = agent_execution_context["attempt"]
@@ -798,7 +804,11 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
                     "run-1", "issue_comment", {"url": "https://example.test/1"}
                 )
                 store.complete(
-                    "run-1", "done", "done", "https://example.test/1", "alice"
+                    "run-1",
+                    "done",
+                    "done",
+                    Work.of_ticket("https://example.test/1"),
+                    "alice",
                 )
             return f"attempt-{attempt}"
         """,
@@ -816,35 +826,6 @@ async def test_a_ticket_run_drives_its_turn_until_the_host_record_completes(
     outcome = await run_main_command(command, source="manual")
 
     assert outcome.text_output == "attempt-2"
-
-
-@pytest.mark.asyncio
-async def test_a_command_of_no_workflow_run_drives_no_completion(tmp_path, monkeypatch):
-    """A manual command does its own run's manual work, which no completion
-    record finishes, so it cannot drive a completion-managed turn."""
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    _write(
-        tmp_path / "commands/driver.py",
-        """
-        from guildbotics.runtime import Context
-
-        async def main(context: Context):
-            return await context.invoke(
-                "functions/answer",
-                agent_execution_context={"max_completion_attempts": 3},
-            )
-        """,
-    )
-    _write(
-        tmp_path / "commands/functions/answer.py",
-        """
-        def main():
-            raise AssertionError("no turn runs")
-        """,
-    )
-
-    with pytest.raises(click.ClickException, match="work_kind"):
-        await _run_locally(monkeypatch, _get_context(), "driver", tmp_path)
 
 
 @pytest.mark.asyncio

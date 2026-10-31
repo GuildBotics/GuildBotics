@@ -264,7 +264,7 @@ beforeEach(() => {
     resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
-      default: "node:22.23.2-bookworm",
+      default: "node:24.22.1-bookworm",
       architecture: "arm64",
       reference: "",
       digest: "",
@@ -1934,6 +1934,30 @@ function renderActivity() {
     </TestMantineProvider>,
   );
 }
+
+it("shows a PR handed over at the review limit as Activity without a session", async () => {
+  const user = userEvent.setup();
+  const event = {
+    id: "review-limit-1",
+    timestamp: "2026-07-01T11:00:00+00:00",
+    person_id: "alice",
+    type: "pr_draft" as const,
+    title: "PR !7 Draft (review limit)",
+    detail: "Fix login",
+    url: "https://example.com/pr/7",
+    links: [],
+  };
+  vi.mocked(getActivityHistory).mockResolvedValue({
+    ...ACTIVITY_FIXTURE,
+    sessions: [],
+    events: [event],
+  });
+  renderActivity();
+  await user.hover(await screen.findByRole("button", { name: event.title }));
+  expect(await screen.findByText(i18n.t("activity.eventTypes.pr_draft"))).toBeInTheDocument();
+  expect(screen.getByText("Fix login")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: event.url })).toHaveAttribute("href", event.url);
+});
 
 describe("a change the hub did not accept", () => {
   const rejectionEvent = {

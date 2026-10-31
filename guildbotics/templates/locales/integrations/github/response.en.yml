@@ -1,4 +1,7 @@
 en:
+  search_incomplete: "GitHub's ticket search is incomplete or exceeds its 1,000-result limit. Retry or narrow the search; this is not an empty result."
+  mention_search_incomplete: "GitHub's mention search is incomplete or exceeds its 1,000-result limit. Retry an incomplete search; close resolved open issues to reduce the result count. Replies alone do not remove search matches."
+  mention_discovery_failed: "Mention discovery failed; assigned tickets and PR work remain available. Details: %{message}"
   too_large: "The GitHub response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."
   response: "GitHub returned an invalid response."
   rate_limit: "GitHub rate-limited the request. Wait before retrying."
@@ -10,4 +13,8 @@ en:
   rejected: "GitHub rejected the request or temporarily limited this endpoint. Check the request and retry later."
   http: "The GitHub request failed (HTTP %{status})."
   transport: "Could not complete the GitHub request. Check connectivity and retry."
-  created_off_board: "%{url} was created, but it could not be put on the board: %{message}"
+  created_off_board: "%{url} was created, but its initial setup failed: %{message}"
+  attachments_unsupported: "Files attached to a GitHub issue are not listed or downloaded: an image in an issue is only its URL in the text. Ask a human what it shows."
+  interactive_unsupported: "Interactive tickets are not supported by GitHub."
+  lane_unsupported: "The board has no lane for %{lane}."
+  agent_unsupported: "The board has no Agent option for %{person}, or the ticket is off the board."

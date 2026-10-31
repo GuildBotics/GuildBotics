@@ -5,9 +5,10 @@ back the same way, named by its URL and the ids its reads give; a ticket
 assigned to the member in the ready lane is a candidate, moves to the working
 lane, and is re-read as work still to do there; a created ticket is on the
 board unless asked otherwise, which a board holding every ticket refuses;
-the board's closed work is listed for the activity history. A write outside
-the configured scope -- a ticket, a comment, a reaction, a lane -- is refused
-before it is made.
+the board's closed work is listed for the activity history; the files a
+ticket refers to are listed and handed out by their ids where the service
+keeps them. A write outside the configured scope -- a ticket, a comment, a
+reaction, a lane -- is refused before it is made.
 """
 
 from __future__ import annotations
@@ -20,7 +21,13 @@ import pytest_asyncio
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.integrations.factory import PROVIDERS
-from guildbotics.runtime.port import ServiceError, ServiceNotFound, ServiceUnsupported
+from guildbotics.runtime.code_hosting_service import TicketLink
+from guildbotics.runtime.port import (
+    ServiceError,
+    ServiceNotFound,
+    ServiceUnsupported,
+    WorkflowStatus,
+)
 from guildbotics.runtime.ticket_service import TicketService
 from tests.guildbotics.integrations.contracts.providers import (
     LABEL,
@@ -56,6 +63,524 @@ def test_every_ticket_service_answers_every_operation_of_the_port(board: Harness
 
 async def _ticket(board: Harness, title: str = "Fix login") -> str:
     return (await board.tickets.create_ticket(board.tracker, title, "", [])).target.url
+
+
+@pytest.mark.asyncio
+async def test_tracker_search_filters_title_body_state_label_and_pages(board):
+    created = []
+    for title, body, labels in [
+        ("Needle Alpha", "secondword", [LABEL]),
+        ("needle Beta secondword", "", [LABEL]),
+        ("Needle Gamma", "SECONDWORD", [LABEL]),
+        ("Needle missing term", "", [LABEL]),
+        ("Needle without label", "secondword", []),
+    ]:
+        created.append(
+            (
+                await board.tickets.create_ticket(
+                    board.tracker, title, body, labels, lane="ready"
+                )
+            ).target.url
+        )
+    await board.tickets.update_ticket(
+        created[2],
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state="closed",
+        state_reason="completed",
+    )
+    # Neither pull requests nor comment text are ticket title/body matches.
+    board.branch("search-decoy")
+    await board.code.create_pull_request(
+        board.repository,
+        "search-decoy",
+        "main",
+        "Needle secondword",
+        "",
+        tickets=[],
+        draft=False,
+    )
+    await board.tickets.comment(created[3], "secondword")
+    conditions = {
+        "text": "  NEEDLE\tsecondword ",
+        "state": "all",
+        "label": LABEL,
+        "page_size": 1,
+    }
+    found, continuation = [], ""
+    while True:
+        page = await board.tickets.read(
+            "tracker_tickets",
+            board.tracker,
+            parameters=conditions,
+            continuation=continuation,
+        )
+        assert page.target is None
+        assert len(page.items) == 1
+        found.extend(page.items)
+        if page.continuation is None:
+            break
+        continuation = page.continuation
+    assert [item["url"] for item in found] == created[:3]
+    assert [item["state"] for item in found] == ["open", "open", "closed"]
+    for item in found:
+        assert item["kind"] == "ticket"
+        assert item["key"] and item["label"] and item["title"]
+        assert item["labels"] == [LABEL]
+        assert item["lane"] in {"ready", "done"}
+        assert datetime.fromisoformat(item["updated_at"])
+        assert "body" not in item
+    for state, expected in [("open", created[:2]), ("closed", created[2:3])]:
+        page = await board.tickets.read(
+            "tracker_tickets",
+            board.tracker,
+            parameters={**conditions, "page_size": 100, "state": state},
+        )
+        assert [item["url"] for item in page.items] == expected
+    page = await board.tickets.read(
+        "tracker_tickets",
+        board.tracker,
+        parameters={"text": "nothing-matches", "state": "all"},
+    )
+    assert page.items == [] and page.continuation is None
+    # Empty text lists the tracker, and the default state is open.
+    page = await board.tickets.read("tracker_tickets", board.tracker)
+    assert [item["url"] for item in page.items] == [
+        created[0],
+        created[1],
+        created[3],
+        created[4],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tracker_search_rejects_a_url_as_subject_and_invalid_continuation(board):
+    with pytest.raises(ServiceError):
+        await board.tickets.read("tracker_tickets", board.theirs.url)
+    with pytest.raises(ServiceError):
+        await board.tickets.read(
+            "tracker_tickets", board.tracker, continuation="https://invalid.test/page"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"state": "invalid"},
+        {"page_size": 0},
+        {"page_size": 101},
+        {"text": 3},
+        {"label": []},
+        {"node": "a-thread"},
+        {"q": "raw"},
+    ],
+)
+async def test_tracker_search_rejects_invalid_conditions(board, parameters):
+    with pytest.raises(ServiceError):
+        await board.tickets.read(
+            "tracker_tickets", board.tracker, parameters=parameters
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", ["none", "parent", "blocker", "both"])
+@pytest.mark.parametrize("lane", [None, "new", "ready", "in_progress"])
+async def test_creation_sets_assignment_relations_and_initial_lane(
+    board, relation, lane
+):
+    parent, blocker = await _ticket(board, "Parent"), await _ticket(board, "Blocker")
+    # Starting a ticket requires its blockers to have finished.
+    await board.tickets.update_ticket(
+        blocker,
+        body=None,
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state="closed",
+        state_reason="completed",
+    )
+    parent_url = parent if relation in {"parent", "both"} else None
+    blockers = [blocker] if relation in {"blocker", "both"} else []
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Created complete",
+        "",
+        [LABEL],
+        assignee=name,
+        lane=lane,
+        parent=parent_url,
+        blocked_by=blockers,
+    )
+    ticket = await _read(board, created.target.url)
+    expected_lane = lane or ("ready" if parent_url or blockers else "new")
+    assert ticket["lane"] == expected_lane
+    assert ticket["assignees"] == [name]
+    assert ticket["labels"] == [LABEL]
+    assert (ticket["parent"] or {}).get("url") == parent_url
+    assert [item["url"] for item in ticket["blocked_by"]] == blockers
+    selected = [task.url for task in await board.tickets.candidates()]
+    assert (created.target.url in selected) == (expected_lane != "new")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("related", [False, True])
+@pytest.mark.parametrize("lane", [None, "ready", "in_progress"])
+async def test_interactive_creation_is_excluded_from_patrol_or_refused_before_writes(
+    board, related, lane
+):
+    parent = await _ticket(board, "Parent") if related else None
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    before = len(board.writes)
+    if "interactive" not in board.features:
+        with pytest.raises(ServiceUnsupported):
+            await board.tickets.create_ticket(
+                board.tracker,
+                "Interactive",
+                "",
+                [],
+                interactive=True,
+                assignee=name,
+                parent=parent,
+                lane=lane,
+            )
+        assert board.writes[before:] == []
+        return
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Interactive",
+        "",
+        [],
+        interactive=True,
+        assignee=name,
+        parent=parent,
+        lane=lane,
+    )
+    assert (await _read(board, created.target.url))["lane"] == (
+        lane or ("ready" if parent else "new")
+    )
+    assert await board.tickets.candidates() == []
+    # Descendants inherit the interactive exclusion too.
+    child = await board.tickets.create_ticket(
+        board.tracker,
+        "Child",
+        "",
+        [],
+        assignee=name,
+        parent=created.target.url,
+    )
+    assert await board.tickets.candidates() == []
+    assert (
+        await board.tickets.refresh(
+            Task(
+                url=child.target.url, id=child.target.url, title="Child", description=""
+            )
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", ["parent", "blocked_by"])
+async def test_creation_checks_all_related_write_scopes_before_creating(
+    board, relation
+):
+    before = len(board.writes)
+    options = {
+        relation: board.theirs.url if relation == "parent" else [board.theirs.url]
+    }
+    with pytest.raises(ServiceError, match="Writes are limited to"):
+        await board.tickets.create_ticket(board.tracker, "Denied", "", [], **options)
+    assert board.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_interactive_updates_read_inheritance_and_control_patrol(board):
+    root = await _ticket(board, "Root")
+    parent = await _ticket(board, "Parent")
+    child = await _ticket(board, "Child")
+    await _relate(board, parent, parent=root)
+    await _relate(board, child, parent=parent)
+    board.assign(child)
+    [task] = await board.tickets.candidates()
+    initial = await _read(board, child)
+    for url in (root, parent, child):
+        read = await _read(board, url)
+        assert read["interactive"] is False
+        assert read["interactive_ancestor"] is None
+
+    async def update(url, **options):
+        return await board.tickets.update_ticket(
+            url,
+            body=None,
+            title=None,
+            add_labels=(),
+            remove_labels=(),
+            state=None,
+            state_reason=None,
+            **options,
+        )
+
+    if "interactive" not in board.features:
+        for enabled in (True, False):
+            before = len(board.writes)
+            with pytest.raises(ServiceUnsupported):
+                # Refuse the whole operation, before any other fields change.
+                await update(child, interactive=enabled, parent="")
+            assert board.writes[before:] == []
+        unchanged = await update(child)
+        assert unchanged.interactive is False
+        assert unchanged.interactive_ancestor is None
+        return
+
+    enabled = await update(child, interactive=True)
+    assert enabled.interactive is True and enabled.interactive_ancestor is None
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert not await board.tickets.can_receive_work(child)
+    # An unrelated update preserves the own flag.
+    assert (await update(child)).interactive is True
+    assert (await _read(board, child))["interactive"] is True
+    disabled = await update(child, interactive=False)
+    assert disabled.interactive is False and disabled.interactive_ancestor is None
+    assert [t.url for t in await board.tickets.candidates()] == [child]
+    assert await board.tickets.refresh(task) is not None
+    assert await board.tickets.can_receive_work(child)
+
+    await update(root, interactive=True)
+    inherited = await update(child, interactive=False)
+    assert inherited.interactive is False and inherited.interactive_ancestor == root
+    assert (await _read(board, child))["interactive_ancestor"] == root
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert not await board.tickets.can_receive_work(child)
+    # Read and update choose the nearest interactive ancestor, even when
+    # the child itself also has the flag set.
+    await update(parent, interactive=True)
+    own_and_inherited = await update(child, interactive=True)
+    assert own_and_inherited.interactive is True
+    assert own_and_inherited.interactive_ancestor == parent
+    read = await _read(board, child)
+    assert read["interactive"] is True and read["interactive_ancestor"] == parent
+    await update(parent, interactive=False)
+    await update(child, interactive=False)
+    assert (await _read(board, child))["interactive_ancestor"] == root
+    await update(root, interactive=False)
+    assert (await _read(board, child))["interactive_ancestor"] is None
+    assert [t.url for t in await board.tickets.candidates()] == [child]
+    # Reparenting in the same write reports the new inheritance.
+    await update(parent, interactive=True)
+    detached = await update(child, interactive=False, parent="")
+    assert detached.interactive is False and detached.interactive_ancestor is None
+    read = await _read(board, child)
+    assert read["lane"] == "ready"
+    assert read["assignees"] == initial["assignees"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_index", [0, 1])
+async def test_creation_can_assign_human_members(board, member_index):
+    member = board.team.members[member_index]
+    member.person_type = "human"
+    name = PROVIDERS[board.name].member_identity(member).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Human assignment",
+        "",
+        [],
+        assignee=name,
+        lane="ready",
+    )
+    assert (await _read(board, created.target.url))["assignees"] == [name]
+
+
+@pytest.mark.asyncio
+async def test_github_exposes_status_only_after_relations_and_agent_assignment(
+    board, monkeypatch
+):
+    if board.name != "github":
+        return
+    parent, blocker = await _ticket(board, "Parent"), await _ticket(board, "Blocker")
+    graphql = board.tickets.graphql
+    observed = []
+
+    async def traced(query, variables):
+        if "updateProjectV2ItemFieldValue" in query and variables["field"] == "status":
+            number = variables["item"].removeprefix("ITEM")
+            url = f"https://github.com/{board.repository}/issues/{number}"
+            ticket = await _read(board, url)
+            assert ticket["lane"] == "new"
+            assert ticket["assignees"] == [
+                PROVIDERS[board.name].member_identity(board.team.members[0]).name
+            ]
+            assert ticket["parent"]["url"] == parent
+            assert [b["url"] for b in ticket["blocked_by"]] == [blocker]
+            assert url not in [t.url for t in await board.tickets.candidates()]
+            observed.append(url)
+        return await graphql(query, variables)
+
+    monkeypatch.setattr(board.tickets, "graphql", traced)
+    name = PROVIDERS[board.name].member_identity(board.team.members[0]).name
+    created = await board.tickets.create_ticket(
+        board.tracker,
+        "Complete before ready",
+        "",
+        [],
+        assignee=name,
+        parent=parent,
+        blocked_by=[blocker],
+    )
+    assert observed == [created.target.url]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uppercase", [False, True])
+async def test_unassigned_mentions_are_answered_once_without_taking_the_ticket(
+    board: Harness,
+    uppercase,
+):
+    url = await _ticket(board)
+    mention = board.mention.upper() if uppercase else board.mention
+    board.human_comment(url, f"{mention} Please provide context.")
+    before = await _read(board, url)
+
+    [task] = await board.tickets.candidates()
+    assert (task.url, task.assignee, task.trigger_reason) == (
+        url,
+        None,
+        "issue_mention",
+    )
+    assert (await board.tickets.refresh(task)).trigger_reason == "issue_mention"
+    assert await _read(board, url) == before
+
+    await board.tickets.comment(url, "Here is the context.")
+    board.human_comment(url, "Thanks.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    after = await _read(board, url)
+    assert (after["lane"], after["assignees"]) == (before["lane"], before["assignees"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_comments_addressed_to_other_members_do_not_wake_the_assignee(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    await board.tickets.comment(url, "Please ask the author for context.")
+    board.human_comment(url, "@OTOTA Please provide the context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+
+    board.human_comment(url, f"{board.mention} Here is the context.")
+    [selected] = await board.tickets.candidates()
+    assert selected.assignee is not None
+    assert selected.trigger_reason == ("issue_comment" if working else "ready_lane")
+    assert await board.tickets.refresh(selected) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_new_ready_assignment_starts_despite_a_comment_addressed_elsewhere(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.assign(url)
+    board.human_comment(url, "@otota Please add context.")
+    [task] = await board.tickets.candidates()
+    assert (task.url, task.trigger_reason) == (url, "ready_lane")
+    assert (await board.tickets.refresh(task)).trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_unanswered_mentions_survive_later_comments_to_other_members(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    board.human_comment(url, f"{board.mention} Please investigate.")
+    board.human_comment(url, "@otota Please supply the context.")
+    [selected] = await board.tickets.candidates()
+    assert (selected.url, selected.trigger_reason) == (
+        url,
+        "issue_comment" if working else "ready_lane",
+    )
+    assert await board.tickets.refresh(selected) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("working", [False, True])
+async def test_other_recipients_do_not_erase_the_members_held_status(
+    board: Harness, working
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    if working:
+        await board.tickets.move(task, "in_progress")
+    await board.tickets.comment(
+        url,
+        "The run failed.",
+        status=WorkflowStatus(reason="failed", person_id="aiko", run_id="failed-run"),
+    )
+    board.human_comment(url, "@otota Please supply context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+
+
+@pytest.mark.asyncio
+async def test_a_held_ticket_does_not_finish_its_merged_pr_after_other_recipients(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.assign(url)
+    [task] = await board.tickets.candidates()
+    await board.tickets.move(task, "in_progress")
+    board.branch("feature")
+    pull = await board.code.create_pull_request(
+        board.repository,
+        "feature",
+        "main",
+        "Feature",
+        "",
+        draft=False,
+        tickets=[TicketLink(url=url, closes=False)],
+    )
+    board.merge(pull.target.url)
+    await board.tickets.comment(
+        url,
+        "The run failed.",
+        status=WorkflowStatus(reason="failed", person_id="aiko", run_id="failed-run"),
+    )
+    board.human_comment(url, "@otota Please supply context.")
+    assert await board.tickets.candidates() == []
+    assert await board.tickets.refresh(task) is None
+    assert (await _read(board, url))["lane"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_assignment_refreshes_mention_work_into_regular_work_without_duplicates(
+    board: Harness,
+):
+    url = await _ticket(board)
+    board.human_comment(url, f"{board.mention} Context?")
+    [mention] = await board.tickets.candidates()
+    board.assign(url)
+    [assigned] = await board.tickets.candidates()
+    assert assigned.trigger_reason == "ready_lane"
+    refreshed = await board.tickets.refresh(mention)
+    assert refreshed.assignee == assigned.assignee
+    assert refreshed.trigger_reason == "ready_lane"
 
 
 async def _relate(board: Harness, url: str, **relations) -> None:
@@ -426,3 +951,67 @@ async def test_a_label_the_tracker_does_not_define_is_refused(board: Harness):
         )
 
     assert board.writes[before:] == []
+
+
+#: A picture as a human attaches one: its content is what is downloaded.
+_SCREEN = b"\x89PNG\r\n\x1a\nscreen"
+_LOG = b"GIF89alog"
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_lists_the_files_it_refers_to_and_hands_out_each_by_id(
+    board: Harness,
+):
+    url = await _ticket(board)
+    if "attachments" not in board.features:
+        with pytest.raises(ServiceUnsupported):
+            await board.tickets.read("ticket_attachments", url)
+        with pytest.raises(ServiceUnsupported):
+            async with board.tickets.attachment(url, "any", 1024):
+                pass
+        return
+    assert board.attach is not None
+    screen = board.attach("screen.png", _SCREEN)
+    log = board.attach("log.gif", _LOG)
+    # One no ticket refers to is no ticket's.
+    board.attach("unused.png", _SCREEN)
+    await board.tickets.update_ticket(
+        url,
+        body=f"The login fails:\n\n{screen}",
+        title=None,
+        add_labels=(),
+        remove_labels=(),
+        state=None,
+        state_reason=None,
+    )
+    said = await board.tickets.comment(url, f"The log: {log}, and again {screen}")
+
+    page = await board.tickets.read("ticket_attachments", url)
+
+    listed = {item["name"]: item for item in page.items}
+    assert {
+        name: (item["media_type"], item["size"], item["referenced_by"])
+        for name, item in listed.items()
+    } == {
+        "screen.png": ("image/png", len(_SCREEN), ["body", said.id]),
+        "log.gif": ("image/gif", len(_LOG), [said.id]),
+    }
+    for name, content in (("screen.png", _SCREEN), ("log.gif", _LOG)):
+        async with board.tickets.attachment(url, listed[name]["id"], len(content)) as (
+            attachment,
+            downloaded,
+        ):
+            assert attachment.model_dump() == listed[name]
+            assert downloaded.read() == content
+
+    screen_id = listed["screen.png"]["id"]
+    with pytest.raises(ServiceError) as too_large:
+        async with board.tickets.attachment(url, screen_id, len(_SCREEN) - 1):
+            pass
+    assert not isinstance(too_large.value, ServiceNotFound)
+    # An id is the ticket's only while the ticket refers to it.
+    other = await _ticket(board, "Another")
+    for ticket, attachment_id in ((other, screen_id), (url, "missing")):
+        with pytest.raises(ServiceNotFound):
+            async with board.tickets.attachment(ticket, attachment_id, 1024):
+                pass

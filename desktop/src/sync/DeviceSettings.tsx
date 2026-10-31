@@ -25,6 +25,7 @@ import {
   getConfigStatus,
   unregisterWorkspace,
 } from "../api/client";
+import { ServerMachineBadge } from "../serverMachine";
 
 /**
  * Settings that belong to this machine rather than to a workspace: its SSH
@@ -35,7 +36,10 @@ export function DeviceSettings() {
   const { t } = useTranslation();
   return (
     <Stack gap="md">
-      <Title order={3}>{t("sync.device.title")}</Title>
+      <Group gap="xs">
+        <Title order={3}>{t("sync.device.title")}</Title>
+        <ServerMachineBadge />
+      </Group>
       <Text c="dimmed" size="sm">
         {t("sync.device.subtitle")}
       </Text>

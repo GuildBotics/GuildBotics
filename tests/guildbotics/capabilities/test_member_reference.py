@@ -85,7 +85,7 @@ def test_reference_includes_standard_work_procedure():
     assert "`--closes-issue` applies to all of them" in text
     assert "A child ticket can therefore be closed by a PR" in text
     assert "`--issue-url <child> --closes-issue`" in text
-    assert "refer to the parent ticket on a standalone line" in text
+    assert "refer to the parent ticket in ordinary body prose" in text
     assert "feature branch to the default branch closes the parent ticket" in text
     assert "tickets that the merge does not complete" in text
     assert (
@@ -105,13 +105,17 @@ def test_reference_includes_standard_work_procedure():
     assert "repository/pr_checks failed_logs=true" in text
     assert "check CI again" in text
     assert "unless `readiness` is `ready`" in text
-    assert "head must not be behind the current base" in text
+    assert "resolve its `completion_blockers`" in text
+    assert "the host requires an up-to-date head" in text
     assert "checked head SHA must still be current" in text
-    # CI runs outside the environment: a ticket workflow run ends to await it
-    # and the patrol resumes the work, instead of waiting in the turn.
-    assert "In a ticket workflow run, do not wait for CI in the turn" in text
-    assert "`member task complete --status awaiting_checks`" in text
-    assert "the patrol resumes the work once the checks finish" in text
+    # CI runs outside the environment: whatever work a run does, it ends to
+    # await it and the patrol resumes that work, instead of waiting in the turn.
+    assert "In any workflow or command run" in text
+    assert "do not wait for CI in the turn" in text
+    assert "end the run with `member checks await`" in text
+    assert "summary says where the outcome is to be reported" in text
+    assert "the patrol resumes the run's work once the checks finish" in text
+    assert "awaiting_checks" not in text
     # Observable-outcome principle: leave externally visible traces at the
     # work's entry point, and avoid duplicate / unwanted posts.
     assert "externally visible trace" in text
@@ -123,13 +127,17 @@ def test_reference_grounds_repository_judgments_in_guidelines():
     text = capability_reference_text()
     # Issue #381: drafting an issue for a repository or settling a design or
     # implementation policy for one must be grounded in that repository's own
-    # guidelines, with the origin default branch version canonical so a stale
-    # checkout is never trusted.
+    # guidelines. Read the current default branch as the member, with or without
+    # a checkout, so a stale checkout and the user's credentials are never required.
     assert "AGENTS.md" in text
-    assert "origin default branch is canonical" in text
-    assert "git fetch origin" in text
-    assert "git show origin/<default-branch>:<file>" in text
-    assert "create a checkout first with `member git prepare`" in text
+    assert "current default branch is canonical" in text
+    assert "guildbotics member git show --person <person> --repo <repository>" in text
+    assert "--path AGENTS.md --path CLAUDE.md --path CONTRIBUTING.md" in text
+    assert "with or without a checkout" in text
+    assert "do not rely on possibly stale working-tree files" in text
+    assert "git fetch origin" not in text
+    assert "git show origin/<default-branch>:<file>" not in text
+    assert "create a checkout first" not in text
 
 
 def test_reference_states_pr_work_record_contract():

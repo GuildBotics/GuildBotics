@@ -552,6 +552,7 @@ def test_chat_channels_are_named_as_the_projects_chat_names_them(
             "chat": {
                 "enabled": True,
                 "participation": "strict",
+                "notify_work_stops": False,
                 "channel_name": "general",
             },
         },
@@ -563,6 +564,7 @@ def test_chat_channels_are_named_as_the_projects_chat_names_them(
             "chat": {
                 "enabled": True,
                 "participation": "social",
+                "notify_work_stops": False,
                 "channel_id": "C0123456789",
             },
         },
@@ -585,8 +587,40 @@ def test_chat_channels_are_names_without_a_chat_that_reads_ids(
     assert channel["chat"] == {
         "enabled": True,
         "participation": "strict",
+        "notify_work_stops": False,
         "channel_name": "C0123456789",
     }
+
+
+def test_work_stop_destinations_round_trip_and_can_be_cleared(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".guildbotics/config"
+    _write_project(config_dir, {"chat_service": {"name": "local"}})
+    service = SimplePersonSetupService()
+    config = _person(
+        config_dir,
+        chat_channels=["#general", "random"],
+        work_stop_notification_channels=[" #general ", "deleted", " "],
+        chat_channel_participation={"general": "muted"},
+    )
+    service.save_person(config)
+    snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
+    assert snapshot.work_stop_notification_channels == ["general"]
+    person = YamlTeamLoader(str(config_dir / "team")).load().members[0]
+    assert [ch.chat["notify_work_stops"] for ch in person.message_channels] == [
+        True,
+        False,
+    ]
+    assert person.message_channels[0].chat["participation"] == "muted"
+
+    service.save_person(
+        config.model_copy(update={"work_stop_notification_channels": []})
+    )
+    snapshot = service.read_person_config(config_dir=config_dir, person_id="alice")
+    assert snapshot.work_stop_notification_channels == []
+    assert all(
+        not ch["chat"]["notify_work_stops"]
+        for ch in _participation(config_dir)["message_channels"]
+    )
 
 
 def test_save_human_person_clears_agent_execution_settings(tmp_path: Path) -> None:

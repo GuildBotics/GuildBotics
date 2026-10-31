@@ -143,9 +143,9 @@ class ExecutionCoordinator:
             command: Command label reported in the runtime status.
             work_id: Correlation identity, usually the work's trace id.
             cancel: Called when a forced drain interrupts the work.
-            exclusive: Whether to hold the member's execution lease. Read-only
-                work that never touches the member's workspace, chat or tickets
-                passes ``False`` so it can run alongside scheduled work. It is
+            exclusive: Whether to hold the member's execution lease to serialize
+                runs that use the member's clone. Read-only work passes ``False``
+                so it can run alongside scheduled work. It is
                 still drained and cancelled like any other tracked work.
             work_identity: The stable input identity a task-run boundary
                 claims; this coordinator records nothing and ignores it.

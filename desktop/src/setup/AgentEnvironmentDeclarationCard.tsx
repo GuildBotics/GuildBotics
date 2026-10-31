@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getAgentEnvironmentImages, type AgentEnvironmentDeclaration } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { NetworkPolicyField } from "./NetworkPolicyField";
 
 /** Anchor for a system alert to scroll to. */
@@ -40,6 +41,7 @@ export function AgentEnvironmentDeclarationCard({
   onValidityChange?: (valid: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const [rejectedDns, setRejectedDns] = useState<string>();
   const [networkValid, setNetworkValid] = useState(true);
   const [memoryDraft, setMemoryDraft] = useState<string | number>();
@@ -83,7 +85,7 @@ export function AgentEnvironmentDeclarationCard({
       ? [
           {
             value: selected,
-            label: `${declared.reference} (${shortDigest(declaredHere)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+            label: `${declared.reference} (${shortDigest(declaredHere)}) — ${t("setup.intelligence.environment.declaration.imageNotHere", { machine })}`,
             disabled: true,
           },
         ]
@@ -135,7 +137,7 @@ export function AgentEnvironmentDeclarationCard({
         <Select
           size="xs"
           label={t("setup.intelligence.environment.declaration.image")}
-          description={t("setup.intelligence.environment.declaration.imageHint")}
+          description={t("setup.intelligence.environment.declaration.imageHint", { machine })}
           data={imageOptions}
           value={selected}
           onChange={setImage}
@@ -143,12 +145,14 @@ export function AgentEnvironmentDeclarationCard({
             images.data?.problem
               ? t("setup.intelligence.environment.declaration.imageUnavailable", {
                   problem: images.data.problem,
+                  machine,
                 })
               : declared && architecture && !declaredHere
                 ? t("setup.intelligence.environment.declaration.imageNotDeclaredHere", {
                     reference: declared.reference,
                     architecture,
                     declared: Object.keys(declared.digests).sort().join(", "),
+                    machine,
                   })
                 : undefined
           }
@@ -221,7 +225,7 @@ export function AgentEnvironmentDeclarationCard({
           data={[
             {
               value: "host",
-              label: t("setup.intelligence.environment.declaration.nameserversHost"),
+              label: t("setup.intelligence.environment.declaration.nameserversHost", { machine }),
             },
             {
               value: "list",

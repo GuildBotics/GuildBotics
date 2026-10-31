@@ -1,7 +1,9 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
-import { InfoCallout, RequiredLabel, isTauriRuntime } from "./formParts";
+import { InfoCallout, RequiredLabel } from "./formParts";
+import { isTauriRuntime } from "../desktopWindow";
+import { ServerMachineBadge, useServerMachineLabel, useServerPathHint } from "../serverMachine";
 import {
   Avatar,
   FileButton,
@@ -17,6 +19,7 @@ import {
   Group,
   HoverCard,
   Indicator,
+  Menu,
   Modal,
   MultiSelect,
   NumberInput,
@@ -48,6 +51,7 @@ import {
   Eraser,
   Folder,
   FolderOpen,
+  History,
   Plus,
   Save,
   Trash2,
@@ -91,6 +95,7 @@ import {
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
+  getRegisteredWorkspaces,
   getIntelligenceConfig,
   getLlmProviders,
   type LlmProviderInfo,
@@ -128,7 +133,6 @@ import {
   getCliAgentSkillStatuses,
   restartBackend,
 } from "../api/backend";
-import { announceWorkspaceChange } from "../appEvents";
 import {
   cliAgentLabelFromConfig,
   cliAgentNameFromConfig,
@@ -244,6 +248,7 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
  */
 function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const status = useQuery({
     queryKey: ["agent-environment-status"],
     queryFn: getAgentEnvironmentStatus,
@@ -271,7 +276,7 @@ function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabl
       maw={420}
     >
       <Badge color="danger" variant="light" style={{ flexShrink: 0 }}>
-        {t("setup.members.blockedHere")}
+        {t("setup.members.blockedHere", { machine })}
       </Badge>
     </Tooltip>
   );
@@ -281,6 +286,11 @@ type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
+type ChatChannelDraft = {
+  name: string;
+  participation: ChatParticipationPolicy;
+  notifyWorkStops: boolean;
+};
 const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 /** The providers whose accounts a member form holds, whatever the project uses. */
 const MEMBER_ACCOUNT_UIS = Object.entries(PROVIDER_UIS).flatMap(([name, ui]) =>
@@ -640,8 +650,6 @@ export function SetupPage() {
       queryClient.refetchQueries({ queryKey: ["team"] }),
     ]);
     await queryClient.refetchQueries({ queryKey: ["project-config"] });
-    // The quick run window has its own cache and never reloads.
-    await announceWorkspaceChange();
     setSaveState("saved");
   };
   const startWorkspaceSwitch = (workspace: string, alreadySwitched = false) => {
@@ -985,7 +993,10 @@ function SetupSectionNav({
       {groups.map((group) =>
         group.sections.length === 0 ? null : (
           <div className="setup-nav-group" key={group.labelKey}>
-            <div className="nav-label">{t(group.labelKey)}</div>
+            <Group className="nav-label" gap={6}>
+              {t(group.labelKey)}
+              {group.machine ? <ServerMachineBadge /> : null}
+            </Group>
             {group.sections.map((value) => (
               <button
                 className={`setup-nav-item ${active === value ? "active" : ""}`}
@@ -1043,7 +1054,7 @@ function ProjectSection({
       />
       <Stack mt="md">
         <Stack gap="xs">
-          <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+          <WorkspacePicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
           <Group>
             <CloneFromHubButton
               destination={form.values.workspaceDir}
@@ -1173,6 +1184,7 @@ function IntelligenceSection({
   providers: LlmProviderInfo[];
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const selectedTool = tools.find((tool) => tool.name === form.values.cliAgent);
   // The advanced editor writes different files from the basic settings above
@@ -1211,6 +1223,9 @@ function IntelligenceSection({
   const skillStatuses = useQuery({
     queryKey: ["cli-agent-skill-statuses"],
     queryFn: getCliAgentSkillStatuses,
+    // Skills live in each machine's harness: the server sees none of a
+    // browser's machine, so only a Desktop window shows them.
+    enabled: isTauriRuntime(),
   });
   const forceSkillUpdate = useMutation({
     mutationFn: forceUpdateCliAgentSkill,
@@ -1338,6 +1353,9 @@ function IntelligenceSection({
               isActive={(tool) => form.values.cliAgent === tool.name}
               onSelect={(tool) => form.setFieldValue("cliAgent", tool.name)}
               renderExtra={(agent) => {
+                if (!isTauriRuntime()) {
+                  return null;
+                }
                 const status = (skillStatuses.data?.agents ?? []).find(
                   (s) => s.agent === agent.name,
                 );
@@ -1418,7 +1436,9 @@ function IntelligenceSection({
             {persisted && selectedTool ? (
               <Group justify="space-between" mt="xs">
                 <Badge color={cliToolStatusColor(selectedTool)} variant="light">
-                  {t(`setup.intelligence.environment.${cliToolStatusKey(selectedTool)}`)}
+                  {t(`setup.intelligence.environment.${cliToolStatusKey(selectedTool)}`, {
+                    machine,
+                  })}
                 </Badge>
                 <Anchor component={Link} to="/setup?section=environment" size="sm">
                   {t("setup.intelligence.openEnvironment")}
@@ -1488,6 +1508,7 @@ function AgentEnvironmentSection({
   status?: AgentEnvironmentStatusResponse;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["intelligence-config", "team"],
@@ -1563,7 +1584,7 @@ function AgentEnvironmentSection({
     <Card withBorder radius="md" p="lg">
       <PanelHeader
         title={t("setup.agentEnvironment.title")}
-        subtitle={t("setup.agentEnvironment.subtitle")}
+        subtitle={t("setup.agentEnvironment.subtitle", { machine })}
         save={
           draft
             ? {
@@ -1579,6 +1600,7 @@ function AgentEnvironmentSection({
           title={t("setup.agentEnvironment.currentDevice.title")}
           description={t("setup.agentEnvironment.currentDevice.description")}
           badge={t("setup.agentEnvironment.scope.device")}
+          device
         />
         <AgentEnvironmentCard focusElement={focusElement} />
 
@@ -1621,6 +1643,7 @@ function AgentEnvironmentSection({
               title={t("setup.agentEnvironment.device.title")}
               description={t("setup.agentEnvironment.device.description")}
               badge={t("setup.agentEnvironment.scope.device")}
+              device
             />
             <DeviceAccessCard
               local={draft.local}
@@ -1646,16 +1669,20 @@ function EnvironmentScopeHeader({
   title,
   description,
   badge,
+  device = false,
 }: {
   title: string;
   description: string;
   badge: string;
+  /** Whether the scope is the server machine's own, which the header names. */
+  device?: boolean;
 }) {
   return (
     <div>
       <Group gap="xs">
         <Title order={4}>{title}</Title>
         <Badge variant="light">{badge}</Badge>
+        {device ? <ServerMachineBadge /> : null}
       </Group>
       <Text size="sm" c="dimmed">
         {description}
@@ -1940,6 +1967,7 @@ function DefaultCliAgentCards({
   personId?: string;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const turns = useCliAgentLastTurns(Boolean(personId));
   return (
     <div className="option-card-grid">
@@ -1950,7 +1978,7 @@ function DefaultCliAgentCards({
           active={isActive(tool)}
           enabled={tool.provisioned}
           statusColor={cliToolStatusColor(tool)}
-          statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+          statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`, { machine })}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={onSelect ? () => onSelect(tool) : undefined}
           extra={renderExtra?.(tool)}
@@ -2002,6 +2030,7 @@ function IntelligenceEditor({
   onTeamCliAgentChange?: (val: string) => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const providerDefaults = useMemo(() => providerDefaultsMap(providers), [providers]);
   const isLlmProvider = (provider: string) =>
@@ -2853,7 +2882,9 @@ function IntelligenceEditor({
                             <Group gap="xs" wrap="nowrap">
                               {tool ? (
                                 <Badge color={cliToolStatusColor(tool)} variant="light">
-                                  {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+                                  {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`, {
+                                    machine,
+                                  })}
                                 </Badge>
                               ) : null}
                               {!isCliSlotLocked(slotKey) ? (
@@ -3022,6 +3053,7 @@ function MembersSection({
   initialSlot?: string;
 }) {
   const { t, i18n } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
   const changedSaveHintId = useId();
@@ -3056,12 +3088,10 @@ function MembersSection({
   const [characterAvoidWhenText, setCharacterAvoidWhenText] = useState("");
   const [characterContributionText, setCharacterContributionText] = useState("");
   const [characterExtras, setCharacterExtras] = useState<Record<string, unknown>>({});
-  const [chatChannels, setChatChannels] = useState<string[]>([]);
+  const [chatChannelDrafts, setChatChannelDrafts] = useState<ChatChannelDraft[]>([]);
+  const chatChannels = chatChannelDrafts.map((channel) => channel.name);
   const [chatChannelInput, setChatChannelInput] = useState("");
   const [chatChannelInputError, setChatChannelInputError] = useState<string | null>(null);
-  const [chatChannelParticipation, setChatChannelParticipation] = useState<
-    Record<string, ChatParticipationPolicy>
-  >({});
   const [routineOverrideEnabled, setRoutineOverrideEnabled] = useState(false);
   const [routineCommands, setRoutineCommands] = useState<string[]>([]);
   const [scheduledCommands, setScheduledCommands] = useState<ScheduledCommandDraft[]>([]);
@@ -3079,9 +3109,9 @@ function MembersSection({
   const [joiningPersonId, setJoiningPersonId] = useState<string | null>(null);
   const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
-  const routineDefaultDismissedRef = useRef(false);
+  const [routineDefaultDismissed, setRoutineDefaultDismissed] = useState(false);
   const hasPersistedProject = Boolean(config?.project_file_exists);
-  const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
+  const [avatarTimestamp, setAvatarTimestamp] = useState(() => Date.now());
   const [importingAvatar, setImportingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const isHumanMember = personType === "human";
@@ -3266,14 +3296,12 @@ function MembersSection({
     }
   }, [applyPresetFields, displayedMembers.length, mode]);
 
-  useEffect(() => {
-    if (
-      isHumanMember &&
-      (activeTab === "intelligence" || activeTab === "patrol" || activeTab === "diagnostics")
-    ) {
-      showTab("basic");
-    }
-  }, [activeTab, isHumanMember, showTab]);
+  if (
+    isHumanMember &&
+    (activeTab === "intelligence" || activeTab === "patrol" || activeTab === "diagnostics")
+  ) {
+    showTab("basic");
+  }
 
   const clearForm = ({ withDefaults = false }: { withDefaults?: boolean } = {}) => {
     setPersonId("");
@@ -3290,13 +3318,12 @@ function MembersSection({
     }
     setRelationships("");
     setCharacterExtras({});
-    setChatChannels([]);
+    setChatChannelDrafts([]);
     setChatChannelInput("");
     setChatChannelInputError(null);
-    setChatChannelParticipation({});
     setRoutineOverrideEnabled(false);
     setRoutineCommands([]);
-    routineDefaultDismissedRef.current = false;
+    setRoutineDefaultDismissed(false);
     setScheduledCommands([]);
     setPersonType("agent");
     setIsActive(true);
@@ -3338,14 +3365,20 @@ function MembersSection({
     setCharacterAvoidWhenText(characterFields.avoidWhen.join("\n"));
     setCharacterContributionText(characterFields.contributionStyle.join("\n"));
     setCharacterExtras(characterFields.extras);
-    setChatChannels(member.chat_channels ?? []);
+    setChatChannelDrafts(() =>
+      member.chat_channels.map((name) => ({
+        name,
+        participation: member.chat_channel_participation[normalizeChatChannel(name)] ?? "strict",
+        notifyWorkStops: member.work_stop_notification_channels
+          .map(normalizeChatChannel)
+          .includes(normalizeChatChannel(name)),
+      })),
+    );
     setChatChannelInput("");
     setChatChannelInputError(null);
-    setChatChannelParticipation(member.chat_channel_participation ?? {});
     setRoutineOverrideEnabled(member.routine_commands.length > 0);
     setRoutineCommands(member.routine_commands);
-    routineDefaultDismissedRef.current =
-      nextPersonType === "human" || member.routine_commands.length > 0;
+    setRoutineDefaultDismissed(nextPersonType === "human" || member.routine_commands.length > 0);
     setScheduledCommands(
       flattenTaskSchedules(member.task_schedules).map((entry) =>
         scheduledCommandToDraft(entry, commandCatalog),
@@ -3573,28 +3606,17 @@ function MembersSection({
     }
     setRoutineCommands((current) => (current.length > 0 ? current : [routineDefaultCommand]));
   }, [routineDefaultCommand]);
-  useEffect(() => {
-    if (
-      formMode === "add" &&
-      !isHumanMember &&
-      shouldSeedDefaultRoutine &&
-      // Without a default to offer (no saved project to read commands from
-      // yet), the routine is left to the save, which seeds the same default.
-      routineDefaultCommand &&
-      !routineDefaultDismissedRef.current &&
-      (!routineOverrideEnabled || routineCommands.length === 0)
-    ) {
-      seedDefaultRoutineCommands();
-    }
-  }, [
-    formMode,
-    isHumanMember,
-    shouldSeedDefaultRoutine,
-    routineDefaultCommand,
-    routineOverrideEnabled,
-    routineCommands.length,
-    seedDefaultRoutineCommands,
-  ]);
+  if (
+    formMode === "add" &&
+    !isHumanMember &&
+    shouldSeedDefaultRoutine &&
+    // The saved project must offer a default before it can seed the form.
+    routineDefaultCommand &&
+    !routineDefaultDismissed &&
+    (!routineOverrideEnabled || routineCommands.length === 0)
+  ) {
+    seedDefaultRoutineCommands();
+  }
   const memberContext: MemberContext = {
     human: isHumanMember,
     personId,
@@ -3654,44 +3676,27 @@ function MembersSection({
       return;
     }
     const channelRef = normalizeChatChannel(channel);
-    setChatChannels([
-      ...chatChannels.filter((existing) => normalizeChatChannel(existing) !== channelRef),
-      channel,
+    const existing = chatChannelDrafts.find((row) => normalizeChatChannel(row.name) === channelRef);
+    setChatChannelDrafts([
+      ...chatChannelDrafts.filter((row) => normalizeChatChannel(row.name) !== channelRef),
+      {
+        name: channel,
+        participation: existing?.participation ?? "strict",
+        notifyWorkStops: existing?.notifyWorkStops ?? false,
+      },
     ]);
-    setChatChannelParticipation((current) => ({
-      ...current,
-      [channelRef]: current[channelRef] ?? "strict",
-    }));
     setChatChannelInput("");
     setChatChannelInputError(null);
   };
 
-  const updateChatChannel = (index: number, value: string) => {
-    const previousRef = normalizeChatChannel(chatChannels[index] ?? "");
-    const nextRef = normalizeChatChannel(value);
-    setChatChannels(
-      chatChannels.map((channel, currentIndex) => (currentIndex === index ? value : channel)),
+  const updateChatChannel = (index: number, update: Partial<ChatChannelDraft>) => {
+    setChatChannelDrafts((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...update } : row)),
     );
-    if (!nextRef || previousRef === nextRef) {
-      return;
-    }
-    setChatChannelParticipation((current) => {
-      const { [previousRef]: previousPolicy, ...rest } = current;
-      return {
-        ...rest,
-        [nextRef]: previousPolicy ?? current[nextRef] ?? "strict",
-      };
-    });
   };
 
   const removeChatChannel = (index: number) => {
-    const removedRef = normalizeChatChannel(chatChannels[index] ?? "");
-    setChatChannels(chatChannels.filter((_, currentIndex) => currentIndex !== index));
-    setChatChannelParticipation((current) => {
-      const next = { ...current };
-      delete next[removedRef];
-      return next;
-    });
+    setChatChannelDrafts((current) => current.filter((_, rowIndex) => rowIndex !== index));
   };
 
   const chatChannelsField = (
@@ -3722,49 +3727,57 @@ function MembersSection({
         <div className="empty-row">{t("setup.members.chatChannelsEmpty")}</div>
       ) : (
         <Stack gap="sm">
-          {chatChannels.map((channel, index) => {
-            const channelRef = normalizeChatChannel(channel);
+          {chatChannelDrafts.map((channel, index) => {
             return (
-              <Group key={`${channelRef}-${index}`} align="start">
-                <TextInput
-                  className="member-chat-channel-input"
-                  label={t("setup.members.chatParticipationChannel")}
-                  value={channel}
-                  onChange={(event) => updateChatChannel(index, event.currentTarget.value)}
-                />
-                <Select
-                  className="member-chat-policy-select"
-                  label={t("setup.members.chatParticipationPolicy")}
-                  data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
-                    value: option,
-                    label: t(`setup.members.chatParticipationOptions.${option}`),
-                  }))}
-                  value={chatChannelParticipation[channelRef] ?? "strict"}
-                  onChange={(value) =>
-                    setChatChannelParticipation((current) => ({
-                      ...current,
-                      [channelRef]: toChatParticipationPolicy(value),
-                    }))
+              <Stack key={index} gap="xs">
+                <Group align="start">
+                  <TextInput
+                    className="member-chat-channel-input"
+                    label={t("setup.members.chatParticipationChannel")}
+                    value={channel.name}
+                    onChange={(event) =>
+                      updateChatChannel(index, { name: event.currentTarget.value })
+                    }
+                  />
+                  <Select
+                    className="member-chat-policy-select"
+                    label={t("setup.members.chatParticipationPolicy")}
+                    data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
+                      value: option,
+                      label: t(`setup.members.chatParticipationOptions.${option}`),
+                    }))}
+                    value={channel.participation}
+                    onChange={(value) =>
+                      updateChatChannel(index, { participation: toChatParticipationPolicy(value) })
+                    }
+                    renderOption={({ option }) => (
+                      <Stack gap={2}>
+                        <Text size="sm">{option.label}</Text>
+                        <Text size="xs" c="dimmed">
+                          {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
+                        </Text>
+                      </Stack>
+                    )}
+                  />
+                  <ActionIcon
+                    aria-label={t("setup.members.chatChannelRemove")}
+                    color="danger"
+                    mt={25}
+                    variant="subtle"
+                    onClick={() => removeChatChannel(index)}
+                  >
+                    <Trash2 size={16} />
+                  </ActionIcon>
+                </Group>
+                <Switch
+                  label={t("setup.members.workStopNotifications")}
+                  description={t("setup.members.workStopNotificationsHint")}
+                  checked={channel.notifyWorkStops}
+                  onChange={(event) =>
+                    updateChatChannel(index, { notifyWorkStops: event.currentTarget.checked })
                   }
-                  renderOption={({ option }) => (
-                    <Stack gap={2}>
-                      <Text size="sm">{option.label}</Text>
-                      <Text size="xs" c="dimmed">
-                        {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
-                      </Text>
-                    </Stack>
-                  )}
                 />
-                <ActionIcon
-                  aria-label={t("setup.members.chatChannelRemove")}
-                  color="danger"
-                  mt={25}
-                  variant="subtle"
-                  onClick={() => removeChatChannel(index)}
-                >
-                  <Trash2 size={16} />
-                </ActionIcon>
-              </Group>
+              </Stack>
             );
           })}
         </Stack>
@@ -3803,13 +3816,18 @@ function MembersSection({
         ]),
       ),
       chat_channels: isHumanMember ? [] : chatChannels,
+      work_stop_notification_channels: isHumanMember
+        ? []
+        : chatChannelDrafts
+            .filter((channel) => channel.notifyWorkStops)
+            .map((channel) => normalizeChatChannel(channel.name)),
       chat_channel_participation: isHumanMember
         ? {}
         : Object.fromEntries(
-            chatChannels.map((channel) => {
-              const channelRef = normalizeChatChannel(channel);
-              return [channelRef, chatChannelParticipation[channelRef] ?? "strict"];
-            }),
+            chatChannelDrafts.map((channel) => [
+              normalizeChatChannel(channel.name),
+              channel.participation,
+            ]),
           ),
       routine_commands: isHumanMember || !routineOverrideEnabled ? [] : routineCommands,
       task_schedules: isHumanMember
@@ -4272,7 +4290,7 @@ function MembersSection({
                     }
                     description={
                       formMode === "edit" || joiningPersonId !== null
-                        ? t("setup.members.personIdFixed")
+                        ? t("setup.members.personIdFixed", { machine })
                         : personIdHolder !== undefined
                           ? t("setup.members.personIdFixedByAccount", {
                               provider: personIdHolder.title,
@@ -4559,7 +4577,7 @@ function MembersSection({
                     routineCommands={routineCommands}
                     scheduledCommands={scheduledCommands}
                     onRoutineOverrideChange={(enabled) => {
-                      routineDefaultDismissedRef.current = !enabled;
+                      setRoutineDefaultDismissed(!enabled);
                       if (enabled) {
                         seedDefaultRoutineCommands();
                       } else {
@@ -5082,20 +5100,21 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
         </Text>
       ) : null}
       <div className="command-script-path">
-        <Anchor
-          href={localFileHref(option.path)}
-          size="sm"
-          title={option.path}
-          onClick={(event) => {
-            if (!isTauriRuntime()) {
-              return;
-            }
-            event.preventDefault();
-            void openLocalFile(option.path).catch(console.error);
-          }}
-        >
-          {option.path}
-        </Anchor>
+        {/* The commands screen opens the workspace's own commands only. */}
+        {option.source === "workspace" ? (
+          <Anchor
+            component={Link}
+            to={`/commands?${new URLSearchParams({ command: option.command })}`}
+            size="sm"
+            title={option.path}
+          >
+            {option.path}
+          </Anchor>
+        ) : (
+          <Text component="span" size="sm" title={option.path}>
+            {option.path}
+          </Text>
+        )}
         <Tooltip label={t("commands.copyScriptPath")}>
           <ActionIcon
             aria-label={t("commands.copyScriptPath")}
@@ -5127,6 +5146,7 @@ function MemberDiagnosticsPanel({
   onRun: () => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const sectionLabel = useDiagnosticSectionLabel();
   if (formMode !== "edit" || !personId) {
     return (
@@ -5192,12 +5212,12 @@ function MemberDiagnosticsPanel({
                 {sectionLabel(check.section)}
                 {check.target ? ` / ${check.target}` : ""}
               </Text>
-              {diagnosticDescription(t, check) ? (
-                <Text size="sm">{diagnosticDescription(t, check)}</Text>
+              {diagnosticDescription(t, check, machine) ? (
+                <Text size="sm">{diagnosticDescription(t, check, machine)}</Text>
               ) : null}
-              {diagnosticDetail(t, check) ? (
+              {diagnosticDetail(t, check, machine) ? (
                 <Text size="xs" c="dimmed" mt={6}>
-                  {diagnosticDetail(t, check)}
+                  {diagnosticDetail(t, check, machine)}
                 </Text>
               ) : null}
             </Alert>
@@ -5263,7 +5283,7 @@ function diagnosticTitle(t: TFunction, check: DiagnosticCheck) {
   });
 }
 
-function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
+function diagnosticDescription(t: TFunction, check: DiagnosticCheck, machine: string) {
   const namespace =
     check.status === "ok" ? "overview.diagnosticSuccess" : "overview.diagnosticChecks";
   // Why the provider refused the call, when the backend could tell.
@@ -5273,14 +5293,15 @@ function diagnosticDescription(t: TFunction, check: DiagnosticCheck) {
   return t(keys, {
     defaultValue: check.status === "ok" ? "" : check.message,
     ...diagnosticValues(check),
+    machine,
   });
 }
 
-function diagnosticDetail(t: TFunction, check: DiagnosticCheck) {
+function diagnosticDetail(t: TFunction, check: DiagnosticCheck, machine: string) {
   if (check.status === "ok") {
     return "";
   }
-  const description = diagnosticDescription(t, check);
+  const description = diagnosticDescription(t, check, machine);
   return description && description !== check.message ? check.message : "";
 }
 
@@ -5347,24 +5368,52 @@ function SectionSaveControl({ state, saving, onSave }: SectionSave) {
   );
 }
 
-function FolderPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+/**
+ * The workspace folder, a path on the server machine. Typing does not switch:
+ * the path is taken on Enter or when the field is left, so no partial path
+ * is ever opened as a workspace. The registered workspaces are offered too,
+ * so a browser on another machine need not type the server's paths.
+ */
+function WorkspacePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
   const { t } = useTranslation();
+  const serverPathHint = useServerPathHint();
+  const [draft, setDraft] = useState(value);
+  // A workspace taken elsewhere (a copy, a dismissed switch) replaces the draft.
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setDraft(value);
+  }
   const [picking, setPicking] = useState(false);
+  const registered = useQuery({
+    queryKey: ["registered-workspaces"],
+    queryFn: getRegisteredWorkspaces,
+  });
+  const take = (next: string) => {
+    setDraft(next);
+    if (next.trim() !== value.trim()) {
+      onChange(next);
+    }
+  };
   const pickDirectory = async () => {
     setPicking(true);
     try {
-      if (!isTauriRuntime()) {
-        return;
-      }
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false });
       if (typeof selected === "string") {
-        onChange(selected);
+        take(selected);
       }
     } finally {
       setPicking(false);
     }
   };
+  const workspaces = (registered.data ?? []).filter((path) => path !== value);
   return (
     <Group align="flex-end" wrap="nowrap">
       <TextInput
@@ -5372,19 +5421,49 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (value: st
         aria-label={t("setup.project.workspace")}
         aria-required
         leftSection={<Folder size={16} />}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        description={t("setup.project.workspaceDescription")}
+        value={draft}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={(event) => take(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            take(event.currentTarget.value);
+          }
+        }}
+        description={
+          isTauriRuntime()
+            ? t("setup.project.workspaceDescription")
+            : `${serverPathHint} ${t("setup.project.workspaceDescription")}`
+        }
         flex={1}
       />
-      <Button
-        leftSection={<FolderOpen size={16} />}
-        loading={picking}
-        onClick={pickDirectory}
-        variant="default"
-      >
-        {t("setup.project.choose")}
-      </Button>
+      <Menu position="bottom-end" disabled={workspaces.length === 0}>
+        <Menu.Target>
+          <Button
+            leftSection={<History size={16} />}
+            variant="default"
+            disabled={workspaces.length === 0}
+          >
+            {t("setup.project.registered")}
+          </Button>
+        </Menu.Target>
+        <Menu.Dropdown>
+          {workspaces.map((path) => (
+            <Menu.Item key={path} onClick={() => take(path)}>
+              {path}
+            </Menu.Item>
+          ))}
+        </Menu.Dropdown>
+      </Menu>
+      {isTauriRuntime() ? (
+        <Button
+          leftSection={<FolderOpen size={16} />}
+          loading={picking}
+          onClick={pickDirectory}
+          variant="default"
+        >
+          {t("setup.project.choose")}
+        </Button>
+      ) : null}
     </Group>
   );
 }
@@ -6265,20 +6344,6 @@ function newDraftId(): string {
   return crypto.randomUUID?.() ?? `schedule-${Date.now()}-${Math.random()}`;
 }
 
-async function openLocalFile(path: string) {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  const { open } = await import("@tauri-apps/plugin-shell");
-  await open(path);
-}
-
-function localFileHref(path: string) {
-  const normalizedPath = path.replace(/\\/g, "/");
-  const prefix = normalizedPath.startsWith("/") ? "file://" : "file:///";
-  return encodeURI(`${prefix}${normalizedPath}`);
-}
-
 function resolveConfigDir(workspaceDir: string): string {
   return joinPath(workspaceDir, ".guildbotics/config");
 }
@@ -6293,6 +6358,7 @@ function ScenarioDiagnosticsSummary({
   loading: boolean;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const sectionLabel = useDiagnosticSectionLabel();
   if (loading) {
     return (
@@ -6336,10 +6402,10 @@ function ScenarioDiagnosticsSummary({
             {sectionLabel(check.section)}
             {check.person_id ? ` / ${check.person_id}` : ""}
           </Text>
-          <Text size="sm">{diagnosticDescription(t, check)}</Text>
-          {diagnosticDetail(t, check) ? (
+          <Text size="sm">{diagnosticDescription(t, check, machine)}</Text>
+          {diagnosticDetail(t, check, machine) ? (
             <Text size="xs" c="dimmed" mt={6}>
-              {diagnosticDetail(t, check)}
+              {diagnosticDetail(t, check, machine)}
             </Text>
           ) : null}
           {check.target ? (

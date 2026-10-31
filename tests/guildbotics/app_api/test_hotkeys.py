@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
@@ -16,6 +15,7 @@ from guildbotics.app_api.hotkeys import (
 from guildbotics.app_api.models import HotkeySettings
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_template_path
 from guildbotics.utils.workspace_sync_port import shared_relative_path
+from tests.guildbotics.app_api.owner import owner_client
 from tests.guildbotics.app_api.test_api import RuntimeStub
 
 
@@ -138,29 +138,24 @@ def test_save_rejects_conflicts_before_writing(local_dir: Path) -> None:
 def test_endpoints_round_trip_and_report_conflicts(
     local_dir: Path, tmp_path: Path
 ) -> None:
-    headers = {"X-GuildBotics-Session-Token": "secret"}
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
-        assert client.get("/hotkeys", headers=headers).json() == {
+    with owner_client(app) as client:
+        assert client.get("/hotkeys").json() == {
             "quick_run": "",
             "commands": {},
         }
 
         saved = client.put(
             "/hotkeys",
-            headers=headers,
             json={"quick_run": "Control+Alt+G", "commands": {"greet": "Control+Alt+1"}},
         )
         assert saved.status_code == 200
         assert saved.json()["commands"] == {"greet": "Control+Alt+1"}
-        assert client.get("/hotkeys", headers=headers).json()["quick_run"] == (
-            "Control+Alt+G"
-        )
+        assert client.get("/hotkeys").json()["quick_run"] == ("Control+Alt+G")
 
         conflict = client.put(
             "/hotkeys",
-            headers=headers,
             json={"quick_run": "Control+Alt+G", "commands": {"greet": "Control+Alt+G"}},
         )
         assert conflict.status_code == 400
@@ -191,18 +186,16 @@ def test_save_without_workspace_fails_and_keeps_templates_pristine(
 def test_put_endpoint_reports_missing_workspace(
     no_workspace: None, tmp_path: Path
 ) -> None:
-    headers = {"X-GuildBotics-Session-Token": "secret"}
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    app = create_app(runtime=RuntimeStub(tmp_path))
 
-    with TestClient(app) as client:
-        assert client.get("/hotkeys", headers=headers).json() == {
+    with owner_client(app) as client:
+        assert client.get("/hotkeys").json() == {
             "quick_run": "",
             "commands": {},
         }
 
         rejected = client.put(
             "/hotkeys",
-            headers=headers,
             json={"quick_run": "Control+Alt+G", "commands": {}},
         )
 

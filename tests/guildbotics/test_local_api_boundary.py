@@ -1,20 +1,19 @@
-"""Every route the Local API session token, or what it guards, travels is
-classified here.
+"""Every route this machine's server credential, or what it guards, travels
+is classified here.
 
-The token reaches only a destination its holder vouched for: in Desktop, the
-port the sidecar announced after binding it, dropped once the sidecar exits;
-for host clients, a process that proved it holds the token. That holds only
-for the routes drawn into it, so the population is taken from the code of all
-three languages, not from the routes someone happened to think of:
+A token reaches only a destination that showed it knows the token: in Desktop,
+the port the host's own child announced, dropped once the child exits; for
+host clients, a process that proved it knows the token's digest. A browser's
+session lives in its cookie and the CSRF value the API hands the page. That
+holds only for the routes drawn into it, so the population is taken from the
+code of all three languages, not from the routes someone happened to think of:
 
-- Python: every importer of the discovery record module, the token header
-  literal, the record's file name, and every caller of a client that sends
-  through it
-- the frontend: every function that reads the connection, writes the token
-  into a header or URL, hands the destination to a browser callback, or ships
-  a built-in token
-- the host: every function that reads the token, writes it to the wire, or
-  hands it to the sidecar or the frontend
+- Python: every importer of the client module, the owner file's, cookie's and
+  CSRF header's names, and every caller of a client that sends through it
+- the frontend: every function that enters, resumes or refreshes a session,
+  sends the CSRF value, consents for an app, or asks the host for an entry link
+- the host: every function that reads the owner token, writes it to the wire,
+  or hands an entry link to a window
 
 A new one fails here until it is classified.
 """
@@ -26,7 +25,8 @@ import re
 from pathlib import Path
 
 import guildbotics
-from guildbotics.app_api import server
+from guildbotics.app_api import auth, server
+from guildbotics.utils import local_api
 
 PACKAGE = Path(guildbotics.__file__).parent
 REPOSITORY = PACKAGE.parent
@@ -35,17 +35,34 @@ HOST = REPOSITORY / "desktop" / "src-tauri" / "src"
 
 #: ``module -> names`` imported from ``guildbotics.utils.local_api``.
 LOCAL_API_IMPORTS = {
-    "app_api/server.py": {"LocalApiEndpoint"},
-    "app_api/api.py": {
-        "PROOF_PATH",
-        "TOKEN_HEADER",
-        "TOKEN_SUBPROTOCOL",
+    # The server: it reads its own records and the port it listens on.
+    "app_api/api.py": {"API_PREFIX", "PROOF_PATH", "server_port"},
+    "app_api/auth.py": {
+        "NONCE_PATTERN",
+        "TOKEN_ID_PATTERN",
+        "base_url",
         "local_api_proof",
+        "new_token",
+        "owner_token_path",
+        "parse_token",
+        "server_directory",
     },
-    "app_api/models.py": {"NONCE_PATTERN"},
+    "app_api/server.py": {"server_port"},
+    # Where a browser comes back to: an address, no credential.
+    "integrations/provider.py": {"base_url", "server_port"},
     # Proof-gated clients: the token is attached only after the proof.
     "cli/desktop_commands.py": {"connect_local_api"},
+    "cli/service.py": {"connect_local_api", "server_port"},
     "hub/secret_transport.py": {"connect_local_api"},
+    # ``open`` through the proof-gated client; ``connect`` keeps the token the
+    # consent exchange answers, which it posted only the code and verifier for.
+    "cli/server.py": {
+        "API_PREFIX",
+        "base_url",
+        "connect_local_api",
+        "keep_client_token",
+        "server_port",
+    },
 }
 
 #: ``(module, client function)`` for every caller of a proof-gated client.
@@ -57,30 +74,30 @@ CLIENT_CALLERS = {
 
 #: ``(file, function) -> route`` in the frontend.
 FRONTEND_ROUTES = {
-    ("api/client.ts", ""): "the connection itself, module-private",
-    ("api/client.ts", "configureApi"): "sets the connection",
-    ("api/client.ts", "closeApi"): "closes the connection for good",
-    ("api/client.ts", "connected"): "the one reader of the connection",
-    ("api/client.ts", "memberAvatarUrl"): "URL query, loaded by <img>",
-    ("setup/providers/github/api.ts", "startAppRegistration"): (
-        "browser callback destination"
-    ),
-    ("setup/providers/branvil/api.ts", "startConnection"): (
-        "browser callback destination"
-    ),
-    ("api/client.ts", "uploadFile"): "header",
-    ("api/client.ts", "subscribeEvents"): "WebSocket subprotocol",
-    ("api/client.ts", "request"): "header",
-    ("api/backend.ts", ""): "shipped code: inlined only into a preview build",
-    ("api/backend.ts", "startBackend"): "connection from the announced port",
-    ("api/backend.ts", "waitForHealth"): "header, to the connection just set",
+    ("api/client.ts", ""): "the CSRF value, module-private, and its header name",
+    ("api/client.ts", "enterSession"): "exchanges the entry code, keeps the value",
+    ("api/client.ts", "resumeSession"): "reads the value of the cookie's session",
+    ("api/client.ts", "send"): "refreshes a refused value once",
+    ("api/client.ts", "attempt"): "header, on writes only",
+    ("api/client.ts", "authorizeApp"): "consent, through request",
+    ("api/client.ts", "onConnectionLost"): "a 401 ends the session's screens",
+    ("api/backend.ts", "backendEntry"): "asks the host for an entry link",
+    ("Bootstrap.tsx", ""): "import",
+    ("Bootstrap.tsx", "Bootstrap"): "replaces the bundled page with the link",
+    ("main.tsx", ""): "import",
+    ("quick/main.tsx", ""): "import",
+    ("session/entryPages.ts", ""): "the query resuming the session",
+    ("session/EnterView.tsx", ""): "import",
+    ("session/EnterView.tsx", "EnterView"): "the entry page's exchange",
+    ("session/EntryPage.tsx", ""): "import",
+    ("session/EntryPage.tsx", "AppSession"): "no session, no screens",
+    ("session/AuthorizeView.tsx", ""): "import",
+    ("session/AuthorizeView.tsx", "AuthorizeView"): "consent with the session",
 }
 _FRONTEND_CARRIERS = re.compile(
-    r"X-GuildBotics-Session-Token|token=|[\"']token[\"']|callback_base_url"
-    r"|VITE_GUILDBOTICS_API_|backend_info|\bconfigureApi\(|\bconnected\(\)"
+    r"X-GuildBotics-CSRF|\bcsrf\b|enterSession|resumeSession|authorizeApp"
+    r"|backend_entry|backendEntry|/session\b|SESSION_QUERY|onConnectionLost"
 )
-#: Read only where the connection lives.
-_CONNECTION_READS = re.compile(r"\bconnection\b")
 _FRONTEND_FUNCTION = re.compile(
     r"^(?:export )?(?:default )?(?:async )?function\*? ?(\w+)"
     r"|^(?:export )?(?:const|let) (\w+) = (?:async )?\("
@@ -88,20 +105,23 @@ _FRONTEND_FUNCTION = re.compile(
 
 #: ``(file, function) -> route`` in the host.
 HOST_ROUTES = {
-    ("lib.rs", ""): "BackendState holds the token; the notice prefix",
-    ("lib.rs", "after_stdout"): "reads the port notice",
-    ("lib.rs", "backend_info"): "hands the token to the frontend once Ready",
-    ("lib.rs", "backend_request"): "header, only while Ready",
+    ("lib.rs", ""): "BackendState holds the token's path; the notice prefix",
+    ("lib.rs", "owner_token_path"): "where the server keeps it",
+    ("lib.rs", "read_owner_token"): "reads it",
+    ("lib.rs", "after_stdout"): "only the notice for the port asked makes it Ready",
+    ("lib.rs", "backend_request"): "Bearer header, only while Ready",
+    ("lib.rs", "request_entry_link"): "through backend_request",
+    ("lib.rs", "backend_entry_for"): "hands the bundled page the link",
     ("lib.rs", "request_backend_shutdown"): "through backend_request",
     ("lib.rs", "backend_has_active_work"): "through backend_request",
     ("lib.rs", "quit_needs_confirmation"): "through backend_has_active_work",
     ("lib.rs", "stop_backend"): "through request_backend_shutdown",
-    ("lib.rs", "run"): "environment of the sidecar, never argv",
+    ("lib.rs", "run"): "the token's path into the state, nothing to the sidecar",
 }
 _HOST_CARRIERS = re.compile(
-    r"X-GuildBotics-Session-Token|\.token\b|\btoken\b|PORT_NOTICE_PREFIX"
-    r"|backend_request\(|request_backend_shutdown\(|backend_has_active_work\("
-    r"|TcpStream::connect|\"--port\""
+    r"owner_token|Authorization|Bearer|PORT_NOTICE_PREFIX|TcpStream::connect"
+    r"|backend_request\(|request_entry_link\(|request_backend_shutdown\("
+    r"|backend_has_active_work\(|read_owner_token\("
 )
 _HOST_FUNCTION = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))? )?(?:(?:const|async|unsafe|extern \"\w+\") )*fn (\w+)"
@@ -134,16 +154,26 @@ def test_only_the_classified_modules_reach_the_discovery_record():
     assert found == LOCAL_API_IMPORTS
 
 
-def test_the_token_header_and_the_record_are_named_in_one_module():
+#: Each name of a credential's carrier, and the one module that may spell it.
+_SPELLED_ONCE = {
+    "owner.token": "utils/local_api.py",
+    auth.COOKIE_PREFIX: "app_api/auth.py",
+    auth.CSRF_HEADER: "app_api/auth.py",
+}
+
+
+def test_the_credentials_carriers_are_named_in_one_module():
     for module, tree in _python_modules().items():
         literals = {
             node.value
             for node in ast.walk(tree)
             if isinstance(node, ast.Constant) and isinstance(node.value, str)
         }
-        if module != "utils/local_api.py":
-            assert "X-GuildBotics-Session-Token" not in literals, module
-            assert "app-api.json" not in literals, module
+        for name, owner in _SPELLED_ONCE.items():
+            assert module == owner or not any(name in text for text in literals), (
+                module,
+                name,
+            )
 
 
 def test_every_caller_of_a_proof_gated_client_is_classified():
@@ -201,13 +231,9 @@ def _routes(
     return found
 
 
-def test_every_frontend_route_of_the_token_is_classified():
-    client = re.compile(f"{_FRONTEND_CARRIERS.pattern}|{_CONNECTION_READS.pattern}")
+def test_every_frontend_route_of_the_session_is_classified():
     found = _routes(
-        FRONTEND,
-        ("*.ts", "*.tsx"),
-        {"": _FRONTEND_CARRIERS, "api/client.ts": client},
-        _FRONTEND_FUNCTION,
+        FRONTEND, ("*.ts", "*.tsx"), {"": _FRONTEND_CARRIERS}, _FRONTEND_FUNCTION
     )
     assert found == set(FRONTEND_ROUTES)
 
@@ -217,7 +243,10 @@ def test_every_host_route_of_the_token_is_classified():
     assert found == set(HOST_ROUTES)
 
 
-def test_the_host_learns_the_port_only_from_the_sidecar_notice():
+def test_the_host_names_the_port_and_its_notice_as_the_server_does():
     host = (HOST / "lib.rs").read_text("utf-8")
     assert f'const PORT_NOTICE_PREFIX: &str = "{server.PORT_NOTICE_PREFIX}";' in host
-    assert '"--port", "0"' in host
+    assert f'const SERVER_PORT_ENV: &str = "{local_api.PORT_ENV}";' in host
+    assert f"const DEFAULT_SERVER_PORT: u16 = {local_api.DEFAULT_PORT};" in host
+    # The sidecar takes no argument: it reads the port from the environment.
+    assert '"--port"' not in host

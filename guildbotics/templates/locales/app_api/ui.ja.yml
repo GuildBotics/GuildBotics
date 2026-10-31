@@ -1,0 +1,2 @@
+ja:
+  not_built: "GuildBotics の画面がビルドされていません（%{path} がありません）。desktop/ で `npm run build` を実行してください。"

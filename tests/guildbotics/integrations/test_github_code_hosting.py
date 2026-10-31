@@ -15,13 +15,19 @@ from guildbotics.capabilities.artifact_archive import MAX_ARTIFACT_BYTES
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.member_context import member_context
 from guildbotics.entities.team import Person, Project, Role, Team
-from guildbotics.integrations.github.api import GitHubItem
+from guildbotics.integrations.github.api import (
+    GitHubItem,
+    GraphQLUnprocessable,
+    graphql_error,
+)
 from guildbotics.integrations.github.code_hosting_service import (
     GitHubCodeHostingService,
 )
 from guildbotics.integrations.github.issue_links import (
+    append_external_issue_link,
     append_issue_link,
     preserve_issue_links,
+    remove_issue_links,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
@@ -62,11 +68,76 @@ from tests.guildbotics.integrations.github_services import (
     pull_url,
     ticket_service,
 )
-from tests.guildbotics.member_services import MemberServices
+from tests.guildbotics.member_services import GuestDouble, MemberServices
 
 PULL = pull_url(7)
 ISSUE = issue_url(42)
 _REPO_API = f"{API}/repos/{REPO}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("another_writer_drafted", [True, False])
+async def test_draft_conversion_reports_only_its_own_transition(
+    monkeypatch, another_writer_drafted
+):
+    service = code_host(ScriptedGitHub(), monkeypatch)
+    reads = []
+
+    async def fetch(item):
+        reads.append(item)
+        return {
+            "node_id": "PR_7",
+            "state": "open",
+            "draft": bool(len(reads) > 1 and another_writer_drafted),
+        }
+
+    async def convert(query, variables):
+        assert variables == {"pullRequest": "PR_7"}
+        raise GraphQLUnprocessable("conversion refused")
+
+    monkeypatch.setattr(service, "fetch", fetch)
+    monkeypatch.setattr(service, "graphql", convert)
+    try:
+        if another_writer_drafted:
+            assert await service.convert_pull_request_to_draft(PULL) is False
+        else:
+            with pytest.raises(ServiceError, match="conversion refused"):
+                await service.convert_pull_request_to_draft(PULL)
+    finally:
+        await service.aclose()
+    assert len(reads) == 2
+
+
+def test_unprocessable_graphql_answers_are_typed_without_exposing_the_response():
+    error = graphql_error([{"type": "UNPROCESSABLE", "message": "private response"}])
+    assert isinstance(error, GraphQLUnprocessable)
+    assert str(error) == t("integrations.github.response.response")
+
+
+@pytest.mark.asyncio
+async def test_a_lost_conversion_response_is_not_mistaken_for_another_writers_draft(
+    monkeypatch,
+):
+    service = code_host(ScriptedGitHub(), monkeypatch)
+    reads = []
+
+    async def fetch(item):
+        reads.append(item)
+        return {"node_id": "PR_7", "state": "open", "draft": len(reads) > 1}
+
+    async def convert(query, variables):
+        # The write may have reached the host. A later draft cannot prove
+        # that someone else made it, so the caller must report the failure.
+        raise ServiceError("transport failed")
+
+    monkeypatch.setattr(service, "fetch", fetch)
+    monkeypatch.setattr(service, "graphql", convert)
+    try:
+        with pytest.raises(ServiceError, match="transport failed"):
+            await service.convert_pull_request_to_draft(PULL)
+    finally:
+        await service.aclose()
+    assert len(reads) == 1
 
 
 @pytest.mark.asyncio
@@ -96,6 +167,7 @@ def _pull(number: int = 7, **fields: Any) -> dict[str, Any]:
         "user": {"login": "human"},
         "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": REPO}},
         "base": {"ref": "main"},
+        "mergeable_state": "clean",
         **fields,
     }
 
@@ -856,7 +928,7 @@ async def test_a_reaction_to_an_id_of_no_kind_is_refused_unread(monkeypatch, tar
 @pytest.mark.parametrize(
     ("reaction", "content"),
     [
-        ("ack", "EYES"),
+        ("ack", "THUMBS_UP"),
         ("agree", "THUMBS_UP"),
         ("celebrate", "HOORAY"),
         ("support", "HEART"),
@@ -870,8 +942,9 @@ async def test_each_reaction_is_githubs_own(monkeypatch, reaction, content):
     )
     service = _service(github, monkeypatch)
 
-    await service.add_reaction(PULL, "issuecomment-1", reaction)
+    added = await service.add_reaction(PULL, "issuecomment-1", reaction)
 
+    assert (added.reaction, added.id) == (reaction, "issuecomment-1")
     assert github.documents()[-1]["variables"]["content"] == content
 
 
@@ -902,14 +975,16 @@ def _ci(github: ScriptedGitHub, head: str, checks: dict, base: str = "base123"):
     ("workflow_run", "job_id"),
     [({"id": 9, "run_attempt": 2}, "9/2/90"), ({"id": 9}, "9/1/90")],
 )
+@pytest.mark.parametrize("mergeable_state", ["clean", "unknown"])
 async def test_readiness_reports_rollup_and_tails_failed_job_logs(
-    monkeypatch, workflow_run, job_id
+    monkeypatch, workflow_run, job_id, mergeable_state
 ):
     github = _ci(
         _github(),
         "abc123",
         _checks(_run("failure", details_url=f"{WEB}/{REPO}/actions/runs/9")),
     )
+    github.on("GET", f"/repos/{REPO}/pulls/7", _pull(mergeable_state=mergeable_state))
     github.on("GET", f"/repos/{REPO}/actions/runs", {"workflow_runs": [workflow_run]})
     github.on(
         "GET",
@@ -1087,6 +1162,93 @@ async def test_readiness_is_ready_after_true_base_integration_and_successful_ci(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("behind_by", [0, 2])
+@pytest.mark.parametrize(
+    ("state", "requires_base"),
+    [
+        ("clean", False),
+        ("unstable", False),
+        ("has_hooks", False),
+        ("behind", True),
+        ("blocked", True),
+        ("dirty", True),
+        ("draft", True),
+        ("unknown", True),
+        ("new-state", True),
+        ("", True),
+        (None, True),
+        ("missing", True),
+    ],
+)
+async def test_readiness_ignores_lag_only_when_the_host_explicitly_allows_merging(
+    monkeypatch, state, requires_base, behind_by
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    pull = _pull(mergeable_state=state)
+    if state == "missing":
+        del pull["mergeable_state"]
+    github.on("GET", f"/repos/{REPO}/pulls/7", pull)
+    github.on(
+        "GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": behind_by}
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    blocked = requires_base and behind_by > 0
+    assert (result.behind_by, result.out_of_date) == (behind_by, behind_by > 0)
+    assert result.readiness == ("blocked" if blocked else "ready")
+    assert [b.code for b in result.completion_blockers] == (
+        ["base_out_of_date"] if blocked else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_readiness_can_be_retried_after_the_host_allows_merging(monkeypatch):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on("GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": 2})
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(
+            _pull(mergeable_state="unknown"), _pull(mergeable_state="unknown"), _pull()
+        ),
+    )
+    service = _service(github, monkeypatch)
+
+    blocked = await service.readiness(PULL)
+    assert [item.code for item in blocked.completion_blockers] == ["base_out_of_date"]
+    ready = await service.readiness(PULL)
+    assert ready.readiness == "ready"
+    assert (ready.behind_by, ready.out_of_date) == (2, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial", "current", "blocked"),
+    [("clean", "blocked", True), ("blocked", "clean", False)],
+)
+async def test_readiness_uses_the_final_host_merge_state(
+    monkeypatch, initial, current, blocked
+):
+    github = _ci(_github(), "abc123", _checks(_run("success")))
+    github.on("GET", f"/repos/{REPO}/compare/base123...abc123", {"behind_by": 2})
+    github.on(
+        "GET",
+        f"/repos/{REPO}/pulls/7",
+        _sequence(_pull(mergeable_state=initial), _pull(mergeable_state=current)),
+    )
+    service = _service(github, monkeypatch)
+
+    result = await service.readiness(PULL)
+
+    assert result.readiness == ("blocked" if blocked else "ready")
+    assert [item.code for item in result.completion_blockers] == (
+        ["base_out_of_date"] if blocked else []
+    )
+
+
+@pytest.mark.asyncio
 async def test_readiness_blocks_a_head_that_changes_during_the_check(monkeypatch):
     old = {"sha": "old-head", "ref": "feature", "repo": {"full_name": REPO}}
     new = {"sha": "new-head", "ref": "feature", "repo": {"full_name": REPO}}
@@ -1248,39 +1410,6 @@ async def test_artifact_download_rejects_path_traversal(monkeypatch, tmp_path):
     assert not (tmp_path / "outside.txt").exists()
 
 
-class _Guest:
-    """A command's environment as a member command sees it: what it was
-    asked to run, and what it reads on its standard input."""
-
-    def __init__(self, result: GuestResult | Exception) -> None:
-        self.result = result
-        self.runs: list[dict[str, object]] = []
-
-    def path(self, host: Path) -> str:
-        return f"/guest{host}"
-
-    def python(self, module: str, *args: str) -> list[str]:
-        return ["python", "-m", module, *args]
-
-    def remaining(self) -> float:
-        return 60.0
-
-    def run(self, argv, *, cwd, env, stdin=b"", stdout=None, stdout_limit):
-        self.runs.append(
-            {
-                "argv": list(argv),
-                "cwd": cwd,
-                "env": env,
-                "stdout_limit": stdout_limit,
-                "stdin": stdin,
-                "read": stdin.read_bytes(),
-            }
-        )
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
-
-
 @pytest.mark.asyncio
 async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     monkeypatch, tmp_path, symlinks
@@ -1290,7 +1419,7 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
     host nowhere, since only the environment unpacks it."""
     archive = _artifact_zip({"report.md": b"details"})
     unpacked = {"destination": "/guest/work", "files": ["/guest/work/report.md"]}
-    guest = _Guest(GuestResult(0, json.dumps(unpacked).encode(), b""))
+    guest = GuestDouble(GuestResult(0, json.dumps(unpacked).encode(), b""))
     outside = tmp_path / "outside"
     outside.mkdir()
     (tmp_path / "work").mkdir()
@@ -1324,7 +1453,9 @@ async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
 async def test_an_artifact_the_environment_refused_fails_the_command(
     monkeypatch, tmp_path
 ):
-    guest = _Guest(GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n"))
+    guest = GuestDouble(
+        GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n")
+    )
     service = _service(_artifacts(_artifact_zip({"../x": b""}), _report()), monkeypatch)
 
     with (
@@ -1351,7 +1482,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
 ):
     """It writes its answer where the agent's code runs: one that is not
     where it unpacked fails the command, and says nothing of the host."""
-    guest = _Guest(answer)
+    guest = GuestDouble(answer)
     service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with (
@@ -1367,7 +1498,7 @@ async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
 async def test_what_the_environment_answers_decides_nothing_else(monkeypatch, tmp_path):
     """Fields the host decides stay the host's, whatever the answer adds."""
     answer = {"destination": "/w", "files": [], "name": "else", "id": "1"}
-    guest = _Guest(GuestResult(0, json.dumps(answer).encode(), b""))
+    guest = GuestDouble(GuestResult(0, json.dumps(answer).encode(), b""))
     service = _service(_artifacts(_artifact_zip({"a": b""}), _report()), monkeypatch)
 
     with member_invocation_scope(MemberInvocation(guest=guest)):
@@ -1533,6 +1664,8 @@ async def test_ticket_update_patches_only_the_body(monkeypatch):
         "state_changed": False,
         "labels": ["cli"],
         "target": _target(ISSUE, "issue 42").model_dump(),
+        "interactive": False,
+        "interactive_ancestor": None,
     }
     assert github.bodies("PATCH", f"/repos/{REPO}/issues/42") == [
         {"body": "Updated body"}
@@ -1866,8 +1999,8 @@ async def test_pr_update_replaces_the_title_without_touching_the_body(monkeypatc
     [
         ("Updated body", "Updated body\n\nCloses #42\n\nRefs #43"),
         ("", "Closes #42\n\nRefs #43"),
-        ("Refs #42", "Refs #42\n\nRefs #43"),
-        ("Closes #43", "Closes #43\n\nCloses #42"),
+        ("Refs #42", "Closes #42\n\nRefs #43"),
+        ("Closes #43", "Closes #42\n\nRefs #43"),
     ],
 )
 @pytest.mark.asyncio
@@ -1896,23 +2029,23 @@ async def test_pr_update_preserves_existing_issue_links(monkeypatch, body, expec
 
 @pytest.mark.parametrize("body", ["", "New\n\nRefs #43"])
 @pytest.mark.asyncio
-async def test_pr_update_drop_ticket_links_replaces_body_verbatim(monkeypatch, body):
+async def test_pr_update_empty_ticket_links_removes_body_links(monkeypatch, body):
     github = _github().on(
         "PATCH", f"/repos/{REPO}/pulls/7", lambda r: _pull(**json.loads(r.content))
     )
     service = _service(github, monkeypatch)
 
-    result = await member_repository.pr_update(
-        _member(service), PULL, body, drop_ticket_links=True
-    )
+    result = await member_repository.pr_update(_member(service), PULL, body, tickets=[])
 
-    assert result["body"] == body
+    assert result["body"] == body.split("\n\nRefs")[0]
     assert github.sent == [f"PATCH /repos/{REPO}/pulls/7"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", [{"body": "New"}, {"tickets": []}])
 async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
     monkeypatch,
+    change,
 ):
     github = ScriptedGitHub().on(
         "GET", f"/repos/{REPO}/pulls/7", httpx.Response(502, text="down")
@@ -1920,7 +2053,7 @@ async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
     service = _service(github, monkeypatch)
 
     with pytest.raises(ServiceError, match="HTTP 502"):
-        await member_repository.pr_update(_member(service), PULL, "New")
+        await member_repository.pr_update(_member(service), PULL, **change)
 
     assert github.writes == []
 
@@ -1929,8 +2062,7 @@ async def test_pr_update_refuses_to_patch_when_the_existing_body_cannot_be_read(
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"title": "New", "drop_ticket_links": True}, "requires a body"),
-        ({}, "pr update needs a body or a title."),
+        ({}, "pr update needs a body, a title, or ticket links."),
     ],
 )
 async def test_pr_update_needs_what_it_changes(monkeypatch, change, message):
@@ -1963,9 +2095,7 @@ async def test_pr_update_reports_what_github_refused(monkeypatch):
     service = _service(github, monkeypatch)
 
     with pytest.raises(ServiceError) as raised:
-        await member_repository.pr_update(
-            _member(service), PULL, "Body", drop_ticket_links=True
-        )
+        await member_repository.pr_update(_member(service), PULL, "Body", tickets=[])
 
     assert str(raised.value) == t("integrations.github.response.http", status=400)
 
@@ -2024,25 +2154,25 @@ def test_preserve_issue_links_keeps_keyword_variants(keyword):
 @pytest.mark.parametrize(
     ("body", "previous", "expected"),
     [
-        ("Refs #42", "Closes #42", "Refs #42"),
-        ("Fixes #42", "Refs #42", "Fixes #42"),
-        ("Closes #42", "Fixes #42", "Closes #42"),
+        ("Refs #42", "Closes #42", "Closes #42"),
+        ("Fixes #42", "Refs #42", "Refs #42"),
+        ("Closes #42", "Fixes #42", "Fixes #42"),
         ("", "Old\nCloses #42\nRefs #43", "Closes #42\n\nRefs #43"),
         ("New", "Refs #42\nRefs #42", "New\n\nRefs #42"),
         ("New", "Refs #42\nCloses #42", "New\n\nRefs #42\n\nCloses #42"),
         ("New\n", "Old without links", "New\n"),
         ("New", "See #42; prefixedRefs #43; Closes #44suffix", "New"),
-        ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
+        ("Refs #420", "Closes #42", "Closes #42"),
         ("See #42", "Closes #42", "See #42\n\nCloses #42"),
-        ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
-        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\nRefs #42"),
+        ("Refs #43", "Closes #42\nRefs #43", "Closes #42\n\nRefs #43"),
+        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\n\nCloses #42"),
         ("New", "Use `tool`.\nCloses #42", "New\n\nCloses #42"),
         ("New", "Text\r\rCloses #99\n```\nCloses #42\n```", "New\n\nCloses #99"),
         ("New", "Text\r\rCloses #42\rRefs #43", "New\n\nCloses #42\n\nRefs #43"),
         ("New", "  Closes #42  \r\nRefs\t#43", "New\n\nCloses #42\n\nRefs\t#43"),
     ],
 )
-def test_preserve_issue_links_prefers_replacement_and_deduplicates(
+def test_preserve_issue_links_keeps_previous_links_and_deduplicates(
     body, previous, expected
 ):
     assert preserve_issue_links(body, previous) == expected
@@ -2084,7 +2214,10 @@ def test_create_upgrades_only_the_real_reference_link():
 
 def test_nested_image_code_does_not_mask_an_adjacent_link():
     body = "Refs #42\n![`x`](https://example.com)"
-    assert preserve_issue_links(body, "Closes #42") == body
+    assert (
+        preserve_issue_links(body, "Closes #42")
+        == "![`x`](https://example.com)\n\nCloses #42"
+    )
     assert preserve_issue_links("New", body) == "New\n\nRefs #42"
 
 
@@ -2094,15 +2227,40 @@ def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
         preserve_issue_links(body, "Closes #42")
     with pytest.raises(ServiceError, match="Close the open code or HTML"):
         append_issue_link(body, 42, closes=True)
+    with pytest.raises(ServiceError, match="Close the open code or HTML"):
+        append_external_issue_link(body, "https://tickets.example.com/T-1")
+
+
+@pytest.mark.parametrize("target", ["#42", "https://tickets.example.com/T-1"])
+@pytest.mark.parametrize(
+    "example",
+    [
+        "`Refs {target}`",
+        "> Refs {target}",
+        "```\nRefs {target}\n```",
+        "<!--\nRefs {target}\n-->",
+        "<pre>\nRefs {target}\n</pre>",
+    ],
+)
+def test_replacing_links_retains_examples_and_removes_real_link_lines(target, example):
+    example = example.format(target=target)
+    body = f"Context\n\n{example}\n\n- Refs {target}\n\nCloses #43"
+    assert remove_issue_links(body) == f"Context\n\n{example}"
+    assert (
+        preserve_issue_links("New", f"{example}\n\nRefs {target}")
+        == f"New\n\nRefs {target}"
+    )
 
 
 @pytest.mark.parametrize(
     "prefix", ["- ", "+ ", "* ", "1. ", "1) ", "- - ", "- item\n  "]
 )
-def test_list_links_are_preserved_and_replacement_links_take_precedence(prefix):
+def test_list_links_are_preserved_and_only_explicit_updates_change_links(prefix):
     body = f"{prefix}Refs #42\r\n"
     assert preserve_issue_links("New", body) == "New\n\nRefs #42"
-    assert preserve_issue_links(body, "Closes #42") == body
+    assert preserve_issue_links(body, "Closes #42") == (
+        "- item\n\nCloses #42" if prefix.startswith("- item") else "Closes #42"
+    )
     assert append_issue_link(body, 42, closes=False) == body
     assert append_issue_link(body, 42, closes=True) == f"{prefix}Closes #42\r\n"
 

@@ -3,7 +3,7 @@ en:
   workspace: "The workspace %{workspace} was read."
   access: "Branvil accepted the member's token as the member's."
   owner: "The human member is Branvil's owner %{owner}, whose rights GuildBotics' connection has."
-  not_owner: "The human member's Branvil name '%{name}' is not Branvil's owner '%{owner}'. Save the member again to take the owner's name."
+  not_owner: "The human member's Branvil account name '%{name}' does not match the owner's account name '%{owner}'. Save the member again to link the owner's account."
   ci_load_failed: "Branvil's CI runner did not load %{archive}: %{detail}"
   ci_load_lost: "Branvil restarted while its CI runner was loading %{archive}, and the load's outcome is lost. Load the archive again."
   ci_load_superseded: "Another image operation began on Branvil's CI runner before the load of %{archive} was seen to finish, so its outcome is unknown. Load the archive again."

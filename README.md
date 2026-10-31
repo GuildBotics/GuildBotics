@@ -313,9 +313,9 @@ To ask for work, use a GitHub Projects ticket as follows:
 
 Once work starts, you interact with the member like this:
 
-- When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues
+- When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues. In-progress tickets with unanswered comments or mentions are picked up even when a linked PR is open or merged; the member reuses an existing open PR
 - When the task completes, the member leaves a comment / PR URL / review reply / reaction
-- Review the PR created from the ticket on the PR itself. The member follows the PR through the pull request patrol, not through the ticket (→ [Pull Request Patrol](#pull-request-patrol))
+- Review the PR created from the ticket on the PR itself. The pull request patrol follows its conversation (→ [Pull Request Patrol](#pull-request-patrol)). Once the ticket's comments and mentions are answered, an open PR keeps the ticket waiting and a merged PR moves it to Done. The member's latest failure or rate-limit status keeps the ticket on hold
 
 To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
 
@@ -333,10 +333,10 @@ Before looking at the ticket lanes, every patrol run checks the open pull reques
 In both roles, the member reads everything someone else says, decides what to do only after reading it, and leaves an answer for every statement: a reply saying what it did, a reply with the reason when it does not adopt a point, or a reaction when there is nothing to act on (thanks, LGTM). A statement is an unresolved review thread whose last word is someone else's, a review with a body (approvals included), or a conversation comment. It is answered by a later comment, review, or thread reply from the member, or by the member's reaction on it. Reviews without a body and workflow status notices are not picked up.
 
 - **PRs the member wrote**: statements the member has not answered are picked up. The member fixes the code where the point is valid
-- **Waiting for CI**: a member does not wait for CI inside its run. When checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR ("Waiting for CI" in the Desktop), and the patrol picks the PR up again once the checks finish or new commits land on it. The resumed run reports the outcome on the PR, or fixes the failures. A merged or closed PR is not picked up again
-- **PRs the member reviews**: the member starts when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. Automatic re-review not driven by a request stops after 3 rounds: the patrol converts the PR to a draft, and then the member announces that on the PR (the author's patrol stops too, as drafts are skipped below). To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
+- **Waiting for CI**: a member does not wait for CI inside its run. Whatever started the run (a ticket, a chat thread, a scheduled or manual command), when checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR (a ticket's or a chat thread's run shows "Waiting for CI" in the Desktop), and the patrol picks the same work up again once the checks finish or new commits land on it. The resumed run fixes the failures, or reports the outcome on the PR and where the work came from (the ticket, the thread, or where the command reports). A merged or closed PR is not picked up again
+- **PRs the member reviews**: the member starts when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. After a member has reviewed 3 heads, automatic re-review not driven by a request stops when a head that member has never reviewed is pushed: the host ticket selector converts the PR to a draft during candidate selection, records it in Activity, and announces it on the PR and in the reviewer’s chat channels with `notify_work_stops: true` (the author's patrol stops too, as drafts are skipped below). Statements and thread replies on an already reviewed head still start a run after the limit; this includes a head restored by force push and heads reviewed before the count restarted. Explicit review requests remain outside the limit. To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
 - The verdict is submitted as a GitHub review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Ask for the first review in Slack or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
-- **Draft PRs are skipped**, in both roles. Only humans and, at the automatic re-review limit, the patrol itself convert a PR to a draft, and only humans mark it ready for review again (a member's work cannot change it). To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits (the automatic re-review rounds, and any member held by a failure, start over from that point)
+- **Draft PRs are skipped**, in both roles. Only humans and, at the automatic re-review limit, the host ticket selector convert a PR to a draft, and only humans mark it ready for review again (a member's work cannot change it). To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits (the automatic re-review rounds, and any member held by a failure, start over from that point)
 
 ## Ask for Work in Slack
 
@@ -357,6 +357,8 @@ First choose Slack under **Setup → Integrations → Chat** in the desktop app;
 If you already have a Slack App, choose **Use a registered app** and start from pasting the tokens.
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
+
+When the member's ticket or pull request work from the patrol or a scheduled run stops to wait for a person — it asked a question, is blocked, or failed and said so on the item — the member posts once to each channel where **Notify when work stops** is enabled in **Setup → Members → Slack** (or the project's chat provider tab), linking the item and its comment. With no channel selected, it posts nothing. Notifications are off by default, including for existing channel settings. Enable the option and save to receive notices, or turn it off and save to stop them.
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
@@ -537,7 +539,7 @@ guildbotics stop               # stop accepting new work and exit after in-fligh
 guildbotics kill               # force stop immediately
 ```
 
-Running `guildbotics stop` a second time cancels the in-flight work (equivalent to **Force stop** in the GUI). For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
+`guildbotics start` launches the same backend as Desktop and starts its services. Close Desktop first. The first Ctrl-C waits for in-flight work; a second Ctrl-C cancels it. Use `guildbotics stop --force` to request cancellation after a timeout, or `guildbotics kill` for an immediate forced stop. For options such as `--timeout` and `--force`, see the [CLI Reference](docs/cli_reference.md#guildbotics-stop).
 
 By default `guildbotics start` starts both the member workers (patrol / scheduled / queued events) and the event listener. `--only` narrows what runs, but the member workers start in either case.
 
@@ -555,7 +557,9 @@ echo "Hello" | guildbotics run translate
 
 Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
-The CLI and the desktop app share a lock file (`~/.guildbotics/data/run/service.lock`), so the service can never start twice on the same machine.
+The backend holds a machine-wide lock (`~/.guildbotics/data/run/app-api.lock`) for its entire lifetime, so Desktop and `guildbotics start` cannot run together. When Desktop is open, start services from its Service screen. When the CLI backend is running, Desktop asks you to run `guildbotics stop` before opening it again. Services hold `service.lock`, including the keep-awake setting, only while running.
+
+The CLI backend also serves the API and browser screens, so `guildbotics run` can delegate commands to it. `guildbotics start` always starts services; it is not an API-only mode. Before updating Desktop, stop `guildbotics start` and any active `guildbotics run` processes. Restart the CLI service after the update, or use Desktop's Service screen.
 
 When a workspace is synchronized, the service also has one persistent owner on
 the Hub. `guildbotics start` and the desktop service screen must reach the Hub
@@ -572,6 +576,36 @@ not Git history, and disappears after its publisher stops heartbeats and the
 snapshot expires. Completed
 work is kept in shared TaskRun records so a service restart does not accept the
 same input again after the result has been pushed.
+
+### Use It from a Browser
+
+The backend serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:8765`. The desktop app's windows show these same screens, so a browser alone can do everything they do, except what runs outside a window (the global hotkeys and the quick-run window, the tray, and controlling the app's quit).
+
+**On the machine where the backend runs**:
+
+```bash
+guildbotics open
+```
+
+The browser opens with a single-use entry link that expires after 60 seconds. There is no sign-in screen: the OS user who can read `~/.guildbotics/data/server/<port>/owner.token` is the owner. A session lasts 30 days; when it has expired, run `guildbotics open` again.
+
+**In a browser on another machine**: forward the port over SSH (the forwarding script in [Share a Workspace Across Machines](#share-a-workspace-across-machines), or `ssh -L 8765:127.0.0.1:8765 <Hub>`), print an entry link on the Hub, and paste it into your browser:
+
+```bash
+ssh <Hub> guildbotics open --print
+```
+
+**Connect another machine's CLI**: run `guildbotics connect` on that machine. A consent screen opens in the browser; once the owner allows it, a token for that machine's CLI is issued and kept in that machine's OS keychain, and `guildbotics open` on that machine uses it (connecting the same machine again revokes its previous token).
+
+In a browser, a few parts of the screens differ:
+
+- There is no "Browse" for folders: type the path on the server machine (a workspace can also be picked from the registered ones)
+- Commands cannot be opened in an external editor; edit them in the screen's editor
+- A file dropped on a command's input is uploaded as a copy (the agent's changes do not reach the original, and folders cannot be dropped)
+- The AI CLI tools' skill status and forced update are not shown
+- Settings labelled "this machine" (keeping it awake, sync, ...) are the server machine's
+
+**Port**: the backend listens on the fixed port 8765. If another program uses that port, the backend does not start. To run two backends on one machine (a development and a released desktop app, for example), set `GUILDBOTICS_SERVER_PORT` to another port where one of them starts; the server, the CLI, and the desktop app all read it.
 
 ### Account-Related Environment Variables
 
@@ -1018,7 +1052,7 @@ A field in the other file is refused when the team is loaded. A workspace member
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
 - `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: what agents make for you goes there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
 - `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian + Node.js unless set; for another toolchain, build an image yourself that keeps git, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Changing the image rebuilds the environment on every machine; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
+- `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian image unless set; for another toolchain, build an image yourself that keeps git, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Changing the image rebuilds the environment on every machine; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).

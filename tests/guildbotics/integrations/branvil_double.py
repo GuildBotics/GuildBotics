@@ -11,21 +11,27 @@ the ticket's repository defines it (``400 label_undefined``), a ticket's
 relation only to a ticket of its workspace (``400 invalid``), its move into
 ``in_progress`` only once its blockers are closed (``409 blocked``), a new pull
 request's link that closes only to a ticket of its repository (``422
-unsupported``), and an artifact only if it is a zip archive. A repository
+unsupported``), an artifact only if it is a zip archive, and an attachment
+(an image of a repository) only under its repository, listed for a ticket
+while its body or a comment holds the attachment's id. A repository
 (``<workspace>/<name>``) numbers its tickets from 1, apart from its pull
 requests, and a ticket is always in a lane of its workspace's board: a new one in
 the lane it names, ``new`` if none, and a lane that is not one (``null``
-included) is refused (``400 invalid``). A ticket keeps
+included) is refused (``400 invalid``). A ticket is not ``interactive`` until a
+test makes it so, as a human does in Branvil's GUI. A ticket keeps
 its ``parent`` and ``blocked_by`` as URLs and is answered with every relation
-shown from both sides. It does not hold writes to the member's scope -- the
-provider refuses those before any request. As Branvil does, it records an author's
-approval of its own pull request (which counts toward no merge); a verdict
-or a new inline comment consumes its author's review request, a reply does
-not; marking a pull request ready for review (or opening it as one) sets
-``ready_at``; a merge closes the tickets the pull request ``closes`` and
-moves them to ``done``; a workspace board's closed items are the closed
-tickets and pull requests of the workspace's repositories; and a gone
-branch's commit is ``""`` with no ``behind_by``.
+shown from both sides and with its nearest interactive ancestor. It does not
+hold writes to the member's scope -- the provider refuses those before any
+request. The author's own review is only
+a ``comment`` (``400 invalid`` otherwise); a verdict or a new inline comment
+consumes its author's review request, a reply does not; marking a pull
+request ready for review (or opening it as one) sets ``ready_at``; a merge
+closes the tickets the pull request ``closes`` and moves them to ``done``; a
+workspace board's closed items are the closed tickets and pull requests of the
+workspace's repositories; a gone branch's commit is ``""`` with no
+``behind_by``; and the dependency alerts of a repository's upstream are read
+only for a repository that has one (``422 unsupported`` otherwise), by
+``state`` and by ``id``.
 
 Its administration answers as Branvil's public admin API does: a token is
 its member's, the owner's (the admin token GuildBotics holds, labelled
@@ -49,6 +55,8 @@ import asyncio
 import json
 import logging
 import math
+import mimetypes
+import re
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -56,7 +64,7 @@ from hashlib import sha256
 from itertools import count
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
 import httpx
 
@@ -80,6 +88,8 @@ LANES = ("new", "ready", "in_progress", "done")
 #: The file every commit on a branch changes.
 CHANGED = "a.py"
 _START = datetime(2026, 10, 14, 10, tzinfo=UTC)
+#: How a body or a comment refers to an attachment: by its id, anywhere.
+_ATTACHMENT_ID = re.compile(r"atc_[0-9A-Za-z]{26}")
 
 
 class Refusal(Exception):
@@ -96,6 +106,7 @@ def _missing(what: str) -> Refusal:
 
 class BranvilDouble:
     def __init__(self) -> None:
+        self.actor = MEMBER
         self.writes: list[str] = []
         #: The branches of ``REPO``: name -> commit.
         self.branches: dict[str, str] = {"main": "main-sha"}
@@ -116,6 +127,12 @@ class BranvilDouble:
         #: Whether making a pull request a draft is refused.
         self.refuse_draft = False
         self.artifacts: dict[tuple[str, str], bytes] = {}
+        #: The images uploaded to the repositories, by id.
+        self.attachments: dict[str, dict[str, Any]] = {}
+        #: The repositories with an upstream, and the dependency alerts its
+        #: host reports for ``REPO``.
+        self.upstreams = {REPO}
+        self.alerts: list[dict[str, Any]] = []
         self._ticks = count()
         self._ids = count(1)
         self._revisions = count(1)
@@ -187,6 +204,15 @@ class BranvilDouble:
     def advance(self, name: str) -> None:
         self.branches[name] = f"{name.replace('/', '-')}-sha{next(self._revisions)}"
 
+    def ancestor(self, url: str, depth: int) -> str:
+        """Put the ticket ``url`` under ``depth`` new ancestors and return the
+        topmost, whose ``interactive`` makes ``url`` interactive too (``url``
+        itself for a depth of 0)."""
+        for _ in range(depth):
+            parent = self._ticket(self.tickets[url]["repository"], "Epic", "", [])
+            self.tickets[url]["parent"] = url = parent["url"]
+        return url
+
     def assign(self, url: str, lane: str = "ready", name: str = MEMBER) -> None:
         self.tickets[url].update(
             lane=lane, assignee={"name": name, "assigned_at": self.now()}
@@ -196,6 +222,41 @@ class BranvilDouble:
         if content[:4] not in (b"PK\x03\x04", b"PK\x05\x06"):
             raise ValueError("Branvil keeps only zip archives as artifacts.")
         self.artifacts[sha, name] = content
+
+    def add_attachment(self, name: str, content: bytes, repo: str = REPO) -> str:
+        """An image uploaded to ``repo``, as the GUI uploads one; what a body
+        or a comment writes to show it."""
+        attachment_id = f"atc_{next(self._ids):026d}"
+        self.attachments[attachment_id] = {
+            "repository": repo,
+            "name": name,
+            "media_type": mimetypes.guess_type(name)[0],
+            "content": content,
+        }
+        return f"![{name}](/api/v1/repos/{quote(repo, safe='')}/attachments/{attachment_id})"
+
+    def alert(self, state: str = "open", patched: str | None = "4.17.21") -> str:
+        """A dependency alert the upstream host reports for ``REPO``; its id."""
+        number = str(len(self.alerts) + 1)
+        self.alerts.append(
+            {
+                "id": number,
+                "state": state,
+                "url": f"https://github.com/acme/demo/security/dependabot/{number}",
+                "package": "lodash",
+                "ecosystem": "npm",
+                "manifest_path": "package-lock.json",
+                "severity": "high",
+                "identifiers": [{"type": "GHSA", "value": f"GHSA-{number}"}],
+                "summary": "Command Injection in lodash",
+                "description": "...",
+                "affected_versions": "< 4.17.21",
+                "patched_version": patched,
+                "created_at": self.now(),
+                "updated_at": self.now(),
+            }
+        )
+        return number
 
     def now(self) -> str:
         moment = _START + timedelta(seconds=next(self._ticks))
@@ -229,6 +290,10 @@ class BranvilDouble:
         """A human marks the pull request ready for review."""
         self.pulls[url].update(draft=False, ready_at=self.now())
 
+    def make_theirs(self, url: str) -> None:
+        """Someone else is the pull request's author."""
+        self.pulls[url]["author"] = "them"
+
     def merge(self, url: str) -> None:
         """A human merges the pull request; the tickets it closes are done."""
         at = self.now()
@@ -259,6 +324,7 @@ class BranvilDouble:
                 token = self.tokens.get(bearer.removeprefix("Bearer "))
                 if token is None:
                     raise Refusal(401, "unauthorized")
+                self.actor = token["member"]
                 status, answer = self._route(
                     request.method,
                     parts,
@@ -453,7 +519,36 @@ class BranvilDouble:
                 ticket = self._ticket(
                     repo, body["title"], body["body"], labels, _lane(body, "new")
                 )
+                ticket.update(
+                    interactive=body.get("interactive", False),
+                    parent=body.get("parent"),
+                    blocked_by=list(dict.fromkeys(body.get("blocked_by", []))),
+                    assignee={"name": body["assignee"], "assigned_at": self.now()}
+                    if body.get("assignee")
+                    else None,
+                )
                 return 201, self._view(ticket)
+            case "GET", ["tickets"]:
+                words = params.get("q", "").casefold().split()
+                return 200, self._page(
+                    [
+                        self._view(ticket)
+                        for ticket in self.tickets.values()
+                        if ticket["repository"] == repo
+                        and (
+                            params.get("state", "open") == "all"
+                            or ticket["state"] == params.get("state", "open")
+                        )
+                        and (
+                            "label" not in params or params["label"] in ticket["labels"]
+                        )
+                        and all(
+                            word in (ticket["title"] + "\n" + ticket["body"]).casefold()
+                            for word in words
+                        )
+                    ],
+                    params,
+                )
             case _, ["tickets", number, *more]:
                 url = f"{BASE}/{repo}/-/tickets/{number}"
                 if url not in self.tickets:
@@ -481,12 +576,31 @@ class BranvilDouble:
                 log = self.logs[attempt][-int(params["tail_bytes"]) :]
                 truncated = len(log) < len(self.logs[attempt])
                 return 200, {"log": log, "log_bytes": len(log), "truncated": truncated}
+            case "GET", ["upstream", "dependency-alerts", *alert]:
+                return 200, self._alerts(repo, alert, params)
             case "GET", ["commits", sha, "artifacts", name] if (
                 sha,
                 name,
             ) in self.artifacts:
                 return 200, self.artifacts[sha, name]
+            case "GET", ["attachments", attachment_id] if (
+                self.attachments.get(attachment_id, {}).get("repository") == repo
+            ):
+                return 200, self.attachments[attachment_id]["content"]
         raise _missing("/".join(rest))
+
+    def _alerts(self, repo: str, alert: list[str], params: dict) -> Any:
+        if repo not in self.upstreams:
+            raise Refusal(422, "unsupported", f"{repo} has no upstream.")
+        if alert:
+            for found in self.alerts:
+                if [found["id"]] == alert:
+                    return found
+            raise _missing(f"Alert {alert[0]}")
+        state = params.get("state", "open")
+        if state not in ("open", "resolved", "dismissed"):
+            raise Refusal(400, "invalid", "state is open, resolved, or dismissed.")
+        return self._page([a for a in self.alerts if a["state"] == state], params)
 
     def _pull_request(
         self, method: str, url: str, rest: list[str], body: dict, params: dict
@@ -497,15 +611,16 @@ class BranvilDouble:
             case "GET", []:
                 return 200, self._pull(pull)
             case "PATCH", []:
+                if "revision" in body and body["revision"] != pull["revision"]:
+                    raise Refusal(409, "conflict", "The revision changed.")
                 if self.refuse_draft and "draft" in body:
                     raise Refusal(403, "forbidden", "The member may not do that.")
                 for key in ("title", "body", "draft", "tickets"):
                     if key in body:
                         pull[key] = body[key]
-                if body.get("drop_ticket_links"):
-                    pull["tickets"] = []
                 if body.get("draft") is False:
                     self.ready(url)
+                pull["revision"] += 1
                 return 200, self._pull(pull)
             case "GET", ["activity"]:
                 return 200, self._activity(url)
@@ -513,13 +628,23 @@ class BranvilDouble:
                 return 200, self._page(entries[kind], params)
             case "POST", ["comments"]:
                 return 201, self.comment(
-                    url, MEMBER, body["body"], **body.get("meta") or {}
+                    url, self.actor, body["body"], **body.get("meta") or {}
                 )
             case "POST", ["reviews"]:
+                if (
+                    body["verdict"] != "comment"
+                    and pull["author"].casefold() == self.actor
+                ):
+                    raise Refusal(
+                        400,
+                        "invalid",
+                        "The author cannot approve or request changes on their"
+                        " own pull request; only comment.",
+                    )
                 self._at_head(pull, body["commit"])
                 fields = {key: body[key] for key in ("verdict", "commit")}
-                self._consume(pull, MEMBER)
-                review = self._entry(url, "reviews", MEMBER, body["body"], **fields)
+                self._consume(pull, self.actor)
+                review = self._entry(url, "reviews", self.actor, body["body"], **fields)
                 keys = ("id", "verdict", "commit", "submitted_at", "url")
                 return 201, {key: review[key] for key in keys}
             case "POST", ["inline-comments"]:
@@ -531,8 +656,8 @@ class BranvilDouble:
                         f"{body['path']} is not changed by !{pull['number']}.",
                     )
                 fields = {k: v for k, v in body.items() if k != "body"}
-                self._consume(pull, MEMBER)
-                return 201, self._root(url, MEMBER, body["body"], **fields)
+                self._consume(pull, self.actor)
+                return 201, self._root(url, self.actor, body["body"], **fields)
             case "GET", ["threads"]:
                 return 200, self._page(self._threads(url), params)
             case "GET", ["threads", root, "comments"]:
@@ -544,7 +669,7 @@ class BranvilDouble:
             case "POST", ["threads", root, "replies"]:
                 self._thread(url, root)
                 reply = self._entry(
-                    url, "inline", MEMBER, body["body"], reply_to_id=root
+                    url, "inline", self.actor, body["body"], reply_to_id=root
                 )
                 return 201, reply
             case "POST", ["reactions"]:
@@ -579,7 +704,14 @@ class BranvilDouble:
                 for related in filter(None, [body.get("parent"), *blockers]):
                     self._related(url, related)
                 state_changed = body.get("state", ticket["state"]) != ticket["state"]
-                for key in ("title", "body", "state", "state_reason", "parent"):
+                for key in (
+                    "title",
+                    "body",
+                    "state",
+                    "state_reason",
+                    "parent",
+                    "interactive",
+                ):
                     if key in body:
                         ticket[key] = body[key]
                 if state_changed:
@@ -599,9 +731,11 @@ class BranvilDouble:
                 }
             case "GET", ["comments"]:
                 return 200, self._page(self.entries[url]["comments"], params)
+            case "GET", ["attachments"]:
+                return 200, self._page(self._attachments(ticket), params)
             case "POST", ["comments"]:
                 return 201, self.comment(
-                    url, MEMBER, body["body"], **body.get("meta") or {}
+                    url, self.actor, body["body"], **body.get("meta") or {}
                 )
             case "POST", ["reactions"]:
                 return 200, self._react(url, ("comments",), body)
@@ -622,6 +756,24 @@ class BranvilDouble:
         def of(item: dict[str, Any]) -> bool:
             return item["repository"].partition("/")[0] == workspace
 
+        if rest == ["tickets"]:
+            assert params["mentions"] == "me"
+            cards = [
+                self._view(ticket)
+                | {
+                    "comments": self.entries[url]["comments"],
+                    "pull_requests": self._linked(url),
+                }
+                for url, ticket in self.tickets.items()
+                if of(ticket)
+                and ticket["state"] == params.get("state", ticket["state"])
+                and any(
+                    self.actor in entry["mentions"]
+                    for entry in [self._view(ticket), *self.entries[url]["comments"]]
+                )
+            ]
+            return self._page(cards, params)
+
         if rest == ["board", "cards"]:
             lanes = params["lane"].split(",")
             cards = [
@@ -634,7 +786,7 @@ class BranvilDouble:
                 if of(ticket)
                 and ticket["lane"] in lanes
                 and ticket["state"] == params.get("state", ticket["state"])
-                and (ticket["assignee"] or {}).get("name") == MEMBER
+                and (ticket["assignee"] or {}).get("name") == self.actor
             ]
             return self._page(
                 sorted(cards, key=lambda card: LANES.index(card["lane"])), params
@@ -672,7 +824,7 @@ class BranvilDouble:
         body: str,
         labels: list[str],
         lane: str = "new",
-        author: str = MEMBER,
+        author: str | None = None,
     ) -> dict[str, Any]:
         number = 1 + sum(t["repository"] == repo for t in self.tickets.values())
         url = f"{BASE}/{repo}/-/tickets/{number}"
@@ -684,17 +836,52 @@ class BranvilDouble:
             "body": body,
             "state": "open",
             "state_reason": None,
-            "author": author,
+            "author": author or self.actor,
             "assignee": None,
             "labels": labels,
             "lane": lane,
+            "interactive": False,
             "parent": None,
             "blocked_by": [],
             "created_at": self.now(),
+            "updated_at": self.now(),
             "closed_at": None,
         }
         self.entries[url] = {"comments": []}
         return self.tickets[url]
+
+    def _attachments(self, ticket: dict[str, Any]) -> list[dict[str, Any]]:
+        """The attachments of the ticket's repository whose id its body or
+        comments hold, in the order of their first reference."""
+        texts = [("body", ticket["body"])] + [
+            (comment["id"], comment["body"])
+            for comment in self.entries[ticket["url"]]["comments"]
+        ]
+        found: dict[str, dict[str, Any]] = {}
+        for where, text in texts:
+            for attachment_id in _ATTACHMENT_ID.findall(text or ""):
+                attachment = self.attachments.get(attachment_id)
+                if (
+                    attachment is None
+                    or attachment["repository"] != ticket["repository"]
+                ):
+                    continue
+                listed = found.setdefault(
+                    attachment_id,
+                    {
+                        "id": attachment_id,
+                        "name": attachment["name"],
+                        "media_type": attachment["media_type"],
+                        "size": len(attachment["content"]),
+                        "url": f"/api/v1/repos/{quote(ticket['repository'], safe='')}"
+                        f"/attachments/{attachment_id}",
+                        "created_at": _START.isoformat(),
+                        "referenced_by": [],
+                    },
+                )
+                if where not in listed["referenced_by"]:
+                    listed["referenced_by"].append(where)
+        return list(found.values())
 
     def _related(self, url: str, other: str) -> None:
         """Refuse a relation of the ticket ``url`` to ``other`` unless both
@@ -717,7 +904,12 @@ class BranvilDouble:
             keys = ("url", "repository", "key", "title", "state", "state_reason")
             return {key: self.tickets[other][key] for key in keys}
 
+        ancestor = ticket["parent"]
+        while ancestor and not self.tickets[ancestor]["interactive"]:
+            ancestor = self.tickets[ancestor]["parent"]
         return ticket | {
+            "mentions": self._mentions(ticket["body"]),
+            "interactive_ancestor": ancestor and relative(ancestor),
             "parent": ticket["parent"] and relative(ticket["parent"]),
             "children": [
                 relative(u) for u, t in self.tickets.items() if t["parent"] == url
@@ -758,7 +950,8 @@ class BranvilDouble:
             "state": "open",
             "merged": False,
             "draft": body["draft"],
-            "author": MEMBER,
+            "revision": 1,
+            "author": self.actor,
             "ready_at": None if body["draft"] else self.now(),
             "head": body["head"],
             "head_repository": repo,
@@ -793,10 +986,10 @@ class BranvilDouble:
                 if pull["state"] == "open"
                 and not pull["draft"]
                 and (
-                    pull["author"] == MEMBER
-                    or MEMBER in map(str.casefold, pull["reviewers"])
+                    pull["author"] == self.actor
+                    or self.actor in map(str.casefold, pull["reviewers"])
                     or any(
-                        entry["author"] == MEMBER
+                        entry["author"] == self.actor
                         for kind in ("reviews", "inline")
                         for entry in self.entries[pull["url"]][kind]
                     )
@@ -866,8 +1059,9 @@ class BranvilDouble:
         at = self.now()
         entry = {
             "id": entry_id,
-            "author": author,
+            "author": author or self.actor,
             "body": body,
+            "mentions": self._mentions(body),
             "reactions": [],
             "url": f"{url}#{entry_id}",
             **(
@@ -895,7 +1089,7 @@ class BranvilDouble:
         )
         if found is None:
             raise _missing(f"{body['target_id']} of {url}")
-        found["reactions"].append({"author": MEMBER, "reaction": body["reaction"]})
+        found["reactions"].append({"author": self.actor, "reaction": body["reaction"]})
         return {"id": found["id"], "reaction": body["reaction"]}
 
     def _consume(self, pull: dict[str, Any], author: str) -> None:
@@ -920,6 +1114,16 @@ class BranvilDouble:
             "items": items[start:end],
             "next_cursor": f"o:{end}" if end < len(items) else None,
         }
+
+    def _mentions(self, body: str) -> list[str]:
+        """Existing Branvil members, in the order they occur in the text."""
+        found = []
+        for member in self.members:
+            pattern = rf"(?<![\w.@-])@{re.escape(member)}(?![\w-]|\.[\w-])"
+            match = re.search(pattern, body, flags=re.IGNORECASE | re.ASCII)
+            if match:
+                found.append((match.start(), member))
+        return [member for _, member in sorted(found)]
 
 
 #: What every pull request changes: ``CHANGED``, added on the branch.

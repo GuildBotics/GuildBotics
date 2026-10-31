@@ -13,6 +13,7 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilePlus, Save, Sparkles, Trash2 } from "lucide-react";
 import {
@@ -24,7 +25,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { NavLink } from "react-router";
+import { NavLink, useSearchParams } from "react-router";
 
 import {
   ApiRequestError,
@@ -50,10 +51,10 @@ import {
 import {
   commandFailureDetail,
   commandTraceRefetchInterval,
-  openLocalFile,
   upsertCommandRecord,
   type CommandRunRecord,
 } from "../App";
+import { isTauriRuntime, openLocalFile } from "../desktopWindow";
 import { setNavigationGuard } from "../navigationGuard";
 import { AssistantChatPanel } from "../assistant/AssistantChatPanel";
 import { useAssistantConversation } from "../assistant/useAssistantConversation";
@@ -212,15 +213,40 @@ export function CommandsPage() {
   });
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data?.files]);
 
+  // A link from elsewhere (a member's scheduled command) names the command to
+  // show; it is taken once the list has loaded and then leaves the address.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedCommand = searchParams.get("command");
+
   // Keep the selection valid as the file list loads / changes.
   useEffect(() => {
     if (!files.length) {
       return;
     }
-    if (!selectedFileId || !files.some((file) => file.id === selectedFileId)) {
+    const linked = files.find((file) => file.command === linkedCommand);
+    if (linked) {
+      setSelectedFileId(linked.id);
+    } else if (!selectedFileId || !files.some((file) => file.id === selectedFileId)) {
       setSelectedFileId(files[0].id);
     }
-  }, [files, selectedFileId]);
+    if (linkedCommand !== null) {
+      if (!linked) {
+        notifications.show({
+          id: `command-not-listed:${linkedCommand}`,
+          color: "warning",
+          title: t("commands.linkedCommandMissing.title"),
+          message: t("commands.linkedCommandMissing.body", { command: linkedCommand }),
+        });
+      }
+      setSearchParams(
+        (current) => {
+          current.delete("command");
+          return current;
+        },
+        { replace: true },
+      );
+    }
+  }, [files, linkedCommand, selectedFileId, setSearchParams, t]);
 
   const detailQuery = useQuery({
     queryKey: ["command-file", selectedFileId],
@@ -795,7 +821,10 @@ export function CommandsPage() {
                 pathLabel={detail ? `commands/${detail.relative_path}` : ""}
                 disabled={authoringMutation.isPending || applyAuthoringMutation.isPending}
                 onOpenExternal={
-                  displayPath ? () => void openLocalFile(displayPath).catch(() => {}) : undefined
+                  // The file is the server machine's: a browser has nothing to open it with.
+                  displayPath && isTauriRuntime()
+                    ? () => void openLocalFile(displayPath).catch(() => {})
+                    : undefined
                 }
               />
               {detail ? (

@@ -1,5 +1,5 @@
 en:
-  redirecting: "Redirecting to GitHub…"
+  continue: "Create the GitHub App on GitHub."
   submit: "Continue to GitHub"
   error_title: "GitHub App registration failed."
   error_hint: "Close this page and retry from the GuildBotics app."

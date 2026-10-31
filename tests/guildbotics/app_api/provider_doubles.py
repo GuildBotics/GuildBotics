@@ -26,8 +26,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.utils.secret_store import identity_secret_store
 from tests.guildbotics import members
-
-AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
+from tests.guildbotics.app_api.owner import owner_client
 
 Answer = Callable[[httpx.Request], httpx.Response]
 
@@ -75,13 +74,12 @@ def saved_workspace(
     ``workspace`` is expected to be the working directory, with ``HOME``
     pointing inside the test's own directory.
     """
-    with TestClient(
-        create_app(session_token="secret", runtime=AppRuntime(EventBus())),
+    with owner_client(
+        create_app(runtime=AppRuntime(EventBus())),
         raise_server_exceptions=False,
     ) as client:
         response = client.post(
             "/config/init",
-            headers=AUTH_HEADERS,
             json={
                 "config_dir": str(workspace / ".guildbotics/config"),
                 "language": "en",

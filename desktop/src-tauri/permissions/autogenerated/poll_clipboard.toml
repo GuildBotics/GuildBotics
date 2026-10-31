@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-poll-clipboard"
+description = "Enables the poll_clipboard command without any pre-configured scope."
+commands.allow = ["poll_clipboard"]
+
+[[permission]]
+identifier = "deny-poll-clipboard"
+description = "Denies the poll_clipboard command without any pre-configured scope."
+commands.deny = ["poll_clipboard"]

@@ -24,6 +24,8 @@ import {
   type LocalGrants,
   type EnvironmentAccessStatus,
 } from "../api/client";
+import { isTauriRuntime } from "../desktopWindow";
+import { useServerMachineLabel } from "../serverMachine";
 
 /** What a row or a new entry may be granted: the two accesses, or closed. */
 type Access = GrantAccess | "deny";
@@ -37,10 +39,6 @@ const LOOKUP_DEBOUNCE_MS = 300;
 function homeRelative(path: string, home: string): string {
   const under = ["/", "\\"].some((separator) => path.startsWith(home + separator));
   return under ? path.slice(home.length + 1) : path;
-}
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 /** The workspace's shared directories under the home. */
@@ -153,6 +151,7 @@ export function DeviceAccessCard({
   onChange: (local: LocalGrants) => void;
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const own: { path: string; access: Access }[] = [
     ...local.paths,
     ...local.deny.map((entry) => ({ path: entry, access: "deny" as const })),
@@ -200,7 +199,7 @@ export function DeviceAccessCard({
               {mono(row.path)}
               {status?.paths.find((g) => g.grant === row.path)?.present === false ? (
                 <Badge color="danger" variant="light" size="xs">
-                  {t("setup.intelligence.grants.absentHere")}
+                  {t("setup.intelligence.grants.absentHere", { machine })}
                 </Badge>
               ) : null}
             </Group>
@@ -285,6 +284,7 @@ function AccessCard({
   rows: AccessRow[];
 }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const [path, setPath] = useState(initialPath);
   const [access, setAccess] = useState<Access>("read");
   const scope = scopeOf(access);
@@ -343,7 +343,7 @@ function AccessCard({
         </Group>
         {judged?.valid && !judged.present && scope === "document" ? (
           <Text size="xs" c="dimmed">
-            {t("setup.intelligence.grants.absentHere")}
+            {t("setup.intelligence.grants.absentHere", { machine })}
           </Text>
         ) : null}
         {rows.length === 0 ? (
@@ -456,7 +456,6 @@ function PathInput({
   const pickDirectory = async () => {
     setPicking(true);
     try {
-      if (!isTauriRuntime()) return;
       const [{ open }, { homeDir }] = await Promise.all([
         import("@tauri-apps/plugin-dialog"),
         import("@tauri-apps/api/path"),
@@ -481,16 +480,19 @@ function PathInput({
       onChange={(event) => onChange(event.currentTarget.value)}
       style={{ flex: 1, minWidth: 220 }}
       rightSectionWidth={30}
+      // A browser has no dialog for the server machine's folders: the path is typed.
       rightSection={
-        <ActionIcon
-          aria-label={t("setup.intelligence.grants.choose")}
-          variant="subtle"
-          size="sm"
-          loading={picking}
-          onClick={pickDirectory}
-        >
-          <FolderOpen size={14} />
-        </ActionIcon>
+        isTauriRuntime() ? (
+          <ActionIcon
+            aria-label={t("setup.intelligence.grants.choose")}
+            variant="subtle"
+            size="sm"
+            loading={picking}
+            onClick={pickDirectory}
+          >
+            <FolderOpen size={14} />
+          </ActionIcon>
+        ) : null
       }
       error={error}
     />
@@ -499,14 +501,15 @@ function PathInput({
 
 function PresenceBadge({ present }: { present: boolean | undefined }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   if (present === undefined) return null;
   return present ? (
     <Badge color="success" variant="light" size="xs">
-      {t("setup.intelligence.grants.presentHere")}
+      {t("setup.intelligence.grants.presentHere", { machine })}
     </Badge>
   ) : (
     <Badge color="gray" variant="light" size="xs">
-      {t("setup.intelligence.grants.absentHere")}
+      {t("setup.intelligence.grants.absentHere", { machine })}
     </Badge>
   );
 }

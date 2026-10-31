@@ -117,7 +117,7 @@ def read_active_workspace() -> WorkspaceState | None:
     path = active_workspace_file()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except FileNotFoundError, json.JSONDecodeError, OSError:
         return None
     if not isinstance(payload, dict):
         return None

@@ -3,28 +3,37 @@ the board of the workspace ``project.services.ticket_service.workspace`` names.
 
 The selection's rules (:mod:`~guildbotics.integrations.ticket_selection`) are
 applied here to the cards Branvil answers.
+
+Ticket comments are mutable in Branvil's GUI: reads and candidate refreshes
+use the current bodies and remaining comments, in their original creation
+order. Edits keep the comment's author, creation time and workflow metadata.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from logging import Logger
-from typing import Any
+from typing import IO, Any
 
 from guildbotics.entities import Person, Service, Task, Team
 from guildbotics.integrations.branvil.api import (
     PROVIDER,
     BranvilApi,
     BranvilItem,
+    interactive,
     segment,
-    username,
 )
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.repository_scope import check_path, in_scope
+from guildbotics.integrations.ticket_attachments import referred, too_large
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
+    relevant_comments,
     select,
+    select_mention,
     since_assignment,
 )
 from guildbotics.runtime.port import (
@@ -35,24 +44,31 @@ from guildbotics.runtime.port import (
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    ActorName,
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadPage,
     Ticket,
     TicketRelative,
+    TicketSummary,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
     ClosedItem,
+    CreateLane,
     MoveLane,
     TicketCreated,
     TicketService,
     TicketUpdated,
+    creation_lane,
 )
 from guildbotics.utils.i18n_tool import t
 
 #: The lanes whose tickets are a member's work.
 _LANES = (Task.READY, Task.IN_PROGRESS)
+#: The collection of a ticket each of its resources but itself is read from.
+_COLLECTIONS = {"ticket_comments": "comments", "ticket_attachments": "attachments"}
 
 
 class BranvilTicketService(BranvilApi, TicketService):
@@ -71,14 +87,32 @@ class BranvilTicketService(BranvilApi, TicketService):
         conditions = read_conditions(resource, parameters, continuation)
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
-        item = self.item(subject, "ticket")
-        if resource == "ticket_comments":
+        if resource == "tracker_tickets":
             return await self.page(
                 resource,
-                f"{item.api}/comments",
+                f"/repos/{segment(self.repository(subject))}/tickets",
                 conditions,
                 continuation,
-                self.comment_of,
+                lambda data: TicketSummary(
+                    **self.target(_ticket_item(data), data).model_dump(),
+                    key=str(data["key"]),
+                    state=data["state"],
+                    lane=data["lane"] if self._on_board(data) else None,
+                    labels=data["labels"],
+                    updated_at=data["updated_at"],
+                ),
+                q=conditions["text"],
+                state=conditions["state"],
+                **({"label": conditions["label"]} if conditions["label"] else {}),
+            )
+        item = self.item(subject, "ticket")
+        if resource != "tickets":
+            return await self.page(
+                resource,
+                f"{item.api}/{_COLLECTIONS[resource]}",
+                conditions,
+                continuation,
+                self.comment_of if resource == "ticket_comments" else _attachment,
             )
         data = await self.get(item.api)
         ticket = Ticket(
@@ -88,15 +122,36 @@ class BranvilTicketService(BranvilApi, TicketService):
             repository=item.place,
             body=str(data.get("body") or ""),
             state=str(data["state"]),
-            assignees=[str(data["assignee"]["name"])] if data["assignee"] else [],
+            assignees=[ActorName(str(data["assignee"]["name"]))]
+            if data["assignee"]
+            else [],
             labels=list(data.get("labels") or []),
             lane=data["lane"] if self._on_board(data) else None,
             parent=data["parent"] and self._relative(data["parent"]),
             children=[self._relative(entry) for entry in data["children"]],
             blocked_by=[self._relative(entry) for entry in data["blocked_by"]],
             blocks=[self._relative(entry) for entry in data["blocks"]],
+            interactive=data["interactive"],
+            interactive_ancestor=_interactive_ancestor(data),
         )
         return ReadPage.of(resource, [ticket], target=self.target(item, data))
+
+    @asynccontextmanager
+    async def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AsyncIterator[tuple[Attachment, IO[bytes]]]:
+        """An attachment of the ticket's repository, which is one of the
+        ticket's only while its body or a comment refers to it."""
+        item = self.item(url, "ticket")
+        found = referred(
+            map(_attachment, await self.items(f"{item.api}/attachments")),
+            url,
+            attachment_id,
+            limit,
+        )
+        path = f"/repos/{segment(item.place)}/attachments/{segment(attachment_id)}"
+        async with self.download(path, limit, too_large(found, limit)) as content:
+            yield found, content
 
     async def comment(
         self, url: str, body: str, *, status: WorkflowStatus | None = None
@@ -111,19 +166,38 @@ class BranvilTicketService(BranvilApi, TicketService):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
-        """Open a ticket in the new lane of the board of its repository's
-        workspace: Branvil keeps every ticket on it.
+        """Create the ticket's complete initial state in one transaction.
+
+        Branvil keeps every ticket on its workspace's board.
 
         Raises:
             ServiceUnsupported: If not ``add_to_board``.
         """
         if not add_to_board:
             raise ServiceUnsupported(t("integrations.branvil.api.every_on_board"))
+        for related in filter(None, (parent, *blocked_by)):
+            check_path(
+                self.workspace, self.item(related, "ticket").place, provider=PROVIDER
+            )
         data = await self.call(
             "POST",
             f"/repos/{segment(self.repository(tracker))}/tickets",
-            {"title": title, "body": body, "labels": list(labels), "lane": Task.NEW},
+            {
+                "title": title,
+                "body": body,
+                "labels": list(labels),
+                "lane": creation_lane(lane, parent, blocked_by),
+                "interactive": interactive,
+                "assignee": assignee,
+                "parent": parent,
+                "blocked_by": list(blocked_by),
+            },
         )
         return TicketCreated(
             labels=list(data["labels"]), target=self.target(_ticket_item(data), data)
@@ -142,6 +216,7 @@ class BranvilTicketService(BranvilApi, TicketService):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
         item = self.item(url, "ticket")
         # A relation is written to both tickets: each is in the scope.
@@ -154,6 +229,7 @@ class BranvilTicketService(BranvilApi, TicketService):
             "title": title,
             "state": state,
             "state_reason": None if state is None else state_reason,
+            "interactive": interactive,
         }
         answer = await self.call(
             "PATCH",
@@ -174,6 +250,8 @@ class BranvilTicketService(BranvilApi, TicketService):
             state_changed=bool(answer["state_changed"]),
             labels=list(data["labels"]),
             target=self.target(item, data),
+            interactive=data["interactive"],
+            interactive_ancestor=_interactive_ancestor(data),
         )
 
     async def add_reaction(
@@ -193,6 +271,13 @@ class BranvilTicketService(BranvilApi, TicketService):
             state="open",
             comments="all",
         )
+        mentioned = await self.items(
+            f"/workspaces/{segment(self.workspace)}/tickets",
+            mentions="me",
+            state="open",
+            comments="all",
+        )
+        cards = list({card["url"]: card for card in [*cards, *mentioned]}.values())
         found = [(task, card) for card in cards if (task := self._task(card))]
         ordered = sorted(found, key=lambda pair: pair[0])
         candidates = []
@@ -214,6 +299,19 @@ class BranvilTicketService(BranvilApi, TicketService):
         }
         found = self._task(card)
         return None if found is None else await self._select(found, card)
+
+    async def can_receive_work(self, url: str) -> bool:
+        item = self.item(url, "ticket")
+        card = {
+            **await self.get(item.api),
+            "comments": await self.items(f"{item.api}/comments"),
+            "pull_requests": await self.items(f"{item.api}/pulls"),
+        }
+        found = self._task(card)
+        return (
+            found is not None
+            and await self._select(found, card, finish_merged=False) is not None
+        )
 
     async def move(self, task: Task, lane: MoveLane) -> bool:
         """Move a ticket of the workspace's board to ``lane``.
@@ -264,21 +362,32 @@ class BranvilTicketService(BranvilApi, TicketService):
         )
 
     def _task(self, card: dict[str, Any]) -> Task | None:
-        """The card as a task of the member, if it is one: open, in a lane of
-        the member's work on the board, not waiting in the ready lane for a
-        ticket it is blocked by, and the member is its one assignee."""
-        me = username(self.person).casefold()
+        """An open card in scope, for assigned work or a mention response.
+
+        Only assigned work is restricted to actionable lanes and blockers;
+        a mention response can answer without starting the assigned work.
+        An interactive card, or one of an interactive ancestor, is none: a
+        human works on it with an agent, so no trigger selects it.
+        """
+        me = member_identity(self.person).name
+        assigned = bool(card["assignee"]) and card["assignee"]["name"].casefold() == me
         if not (
             me
             and card["state"] == "open"
+            and not interactive(card)
             and self._on_board(card)
-            and card["lane"] in _LANES
-            and not (
-                card["lane"] == Task.READY
-                and any(entry["state"] == "open" for entry in card["blocked_by"])
+            and (
+                not assigned
+                or (
+                    card["lane"] in _LANES
+                    and not (
+                        card["lane"] == Task.READY
+                        and any(
+                            entry["state"] == "open" for entry in card["blocked_by"]
+                        )
+                    )
+                )
             )
-            and card["assignee"]
-            and card["assignee"]["name"].casefold() == me
         ):
             return None
         item = _ticket_item(card)
@@ -292,12 +401,45 @@ class BranvilTicketService(BranvilApi, TicketService):
             description=str(card.get("body") or ""),
             status=card["lane"],
             created_at=card.get("created_at"),
-            assignee=self.person.person_id,
+            assignee=self.person.person_id if assigned else None,
             comments=[self.message(comment) for comment in card["comments"]],
         )
 
-    async def _select(self, task: Task, card: dict[str, Any]) -> Task | None:
-        since = since_assignment(task.comments, card["assignee"]["assigned_at"])
+    async def _select(
+        self, task: Task, card: dict[str, Any], *, finish_merged: bool = True
+    ) -> Task | None:
+        if task.assignee is None:
+            return select_mention(
+                task,
+                pending=mention_pending(
+                    self.mentions_member(card),
+                    (
+                        (message, self.mentions_member(comment))
+                        for message, comment in zip(
+                            task.comments, card["comments"], strict=True
+                        )
+                    ),
+                ),
+            )
+        since = since_assignment(
+            relevant_comments(
+                (
+                    message,
+                    bool(comment["mentions"]) and not self.mentions_member(comment),
+                )
+                for message, comment in zip(
+                    task.comments, card["comments"], strict=True
+                )
+            ),
+            card["assignee"]["assigned_at"],
+        )
+        # Keep the source metadata and stored mention flags with the same
+        # filtered messages; unknown timestamps need not form a suffix.
+        comments = [
+            (message, comment)
+            for message, comment in zip(task.comments, card["comments"], strict=True)
+            if message in since
+        ]
 
         async def linked_pull() -> str | None:
             return linked_pull_state(
@@ -311,14 +453,25 @@ class BranvilTicketService(BranvilApi, TicketService):
         return await select(
             task,
             since,
-            # What was said since the assignment ends the comments.
-            latest_status=WorkflowStatus.from_payload(card["comments"][-1].get("meta"))
-            if since
+            latest_status=WorkflowStatus.from_payload(comments[-1][1].get("meta"))
+            if comments
             else None,
-            pending=mention_pending(task.description, since, self.mentions),
+            pending=mention_pending(
+                self.mentions_member(card),
+                (
+                    (message, self.mentions_member(comment))
+                    for message, comment in comments
+                ),
+            ),
             linked_pull=linked_pull,
             done=lambda: self.move(task, "done"),
+            finish_merged=finish_merged,
         )
+
+
+def _interactive_ancestor(ticket: dict[str, Any]) -> str | None:
+    ancestor = ticket["interactive_ancestor"]
+    return str(ancestor["url"]) if ancestor else None
 
 
 def _ticket_item(ticket: dict[str, Any]) -> BranvilItem:
@@ -329,4 +482,16 @@ def _timestamp(moment: datetime) -> str:
     """``moment`` as Branvil writes times: UTC, to the millisecond."""
     return (
         moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    )
+
+
+def _attachment(attachment: dict[str, Any]) -> Attachment:
+    """An attachment as Branvil lists one for a ticket, without the address
+    it is read from with a session."""
+    return Attachment(
+        id=str(attachment["id"]),
+        name=str(attachment["name"]),
+        media_type=str(attachment["media_type"]),
+        size=int(attachment["size"]),
+        referenced_by=[str(where) for where in attachment["referenced_by"]],
     )

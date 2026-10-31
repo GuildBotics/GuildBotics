@@ -42,6 +42,8 @@ class Freshness:
     behind_by: int
     #: The base's tip when the pull request was read again.
     current_base_sha: str
+    #: Whether the host requires this head to include the current base.
+    requires_up_to_date: bool
 
 
 def check_rollup(checks: list[dict[str, Any]]) -> str:
@@ -116,6 +118,7 @@ def readiness_of(
             rollup=rollup,
             checks_expected=checks_expected,
             behind_by=freshness.behind_by,
+            requires_up_to_date=freshness.requires_up_to_date,
             changed={
                 "head": current_head_sha != head_sha,
                 "base": freshness.current_base_sha != freshness.base_sha,
@@ -137,10 +140,15 @@ def readiness_of(
 
 
 def _completion_blockers(
-    *, rollup: str, checks_expected: bool, behind_by: int, changed: dict[str, bool]
+    *,
+    rollup: str,
+    checks_expected: bool,
+    behind_by: int,
+    requires_up_to_date: bool,
+    changed: dict[str, bool],
 ) -> list[dict[str, str]]:
     blockers: list[dict[str, str]] = []
-    if behind_by > 0:
+    if requires_up_to_date and behind_by > 0:
         blockers.append(
             {
                 "code": "base_out_of_date",

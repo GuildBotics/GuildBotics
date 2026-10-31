@@ -4,12 +4,16 @@ import {
   getCliAgentUsage,
   getCliAgentLastTurns,
   ApiRequestError,
+  authorizeApp,
+  enterSession,
+  onConnectionLost,
+  resumeSession,
+  type ConnectionLoss,
   applyCommandAuthoring,
   authorCommand,
   checkCommandInputPaths,
   copyCommandInputFile,
   troubleshoot,
-  configureApi,
   createCommandFile,
   dismissSystemAlert,
   getActivityHistory,
@@ -80,9 +84,32 @@ function headerValue(init: RequestInit, name: string): string | undefined {
   return (init.headers as Record<string, string>)[name];
 }
 
-beforeEach(() => {
-  // Reset module state to a known token + base for deterministic assertions.
-  configureApi("test-token", "http://127.0.0.1:8765");
+/** A fetch that answers each call with the next response, recording the calls. */
+function queueFetch(...responses: Response[]): FetchArgs[] {
+  const calls: FetchArgs[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const response = responses.shift();
+      if (!response) {
+        throw new Error(`unexpected request ${url}`);
+      }
+      return response;
+    }),
+  );
+  return calls;
+}
+
+function errorResponse(status: number, code: string): Response {
+  return jsonResponse({ code, message: code, context: {} }, { ok: false, status });
+}
+
+beforeEach(async () => {
+  // Every test runs in a session whose CSRF value is known.
+  queueFetch(jsonResponse({ csrf: "test-csrf" }));
+  await resumeSession();
+  vi.unstubAllGlobals();
 });
 
 afterEach(() => {
@@ -90,82 +117,154 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("configureApi", () => {
-  it("stores the token and base URL", () => {
-    configureApi("abc123", "http://example.test:9000");
+describe("session", () => {
+  it("enters with an entry link's code and sends the session's CSRF value with writes", async () => {
+    const calls = queueFetch(
+      jsonResponse({ csrf: "entered" }),
+      jsonResponse({ cwd: "/ws" }),
+      jsonResponse({ cwd: "/ws" }),
+    );
 
-    const { calls } = captureFetch(jsonResponse({ ok: true }));
-    return getConfigStatus().then(() => {
-      expect(calls[0].url).toBe("http://example.test:9000/config/status");
-      expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("abc123");
-    });
+    await enterSession("code-1");
+    await setWorkspace({ workspace_dir: "/ws" });
+    await getConfigStatus();
+
+    expect(calls[0].url).toBe("/api/session");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify({ code: "code-1" }));
+    expect(headerValue(calls[1].init, "X-GuildBotics-CSRF")).toBe("entered");
+    expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBeUndefined();
   });
-});
 
-describe("closeApi", () => {
-  it("closes every path for good, refusing a late reconnect", async () => {
-    // A fresh module: a closed connection never reopens in it.
-    vi.resetModules();
-    const client = await import("./client");
-    client.configureApi("old-token", "http://127.0.0.1:8765");
-    const { mock } = captureFetch(jsonResponse({ ok: true }));
-    const sockets = vi.fn();
-    vi.stubGlobal("WebSocket", sockets);
-    const reason = new Error("the backend exited");
-    client.closeApi(reason);
+  it("takes up the session's CSRF value, or says there is no session", async () => {
+    const calls = queueFetch(
+      jsonResponse({ csrf: "resumed" }),
+      jsonResponse({}),
+      errorResponse(401, "unauthorized"),
+    );
 
-    expect(() => client.configureApi("old-token", "http://127.0.0.1:8765")).toThrow(reason);
-    await expect(client.getConfigStatus()).rejects.toBe(reason);
-    await expect(
-      client.uploadMemberAvatar("alice", new File(["x"], "a.png", { type: "image/png" })),
-    ).rejects.toBe(reason);
-    await expect(
-      client.providerOperation("github", "app-registrations", { app_name: "app" }),
-    ).rejects.toBe(reason);
-    expect(() => client.subscribeEvents(() => undefined)).toThrow(reason);
-    expect(client.memberAvatarUrl("alice")).toBeUndefined();
-    expect(mock).not.toHaveBeenCalled();
-    expect(sockets).not.toHaveBeenCalled();
+    await expect(resumeSession()).resolves.toBe(true);
+    await verify();
+    await expect(resumeSession()).resolves.toBe(false);
+
+    expect(calls[0].url).toBe("/api/session");
+    expect(calls[0].init.method).toBe("GET");
+    expect(headerValue(calls[1].init, "X-GuildBotics-CSRF")).toBe("resumed");
+  });
+
+  it("refreshes a refused CSRF value once and sends the same write again", async () => {
+    const calls = queueFetch(
+      errorResponse(403, "csrf_mismatch"),
+      jsonResponse({ csrf: "fresh" }),
+      jsonResponse({ cwd: "/ws" }),
+    );
+
+    await expect(setWorkspace({ workspace_dir: "/ws" })).resolves.toEqual({ cwd: "/ws" });
+
+    expect(calls.map(({ url, init }) => `${init.method} ${url}`)).toEqual([
+      "POST /api/workspace",
+      "GET /api/session",
+      "POST /api/workspace",
+    ]);
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
+    expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBe("fresh");
+    expect(calls[2].init.body).toBe(calls[0].init.body);
+  });
+
+  it("refreshes an upload's refused CSRF value too, sending the same file", async () => {
+    const calls = queueFetch(
+      errorResponse(403, "csrf_mismatch"),
+      jsonResponse({ csrf: "fresh" }),
+      jsonResponse({ avatar_timestamp: 1 }),
+    );
+    const avatar = new File(["avatar"], "avatar.png", { type: "image/png" });
+
+    await expect(uploadMemberAvatar("alice", avatar)).resolves.toEqual({ avatar_timestamp: 1 });
+
+    expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBe("fresh");
+    expect((calls[2].init.body as FormData).get("file")).toBe(avatar);
+  });
+
+  it("does not retry a second CSRF refusal", async () => {
+    const calls = queueFetch(
+      errorResponse(403, "csrf_mismatch"),
+      jsonResponse({ csrf: "fresh" }),
+      errorResponse(403, "csrf_mismatch"),
+    );
+
+    await expect(setWorkspace({ workspace_dir: "/ws" })).rejects.toMatchObject({
+      code: "csrf_mismatch",
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("tells the listeners when the session is gone or the server unreachable", async () => {
+    const losses: ConnectionLoss[] = [];
+    const stop = onConnectionLost((loss) => losses.push(loss));
+    queueFetch(errorResponse(401, "unauthorized"), errorResponse(500, "internal"));
+
+    await expect(getConfigStatus()).rejects.toBeInstanceOf(ApiRequestError);
+    await expect(getConfigStatus()).rejects.toMatchObject({ code: "internal" });
+    const offline = new TypeError("Failed to fetch");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(offline));
+    await expect(getConfigStatus()).rejects.toBe(offline);
+    stop();
+    await expect(getConfigStatus()).rejects.toBe(offline);
+
+    expect(losses).toEqual(["signed_out", "unreachable"]);
+  });
+
+  it("allows a local app with the consent page's request", async () => {
+    const calls = queueFetch(jsonResponse({ redirect: "http://127.0.0.1:5000/cb?code=c" }));
+    const body = {
+      client: "GuildBotics CLI laptop",
+      redirect_uri: "http://127.0.0.1:5000/cb",
+      state: "s",
+      code_challenge: "c".repeat(43),
+    };
+
+    await expect(authorizeApp(body)).resolves.toEqual({
+      redirect: "http://127.0.0.1:5000/cb?code=c",
+    });
+    expect(calls[0].url).toBe("/api/apps/authorizations");
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.body).toBe(JSON.stringify(body));
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
   });
 });
 
 describe("memberAvatarUrl", () => {
-  it("embeds the session token and cache-buster as query parameters", () => {
-    configureApi("avatar-token", "http://example.test:9000");
-    const url = new URL(memberAvatarUrl("alice", 12345)!);
-    expect(url.pathname).toBe("/config/members/alice/avatar");
-    expect(url.searchParams.get("token")).toBe("avatar-token");
-    expect(url.searchParams.get("t")).toBe("12345");
+  it("is a same-origin API path with the cache-buster", () => {
+    expect(memberAvatarUrl("alice", 12345)).toBe("/api/config/members/alice/avatar?t=12345");
   });
 
   it("encodes the person id and omits the cache-buster when absent", () => {
-    configureApi("avatar-token", "http://example.test:9000");
-    const url = new URL(memberAvatarUrl("a/b")!);
-    expect(url.pathname).toBe("/config/members/a%2Fb/avatar");
-    expect(url.searchParams.has("t")).toBe(false);
+    expect(memberAvatarUrl("a/b")).toBe("/api/config/members/a%2Fb/avatar");
   });
 });
 
 describe("request headers and body", () => {
-  it("sends the session token and JSON content type on GET", async () => {
+  it("sends the language and JSON content type on GET", async () => {
     const { calls } = captureFetch(jsonResponse({ cwd: "/ws" }));
     await getConfigStatus();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/status");
+    expect(calls[0].url).toBe("/api/config/status");
     expect(calls[0].init.method).toBe("GET");
     expect(headerValue(calls[0].init, "Content-Type")).toBe("application/json");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(headerValue(calls[0].init, "X-GuildBotics-Language")).toBe("en");
+    // A read carries no CSRF value.
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBeUndefined();
     expect(calls[0].init.body).toBeUndefined();
   });
 
-  it("serializes the body as JSON on POST", async () => {
+  it("serializes the body as JSON on POST, with the CSRF value", async () => {
     const { calls } = captureFetch(jsonResponse({ cwd: "/ws" }));
     await setWorkspace({ workspace_dir: "/projects/demo" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/workspace");
+    expect(calls[0].url).toBe("/api/workspace");
     expect(calls[0].init.method).toBe("POST");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(JSON.stringify({ workspace_dir: "/projects/demo" }));
   });
 
@@ -177,14 +276,14 @@ describe("request headers and body", () => {
     await uploadCommandInputFile(commandInput);
     await uploadMemberAvatar("a/b", avatar);
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files");
-    expect(calls[1].url).toBe("http://127.0.0.1:8765/config/members/a%2Fb/avatar");
+    expect(calls[0].url).toBe("/api/commands/input-files");
+    expect(calls[1].url).toBe("/api/config/members/a%2Fb/avatar");
     for (const [call, file] of [
       [calls[0], commandInput],
       [calls[1], avatar],
     ] as const) {
       expect(call.init.method).toBe("POST");
-      expect(headerValue(call.init, "X-GuildBotics-Session-Token")).toBe("test-token");
+      expect(headerValue(call.init, "X-GuildBotics-CSRF")).toBe("test-csrf");
       expect(headerValue(call.init, "Content-Type")).toBeUndefined();
       expect(call.init.body).toBeInstanceOf(FormData);
       expect((call.init.body as FormData).get("file")).toBe(file);
@@ -197,7 +296,7 @@ describe("request headers and body", () => {
     );
     await checkCommandInputPaths({ paths: ["/a"], cwd: "/work" });
 
-    expect(check.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-paths");
+    expect(check.calls[0].url).toBe("/api/commands/input-paths");
     expect(check.calls[0].init.method).toBe("POST");
     expect(check.calls[0].init.body).toBe(JSON.stringify({ paths: ["/a"], cwd: "/work" }));
 
@@ -209,7 +308,7 @@ describe("request headers and body", () => {
     );
     await copyCommandInputFile("/a");
 
-    expect(copy.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files/copy");
+    expect(copy.calls[0].url).toBe("/api/commands/input-files/copy");
     expect(copy.calls[0].init.method).toBe("POST");
     expect(copy.calls[0].init.body).toBe(JSON.stringify({ path: "/a" }));
   });
@@ -226,7 +325,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse(providers));
     const result = await getProviders();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers");
+    expect(calls[0].url).toBe("/api/config/providers");
     expect(calls[0].init.method).toBe("GET");
     expect(result).toEqual(providers);
   });
@@ -235,9 +334,9 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await providerOperation("slack", "verify-tokens", { bot_token: "xoxb-1" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/verify-tokens");
+    expect(calls[0].url).toBe("/api/config/providers/slack/verify-tokens");
     expect(calls[0].init.method).toBe("POST");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1" }));
   });
 
@@ -245,12 +344,12 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ avatar_timestamp: 1 }));
     await importAvatarFromProvider("a/b", "git hub");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/a%2Fb/avatar/git%20hub");
+    expect(calls[0].url).toBe("/api/config/members/a%2Fb/avatar/git%20hub");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
   });
 
-  it("POSTs the GitHub App registration with the API base as callback", async () => {
+  it("POSTs the GitHub App registration", async () => {
     const { calls } = captureFetch(jsonResponse({ state: "s1", status: "pending" }));
     await startAppRegistration({
       app_name: "my-bot",
@@ -258,14 +357,13 @@ describe("request headers and body", () => {
       organization: "acme",
     });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/github/app-registrations");
+    expect(calls[0].url).toBe("/api/config/providers/github/app-registrations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
         app_name: "my-bot",
         person_id: "my-bot",
         organization: "acme",
-        callback_base_url: "http://127.0.0.1:8765",
       }),
     );
   });
@@ -274,7 +372,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ state: "s/1", status: "pending" }));
     await getAppRegistration("s/1");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/github/app-registration");
+    expect(calls[0].url).toBe("/api/config/providers/github/app-registration");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ state: "s/1" }));
   });
@@ -285,7 +383,7 @@ describe("request headers and body", () => {
     );
     const result = await startSlackAppRegistration({ app_name: "alice" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/app-registrations");
+    expect(calls[0].url).toBe("/api/config/providers/slack/app-registrations");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ app_name: "alice" }));
     expect(result.registration_url).toBe("https://api.slack.com/apps?new_app=1");
@@ -295,7 +393,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ bot_ok: true, app_token_ok: true }));
     await verifySlackTokens({ bot_token: "xoxb-1", app_token: "xapp-1" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/providers/slack/verify-tokens");
+    expect(calls[0].url).toBe("/api/config/providers/slack/verify-tokens");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ bot_token: "xoxb-1", app_token: "xapp-1" }));
   });
@@ -317,7 +415,7 @@ describe("request headers and body", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await verify();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/verify");
+    expect(calls[0].url).toBe("/api/verify");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBeUndefined();
   });
@@ -332,9 +430,9 @@ describe("request headers and body", () => {
     await getStatusOptions(target);
 
     expect(calls.map((call) => call.url)).toEqual([
-      "http://127.0.0.1:8765/config/providers/github/agent-field",
-      "http://127.0.0.1:8765/config/providers/github/agent-field/ensure",
-      "http://127.0.0.1:8765/config/providers/github/status-options",
+      "/api/config/providers/github/agent-field",
+      "/api/config/providers/github/agent-field/ensure",
+      "/api/config/providers/github/status-options",
     ]);
     for (const call of calls) {
       expect(call.init.method).toBe("POST");
@@ -349,8 +447,8 @@ describe("GET query parameter encoding", () => {
     await getTranscriptSettings();
     await updateTranscriptSettings({ detail: "full", retention_days: 14 });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/transcripts/settings");
-    expect(calls[1].url).toBe("http://127.0.0.1:8765/transcripts/settings");
+    expect(calls[0].url).toBe("/api/transcripts/settings");
+    expect(calls[1].url).toBe("/api/transcripts/settings");
     expect(calls[1].init.method).toBe("PUT");
     expect(calls[1].init.body).toBe(JSON.stringify({ detail: "full", retention_days: 14 }));
   });
@@ -359,14 +457,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ enabled: false }));
     await getRuntimeDebug();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/runtime/debug");
+    expect(calls[0].url).toBe("/api/runtime/debug");
   });
 
   it("updates runtime debug status", async () => {
     const { calls } = captureFetch(jsonResponse({ enabled: true }));
     await updateRuntimeDebug({ enabled: true });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/runtime/debug");
+    expect(calls[0].url).toBe("/api/runtime/debug");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.body).toBe(JSON.stringify({ enabled: true }));
   });
@@ -376,8 +474,8 @@ describe("GET query parameter encoding", () => {
     await getServiceKeepAwake();
     await updateServiceKeepAwake({ enabled: true });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/service/keep-awake");
-    expect(calls[1].url).toBe("http://127.0.0.1:8765/service/keep-awake");
+    expect(calls[0].url).toBe("/api/service/keep-awake");
+    expect(calls[1].url).toBe("/api/service/keep-awake");
     expect(calls[1].init.method).toBe("PUT");
     expect(calls[1].init.body).toBe(JSON.stringify({ enabled: true }));
   });
@@ -386,11 +484,11 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await runScenarioDiagnostics("alice/dev");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario?person_id=alice%2Fdev");
+    expect(calls[0].url).toBe("/api/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
   });
 
-  it("reads device-local last turns with the session token", async () => {
+  it("reads device-local last turns", async () => {
     const turns = [
       {
         person_id: "alice",
@@ -403,9 +501,8 @@ describe("GET query parameter encoding", () => {
     ];
     const { calls } = captureFetch(jsonResponse(turns));
     expect(await getCliAgentLastTurns()).toEqual(turns);
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/cli-agents/last-turns");
+    expect(calls[0].url).toBe("/api/intelligences/cli-agents/last-turns");
     expect(calls[0].init.method).toBe("GET");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
   });
 
   it("reads one tool's usage, and waits for a new probe on refresh", async () => {
@@ -416,8 +513,8 @@ describe("GET query parameter encoding", () => {
     await getCliAgentUsage("codex", true);
 
     expect(calls.map((call) => call.url)).toEqual([
-      "http://127.0.0.1:8765/intelligences/cli-agents/codex/usage",
-      "http://127.0.0.1:8765/intelligences/cli-agents/codex/usage?refresh=true",
+      "/api/intelligences/cli-agents/codex/usage",
+      "/api/intelligences/cli-agents/codex/usage?refresh=true",
     ]);
     expect(calls[0].init.method).toBe("GET");
   });
@@ -426,7 +523,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ alerts: [] }));
     await getSystemAlerts();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/system-alerts");
+    expect(calls[0].url).toBe("/api/system-alerts");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -434,7 +531,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ alerts: [] }));
     await dismissSystemAlert("credential:slack:alice/dev");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/system-alerts/dismiss");
+    expect(calls[0].url).toBe("/api/system-alerts/dismiss");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ alert_id: "credential:slack:alice/dev" }));
   });
@@ -453,8 +550,8 @@ describe("GET query parameter encoding", () => {
       limit: 50,
     });
 
-    const url = new URL(calls[0].url);
-    expect(url.pathname).toBe("/diagnostics/memory-events");
+    const url = new URL(calls[0].url, window.location.href);
+    expect(url.pathname).toBe("/api/diagnostics/memory-events");
     expect(url.searchParams.get("person_id")).toBe("alice/dev");
     expect(url.searchParams.get("doc_id")).toBe("doc 1");
     expect(url.searchParams.get("action")).toBe("touch");
@@ -476,8 +573,8 @@ describe("GET query parameter encoding", () => {
       syncEnd: "2026-07-07T00:00:00+09:00",
     });
 
-    const url = new URL(calls[0].url);
-    expect(url.pathname).toBe("/activity/history");
+    const url = new URL(calls[0].url, window.location.href);
+    expect(url.pathname).toBe("/api/activity/history");
     expect(url.searchParams.get("start")).toBe("2026-07-01T00:00:00+09:00");
     expect(url.searchParams.get("end")).toBe("2026-07-02T00:00:00+09:00");
     expect(url.searchParams.has("limit")).toBe(false);
@@ -490,14 +587,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ ok: true }));
     await runScenarioDiagnostics();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario");
+    expect(calls[0].url).toBe("/api/diagnostics/scenario");
   });
 
   it("fetches the sandbox status of this device", async () => {
     const { calls } = captureFetch(jsonResponse({ platform: "darwin", members: [] }));
     await getAgentEnvironmentStatus();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/agent-environment");
+    expect(calls[0].url).toBe("/api/intelligences/agent-environment");
   });
 
   it("encodes grant evaluations", async () => {
@@ -506,10 +603,10 @@ describe("GET query parameter encoding", () => {
     await evaluateGrant({ scope: "local", path: "/opt/home brew", access: "read_write" });
 
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
+      "/api/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
     );
     expect(calls[1].url).toBe(
-      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
+      "/api/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
     );
   });
 
@@ -517,42 +614,42 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ config_dir: "/c" }));
     await getIntelligenceConfig("bob smith");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/intelligences?person_id=bob%20smith");
+    expect(calls[0].url).toBe("/api/config/intelligences?person_id=bob%20smith");
   });
 
   it("encodes person for getCommandOptions", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getCommandOptions("a&b");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/options?person=a%26b");
+    expect(calls[0].url).toBe("/api/commands/options?person=a%26b");
   });
 
   it("omits the query when getCommandOptions has no person", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getCommandOptions();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/options");
+    expect(calls[0].url).toBe("/api/commands/options");
   });
 
   it("encodes person for getRoutineCommandOptions", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getRoutineCommandOptions("a&b");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/routine-options?person=a%26b");
+    expect(calls[0].url).toBe("/api/commands/routine-options?person=a%26b");
   });
 
   it("omits the query when getRoutineCommandOptions has no person", async () => {
     const { calls } = captureFetch(jsonResponse({ options: [] }));
     await getRoutineCommandOptions();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/routine-options");
+    expect(calls[0].url).toBe("/api/commands/routine-options");
   });
 
   it("encodes the path segment for getMemberConfig", async () => {
     const { calls } = captureFetch(jsonResponse({ person_id: "x" }));
     await getMemberConfig("team/alice");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/config/members/team%2Falice");
+    expect(calls[0].url).toBe("/api/config/members/team%2Falice");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -560,7 +657,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({ files: [] }));
     await listCommandFiles();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files");
+    expect(calls[0].url).toBe("/api/commands/files");
     expect(calls[0].init.method).toBe("GET");
   });
 
@@ -568,14 +665,14 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({}));
     await getCommandFile("a/b+c");
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files/a%2Fb%2Bc");
+    expect(calls[0].url).toBe("/api/commands/files/a%2Fb%2Bc");
   });
 
   it("posts a create command file request", async () => {
     const { calls } = captureFetch(jsonResponse({}));
     await createCommandFile({ command: "reports/weekly", format: "markdown" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files");
+    expect(calls[0].url).toBe("/api/commands/files");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({ command: "reports/weekly", format: "markdown" }),
@@ -596,7 +693,7 @@ describe("GET query parameter encoding", () => {
       person: "bot",
     });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/author");
+    expect(calls[0].url).toBe("/api/commands/author");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
@@ -629,7 +726,7 @@ describe("GET query parameter encoding", () => {
 
     await applyCommandAuthoring(changes);
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/author/apply");
+    expect(calls[0].url).toBe("/api/commands/author/apply");
     expect(calls[0].init.method).toBe("POST");
     expect(calls[0].init.body).toBe(JSON.stringify({ changes }));
   });
@@ -664,9 +761,9 @@ describe("GET query parameter encoding", () => {
       focus: { view: "trace", trace_id: "abc123", source: "routine" },
     });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/troubleshoot");
+    expect(calls[0].url).toBe("/api/diagnostics/troubleshoot");
     expect(calls[0].init.method).toBe("POST");
-    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
+    expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(calls[0].init.body).toBe(
       JSON.stringify({
         conversation_id: "conv-1",
@@ -694,7 +791,7 @@ describe("GET query parameter encoding", () => {
     const { calls } = captureFetch(jsonResponse({}));
     await updateCommandFile("greet-id", { content: "body", expected_revision: "rev-1" });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/commands/files/greet-id");
+    expect(calls[0].url).toBe("/api/commands/files/greet-id");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.body).toBe(
       JSON.stringify({ content: "body", expected_revision: "rev-1" }),
@@ -709,7 +806,7 @@ describe("GET query parameter encoding", () => {
     });
 
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8765/commands/files/greet-id/execution-status?expected_revision=rev-1&person=a%26b",
+      "/api/commands/files/greet-id/execution-status?expected_revision=rev-1&person=a%26b",
     );
   });
 });
@@ -797,14 +894,14 @@ type SocketHandlers = {
 class MockWebSocket implements SocketHandlers {
   static instances: MockWebSocket[] = [];
   url: string;
-  protocols: string[];
+  protocols: unknown;
   close = vi.fn();
   onopen?: () => void;
   onmessage?: (event: { data: string }) => void;
   onerror?: () => void;
   onclose?: () => void;
 
-  constructor(url: string, protocols: string[]) {
+  constructor(url: string, protocols?: unknown) {
     this.url = url;
     this.protocols = protocols;
     MockWebSocket.instances.push(this);
@@ -817,8 +914,7 @@ describe("websocket subscriptions", () => {
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
   });
 
-  it("connects to /events with the token as a subprotocol and drives status transitions", () => {
-    configureApi("ws-token", "http://127.0.0.1:8765");
+  it("connects to this page's /api/events without a subprotocol and drives status transitions", () => {
     const events: RuntimeEvent[] = [];
     const statuses: StreamStatus[] = [];
 
@@ -828,9 +924,9 @@ describe("websocket subscriptions", () => {
     );
 
     const socket = MockWebSocket.instances[0];
-    // The URL is logged by the server on every handshake, so the token stays out of it.
-    expect(socket.url).toBe("ws://127.0.0.1:8765/events");
-    expect(socket.protocols).toEqual(["guildbotics.session", "ws-token"]);
+    // The session cookie authenticates the handshake.
+    expect(socket.url).toBe(`ws://${window.location.host}/api/events`);
+    expect(socket.protocols).toBeUndefined();
     expect(statuses).toEqual(["connecting"]);
 
     socket.onopen?.();
@@ -859,30 +955,10 @@ describe("websocket subscriptions", () => {
   });
 
   it("works without an onStatus callback", () => {
-    configureApi("ws-token", "http://127.0.0.1:8765");
     expect(() => subscribeEvents(() => undefined)).not.toThrow();
     const socket = MockWebSocket.instances[0];
     expect(() => socket.onopen?.()).not.toThrow();
     expect(() => socket.onerror?.()).not.toThrow();
     expect(() => socket.onclose?.()).not.toThrow();
-  });
-});
-
-describe("websocketBase protocol conversion", () => {
-  beforeEach(() => {
-    MockWebSocket.instances = [];
-    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
-  });
-
-  it("converts http:// to ws://", () => {
-    configureApi("t", "http://localhost:1234");
-    subscribeEvents(() => undefined);
-    expect(MockWebSocket.instances[0].url).toBe("ws://localhost:1234/events");
-  });
-
-  it("converts https:// to wss:// and strips the trailing slash", () => {
-    configureApi("t", "https://api.example.com");
-    subscribeEvents(() => undefined);
-    expect(MockWebSocket.instances[0].url).toBe("wss://api.example.com/events");
   });
 });

@@ -4,11 +4,13 @@ and the messages a test puts there or hands around."""
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.local import chat
+from guildbotics.integrations.local.identity import username
 from guildbotics.runtime.chat_service import ChatEvent
 
 #: The time a message id that is a number of seconds counts from.
@@ -73,6 +75,13 @@ def say(
 ) -> ChatEvent:
     """Have ``author`` write ``text`` in the local channel, as a person
     appending a line would; the event it is."""
+    text = re.sub(
+        r"@([\w-]+)",
+        lambda match: (
+            "@" + (match[1] if match[1].startswith("local-") else username(match[1]))
+        ),
+        text,
+    )
     line: dict[str, Any] = {
         "message_id": message_id,
         "thread_id": thread_id or message_id,

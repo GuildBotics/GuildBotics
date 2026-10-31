@@ -7,6 +7,7 @@ import pytest
 from guildbotics.commands.errors import CommandError
 from guildbotics.entities.team import Person
 from guildbotics.integrations.local.chat import LocalChatService
+from guildbotics.integrations.local.identity import username
 from guildbotics.templates.commands.workflows import chat_post_command
 from tests.guildbotics.local_chat import lines, say
 
@@ -29,7 +30,9 @@ def _context(command_result: object = "hello") -> types.SimpleNamespace:
 
 
 def _posts(channel_id: str) -> list[str]:
-    return [line["text"] for line in lines(channel_id) if line["author"] == "aiko"]
+    return [
+        line["text"] for line in lines(channel_id) if line["author"] == username("aiko")
+    ]
 
 
 @pytest.mark.asyncio

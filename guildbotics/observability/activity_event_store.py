@@ -39,6 +39,7 @@ _DOMAIN_EVENT_TYPES = frozenset(
         "workflow.completed",
         "workflow.completion_missing",
         "workflow.rate_limited",
+        "pull_request.review_limit",
         "chat_dispatch.retry_scheduled",
         "chat_dispatch.abandoned",
         SYNC_UPDATE_REJECTED,

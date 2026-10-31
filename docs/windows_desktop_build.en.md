@@ -9,7 +9,7 @@ Install the following before cloning the repository:
 - Visual Studio Build Tools 2022 with the **Desktop development with C++** workload and the Windows SDK.
 - [rustup](https://rustup.rs/) with the stable `x86_64-pc-windows-msvc` toolchain.
 - Node.js 24.
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.12 or later.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.15 or later.
 - Git for Windows. Run the repository build scripts from Git Bash.
 - WebView2 Runtime. Windows 11 normally includes it; the NSIS installer uses Tauri's download-bootstrapper mode when it is absent.
 - The **Windows Hypervisor Platform** optional feature, for the isolated agent environment (the microVM AI CLI turns run in). The runtime (microsandbox) ships inside the sidecar; GuildBotics places it under `%USERPROFILE%\.guildbotics\data\msb` on first use.
@@ -34,8 +34,8 @@ Run the Windows-specific Python behavior and the Rust unit tests before building
 ```bash
 uv run --no-sync python -m pytest \
   tests/guildbotics/utils/test_processes.py \
-  tests/guildbotics/runtime/test_service_control.py \
-  tests/guildbotics/runtime/test_service_lock.py \
+  tests/guildbotics/drivers/test_app_api_lock.py \
+  tests/guildbotics/drivers/test_service_lock.py \
   tests/guildbotics/cli/test_start_command.py \
   tests/guildbotics/cli/test_stop_command.py \
   tests/guildbotics/cli/test_member_command.py \
@@ -49,9 +49,10 @@ The Rust test wrapper clears Tauri's `bundle.resources` only for tests, so it wo
 
 ## Build
 
-From the repository root in Git Bash:
+From the repository root in Git Bash. The Local API carries the screens it serves (`desktop/dist`), so they are built first:
 
 ```bash
+(cd desktop && npm ci && npm run build)
 scripts/desktop-build-backend.sh
 scripts/desktop-smoke-sidecars.sh
 cd desktop
@@ -62,7 +63,7 @@ The PyInstaller programs are written as one directory, `desktop/src-tauri/binari
 
 The NSIS installer is produced under `desktop/src-tauri/target/release/bundle/nsis/`. The Windows Tauri overlay fixes the bundle target to NSIS so a normal Windows build does not attempt an MSI build.
 
-For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds real PyInstaller `.exe` sidecars. For faster frontend iteration, run `scripts/desktop-dev-backend.sh` in one Git Bash terminal and the Vite dev command in another; this avoids rebuilding the sidecars for each frontend change.
+For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds the screens and real PyInstaller `.exe` sidecars. For faster frontend iteration, run `scripts/desktop-dev-backend.sh` in one Git Bash terminal and the Vite dev command in another; this avoids rebuilding the sidecars for each frontend change.
 
 ## Installation and PATH behavior
 

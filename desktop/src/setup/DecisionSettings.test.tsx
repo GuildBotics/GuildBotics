@@ -12,6 +12,7 @@ vi.mock("../api/client", async (original) => ({
   ...(await original<typeof import("../api/client")>()),
   getDecisionOptions: vi.fn(),
   getInferenceFailures: vi.fn(),
+  getServerMachineName: vi.fn(async () => "studio"),
 }));
 const t = i18n.getFixedT("en");
 function mount(engine: "llm" | "cli" | "jev" | null = "llm") {
@@ -60,6 +61,7 @@ it("shows why Jev refused the latest call until a call succeeds", async () => {
       t("setup.intelligence.inferenceFailure.summary", {
         reason: t("setup.intelligence.inferenceFailure.categories.authentication"),
         time: new Date("2026-10-08T10:00:00Z").toLocaleString("en"),
+        machine: "studio",
       }),
     ),
   ).toBeInTheDocument();

@@ -10,12 +10,29 @@ project chooses (Slack, for example).
 This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
 the exact `branvil` commands, are in the Branvil README.
 
+Ticket mention selection uses the `mentions` lists Branvil returns on bodies
+and comments. Branvil resolves names against its members when a body is saved.
+Install the matching Branvil (storage schema 22) before this provider.
+Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
+unanswered mentions outside the member's assignment, without scanning every
+ticket's comments. These runs respond on the ticket and leave its lane and
+assignee unchanged. Comments addressed only to other members do not wake the
+assignee; a response that affects their work should mention them.
+
+A ticket a human marks interactive (`interactive` on Branvil's tickets), and every
+descendant of it (a ticket with an interactive ancestor, Branvil's
+`interactive_ancestor`), is theirs to work on with an agent: the patrol never
+selects it, by any trigger (the ready or working lane, a comment, or a mention,
+assigned or not). A pull request that links it is still reviewed, but the member
+does not take up its own such pull request, neither for feedback nor once the
+checks it awaits settle.
+
 ## How it fits together
 
 ```text
 Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
-│ branvil serve                │            │ GuildBotics (forwards)       │
+│ branvil serve                │            │ OpenSSH (OS user service)    │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
 │ GuildBotics                  │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
@@ -23,15 +40,12 @@ Hub machine                                 another machine
 
 - Branvil runs once, on the machine that hosts the GuildBotics Hub, and listens on
   loopback only.
-- Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default. On
-  the Hub machine that is Branvil itself. On any other machine, GuildBotics (Desktop,
-  or the service of `guildbotics start`) forwards that local port to the Hub over the
-  SSH connection the Hub sync already uses, for as long as it runs, so nothing else
-  needs to run there. While GuildBotics is not running, `branvil tunnel --via <hub>`
-  forwards it instead (for `git` or Branvil's GUI). Whichever of them binds the port
-  first forwards it; the other waits, and GuildBotics takes the port over within
-  10 seconds once it is free. Only a loopback base URL (`127.0.0.1` or `localhost`)
-  is forwarded.
+- Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default.
+  On the Hub machine that is Branvil itself. On another machine, set up the
+  [SSH forwarding service](#set-up-ssh-forwarding-on-another-machine) once. OpenSSH
+  starts at login and forwards the loopback ports over one connection, independently
+  of GuildBotics and Branvil's client. The browser, git and CLI can use it even when
+  GuildBotics is closed.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
   on every machine, and GuildBotics' connection to Branvil names one base URL. A repository
@@ -77,8 +91,8 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 Following the Branvil README:
 
-1. Run Branvil on the Hub machine. Other machines need nothing more while GuildBotics
-   runs there. `branvil init` creates Branvil's owner, the one person who uses it: the
+1. Run Branvil on the Hub machine. Set up SSH forwarding on other machines as below.
+   `branvil init` creates Branvil's owner, the one person who uses it: the
    GuildBotics human member. The owner may do everything, merges, and uses Branvil's GUI.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
@@ -86,6 +100,81 @@ Following the Branvil README:
    repository. GuildBotics can create the workspace itself (below).
 
 Members and their tokens are not created in Branvil: GuildBotics does that.
+
+## Set up SSH forwarding on another machine
+
+Run the bundled script from a checkout on each machine other than the Hub. It
+needs only OpenSSH and the OS service manager; Python and the GuildBotics CLI are
+not needed. No setup is needed on the Hub itself, beyond accepting your SSH key.
+
+1. Stop any `branvil tunnel` you run manually or as a service.
+2. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
+   `[user@]host`) and accept the verified host key. Configure keys and hostnames
+   in your existing OpenSSH configuration. Do **not** put `LocalForward` in that
+   host entry: an ordinary `ssh my-hub` would then compete with the service.
+3. Use an unencrypted key or an unlocked ssh-agent key. The unencrypted
+   `~/.ssh/id_ed25519` created for Hub sync can be reused. The service uses
+   `BatchMode=yes` and strict host-key checking, so it never prompts. On Windows,
+   enable the OpenSSH client and, if used, the OpenSSH Authentication Agent service.
+4. Install the service using the commands below, then inspect its status.
+
+macOS (launchd user agent) and Linux (systemd user service):
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878
+sh scripts/hub-forward.sh status
+# Replace the entire port list by running install again with every desired port.
+sh scripts/hub-forward.sh uninstall
+```
+
+On Linux, a user service does not inherit your login shell's `SSH_AUTH_SOCK`.
+Without `--agent-socket` the service disables agent use and needs an unencrypted
+key. To use an agent, pass its **stable, absolute socket path**, for example:
+
+```sh
+sh scripts/hub-forward.sh install --hub my-hub --port 7878 --agent-socket "$SSH_AUTH_SOCK"
+```
+
+The script sets `SSH_AUTH_SOCK` in the service. If your agent uses a new socket
+path after login, install again with the new path or configure a stable socket.
+macOS uses the agent made available to launchd by the OS.
+
+Windows (Task Scheduler, Windows PowerShell 5.1; no administrator account needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port 7878
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action status
+# Replace the entire port list with -Port "7878,12345" (use your actual ports).
+powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action uninstall
+```
+
+The execution-policy override permits the unsigned script for this invocation.
+The task runs only while you are logged in, without a visible console. A small
+PowerShell loop, kept in the task's own arguments, retries ssh after 15 seconds,
+including on failure; the task has no execution time limit. Replacing or removing
+the task also ends its ssh. macOS stores the definition at
+`~/Library/LaunchAgents/local.hub-forward.plist` (ssh errors in
+`~/Library/Logs/hub-forward.log`); Linux uses
+`${XDG_CONFIG_HOME:-~/.config}/systemd/user/hub-forward.service` (logs via
+`journalctl --user -u hub-forward.service`). The scripts do not change SSH config,
+keys or known_hosts. There is one service per user: install replaces its Hub and
+complete port list, with repeated `--port` on POSIX or `-Port "7878,12345"` in PowerShell.
+
+All forwards bind only `127.0.0.1` and target the same port on the Hub's
+`127.0.0.1`. A dropped connection is detected by SSH keepalives and restarted.
+Linux and Windows wait 15 seconds after ssh exits; macOS's `ThrottleInterval`
+limits how often launchd starts it to once per 15 seconds. Status reports the OS process/task and its last result, not an
+end-to-end health check of Branvil. On Windows, a running task may be between SSH
+attempts. Check `http://127.0.0.1:7878` in the browser to verify Branvil too.
+
+Until the backend is consolidated on the Hub, GuildBotics still has its own
+forward. If this service binds first, the backend waits. If the backend already
+owns the port, this service's ssh exits (`ExitOnForwardFailure=yes`) and retries
+at intervals. Status may show it stopped or restarting while Branvil is still
+reachable through the backend. After stopping that backend forward, the service
+takes over on a retry. Do not run a second forwarding service for the same ports.
+The future client installer adds the GuildBotics server port once it is fixed;
+the scripts themselves contain no application names or default ports.
 
 Several GuildBotics workspaces can use one Branvil. The connection to Branvil and each
 member's agent and token belong with the members' identities, which every workspace
@@ -123,6 +212,10 @@ No machine issues them again.
 
 **Open Branvil**, next to the connection, opens Branvil's GUI in the system browser from
 any machine: GuildBotics asks Branvil for a single-use entry link with the admin token.
+The **Branvil** item below **Setup** in the sidebar opens it the same way, with an
+external-link icon. It appears when the saved code host or ticket service uses Branvil;
+saving the integration settings updates its visibility immediately. If opening fails,
+the reason appears below the item.
 
 ## Set up the members
 
@@ -232,14 +325,22 @@ The ticket workflow and the pull request patrol behave as they do with GitHub:
   **New**, and `member ticket create --no-add-to-board` is refused.
 - A ticket assigned to the member in the **Ready** lane of the workspace's board is
   taken up and moved to **In progress**; one in **In progress** is taken up again when
-  someone else has spoken since the member last did. Once a pull request refers to the
-  ticket, the patrol follows the pull request instead, and its merge moves the ticket to
-  **Done**.
+  someone else has spoken since the member last did, or an unanswered mention remains.
+  These ticket conversations are picked up even with an open or merged linked pull
+  request; an existing open pull request is reused. The member's latest failure or
+  rate-limit status holds the ticket first. With no unanswered conversation, an open
+  pull request is followed by the PR patrol, and a merged one moves the ticket to
+  **Done**. Without a linked pull request or comments since assignment, work resumes.
 - A member's pull request is taken up when someone says something the member has not
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.
-  Automatic re-review stops after 3 rounds: the patrol makes the pull request a draft
-  and says so on it. Mark it ready for review to go on.
+  After a member has reviewed 3 heads, automatic re-review not driven by a request
+  stops when a head that member has never reviewed is pushed: the host ticket selector makes the
+  pull request a draft during candidate selection, records it in Activity, and
+  announces it on the PR and in the reviewer’s `notify_work_stops: true` chat channels. Statements and thread replies on an already reviewed head still
+  start a run after the limit, including heads restored by force push or reviewed
+  before the count restarted. Explicit review requests remain outside the limit.
+  Mark it ready for review to go on; every reviewer's count starts over.
 - A member does not wait for CI inside its run: when only unfinished checks are left, it
   ends the run with a waiting notice on the pull request, and the patrol resumes it once
   the checks finish or new commits land.
@@ -268,3 +369,17 @@ things:
   marks its pull request merged, so the patrol moves the ticket to **Done** as usual.
 - A ticket can name the GitHub issue it stands for; the published pull request then
   closes that issue.
+- GitHub's Dependabot alerts of the upstream are read through Branvil
+  (`member repo-info read --resource dependency_alerts`,
+  `repository/security_alerts`): Branvil reads them with the account that reads GitHub
+  for it, which then needs **Dependabot alerts: Read-only** and access to the
+  repository (a GitHub App's added permission approved on its installation). A
+  repository without an upstream has no alerts and refuses the read as unsupported.
+
+### Initial ticket state
+
+Ticket creation sends interactive mode, assignee, lane, parent and blockers in
+one request. The server commits them together; patrol never observes a partially
+configured ticket. Interactive tickets and their descendants are excluded from
+patrol. Without an explicit lane, a ticket with a parent or blockers starts in
+`ready`; other tickets start in `new`.

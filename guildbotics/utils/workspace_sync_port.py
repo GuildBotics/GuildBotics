@@ -48,7 +48,7 @@ SHARED_ROOTS = ("config", "state")
 #: alone, and a second literal elsewhere would let one kind be raised on its
 #: own, at which point the device that wrote it rejects its own file and its
 #: queue stops.
-SHARED_RECORD_SCHEMA_VERSION = 3
+SHARED_RECORD_SCHEMA_VERSION = 4
 
 ChangeOperation = Literal["create", "update", "delete"]
 

@@ -20,6 +20,8 @@ tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-shell = "2.3.5"
+
+[dev-dependencies]
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]

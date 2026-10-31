@@ -194,7 +194,7 @@ async def _node_in_scope(scope: str, node: str, client: httpx.AsyncClient) -> bo
     try:
         repository = response.json()["data"]["node"]["repository"]
         owner, name = repository["owner"]["login"], repository["name"]
-    except (ValueError, LookupError, TypeError):
+    except ValueError, LookupError, TypeError:
         return False  # not a node in any repository GitHub would name
     return (
         isinstance(owner, str)

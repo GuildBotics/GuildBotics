@@ -118,6 +118,7 @@ CLIENTS = {
 #: ``(module, function)`` of every use of a member's credential for git, in
 #: any module: the code host hands it out (``git_credential``).
 TOKEN_USES = {
+    ("capabilities/member_git.py", "show"): "fetch only; a read",
     ("capabilities/member_git.py", "prepare"): "fetch only; a read",
     ("capabilities/member_git.py", "push"): "checked",
 }
@@ -420,3 +421,22 @@ async def test_a_draft_conversion_outside_the_owner_is_refused_before_it_is_sent
         await service.aclose()
 
     assert sent == [{"query": NODE_REPOSITORY, "variables": {"id": "PR_1"}}]
+
+
+@pytest.mark.asyncio
+async def test_the_draft_port_refuses_another_owner_before_reading(monkeypatch):
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        return _in_other_owner(request)
+
+    service = _service(monkeypatch, respond)
+    try:
+        with pytest.raises(ServiceError, match="'acme'"):
+            await service.convert_pull_request_to_draft(
+                "https://github.com/other-owner/demo/pull/7"
+            )
+    finally:
+        await service.aclose()
+    assert sent == []

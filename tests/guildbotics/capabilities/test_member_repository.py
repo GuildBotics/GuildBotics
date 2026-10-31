@@ -9,6 +9,7 @@ is completed against, what each command reports -- is exercised here on
 from __future__ import annotations
 
 import io
+import json
 import re
 import subprocess
 import zipfile
@@ -19,11 +20,21 @@ from guildbotics.capabilities import member_repository
 from guildbotics.capabilities.errors import MemberCapabilityError
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local import store
+from guildbotics.runtime.member_invocation import (
+    ChatSubject,
+    GuestResult,
+    MemberInvocation,
+    Work,
+    member_invocation_scope,
+)
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
+from guildbotics.utils.i18n_tool import get_language, set_language, t
 from tests.guildbotics.local_code_host import (
     REPOSITORY,
     TRACKER,
+    attachment,
     comment,
     item,
     local_member,
@@ -32,8 +43,28 @@ from tests.guildbotics.local_code_host import (
     ticket,
     tracker,
 )
+from tests.guildbotics.member_services import GuestDouble
 
 FOREIGN_TICKET = "https://tickets.example.com/browse/OPS-7"
+
+
+@pytest.mark.asyncio
+async def test_mention_completion_needs_no_code_host_or_linked_pr_readiness():
+    class TicketOnly:
+        def get_code_hosting_service(self):
+            raise AssertionError("A comment response needs no code host")
+
+    result = await member_repository.task_completion_readiness(
+        TicketOnly(),
+        Work("ticket_mention", FOREIGN_TICKET),
+        [
+            {
+                "evidence_type": "ticket_comment",
+                "payload": {"target": {"kind": "ticket", "url": FOREIGN_TICKET}},
+            }
+        ],
+    )
+    assert result == []
 
 
 @pytest.fixture
@@ -76,6 +107,118 @@ async def test_ticket_create_off_the_board(member):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize(
+    "operation, options, action_key",
+    [
+        ("create", {}, "ticket_create"),
+        ("update", {"state": "open"}, "ticket_state"),
+        ("update", {"state": "closed"}, "ticket_state"),
+        ("update", {"interactive": True}, "ticket_interactive"),
+        ("update", {"interactive": False}, "ticket_interactive"),
+    ],
+)
+async def test_ticket_approval_is_localized_before_service_access(
+    member, monkeypatch, language, operation, options, action_key
+):
+    url = ticket(1)
+    original_language = get_language()
+
+    async def invoke(approved):
+        if operation == "create":
+            return await member_repository.ticket_create(
+                member, TRACKER, "Created", "", True, human_approved=approved
+            )
+        return await member_repository.ticket_update(
+            member, url, human_approved=approved, **options
+        )
+
+    def forbidden(_context):
+        pytest.fail("Approval must be checked before accessing the ticket service")
+
+    try:
+        set_language(language)
+        action = t(f"cli.member.{action_key}", state=options.get("state", ""))
+        assert action != f"cli.member.{action_key}"
+        expected = t("cli.member.human_approval_required", action=action)
+        assert "--human-approved" in expected
+        assert (
+            "人の依頼" in expected
+            if language == "ja"
+            else "human instruction" in expected
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(member_repository, "_tickets", forbidden)
+            with pytest.raises(MemberCapabilityError) as error:
+                await invoke(False)
+        assert str(error.value) == expected
+        if language == "ja":
+            assert "requires a human" not in str(error.value)
+        assert (await invoke(True))["target"]["kind"] == "ticket"
+    finally:
+        set_language(original_language)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("human", [False, True])
+async def test_ticket_create_resolves_roster_assignment_and_sets_initial_state(
+    member, human
+):
+    from guildbotics.entities import Person
+
+    tracker()
+    parent, blocker = ticket(1), ticket(2)
+    assignee = Person(
+        person_id="requested",
+        name="Requested",
+        person_type="human" if human else "agent",
+    )
+    member.team.members.append(assignee)
+    result = await member_repository.ticket_create(
+        member,
+        TRACKER,
+        "Interactive",
+        "",
+        True,
+        human_approved=True,
+        interactive=True,
+        assignee=assignee.person_id,
+        lane="in_progress",
+        parent=parent,
+        blocked_by=[blocker],
+    )
+    saved = item(result["target"]["url"])
+    assert saved["assignees"] == [username(assignee.person_id)]
+    assert (
+        saved["interactive"],
+        saved["lane"],
+        saved["parent"],
+        saved["blocked_by"],
+    ) == (
+        True,
+        "in_progress",
+        parent,
+        [blocker],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticket_create_refuses_unknown_roster_member_before_writing(member):
+    tracker()
+    with pytest.raises(MemberCapabilityError, match="missing"):
+        await member_repository.ticket_create(
+            member,
+            TRACKER,
+            "Denied",
+            "",
+            True,
+            human_approved=True,
+            assignee="missing",
+        )
+    assert _tickets_kept() == []
+
+
+@pytest.mark.asyncio
 async def test_ticket_update_and_comment_report_what_they_changed(member):
     url = ticket(1, labels=["bug"])
 
@@ -100,15 +243,35 @@ async def test_ticket_update_and_comment_report_what_they_changed(member):
         "state_changed": True,
         "labels": [],
         "target": target,
+        "interactive": False,
+        "interactive_ancestor": None,
     }
     assert commented == {
         "id": "comment-1",
         "url": None,
-        "author": "aiko",
+        "author": username("aiko"),
         "created_at": commented["created_at"],
         "target": target,
     }
     assert [c["body"] for c in item(url)["comments"]] == ["Closing."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_ticket_interactive_update_requires_human_approval(member, enabled):
+    url = ticket(1, interactive=not enabled)
+    before = item(url)
+    with pytest.raises(MemberCapabilityError, match="human instruction"):
+        await member_repository.ticket_update(
+            member, url, interactive=enabled, title="Must not change"
+        )
+    assert item(url) == before
+    updated = await member_repository.ticket_update(
+        member, url, interactive=enabled, human_approved=True
+    )
+    assert updated["interactive"] is enabled
+    assert item(url)["interactive"] is enabled
+    assert updated["interactive_ancestor"] is None
 
 
 @pytest.mark.asyncio
@@ -149,7 +312,9 @@ async def test_pull_request_work_reports_its_target(member):
     url = created["target"]["url"]
     head = store.branch_tip(REPOSITORY, "feature")
 
-    with pytest.raises(MemberCapabilityError, match="needs a body or a title"):
+    with pytest.raises(
+        MemberCapabilityError, match="needs a body, a title, or ticket links"
+    ):
         await member_repository.pr_update(member, url)
     with pytest.raises(MemberCapabilityError, match="Review verdict must be one of"):
         await member_repository.pr_review(member, url, "x", "lgtm", head)  # type: ignore[arg-type]
@@ -160,7 +325,7 @@ async def test_pull_request_work_reports_its_target(member):
     results = [
         await member_repository.pr_update(member, url, title="Renamed"),
         await member_repository.pr_comment(member, url, "Hi"),
-        await member_repository.pr_review(member, url, "LGTM", "approve", head),
+        await member_repository.pr_review(member, url, "LGTM", "comment", head),
         inline := await member_repository.pr_review_comment(
             member, url, "Hmm", head, "a.py", 2, "RIGHT", None, None
         ),
@@ -177,7 +342,7 @@ async def test_pull_request_work_reports_its_target(member):
     assert {result["target"]["url"] for result in results} == {url}
     pr = item(url)
     assert pr["title"] == "Renamed"
-    assert [(r["verdict"], r["commit"]) for r in pr["reviews"]] == [("approve", head)]
+    assert [(r["verdict"], r["commit"]) for r in pr["reviews"]] == [("comment", head)]
     assert [c["in_reply_to"] for c in pr["review_comments"]] == [None, inline["id"]]
 
 
@@ -213,7 +378,7 @@ async def test_pr_reaction_reacts_to_each_kind_of_entry(member, entry_id, key):
 
     assert result == {"reaction": "ack", "id": entry_id}
     [reacted] = item(url)[key]
-    assert reacted["reactions"] == [{"author": "aiko", "reaction": "ack"}]
+    assert reacted["reactions"] == [{"author": username("aiko"), "reaction": "ack"}]
 
 
 @pytest.mark.asyncio
@@ -226,7 +391,9 @@ async def test_ticket_reaction_reacts_to_a_comment_of_the_ticket(member):
 
     assert result == {"reaction": "celebrate", "id": "comment-2"}
     [reacted] = item(url)["comments"]
-    assert reacted["reactions"] == [{"author": "aiko", "reaction": "celebrate"}]
+    assert reacted["reactions"] == [
+        {"author": username("aiko"), "reaction": "celebrate"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -317,6 +484,75 @@ async def test_artifact_download_extracts_the_heads_artifact(member, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "written"),
+    [("screen.png", "screen.png"), ("../screen.png", "screen-1"), ("", "screen-1")],
+)
+async def test_attachment_download_writes_the_file_by_its_name(
+    member, tmp_path, name, written
+):
+    """A name that is not one plain file name is not followed: the file is
+    written by its id instead, inside the destination."""
+    url = ticket(1, body=f"![screen]({attachment('screen-1', b'png', name=name)})")
+
+    result = await member_repository.attachment_download(
+        member, url, "screen-1", tmp_path / "out"
+    )
+
+    path = (tmp_path / "out" / written).resolve()
+    assert result == {
+        "id": "screen-1",
+        "name": name,
+        "media_type": "image/png",
+        "size": 3,
+        "referenced_by": ["body"],
+        "destination": str((tmp_path / "out").resolve()),
+        "files": [str(path)],
+    }
+    assert path.read_bytes() == b"png"
+    assert [found.name for found in (tmp_path / "out").rglob("*")] == [written]
+
+
+@pytest.mark.asyncio
+async def test_attachment_download_leaves_a_file_already_there(member, tmp_path):
+    url = ticket(1, body=attachment("screen-1", b"new"))
+    (tmp_path / "screen.png").write_bytes(b"mine")
+
+    with pytest.raises(MemberCapabilityError, match="already exists"):
+        await member_repository.attachment_download(member, url, "screen-1", tmp_path)
+    assert (tmp_path / "screen.png").read_bytes() == b"mine"
+
+
+@pytest.mark.asyncio
+async def test_a_command_of_an_environment_has_its_attachment_written_there(
+    member, tmp_path
+):
+    """As an artifact is: the host downloads it and the environment writes
+    it, by the name and id the host hands it."""
+    url = ticket(1, body=attachment("screen-1", b"png"))
+    written = {"destination": "/guest/out", "files": ["/guest/out/screen.png"]}
+    guest = GuestDouble(GuestResult(0, json.dumps(written).encode(), b""))
+
+    with member_invocation_scope(MemberInvocation(guest=guest)):
+        result = await member_repository.attachment_download(
+            member, url, "screen-1", tmp_path / "out"
+        )
+
+    [run] = guest.runs
+    assert run["argv"] == [
+        "python",
+        "-m",
+        "guildbotics.capabilities.artifact_archive",
+        f"/guest{tmp_path / 'out'}",
+        "screen.png",
+        "screen-1",
+    ]
+    assert run["read"] == b"png"
+    assert result["files"] == written["files"]
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.asyncio
 async def test_task_completion_revalidates_what_the_run_answers_for(member):
     """The PRs the run touched and those that refer to the member's ticket,
     when the member wrote them; a PR of someone else's is not the member's to
@@ -332,7 +568,7 @@ async def test_task_completion_revalidates_what_the_run_answers_for(member):
 
     results = await member_repository.task_completion_readiness(
         member,
-        ticket_url,
+        Work.of_ticket(ticket_url),
         [
             {"payload": {"pull_requests": [{"url": touched}]}},
             {"payload": {"target": {"kind": "pull_request", "url": reviewed}}},
@@ -353,7 +589,7 @@ async def test_task_completion_takes_the_pull_requests_the_run_wrote_to(member):
 
     results = await member_repository.task_completion_readiness(
         member,
-        ticket_url,
+        Work.of_ticket(ticket_url),
         [
             {"payload": {"target": {"kind": "pull_request", "url": touched}}},
             {"payload": {"target": {"kind": "ticket", "url": ticket_url}}},
@@ -370,7 +606,9 @@ async def test_task_completion_of_a_pull_request_revalidates_it(member):
     remote_with("mine")
     url = pull_request(2, "mine", author="aiko")
 
-    results = await member_repository.task_completion_readiness(member, url, [])
+    results = await member_repository.task_completion_readiness(
+        member, Work.of_ticket(url), []
+    )
 
     assert [result["target"]["url"] for result in results] == [url]
 
@@ -382,7 +620,9 @@ async def test_task_completion_of_another_services_ticket_has_no_pull_requests(
     """The code host cannot tell which of its pull requests refer to a
     ticket kept elsewhere: that is none, not a failure."""
     assert (
-        await member_repository.task_completion_readiness(member, FOREIGN_TICKET, [])
+        await member_repository.task_completion_readiness(
+            member, Work.of_ticket(FOREIGN_TICKET), []
+        )
         == []
     )
 
@@ -394,7 +634,9 @@ async def test_task_completion_refuses_a_blocked_pull_request():
     url = pull_request(2, "mine", author="aiko")
 
     with pytest.raises(MemberCapabilityError, match=re.escape("CI checks are failing")):
-        await member_repository.task_completion_readiness(failing, url, [])
+        await member_repository.task_completion_readiness(
+            failing, Work.of_ticket(url), []
+        )
 
 
 def _run(*evidence: dict) -> TaskRunStore:
@@ -420,7 +662,9 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
     store.finish_checks(REPOSITORY, store.branch_tip(REPOSITORY, "ready"), "success")
 
     runs = _run()
-    results = await member_repository.await_checks(pending, ticket_url, "run-1", runs)
+    results = await member_repository.await_checks(
+        pending, Work.of_ticket(ticket_url), "run-1", runs
+    )
 
     assert [(r["target"]["url"], r["readiness"]) for r in results] == [
         (waiting, "blocked"),
@@ -435,10 +679,74 @@ async def test_a_run_awaits_its_pull_requests_pending_checks():
         "run_id": "run-1",
         "subject": ticket_url,
         "head": store.branch_tip(REPOSITORY, "mine"),
+        "work_kind": "ticket",
+        "work_identity": ticket_url,
     }
     assert item(ready)["comments"] == []
     # What the run awaits is what the PRs were told, one by one.
     assert runs.awaited_pull_requests("run-1") == {waiting}
+
+
+_THREAD = ChatSubject("local", "C1", "T1", "E1", "aiko")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("work", "evidence_type", "subject"),
+    [
+        # A chat thread's run, on the event it answers.
+        (Work.of_chat(_THREAD), "pr_create", _THREAD.subject_id),
+        # A command's run.
+        (Work("manual", "run-1"), "pr_create", "run-1"),
+        # A run the patrol resumed in a chat thread's work for the PR.
+        (Work("chat", "local:aiko:C1:T1"), "checks_resumed", "local:aiko:C1:T1"),
+    ],
+)
+async def test_a_run_of_any_work_awaits_its_pull_requests_for_that_work(
+    work, evidence_type, subject
+):
+    """Not only a ticket's run ends to await checks: whatever the work, the
+    run answers for the PRs its evidence names, and the notice names the work
+    the patrol resumes from it."""
+    remote_with("mine")
+    url = pull_request(2, "mine", author="aiko")
+    runs = TaskRunStore()
+    runs.append_evidence(
+        "run-1", evidence_type, {"target": {"kind": "pull_request", "url": url}}
+    )
+
+    await member_repository.await_checks(
+        local_member(checks="pending"), work, "run-1", runs
+    )
+
+    [notice] = item(url)["comments"]
+    assert notice["status"] == {
+        "kind": "workflow_error",
+        "routing": "suppress",
+        "reason": "awaiting_checks",
+        "person_id": "aiko",
+        "run_id": "run-1",
+        "subject": subject,
+        "head": store.branch_tip(REPOSITORY, "mine"),
+        "work_kind": work.kind,
+        "work_identity": work.identity,
+    }
+    assert runs.awaited_pull_requests("run-1") == {url}
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_names_no_pull_request_has_none_to_await():
+    """Only a ticket's work names PRs of its own: a command's run whose
+    evidence names none has nothing to await, even when the member has a PR
+    whose checks are pending."""
+    remote_with("mine")
+    url = pull_request(2, "mine", author="aiko")
+
+    with pytest.raises(MemberCapabilityError, match="No PR of the member's own"):
+        await member_repository.await_checks(
+            local_member(checks="pending"), Work("manual", "run-1"), "run-1", _run()
+        )
+    assert item(url)["comments"] == []
 
 
 @pytest.mark.asyncio
@@ -472,7 +780,7 @@ async def test_a_run_awaits_checks_only_when_nothing_else_blocks(
     runs = _run()
     with pytest.raises(MemberCapabilityError, match=re.escape(match)):
         await member_repository.await_checks(
-            local_member(checks=checks), url, "run-1", runs
+            local_member(checks=checks), Work.of_ticket(url), "run-1", runs
         )
     assert item(url)["comments"] == []
     assert runs.awaited_pull_requests("run-1") == set()
@@ -488,11 +796,13 @@ async def test_a_reviewer_neither_awaits_nor_waits_for_the_checks_it_reviewed():
     runs = _run({"kind": "pull_request", "url": url})
 
     with pytest.raises(MemberCapabilityError, match="No PR of the member's own"):
-        await member_repository.await_checks(pending, url, "run-1", runs)
+        await member_repository.await_checks(
+            pending, Work.of_ticket(url), "run-1", runs
+        )
     assert item(url)["comments"] == []
     assert (
         await member_repository.task_completion_readiness(
-            pending, url, runs.evidence("run-1")
+            pending, Work.of_ticket(url), runs.evidence("run-1")
         )
         == []
     )

@@ -1,6 +1,6 @@
 # The base image of the agent environment for developing GuildBotics itself.
 #
-# GuildBotics' default base image (Debian with Node.js, npm, git and uv) lets an
+# GuildBotics' default base image (Debian with curl, the compilers and git) lets an
 # agent run the AI CLI tools but not this repository's own build and tests.
 # This image adds everything the Linux CI uses, so a member turn inside the
 # isolated environment can run the same checks as `.branvil/ci.toml`, whose
@@ -8,16 +8,18 @@
 #
 #   - Python (uv-managed; the version `requires-python` allows) for `uv sync`,
 #     ruff, mypy, pylint and pytest
-#   - Node.js 24, as the Desktop workflows run it, for the frontend checks
+#   - Node.js 24, as the Desktop workflows run it, for the frontend checks of
+#     the CI jobs (in the environment snapshot, the build's own Node.js, at the
+#     version GuildBotics pins, replaces it)
 #   - the Rust toolchain and the Tauri system libraries for `cargo check` /
 #     `scripts/desktop-test-rust.sh`; `cargo` is cargo-wrapper.sh, which first
 #     cleans a target directory built under other build conditions
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
-# It keeps what GuildBotics' build recipe expects of a base image: Node.js with
-# npm, curl and tar, and no bubblewrap (see the last step).
-# GuildBotics installs the AI CLI tools on top when it builds the environment
+# It keeps what GuildBotics' build recipe expects of a base image: curl and
+# tar, gcc, g++ and make, and no bubblewrap (see the last step). GuildBotics
+# installs Node.js and the AI CLI tools on top when it builds the environment
 # snapshot.
 #
 # `scripts/build-agent-environment-image.sh` builds it for every architecture
@@ -32,10 +34,10 @@
 # nothing below lives under /root: interpreters and toolchains sit under /opt
 # and are reached through /usr/local/bin and the ENV settings, which the
 # environment passes to every process it starts.
-FROM node:24.21.0-bookworm
+FROM node:24.22.1-bookworm
 
-ARG UV_VERSION=0.12.10
-ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.13.5
+ARG PYTHON_VERSION=3.15
 ARG RUST_VERSION=1.96.0
 ARG LYCHEE_VERSION=0.24.2
 # Keep in step with `@playwright/test` in desktop/package-lock.json; a newer
@@ -60,7 +62,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # uv, at the version GuildBotics' recipe installs, and a managed Python kept
-# outside any home directory. `python3.12` on PATH is how `uv sync` finds it
+# outside any home directory. `python3.15` on PATH is how `uv sync` finds it
 # even without the ENV; Debian's own python3 (3.11) is left alone.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN arch="$(uname -m)" \

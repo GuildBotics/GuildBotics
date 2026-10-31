@@ -6,11 +6,15 @@ and how a Branvil that is restarting is waited for."""
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections.abc import Sequence
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from guildbotics.commands.python_command import _load_python_module
 from guildbotics.entities.task import Task
 from guildbotics.integrations.branvil import api
 from guildbotics.runtime.code_hosting_service import TicketLink
@@ -26,6 +30,7 @@ from guildbotics.runtime.port import (
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import MAX_PAGE_BYTES
+from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
 from tests.guildbotics.integrations.branvil_double import (
     BASE,
@@ -43,10 +48,18 @@ from tests.guildbotics.integrations.branvil_double import (
 PULL = f"{BASE}/{REPO}/-/pulls/1"
 
 
-async def _pull(double: BranvilDouble, code, author: str = MEMBER) -> str:
+async def _pull(
+    double: BranvilDouble, code, author: str = MEMBER, tickets: Sequence[str] = ()
+) -> str:
     double.branch("feature")
     created = await code.create_pull_request(
-        REPO, "feature", "", "Fix", "", draft=False, tickets=[]
+        REPO,
+        "feature",
+        "",
+        "Fix",
+        "",
+        draft=False,
+        tickets=[TicketLink(url, closes=False) for url in tickets],
     )
     double.pulls[created.target.url]["author"] = author
     return created.target.url
@@ -57,6 +70,35 @@ async def _work(code) -> list[str | None]:
 
 
 # -- the patrol -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["author", "reviewer"])
+async def test_waiting_eligibility_obeys_interactive_author_exclusion(
+    monkeypatch, role
+):
+    double, code, _ = services(monkeypatch)
+    ticket = double._ticket(REPO, "Work", "", [])["url"]
+    double.tickets[ticket]["interactive"] = True
+    url = await _pull(double, code, tickets=[ticket])
+    _role(
+        double,
+        url,
+        ticket,
+        "pull_request_feedback" if role == "author" else "pull_request_review",
+    )
+    assert await code.can_receive_work(url) is (role == "reviewer")
+    assert bool(await code.pull_request_candidates()) is (role == "reviewer")
+    assert not double.pulls[url]["draft"]
+
+
+@pytest.mark.asyncio
+async def test_waiting_eligibility_refuses_review_limit_without_drafting(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code, author="otota")
+    _past_the_review_limit(double, url)
+    assert not await code.can_receive_work(url)
+    assert not double.pulls[url]["draft"]
 
 
 @pytest.mark.asyncio
@@ -79,6 +121,85 @@ async def test_the_author_answers_what_others_said(monkeypatch):
     comment = double.entries[url]["comments"][-1]
     comment["reactions"].append({"author": "Aiko", "reaction": "ack"})
     assert await code.refresh_pull_request(task) is None
+
+
+def _role(double: BranvilDouble, url: str, ticket: str, role: str) -> None:
+    """Have the pull request ask ``role`` of the member."""
+    if role == "pull_request_review":
+        double.make_theirs(url)
+        double.pulls[url]["reviewers"] = ["aiko"]
+    elif role == "pull_request_feedback":
+        double.comment(url, "otota", "Please rename it.")
+    else:
+        awaiting = WorkflowStatus(
+            reason="awaiting_checks",
+            person_id=MEMBER,
+            run_id="run-1",
+            subject=ticket,
+            head="feature-sha",
+            work_kind="ticket",
+            work_identity=ticket,
+        )
+        double.comment(url, MEMBER, "Waiting for CI.", **awaiting.payload())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role", ["pull_request_feedback", "pull_request_checks", "pull_request_review"]
+)
+@pytest.mark.parametrize("depth", [0, 2], ids=["itself", "grandparent"])
+async def test_an_interactive_ticket_leaves_its_authors_pull_request_to_the_human(
+    monkeypatch, role, depth
+):
+    double, code, _ = services(monkeypatch)
+    ticket = double._ticket(REPO, "Fix", "", [])["url"]
+    holder = double.ancestor(ticket, depth)
+    url = await _pull(double, code, tickets=[ticket])
+    _role(double, url, ticket, role)
+    [task] = await code.pull_request_candidates()
+    assert task.trigger_reason == role
+    read: list[str] = []
+    respond = double.respond
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        read.append(request.url.path)
+        return respond(request)
+
+    monkeypatch.setattr(double, "respond", recorded)
+
+    double.tickets[holder]["interactive"] = True
+    # Reviewing it stays the member's, without reading the ticket.
+    reviewed = role == "pull_request_review"
+    assert await _work(code) == ([role] if reviewed else [])
+    assert await code.refresh_pull_request(task) == (task if reviewed else None)
+    assert (f"/api/v1/repos/{REPO}/tickets/1" in read) != reviewed
+
+    double.tickets[holder]["interactive"] = False
+    assert await _work(code) == [role]
+    assert await code.refresh_pull_request(task) == task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("links", "interactive"),
+    [
+        (["https://tickets.example.com/T-1"], False),
+        (["quiet"], False),
+        (["https://tickets.example.com/T-1", "quiet", "interactive"], True),
+    ],
+    ids=["another_service", "not_interactive", "one_of_many"],
+)
+async def test_only_a_linked_interactive_ticket_of_branvil_holds_the_author(
+    monkeypatch, links, interactive
+):
+    double, code, _ = services(monkeypatch)
+    quiet, held = (double._ticket(REPO, name, "", [])["url"] for name in "QH")
+    double.tickets[held]["interactive"] = True
+    named = {"quiet": quiet, "interactive": held}
+    url = await _pull(double, code, tickets=[named.get(link, link) for link in links])
+    double.comment(url, "otota", "Please rename it.")
+
+    assert await _work(code) == ([] if interactive else ["pull_request_feedback"])
 
 
 @pytest.mark.asyncio
@@ -215,6 +336,21 @@ async def test_an_inline_comment_lands_only_on_a_file_the_pull_request_changes(
 
 
 @pytest.mark.asyncio
+async def test_the_authors_own_review_is_only_a_comment(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    before = len(double.writes)
+
+    for verdict in ("approve", "request_changes"):
+        with pytest.raises(ServiceError, match="only comment"):
+            await code.review(url, "Looks good.", verdict, "feature-sha")
+
+    assert double.writes[before:] == []
+    submitted = await code.review(url, "Note.", "comment", "feature-sha")
+    assert submitted.verdict == "comment"
+
+
+@pytest.mark.asyncio
 async def test_a_resolved_thread_waits_on_no_one(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code)
@@ -261,14 +397,42 @@ async def test_a_body_change_keeps_the_ticket_links_unless_they_are_dropped(
         page = await code.read("ticket_pull_requests", ticket)
         return [pull["url"] for pull in page.items]
 
-    await code.update_pull_request(url, body="New", title=None, drop_ticket_links=False)
+    await code.update_pull_request(url, body="New", title=None, tickets=None)
     assert await linked() == [url]
 
-    await code.update_pull_request(
-        url, body="Newer", title=None, drop_ticket_links=True
-    )
+    await code.update_pull_request(url, body="Newer", title=None, tickets=[])
     assert await linked() == []
     assert double.pulls[url]["body"] == "Newer"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_closing_links_never_reach_a_patch(monkeypatch):
+    double, code, tickets = services(monkeypatch)
+    own = (await tickets.create_ticket(REPO, "Own", "", [])).target.url
+    other = double.their_ticket
+    double.branch("feature")
+    url = (
+        await code.create_pull_request(
+            REPO, "feature", "", "Title", "Body", draft=False, tickets=[]
+        )
+    ).target.url
+    call = code.call
+    attempts = []
+
+    async def checked_call(method, path, data):
+        attempts.append(method)
+        return await call(method, path, data)
+
+    monkeypatch.setattr(code, "call", checked_call)
+    for foreign in (other, "https://tickets.example.com/T-1"):
+        with pytest.raises(ServiceUnsupported):
+            await code.update_pull_request(
+                url,
+                body="Changed",
+                title="Changed",
+                tickets=[TicketLink(own, True), TicketLink(foreign, True)],
+            )
+    assert attempts == []
 
 
 def _past_the_review_limit(double: BranvilDouble, url: str) -> None:
@@ -278,50 +442,55 @@ def _past_the_review_limit(double: BranvilDouble, url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_at_the_review_limit_the_pull_request_is_handed_to_a_human(monkeypatch):
+async def test_review_limit_is_a_read_only_decision_for_the_selector(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code, author="otota")
     _past_the_review_limit(double, url)
     before = len(double.writes)
-
-    assert await _work(code) == []
-
-    path = "/api/v1/repos/acme%2Fdemo/pulls/1"
-    assert double.writes[before:] == [f"PATCH {path}", f"POST {path}/comments"]
-    assert double.pulls[url]["draft"] is True
-    notice = double.entries[url]["comments"][-1]
-    status = WorkflowStatus.from_payload(notice["meta"])
-    assert status is not None
-    assert (status.reason, status.person_id, status.subject) == (
-        "review_limit",
-        MEMBER,
-        url,
-    )
-    assert notice["body"] == "@otota\n\n" + t(
-        "integrations.pull_request_patrol.review_limit_reached", count=3
-    )
-    # Marked ready for review again, the rounds start over.
-    double.ready(url)
-    double.advance("feature")
-    assert await _work(code) == ["pull_request_review"]
+    assert await _work(code) == ["pull_request_review_limit"]
+    [task] = await code.pull_request_candidates()
+    refreshed = await code.refresh_pull_request(task)
+    assert refreshed is not None and refreshed.trigger_reason == task.trigger_reason
+    assert double.writes[before:] == []
+    assert not double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
 
 @pytest.mark.asyncio
-async def test_a_refused_draft_holds_the_pull_request_as_failed(monkeypatch):
+async def test_a_refused_draft_conversion_is_a_port_failure(monkeypatch):
     double, code, _ = services(monkeypatch)
     url = await _pull(double, code, author="otota")
-    _past_the_review_limit(double, url)
     double.refuse_draft = True
+    with pytest.raises(ServiceError):
+        await code.convert_pull_request_to_draft(url)
+    assert not double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
-    assert await _work(code) == []
 
-    notice = double.entries[url]["comments"][-1]
-    assert WorkflowStatus.from_payload(notice["meta"]).reason == "failed"  # type: ignore[union-attr]
-    assert (
-        t("integrations.pull_request_patrol.review_limit_draft_failed", count=3)
-        in (notice["body"])
-    )
-    assert await _work(code) == []
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_to_draft", [True, False])
+async def test_draft_conversion_rechecks_a_revision_lost_to_another_writer(
+    monkeypatch, changed_to_draft
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code, author="otota")
+    call = code.call
+    revisions = []
+
+    async def racing(method, path, body=None, **kwargs):
+        if method == "PATCH":
+            revisions.append(body["revision"])
+            if len(revisions) == 1:
+                # The human or another reviewer wins after this caller read.
+                double.pulls[url]["draft"] = changed_to_draft
+                double.pulls[url]["revision"] += 1
+        return await call(method, path, body, **kwargs)
+
+    monkeypatch.setattr(code, "call", racing)
+    assert await code.convert_pull_request_to_draft(url) is (not changed_to_draft)
+    assert revisions == ([1] if changed_to_draft else [1, 2])
+    assert double.pulls[url]["draft"]
+    assert double.entries[url]["comments"] == []
 
 
 # -- readiness ------------------------------------------------------------
@@ -367,11 +536,10 @@ async def test_failed_checks_block_and_bring_their_primary_logs(monkeypatch):
             "still pending",
         ),
         ([], True, 0, ["checks_pending"], "not been registered"),
-        ([], False, 2, ["base_out_of_date"], "2 commit(s) behind"),
     ],
-    ids=["pending", "not_registered", "behind"],
+    ids=["pending", "not_registered"],
 )
-async def test_readiness_waits_for_ci_and_the_base(
+async def test_readiness_waits_for_ci(
     monkeypatch, checks, expected, behind_by, codes, message
 ):
     double, code, _ = services(monkeypatch)
@@ -384,6 +552,41 @@ async def test_readiness_waits_for_ci_and_the_base(
     assert [b.code for b in readiness.completion_blockers] == codes
     assert message in readiness.completion_blockers[0].message
     assert readiness.checks_expected is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "conclusion", "status", "expected"),
+    [
+        ("gate/test", "failure", "completed", "checks_failed"),
+        ("gate/test", None, "running", "checks_pending"),
+        ("gate", "failure", "completed", "checks_failed"),
+    ],
+)
+async def test_gate_checks_block_without_requiring_base_integration(
+    monkeypatch, name, conclusion, status, expected
+):
+    double, code, _ = services(monkeypatch)
+    url = await _pull(double, code)
+    details = "Conflicts: src/one.py, src/two.py"
+    double.behind_by = 2
+    double.checks["feature-sha"] = [
+        {**_check(name, conclusion, status), "details": details, "attempt_id": None}
+    ]
+
+    page = await code.read(
+        "pull_request_readiness", url, parameters={"failed_logs": True}
+    )
+
+    [result] = page.items
+    assert (result["behind_by"], result["out_of_date"], result["readiness"]) == (
+        2,
+        True,
+        "blocked",
+    )
+    assert [b["code"] for b in result["completion_blockers"]] == [expected]
+    assert result["checks"][0]["details"] == details
+    assert result["failed_logs"] == []
 
 
 @pytest.mark.asyncio
@@ -481,6 +684,75 @@ async def test_a_cursor_branvil_did_not_give_is_refused(monkeypatch):
 
     with pytest.raises(ServiceError, match=t("integrations.resources.continuation")):
         await code.read("pull_request_comments", url, continuation="forged")
+
+
+# -- dependency alerts ------------------------------------------------------
+
+
+async def _alerts(code, continuation: str = "", **parameters):
+    return await code.read(
+        "dependency_alerts", REPO, parameters=parameters, continuation=continuation
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_upstreams_alerts_are_read_by_state_page_by_page(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    opened = [double.alert(), double.alert(), double.alert(patched=None)]
+    resolved, dismissed = double.alert("resolved"), double.alert("dismissed")
+
+    first = await _alerts(code, state="open", page_size=2)
+    rest = await _alerts(code, first.continuation or "", state="open", page_size=2)
+
+    assert [a["id"] for a in first.items + rest.items] == opened
+    assert first.continuation and rest.continuation is None
+    assert rest.items[0]["patched_version"] is None
+    assert first.items[0] == double.alerts[0]
+    for state, alert in (("resolved", resolved), ("dismissed", dismissed)):
+        page = await _alerts(code, state=state)
+        assert [a["id"] for a in page.items] == [alert]
+
+
+@pytest.mark.asyncio
+async def test_one_alert_is_read_by_its_id(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    double.alert()
+    second = double.alert("dismissed")
+
+    page = await _alerts(code, id=second)
+
+    assert page.items == [double.alerts[1]] and page.continuation is None
+    with pytest.raises(ServiceNotFound):
+        await _alerts(code, id="99")
+
+
+@pytest.mark.asyncio
+async def test_no_alert_is_an_empty_page_and_no_upstream_none_at_all(monkeypatch):
+    double, code, _ = services(monkeypatch)
+
+    page = await _alerts(code)
+
+    assert (page.items, page.continuation) == ([], None)
+    double.upstreams.clear()
+    with pytest.raises(ServiceUnsupported):
+        await _alerts(code)
+
+
+@pytest.mark.asyncio
+async def test_the_alert_command_shows_the_upstreams_alerts(monkeypatch):
+    double, code, _ = services(monkeypatch)
+    double.alert(patched=None)
+    module = _load_python_module(
+        get_template_path() / "commands/repository/security_alerts.py"
+    )
+    context = SimpleNamespace(
+        person=SimpleNamespace(person_id=MEMBER),
+        get_code_hosting_service=lambda: code,
+    )
+
+    shown = json.loads(await module.main(context, REPO, output="json"))
+
+    assert shown == {"repo": REPO, "alerts": double.alerts, "continuation": None}
 
 
 # -- addresses ------------------------------------------------------------
@@ -619,7 +891,7 @@ def _error(status: int, code: str, message: str = "It says no.") -> httpx.Respon
         (_error(400, "label_undefined"), ServiceError, "not defined"),
         (
             _error(409, "conflict"),
-            ServiceError,
+            api.Conflict,
             "Branvil refused GET /api/v1/repos/acme/demo",
         ),
         (_error(503, "unavailable"), ServiceError, "503 unavailable"),
@@ -636,6 +908,30 @@ async def test_branvils_answers_are_the_ports_failures(
 
     assert type(raised.value) is kind
     assert message in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameters", [{}, {"id": "1"}])
+@pytest.mark.parametrize(
+    ("answer", "kind"),
+    [
+        (_error(409, "no_account"), ServiceError),
+        (_error(409, "upstream_refused"), ServiceError),
+        (_error(503, "unavailable"), ServiceError),
+        (_error(404, "not_found"), ServiceNotFound),
+        (_error(422, "unsupported"), ServiceUnsupported),
+    ],
+)
+async def test_a_failed_read_of_alerts_is_a_failure_with_branvils_words(
+    monkeypatch, parameters, answer, kind
+):
+    code = _answering(monkeypatch, lambda request: answer)
+
+    with pytest.raises(kind) as raised:
+        await _alerts(code, **parameters)
+
+    assert type(raised.value) is kind
+    assert "It says no." in str(raised.value)
 
 
 @pytest.mark.asyncio

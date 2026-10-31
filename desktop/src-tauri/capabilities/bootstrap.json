@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bootstrap",
+  "description": "What the bundled bootstrap page needs to enter the UI the backend serves, or to show why it cannot.",
+  "windows": [
+    "main",
+    "quick"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-backend-entry",
+    "allow-bootstrap-log",
+    "allow-restart-app"
+  ]
+}

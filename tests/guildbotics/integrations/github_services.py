@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from html import escape
 from collections.abc import Callable
 from typing import Any
 
@@ -31,6 +33,20 @@ REPO = f"{OWNER}/demo"
 API = "https://api.github.com"
 WEB = "https://github.com"
 PROJECT_URL = f"{WEB}/orgs/{OWNER}/projects/1"
+
+
+def rendered_body(body: str) -> str:
+    """Supply synthetic GitHub mention links for ordinary fixture prose.
+
+    Cases about Markdown/code or resolution provide explicit HTML instead.
+    This fixture models the host's output, never production Markdown parsing.
+    """
+    return re.sub(
+        r"(?<![\w@])@[a-zA-Z0-9][a-zA-Z0-9-]*(?:\[bot\])?",
+        lambda match: f'<a class="user-mention">{match[0]}</a>',
+        escape(body),
+    )
+
 
 #: What a route answers: a JSON body, a response, or a function of the
 #: request returning either.

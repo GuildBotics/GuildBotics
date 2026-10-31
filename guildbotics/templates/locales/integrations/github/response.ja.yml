@@ -1,4 +1,7 @@
 ja:
+  search_incomplete: "GitHub のチケット検索が不完全か、上限の1,000件を超えています。再試行するか検索を絞ってください。該当なしとは扱えません。"
+  mention_search_incomplete: "GitHub のメンション検索が不完全か、上限の1,000件を超えています。不完全な検索は再試行し、件数超過は解決済みの open issue を閉じて検索結果を減らしてください。返信だけでは検索への一致は減りません。"
+  mention_discovery_failed: "メンションの取得に失敗しました。担当チケットとPRの作業は続行できます。詳細: %{message}"
   too_large: "GitHub の応答がページ上限を超えました。一覧では page_size を減らしてください。個別項目が上限を超える場合は返せません。"
   response: "GitHub の応答形式が不正です。"
   rate_limit: "GitHub がリクエストを制限しました。時間をおいて再試行してください。"
@@ -10,4 +13,8 @@ ja:
   rejected: "GitHub が要求を拒否したか、この取得先を一時的に制限しています。要求を確認し、時間をおいて再試行してください。"
   http: "GitHub への要求が失敗しました（HTTP %{status}）。"
   transport: "GitHub への要求を完了できませんでした。接続を確認して再試行してください。"
-  created_off_board: "%{url} は作成しましたが、ボードに載せられませんでした: %{message}"
+  created_off_board: "%{url} は作成しましたが、初期設定を完了できませんでした: %{message}"
+  attachments_unsupported: "GitHub の Issue に添付されたファイルは一覧も取得もできません。Issue の画像は本文中の URL としてだけ読めます。内容は人に確認してください。"
+  interactive_unsupported: "GitHub は対話チケットに対応していません。"
+  lane_unsupported: "ボードには %{lane} に対応するレーンがありません。"
+  agent_unsupported: "ボードに %{person} の Agent 選択肢がないか、ボード外のチケットです。"

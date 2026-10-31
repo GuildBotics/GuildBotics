@@ -51,6 +51,7 @@ from guildbotics.guest.window import (
     WindowInference,
     WindowIntegrationFactory,
 )
+from guildbotics.integrations.local.identity import username
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -1240,7 +1241,9 @@ def chat(monkeypatch) -> str:
 
 
 def _posted(channel_id: str) -> list[str]:
-    return [line["text"] for line in lines(channel_id) if line["author"] == "aiko"]
+    return [
+        line["text"] for line in lines(channel_id) if line["author"] == username("aiko")
+    ]
 
 
 @pytest.mark.asyncio
@@ -1262,7 +1265,7 @@ async def test_the_commands_chat_is_the_members_chat_commands(
         lease.release()
 
     assert (general, missing) == (chat, None)
-    [line] = [line for line in lines(chat) if line["author"] == "aiko"]
+    [line] = [line for line in lines(chat) if line["author"] == username("aiko")]
     assert posted == ChatPostResult(
         chat,
         line["message_id"],

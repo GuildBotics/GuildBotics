@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  environmentValue,
-  npmInvocation,
-  withEnvironment,
-  withoutEnvironment,
-} from "./environment.mjs";
+import { environmentValue, withEnvironment, withoutEnvironment } from "./environment.mjs";
 import { verifyChromium } from "./preflight.mjs";
 
 test("normalizes Windows environment keys while isolating the stack", () => {
@@ -27,14 +22,6 @@ test("normalizes Windows environment keys while isolating the stack", () => {
   assert.deepEqual(withoutEnvironment(environment, ["path", "userprofile"]), {
     HOME: "C:\\temp-home",
   });
-});
-
-test("launches npm through its JavaScript entrypoint", () => {
-  assert.deepEqual(npmInvocation({ npm_execpath: "C:\\npm-cli.js" }, "node.exe"), {
-    executable: "node.exe",
-    arguments: ["C:\\npm-cli.js"],
-  });
-  assert.throws(() => npmInvocation({}, "node"), /launched through an npm script/);
 });
 
 test("opens and closes Chromium before the journeys start", async () => {

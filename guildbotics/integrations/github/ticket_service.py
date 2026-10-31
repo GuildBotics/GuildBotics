@@ -1,13 +1,11 @@
 """GitHub as a member's tickets: the issues of the configured owner's
 repositories, and the Projects V2 board they are taken from."""
 
-import re
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
-from functools import cached_property
 from logging import Logger
-from typing import Any, ClassVar, cast
+from typing import IO, Any, ClassVar, cast
 from urllib.parse import quote
 
 from guildbotics.entities import Person, Task, Team
@@ -16,17 +14,20 @@ from guildbotics.entities.team import Service
 from guildbotics.integrations.github.api import GitHubApi, GitHubItem
 from guildbotics.integrations.github.async_client import GitHubNotFound
 from guildbotics.integrations.github.github_utils import (
+    GITHUB_PAGE_SIZE,
     get_agent_token,
     get_author_type,
     get_github_username,
     get_person_name,
-    normalize_login,
     parse_timestamp,
 )
+from guildbotics.integrations.github.identity import member_identity
+from guildbotics.integrations.github.mentions import mentions
 from guildbotics.integrations.github.reads import (
     read_collection,
     reading,
     request_of,
+    search_tickets,
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
@@ -37,36 +38,48 @@ from guildbotics.integrations.github.repository_scope import (
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.integrations.ticket_selection import (
     linked_pull_state,
     mention_pending,
+    relevant_comments,
     select,
+    select_mention,
     since_assignment,
 )
 from guildbotics.runtime.port import (
     SemanticReaction,
     ServiceError,
+    ServiceUnsupported,
     WorkflowStatus,
 )
 from guildbotics.runtime.resources import (
     TICKET_RESOURCES,
+    ActorName,
+    Attachment,
     CommentWritten,
     Lane,
     ReactionAdded,
     ReadPage,
     Ticket,
     TicketRelative,
+    TicketSummary,
     read_conditions,
 )
 from guildbotics.runtime.ticket_service import (
     ClosedItem,
+    CreateLane,
     MoveLane,
     TicketCreated,
     TicketService,
     TicketUpdated,
+    creation_lane,
 )
 from guildbotics.utils.i18n_tool import t
+
+_FULL = {"Accept": "application/vnd.github.full+json"}
+#: GitHub Search's result ceiling, independent of REST's page size.
+_SEARCH_LIMIT = 1000
 
 #: The project items of an issue, with their Status, and the issues it is
 #: related to. GitHub holds at most 100 sub-issues of an issue; more of any
@@ -79,6 +92,9 @@ query($owner: String!, $repo: String!, $number: Int!) {
         nodes {
           project { id }
           fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+          agent: fieldValueByName(name: "Agent") {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
           }
         }
@@ -141,6 +157,8 @@ query($proj: ID!, $cursor: String) {
               url
               title
               body
+              bodyHTML
+              state
               createdAt
               assignees(first: 10) { nodes { id login name } }
               timelineItems(last: 10, itemTypes: [ASSIGNED_EVENT]) {
@@ -227,6 +245,34 @@ class GitHubTicketService(GitHubApi, TicketService):
         conditions = read_conditions(resource, parameters, continuation)
         if resource not in TICKET_RESOURCES:
             raise ServiceError(t("integrations.resources.resource"))
+        if resource == "ticket_attachments":
+            raise _no_attachments()
+        if resource == "tracker_tickets":
+            repository = self.repository(subject)
+            with reading(resource):
+                found, next_page = await search_tickets(
+                    self,
+                    repository,
+                    conditions,
+                    request_of(self, resource, subject, conditions),
+                    continuation,
+                )
+                summaries = []
+                for data in found:
+                    item = self.item(data["html_url"], "ticket")
+                    if item.repository.casefold() != repository.casefold():
+                        raise ValueError("Issue outside the searched tracker")
+                    summaries.append(
+                        TicketSummary(
+                            **self.target(item, data).model_dump(),
+                            key=str(item.number),
+                            state=data["state"],
+                            lane=await self._lane(await self._place(item)),
+                            labels=_label_names(data),
+                            updated_at=data["updated_at"],
+                        )
+                    )
+                return ReadPage.of(resource, summaries, continuation=next_page)
         item = self.item(subject, "ticket")
         with reading(resource):
             if resource == "tickets":
@@ -240,17 +286,24 @@ class GitHubTicketService(GitHubApi, TicketService):
                     repository=item.repository,
                     body=data.get("body") or "",
                     state=data["state"],
-                    assignees=[user["login"] for user in data.get("assignees") or []],
+                    assignees=await self._assignees(data, place),
                     labels=[label["name"] for label in data.get("labels") or []],
                     lane=await self._lane(place),
                     parent=_relative(parent) if parent else None,
                     children=_relatives(place["subIssues"]),
                     blocked_by=_relatives(place["blockedBy"]),
                     blocks=_relatives(place["blocking"]),
+                    interactive=False,
+                    interactive_ancestor=None,
                 )
                 return ReadPage.of(resource, [ticket], target=self.target(item, data))
             request = request_of(self, resource, subject, conditions)
             return await read_collection(self, resource, item, request, continuation)
+
+    def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
+        raise _no_attachments()
 
     async def comment(
         self, url: str, body: str, *, status: WorkflowStatus | None = None
@@ -265,6 +318,11 @@ class GitHubTicketService(GitHubApi, TicketService):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
         """Open an issue in ``tracker`` and, if ``add_to_board``, add it to the
         configured Project.
@@ -273,27 +331,119 @@ class GitHubTicketService(GitHubApi, TicketService):
             ServiceError: Saying the issue was created, if it could not be
                 added to the Project: the member does not open it again.
         """
+        if interactive:
+            raise ServiceUnsupported(
+                t("integrations.github.response.interactive_unsupported")
+            )
         repository = self.repository(tracker)
+        # Validate all related write scopes and the destination before creating.
+        for related in filter(None, (parent, *blocked_by)):
+            check_path(
+                self.owner, self.item(related, "ticket").repository, provider="github"
+            )
+        initial_lane = creation_lane(lane, parent, blocked_by)
+        defined = await self._defined_labels(repository, labels)
+        assigned_member = next(
+            (
+                m
+                for m in self.team.members
+                if assignee and member_identity(m).matches(assignee)
+            ),
+            None,
+        )
+        agent = (
+            assigned_member
+            if assigned_member and assigned_member.person_type == "agent"
+            else None
+        )
+        agent_field = None
+        agent_option = None
+        if agent:
+            agent_field = (
+                (await self._fields()).get(self.FIELD_AGENT) if add_to_board else None
+            )
+            agent_option = (
+                next(
+                    (
+                        o["id"]
+                        for o in agent_field["options"]
+                        if o["name"] == get_agent_token(agent)
+                    ),
+                    None,
+                )
+                if agent_field
+                else None
+            )
+            if agent_option is None:
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.github.response.agent_unsupported",
+                        person=agent.person_id,
+                    )
+                )
+        option = None
+        if add_to_board and initial_lane != "new":
+            await self._sync_status_columns()
+            option = self.columns.get(initial_lane)
+            if option is None:
+                raise ServiceUnsupported(
+                    t(
+                        "integrations.github.response.lane_unsupported",
+                        lane=initial_lane,
+                    )
+                )
         payload: dict[str, Any] = {"title": title, "body": body}
-        if labels:
-            payload["labels"] = await self._defined_labels(repository, labels)
+        if assignee and not agent:
+            payload["assignees"] = [assignee]
+        if defined:
+            payload["labels"] = defined
         client = await self.client()
         data = (await client.post(f"/repos/{repository}/issues", json=payload)).json()
         item = self.item(str(data["html_url"]), "ticket")
         created = TicketCreated(
             labels=_label_names(data), target=self.target(item, data)
         )
-        if add_to_board:
-            try:
-                await self._get_project_item_id(str(data["node_id"]))
-            except ServiceError as exc:
-                raise ServiceError(
-                    t(
-                        "integrations.github.response.created_off_board",
-                        url=created.target.url,
-                        message=str(exc),
+        try:
+            if parent or blocked_by:
+                await self.update_ticket(
+                    created.target.url,
+                    body=None,
+                    title=None,
+                    add_labels=(),
+                    remove_labels=(),
+                    state=None,
+                    state_reason=None,
+                    parent=parent,
+                    add_blocked_by=blocked_by,
+                )
+            if add_to_board:
+                project = await self._project_node()
+                project_item = await self._get_project_item_id(str(data["node_id"]))
+                # A newly added item has no Status, hence is not actionable.
+                # Apply Agent before the final Status exposes it to patrol.
+                fields = []
+                if agent_field:
+                    fields.append((agent_field["id"], agent_option))
+                if option:
+                    fields.append((self._status_field_id, option))
+                for field, value in fields:
+                    await self.graphql(
+                        UPDATE_PROJECT_ITEM_STATUS,
+                        {
+                            "proj": project,
+                            "item": project_item,
+                            "field": field,
+                            "opt": value,
+                        },
                     )
-                ) from exc
+        except ServiceError as exc:
+            raise ServiceError(
+                t(
+                    "integrations.github.response.created_off_board",
+                    url=created.target.url,
+                    message=str(exc),
+                )
+            ) from exc
         return created
 
     async def update_ticket(
@@ -309,7 +459,12 @@ class GitHubTicketService(GitHubApi, TicketService):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
+        if interactive is not None:
+            raise ServiceUnsupported(
+                t("integrations.github.response.interactive_unsupported")
+            )
         item = self.item(url, "ticket")
         new_parent = self.item(parent, "ticket") if parent else None
         adding = [self.item(blocker, "ticket") for blocker in add_blocked_by]
@@ -384,6 +539,8 @@ class GitHubTicketService(GitHubApi, TicketService):
             state_changed=state_changed,
             labels=_label_names(data),
             target=self.target(item, data),
+            interactive=False,
+            interactive_ancestor=None,
         )
 
     async def add_reaction(
@@ -471,6 +628,26 @@ class GitHubTicketService(GitHubApi, TicketService):
         await self._sync_status_columns()
         option = (on_board[0].get("fieldValueByName") or {}).get("name")
         return cast(Lane, self._status_from_option(option) or Task.NEW)
+
+    async def _assignees(
+        self, data: dict[str, Any], place: dict[str, Any]
+    ) -> list[ActorName]:
+        """Both GitHub assignees and this board's Agent assignment."""
+        names = [ActorName(user["login"]) for user in data.get("assignees") or []]
+        project = await self._project_node()
+        for node in _nodes(place["projectItems"]):
+            if (node.get("project") or {}).get("id") != project:
+                continue
+            token = (node.get("agent") or {}).get("name")
+            for member in self.team.members:
+                identity = member_identity(member)
+                if (
+                    token
+                    and identity.mention == token
+                    and not any(identity.matches(name) for name in names)
+                ):
+                    names.append(ActorName(identity.name))
+        return names
 
     # --------------------------------------------------------------------- #
     #   The board                                                           #
@@ -710,53 +887,42 @@ class GitHubTicketService(GitHubApi, TicketService):
         await self._sync_status_columns()
         return await self._project_connection(_BOARD_ITEMS, "items")
 
-    @cached_property
-    def _login(self) -> str:
-        """The member's login, read only by what decides the member's work:
-        reading the board's closed work needs no one's identity."""
-        return normalize_login(get_github_username(self.person, strict=True))
-
     def _is_me(self, login: str) -> bool:
         """Whether a login from either GitHub API names this member."""
-        return bool(self._login) and normalize_login(login) == self._login
+        return member_identity(self.person).matches(login)
 
-    def _text_mentions_me(self, text: str | None) -> bool:
-        """
-        Return True when the given text contains a mention of the current user.
-        Args:
-            text (str | None): The text to check for mentions.
-        Returns:
-            bool: True if the text mentions the user, False otherwise.
-        """
-        if not text:
-            return False
+    def _mentions(self, html: str) -> set[str]:
+        return mentions(html, (get_agent_token(member) for member in self.team.members))
 
-        if self._mention_token and self._mention_token in text:
-            return True
-
-        if self._login:
-            mention_re = (
-                r"(^|[^A-Za-z0-9_])@" + re.escape(self._login) + r"(?=$|[^A-Za-z0-9-])"
+    def _mentions_me(self, names: set[str]) -> bool:
+        return (
+            any(
+                self._is_me(name.removeprefix("@"))
+                for name in names
+                if name.startswith("@")
             )
-            if re.search(mention_re, text, flags=re.IGNORECASE):
-                return True
+            or self._mention_token.casefold() in names
+        )
 
-        return False
-
-    async def _comments(self, item: GitHubItem) -> list[Message]:
+    async def _comments(self, item: GitHubItem) -> list[tuple[Message, set[str]]]:
         comments = []
-        async for found in self.paginated(f"{item.conversation}/comments"):
+        async for found in self.paginated(
+            f"{item.conversation}/comments", headers=_FULL
+        ):
             login = found["user"]["login"]
             author_type = get_author_type(self.person, login)
             comments.append(
-                Message(
-                    content=found["body"],
-                    author=get_person_name(self.team.members, login) or author_type,
-                    author_type=author_type,
-                    timestamp=found["created_at"],
+                (
+                    Message(
+                        content=found["body"],
+                        author=get_person_name(self.team.members, login) or author_type,
+                        author_type=author_type,
+                        timestamp=found["created_at"],
+                    ),
+                    self._mentions(found["body_html"] or ""),
                 )
             )
-        return sorted(comments, key=lambda comment: comment.timestamp)
+        return sorted(comments, key=lambda comment: comment[0].timestamp)
 
     async def _related_pull_request_state(self, item: GitHubItem) -> str | None:
         """The state of the pull request that refers to the issue -- ``merged``
@@ -805,7 +971,7 @@ class GitHubTicketService(GitHubApi, TicketService):
             }
             status = self._status_from_option((values.get("Status") or {}).get("name"))
             issue = it["content"]
-            if status is None or status == Task.DONE or not issue:
+            if not issue or issue.get("state") == "CLOSED":
                 continue
             assignees = issue.get("assignees", {}).get("nodes", [])
             # Assignees and the Agent field are independent ways to assign this
@@ -831,7 +997,7 @@ class GitHubTicketService(GitHubApi, TicketService):
                     url=issue.get("url"),
                     title=issue["title"],
                     description=issue.get("body", "") or "",
-                    status=status,
+                    status=status or Task.NEW,
                     created_at=issue["createdAt"],
                     assignee=self.person.person_id if is_assigned else None,
                 )
@@ -841,32 +1007,61 @@ class GitHubTicketService(GitHubApi, TicketService):
                 "assigned_at": assigned_at,
                 # The open issues it is blocked by.
                 "blocked": issue["issueDependenciesSummary"]["blockedBy"] > 0,
+                "body_html": issue["bodyHTML"] or "",
             }
         return sorted(tasks), task_metadata
 
     async def _select_actionable_task(
-        self, task: Task, metadata: dict[str, Any]
+        self, task: Task, metadata: dict[str, Any], *, finish_merged: bool = True
     ) -> Task | None:
         # A ticket is not started while an issue it is blocked by is open.
-        if not metadata["assigned"] or (
-            task.status == Task.READY and metadata["blocked"]
+        if metadata["assigned"] and (
+            task.status not in (Task.READY, Task.IN_PROGRESS)
+            or (task.status == Task.READY and metadata["blocked"])
         ):
             return None
         assert task.url
         item = self.item(task.url, "ticket")
-        task.comments = await self._comments(item)
+        comments = await self._comments(item)
+        task.comments = [message for message, _ in comments]
+        described = self._mentions_me(self._mentions(metadata["body_html"]))
+        if not metadata["assigned"]:
+            return select_mention(
+                task,
+                pending=mention_pending(
+                    described,
+                    (
+                        (message, self._mentions_me(names))
+                        for message, names in comments
+                    ),
+                ),
+            )
         # The agent still receives the whole history on the task; only the
         # decision is limited to what was said after the assignment.
-        since = since_assignment(task.comments, str(metadata.get("assigned_at") or ""))
+        since = since_assignment(
+            relevant_comments(
+                (message, bool(names) and not self._mentions_me(names))
+                for message, names in comments
+            ),
+            str(metadata.get("assigned_at") or ""),
+        )
         return await select(
             task,
             since,
             latest_status=parse_workflow_status_comment(since[-1].content)
             if since
             else None,
-            pending=mention_pending(task.description, since, self._text_mentions_me),
+            pending=mention_pending(
+                described,
+                (
+                    (message, self._mentions_me(names))
+                    for message, names in comments
+                    if message in since
+                ),
+            ),
             linked_pull=lambda: self._related_pull_request_state(item),
             done=lambda: self.move(task, "done"),
+            finish_merged=finish_merged,
         )
 
     async def candidates(self) -> list[Task]:
@@ -878,10 +1073,121 @@ class GitHubTicketService(GitHubApi, TicketService):
         working_tasks = [task for task in tasks if task.status != Task.READY]
         for task in [*ready_tasks, *working_tasks]:
             assert task.id, "Task ID must be set"
+            if not task_metadata[task.id]["assigned"]:
+                continue
             selected = await self._select_actionable_task(task, task_metadata[task.id])
             if selected:
                 candidates.append(selected)
+        known = {task.url: task for task in tasks}
+        mentioned = []
+        try:
+            for issue in await self._search_mentions():
+                item = self.item(issue["html_url"], "ticket")
+                if not in_scope(self.owner, item.repository):
+                    continue
+                known_task = known.get(issue["html_url"])
+                if known_task is None:
+                    snapshot = await self.fetch(item, headers=_FULL)
+                    if snapshot["state"] != "open":
+                        continue
+                    task = self._mention_task(snapshot)
+                    metadata = {
+                        "assigned": bool(task.assignee),
+                        "body_html": snapshot["body_html"] or "",
+                    }
+                else:
+                    task = known_task
+                    metadata = task_metadata[str(task.id)]
+                if (
+                    not metadata["assigned"]
+                    and (selected := await self._select_actionable_task(task, metadata))
+                    is not None
+                ):
+                    mentioned.append(selected)
+        except ServiceError as exc:
+            # Discovery of mentions is independent of assigned work and PRs.
+            # No partial mention snapshot is returned as a complete search.
+            self.logger.warning(
+                t(
+                    "integrations.github.response.mention_discovery_failed",
+                    message=str(exc),
+                )
+            )
+        else:
+            candidates.extend(mentioned)
         return candidates
+
+    async def _search_mentions(self) -> list[dict[str, Any]]:
+        """Discover native mentions and the directory's explicit member token."""
+        identity = member_identity(self.person)
+        login = get_github_username(self.person)
+        queries = [f"mentions:{login}"] if login else []
+        queries.append(f'"{identity.mention}" in:body,comments')
+        found: dict[str, dict[str, Any]] = {}
+        for query in queries:
+            for issue in await self._search_mentions_query(query):
+                found[issue["html_url"]] = issue
+        return list(found.values())
+
+    async def _search_mentions_query(self, query: str) -> list[dict[str, Any]]:
+        """One search query, paginated to GitHub's 1,000-result limit.
+
+        Answered mentions still match open issues. Following result pages
+        prevents them from permanently hiding unanswered mentions after page 1.
+        Incomplete or overflowing searches fail this discovery path explicitly.
+        """
+        found: dict[str, dict[str, Any]] = {}
+        for number in range(1, _SEARCH_LIMIT // GITHUB_PAGE_SIZE + 1):
+            page = await self.get(
+                "/search/issues",
+                params={
+                    "q": f"is:issue is:open user:{self.owner} {query}",
+                    "per_page": GITHUB_PAGE_SIZE,
+                    "page": number,
+                    "sort": "updated",
+                    "order": "asc",
+                },
+            )
+            if (
+                not isinstance(page, dict)
+                or not isinstance(page.get("items"), list)
+                or type(page.get("total_count")) is not int
+                or page["total_count"] < 0
+                or type(page.get("incomplete_results")) is not bool
+                or not all(
+                    isinstance(issue, dict) and isinstance(issue.get("html_url"), str)
+                    for issue in page["items"]
+                )
+            ):
+                raise ServiceError(t("integrations.github.response.response"))
+            if page["incomplete_results"] or page["total_count"] > _SEARCH_LIMIT:
+                raise ServiceError(
+                    t("integrations.github.response.mention_search_incomplete")
+                )
+            for issue in page["items"]:
+                found[issue["html_url"]] = issue
+            if len(found) >= page["total_count"]:
+                return list(found.values())
+            if len(page["items"]) < GITHUB_PAGE_SIZE:
+                break
+        raise ServiceError(t("integrations.github.response.mention_search_incomplete"))
+
+    def _mention_task(self, issue: dict[str, Any]) -> Task:
+        """An issue outside the board's work window, for conversation only."""
+        item = self.item(issue["html_url"], "ticket")
+        return Task(
+            provider="github",
+            label=item.label,
+            id=issue["node_id"],
+            url=issue["html_url"],
+            title=issue["title"],
+            description=issue.get("body") or "",
+            status=Task.NEW,
+            created_at=issue["created_at"],
+            assignee=self.person.person_id
+            if any(self._is_me(user["login"]) for user in issue["assignees"])
+            else None,
+        )
 
     async def refresh(self, candidate: Task) -> Task | None:
         """Re-read one patrol candidate and apply the canonical work test."""
@@ -892,7 +1198,44 @@ class GitHubTicketService(GitHubApi, TicketService):
                 continue
             assert task.id, "Task ID must be set"
             return await self._select_actionable_task(task, task_metadata[task.id])
+        if candidate.url:
+            item = self.item(candidate.url, "ticket")
+            issue = await self.fetch(item, headers=_FULL)
+            if issue["state"] != "open" or not in_scope(self.owner, item.repository):
+                return None
+            task = self._mention_task(issue)
+            if task.assignee is None:
+                return await self._select_actionable_task(
+                    task, {"assigned": False, "body_html": issue["body_html"] or ""}
+                )
         return None
+
+    async def can_receive_work(self, url: str) -> bool:
+        tasks, metadata = self._build_project_tasks(await self.get_all_tickets())
+        for task in tasks:
+            if task.url == url:
+                assert task.id
+                return (
+                    await self._select_actionable_task(
+                        task, metadata[task.id], finish_merged=False
+                    )
+                    is not None
+                )
+        item = self.item(url, "ticket")
+        issue = await self.fetch(item, headers=_FULL)
+        if issue["state"] != "open" or not in_scope(self.owner, item.repository):
+            return False
+        task = self._mention_task(issue)
+        if task.assignee is not None:
+            return False
+        return (
+            await self._select_actionable_task(
+                task,
+                {"assigned": False, "body_html": issue["body_html"] or ""},
+                finish_merged=False,
+            )
+            is not None
+        )
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
         project_id = await self._project_node()
@@ -1030,3 +1373,7 @@ def _relatives(connection: dict[str, Any]) -> list[TicketRelative]:
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
     return [str(label.get("name", "")) for label in issue.get("labels") or []]
+
+
+def _no_attachments() -> ServiceUnsupported:
+    return ServiceUnsupported(t("integrations.github.response.attachments_unsupported"))

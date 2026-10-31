@@ -22,7 +22,8 @@ export const github = {
         gitEmail: "Git email",
         installationId: "GitHub Installation ID",
         appId: "GitHub App ID",
-        privateKeyPath: "GitHub private key path",
+        privateKey: "GitHub private key file",
+        privateKeyPlaceholder: "Choose the .pem file GitHub downloaded",
         agentFieldSyncFailedTitle: "Agent field update failed",
         agentFieldSyncFailedBody:
           "The member was saved, but the project's Agent field could not be updated. Update it from Setup → Integrations.",
@@ -115,7 +116,7 @@ export const github = {
         githubInstallationIdInvalid: "GitHub Installation ID must be digits only.",
         githubAppIdRequired: "GitHub App ID is required.",
         githubAppIdInvalid: "GitHub App ID must be digits only.",
-        githubPrivateKeyPathRequired: "GitHub private key path is required.",
+        githubPrivateKeyRequired: "Choose the GitHub private key file.",
         githubAccessTokenRequired: "GitHub access token is required.",
         githubAccessTokenInvalid:
           "Enter a GitHub access token starting with ghp_, gho_, ghu_, ghs_, ghr_, or github_pat_.",
@@ -200,7 +201,8 @@ export const github = {
         gitEmail: "Gitメールアドレス",
         installationId: "GitHub Installation ID",
         appId: "GitHub App ID",
-        privateKeyPath: "GitHub秘密鍵パス",
+        privateKey: "GitHub秘密鍵ファイル",
+        privateKeyPlaceholder: "GitHub からダウンロードした .pem ファイルを選択",
         agentFieldSyncFailedTitle: "Agent フィールドの更新に失敗しました",
         agentFieldSyncFailedBody:
           "メンバーは保存されましたが、プロジェクトの Agent フィールドを更新できませんでした。設定 → 連携 から更新してください。",
@@ -294,7 +296,7 @@ export const github = {
         githubInstallationIdInvalid: "GitHub Installation ID は数字のみで入力してください。",
         githubAppIdRequired: "GitHub App ID は必須です。",
         githubAppIdInvalid: "GitHub App ID は数字のみで入力してください。",
-        githubPrivateKeyPathRequired: "GitHub秘密鍵パスは必須です。",
+        githubPrivateKeyRequired: "GitHub秘密鍵ファイルを選択してください。",
         githubAccessTokenRequired: "GitHubアクセストークンは必須です。",
         githubAccessTokenInvalid:
           "GitHubアクセストークンは ghp_、gho_、ghu_、ghs_、ghr_、github_pat_ のいずれかで始まる値を入力してください。",

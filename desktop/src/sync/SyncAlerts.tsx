@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import { getWorkspaceSecrets, type SyncScope } from "../api/client";
+import { useServerMachineLabel } from "../serverMachine";
 import { SECRETS_REFETCH_MS, secretAlert, secretsQueryKey } from "./secretState";
 import { SyncFailureDetail } from "./SyncFailureDetail";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
@@ -32,6 +33,7 @@ import { useSyncRetry, useSyncStatuses } from "./useSyncStatus";
  */
 export function SyncAlerts() {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const queryClient = useQueryClient();
   const scoped = useSyncStatuses();
   const workspace = scoped.find((item) => item.scope === "workspace");
@@ -92,7 +94,7 @@ export function SyncAlerts() {
           icon={<TriangleAlert size={18} />}
           title={t("sync.live.updateRequiredTitle")}
         >
-          <Text size="sm">{t("sync.live.updateRequired")}</Text>
+          <Text size="sm">{t("sync.live.updateRequired", { machine })}</Text>
         </Alert>
       ) : null}
     </>
@@ -107,9 +109,10 @@ export function SyncAlerts() {
  */
 function StateAlert({ group }: { group: ScopedSyncStatus[] }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   const retry = useSyncRetry();
   const state = group[0]?.state ?? "disabled";
-  const label = t(`sync.state.${state}.label`);
+  const label = t(`sync.state.${state}.label`, { machine });
   const count = group.reduce((sum, item) => sum + (item.status?.unsendable_changes.length ?? 0), 0);
   // Both scopes of a hub that is down failed the same way; their words are
   // shown once.
@@ -132,7 +135,7 @@ function StateAlert({ group }: { group: ScopedSyncStatus[] }) {
     >
       <Stack gap="xs">
         <Group align="center" gap="md" wrap="wrap">
-          <Text size="sm">{t(`sync.alerts.${state}`, { count })}</Text>
+          <Text size="sm">{t(`sync.alerts.${state}`, { count, machine })}</Text>
           <Group gap="xs">
             {syncCanRetry(state) ? (
               <Button
@@ -166,14 +169,15 @@ function StateAlert({ group }: { group: ScopedSyncStatus[] }) {
  */
 function SecretsAlert({ scope, count }: { scope: SyncScope; count: number }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   return (
     <Alert
       color="warning"
       icon={<TriangleAlert size={18} />}
-      title={t(`sync.secrets.title.${scope}`)}
+      title={t(`sync.secrets.title.${scope}`, { machine })}
     >
       <Group align="center" gap="md" wrap="wrap">
-        <Text size="sm">{t("sync.secrets.alert.attention", { count })}</Text>
+        <Text size="sm">{t("sync.secrets.alert.attention", { count, machine })}</Text>
         <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
           {t("sync.secrets.hint.link")}
         </Anchor>
@@ -192,6 +196,7 @@ function SecretsAlert({ scope, count }: { scope: SyncScope; count: number }) {
  */
 function RejectedAlert({ scope, count }: { scope: SyncScope; count: number }) {
   const { t } = useTranslation();
+  const machine = useServerMachineLabel();
   return (
     <Alert
       color="warning"
@@ -199,7 +204,7 @@ function RejectedAlert({ scope, count }: { scope: SyncScope; count: number }) {
       title={t(`sync.rejected.alertTitle.${scope}`)}
     >
       <Group align="center" gap="md" wrap="wrap">
-        <Text size="sm">{t("sync.rejected.alert", { count })}</Text>
+        <Text size="sm">{t("sync.rejected.alert", { count, machine })}</Text>
         <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
           {t("sync.actions.settings")}
         </Anchor>

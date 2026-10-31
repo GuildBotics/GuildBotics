@@ -77,7 +77,7 @@ class RuntimeLifecycleService:
 
     def _start(self, request: SchedulerStartRequest) -> RuntimeStatus:
         if not self._service_lock.locked:
-            self._service_lock.acquire(owner="desktop", workspace=Path.cwd())
+            self._service_lock.acquire(workspace=Path.cwd())
 
         with self._state_lock:
             self._start_in_progress = True

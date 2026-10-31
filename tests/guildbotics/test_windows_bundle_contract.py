@@ -18,19 +18,23 @@ def test_windows_tauri_overlay_builds_only_nsis_with_installer_hooks() -> None:
     assert (ROOT / "desktop/src-tauri" / hook).is_file()
 
 
-def test_packaged_desktop_csp_allows_local_api_avatars() -> None:
+def test_bundled_desktop_page_reaches_only_the_host() -> None:
+    """The bundled bootstrap page talks to the host over IPC alone: the UI
+    that talks to the backend is the backend's own page."""
     config = json.loads(
         (ROOT / "desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
     )
 
-    csp = config["app"]["security"]["csp"]
-    image_sources = next(
-        directive.split()[1:]
-        for directive in csp.split(";")
-        if directive.strip().startswith("img-src ")
-    )
+    directives = {
+        name: sources
+        for name, *sources in (
+            directive.split()
+            for directive in config["app"]["security"]["csp"].split(";")
+        )
+    }
 
-    assert "http://127.0.0.1:*" in image_sources
+    assert directives["connect-src"] == ["ipc:", "http://ipc.localhost"]
+    assert directives["img-src"] == ["'self'", "data:"]
 
 
 def test_release_desktop_uses_the_windows_gui_subsystem() -> None:

@@ -21,6 +21,7 @@ from guildbotics.guest.acp import AcpAdapterBase
 from guildbotics.guest.jsonrpc import RpcError
 from guildbotics.guest.provider_process import as_dict
 from guildbotics.intelligences.agent_runtime.models import (
+    TURN_TIMEOUT_SECONDS,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -61,7 +62,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
         self,
         *,
         executable: str = "copilot",
-        timeout: float = 3600.0,
+        timeout: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
         #: The setting values Copilot reported back for the live session, never

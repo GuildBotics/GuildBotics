@@ -126,6 +126,7 @@ _FILLED_ACCOUNTS: dict[str, tuple[dict[str, Any], set[str]]] = {
             "installation_id": 7,
             "app_id": 3,
             "access_token": "ghp-token",
+            "private_key": "-----BEGIN KEY-----",
         },
         {"GITHUB_ACCESS_TOKEN", "GITHUB_PRIVATE_KEY"},
     ),
@@ -163,15 +164,10 @@ def test_what_a_setup_stores_is_read_without_unknown_fields_or_whitespace(name):
 @pytest.mark.parametrize(
     "name", sorted(n for n, p in PROVIDERS.items() if p.setup and p.setup.member)
 )
-def test_a_member_account_stores_only_the_secrets_its_provider_declares(name, tmp_path):
+def test_a_member_account_stores_only_the_secrets_its_provider_declares(name):
     provider = PROVIDERS[name]
     assert provider.setup is not None and provider.setup.member is not None
-    key = tmp_path / "app.pem"
-    key.write_text("-----BEGIN KEY-----", encoding="utf-8")
     fields, given = _FILLED_ACCOUNTS[name]
-    fields = dict(fields)
-    if "private_key_path" in provider.setup.member.model_fields:
-        fields["private_key_path"] = key
     account = provider.setup.member.model_validate(fields)
 
     info, secrets = account.stored("alice", human=False)

@@ -21,15 +21,19 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.diff_lines import file_change
 from guildbotics.integrations.local import items, store
+from guildbotics.integrations.local.identity import member_identity
 from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
     Comment,
     PullRequest,
     Review,
     ReviewThread,
     patrol,
+    pull_request_work,
 )
 from guildbotics.integrations.readiness import Freshness, readiness_of
-from guildbotics.integrations.repository_scope import check_path
+from guildbotics.integrations.repository_scope import check_path, in_scope
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
     CodeHostingService,
@@ -58,6 +62,7 @@ from guildbotics.runtime.resources import (
     ReviewVerdict,
     read_conditions,
 )
+from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.i18n_tool import t
 
 #: The one job of a head's CI, and its one attempt.
@@ -142,6 +147,8 @@ class LocalCodeHostingService(CodeHostingService):
             "assignees": item["assignees"],
             "labels": item["labels"],
             "author_type": self._author_type(item["author"]),
+            "author": item["author"],
+            "requested_reviewers": item["reviewers"],
             "head": item["head"],
             "head_repository": item["head_repository"],
             "head_sha": _head_sha(item),
@@ -215,7 +222,11 @@ class LocalCodeHostingService(CodeHostingService):
         return {**self._comment(comment), "reply_to_id": comment["in_reply_to"]}
 
     def _author_type(self, author: str) -> str:
-        return Message.ASSISTANT if author == self.person.person_id else Message.USER
+        return (
+            Message.ASSISTANT
+            if author == member_identity(self.person).name
+            else Message.USER
+        )
 
     async def identity(self, *, check: bool = False) -> dict[str, str]:
         return {}
@@ -226,7 +237,9 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, body: str, *, status: WorkflowStatus | None = None
     ) -> CommentWritten:
         ref = store.locate(url, "pull_request")
-        return items.comment(self.scope, ref, self.person.person_id, body, status)
+        return items.comment(
+            self.scope, ref, member_identity(self.person).name, body, status
+        )
 
     async def create_pull_request(
         self,
@@ -253,7 +266,9 @@ class LocalCodeHostingService(CodeHostingService):
             links = [_linked(ticket, repository) for ticket in tickets]
             ref, number = store.new_ref("pull_request", repository)
             item = {
-                **items.new_item(number, title, body, self.person.person_id),
+                **items.new_item(
+                    number, title, body, member_identity(self.person).name
+                ),
                 "head": head,
                 "head_repository": repository,
                 "base": base,
@@ -281,12 +296,12 @@ class LocalCodeHostingService(CodeHostingService):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         ref = store.locate(url, "pull_request")
         item = store.load(ref)
-        if drop_ticket_links:
-            item["tickets"] = []
+        if tickets is not None:
+            item["tickets"] = [_linked(ticket, ref.place) for ticket in tickets]
         for key, value in (("body", body), ("title", title)):
             if value is not None:
                 item[key] = value
@@ -298,11 +313,18 @@ class LocalCodeHostingService(CodeHostingService):
     ) -> ReviewSubmitted:
         ref, item = _at_head(url, head)
         review = items.entry(
-            item, "review", self.person.person_id, body, verdict=verdict, commit=head
+            item,
+            "review",
+            member_identity(self.person).name,
+            body,
+            verdict=verdict,
+            commit=head,
         )
         item["reviews"].append(review)
         # A review answers the member's review request, as on every code host.
-        item["reviewers"] = [r for r in item["reviewers"] if r != self.person.person_id]
+        item["reviewers"] = [
+            r for r in item["reviewers"] if r != member_identity(self.person).name
+        ]
         store.save(self.scope, ref, item)
         return ReviewSubmitted(
             verdict=verdict, commit=head, url=None, target=items.target(ref, item)
@@ -323,7 +345,7 @@ class LocalCodeHostingService(CodeHostingService):
         comment = items.entry(
             item,
             "inline",
-            self.person.person_id,
+            member_identity(self.person).name,
             body,
             path=path,
             line=line,
@@ -361,7 +383,7 @@ class LocalCodeHostingService(CodeHostingService):
         reply = items.entry(
             item,
             "inline",
-            self.person.person_id,
+            member_identity(self.person).name,
             body,
             **{key: root[key] for key in ("path", "line", "side", "commit")},
             in_reply_to=reply_to,
@@ -379,7 +401,9 @@ class LocalCodeHostingService(CodeHostingService):
         self, url: str, target_id: str, reaction: SemanticReaction
     ) -> ReactionAdded:
         ref = store.locate(url, "pull_request")
-        return items.react(self.scope, ref, self.person.person_id, target_id, reaction)
+        return items.react(
+            self.scope, ref, member_identity(self.person).name, target_id, reaction
+        )
 
     async def readiness(
         self,
@@ -406,7 +430,9 @@ class LocalCodeHostingService(CodeHostingService):
             behind_by = store.git(
                 ref.place, "rev-list", "--count", f"{head_sha}..{base_sha}"
             )
-            freshness = Freshness(base_sha, int(behind_by), base_sha)
+            freshness = Freshness(
+                base_sha, int(behind_by), base_sha, requires_up_to_date=True
+            )
         failed = {
             "job_id": f"{_JOB}@{_ATTEMPT}",
             "name": _JOB,
@@ -492,6 +518,19 @@ class LocalCodeHostingService(CodeHostingService):
 
     # -- the pull request patrol --------------------------------------------
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        ref = store.locate(url, "pull_request")
+        check_path(self.scope, ref.place, provider="local")
+        # No await inside the file transaction: other processes and threads
+        # observe the winner before deciding whether they changed the PR.
+        with held_lock(ref.path.with_suffix(".lock")):
+            pull = store.load(ref)
+            if pull["draft"] or pull["state"] != "open":
+                return False
+            pull["draft"] = True
+            store.save(self.scope, ref, pull)
+            return True
+
     async def pull_request_candidates(self) -> list[Task]:
         return [
             task
@@ -504,19 +543,22 @@ class LocalCodeHostingService(CodeHostingService):
         ref = store.locate(task.pull_request_url, "pull_request")
         return await self._patrol(ref, store.load(ref))
 
+    async def can_receive_work(self, url: str) -> bool:
+        ref = store.locate(url, "pull_request")
+        return in_scope(self.scope, ref.place) and pull_request_work(
+            _snapshot(ref, store.load(ref)), member_identity(self.person).name
+        ) in {FEEDBACK, REVIEW}
+
     async def _patrol(self, ref: store.Ref, item: dict[str, Any]) -> Task | None:
-        async def draft() -> None:
-            pull = store.load(ref)
-            pull["draft"] = True
-            store.save(self.scope, ref, pull)
+        if not in_scope(self.scope, ref.place):
+            return None
 
         return await patrol(
             self,
             _snapshot(ref, item),
-            self.person.person_id,
+            member_identity(self.person).name,
             provider="local",
             person_id=self.person.person_id,
-            draft=draft,
         )
 
 

@@ -23,6 +23,7 @@ vi.mock("../api/client", async () => {
     ...actual,
     getWorkspaceSyncStatus: vi.fn(),
     retryWorkspaceSync: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
   };
 });
 
@@ -84,7 +85,9 @@ describe("SyncIndicator", () => {
 
     await user.click(await screen.findByRole("button", { name: /Waiting to send/ }));
 
-    expect(await screen.findByText(t("sync.state.sending.detail"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.state.sending.detail", { machine: "studio" })),
+    ).toBeInTheDocument();
     expect(screen.getByText(t("sync.counts.ahead", { count: 3 }))).toBeInTheDocument();
   });
 
@@ -150,7 +153,9 @@ describe("SyncIndicator", () => {
 
     await user.click(await screen.findByRole("button", { name: /cannot be sent/ }));
 
-    expect(await screen.findByText(t("sync.state.unsendable.detail"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.state.unsendable.detail", { machine: "studio" })),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: t("sync.actions.retry") })).not.toBeInTheDocument();
   });
 });
@@ -178,7 +183,9 @@ describe("SyncAlerts", () => {
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncAlerts />);
 
-    expect(await screen.findByText(t("sync.alerts.unreachable"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.alerts.unreachable", { machine: "studio" })),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: t("sync.actions.retry") }));
 
     expect(retryWorkspaceSync).toHaveBeenCalledTimes(1);
@@ -191,11 +198,17 @@ describe("SyncAlerts", () => {
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncAlerts />);
 
-    expect(await screen.findByText(t("sync.state.local_error.label"))).toBeInTheDocument();
-    expect(screen.getByText(t("sync.alerts.local_error"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.state.local_error.label", { machine: "studio" })),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(t("sync.alerts.local_error", { machine: "studio" })),
+    ).toBeInTheDocument();
     expect(screen.getByText(printed)).toBeInTheDocument();
     expect(screen.queryByText(t("sync.state.unreachable.label"))).not.toBeInTheDocument();
-    expect(screen.queryByText(t("sync.alerts.unreachable"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(t("sync.alerts.unreachable", { machine: "studio" })),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: t("sync.actions.retry") }));
 
     expect(retryWorkspaceSync).toHaveBeenCalledTimes(1);
@@ -232,7 +245,9 @@ describe("SyncAlerts", () => {
     mockSyncStatuses(status({ state: "update_required" }));
     renderWith(<SyncAlerts />);
 
-    expect(await screen.findByText(t("sync.alerts.update_required"))).toBeInTheDocument();
+    expect(
+      await screen.findByText(t("sync.alerts.update_required", { machine: "studio" })),
+    ).toBeInTheDocument();
     // Retrying cannot make an old build read a newer record.
     expect(screen.queryByRole("button", { name: t("sync.actions.retry") })).not.toBeInTheDocument();
   });

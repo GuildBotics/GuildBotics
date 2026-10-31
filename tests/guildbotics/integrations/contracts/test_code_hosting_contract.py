@@ -13,12 +13,17 @@ remote of. What a provider cannot do at all it refuses as unsupported.
 from __future__ import annotations
 
 import io
+import asyncio
 import zipfile
+from pathlib import Path
+from unittest.mock import AsyncMock
 
+import git
 import pytest
 import pytest_asyncio
 
 from guildbotics.entities.message import Message
+from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.integrations.factory import PROVIDERS
 from guildbotics.runtime.code_hosting_service import CodeHostingService, TicketLink
 from guildbotics.runtime.port import (
@@ -72,6 +77,13 @@ async def _pull_request(host: Harness, branch: str = "feature", **fields):
     )
 
 
+async def _their_pull_request(host: Harness):
+    """A pull request someone else opened, for the member to give a verdict on."""
+    created = await _pull_request(host)
+    host.make_theirs(created.target.url)
+    return created
+
+
 async def _ticket(host: Harness, title: str = "Fix login") -> str:
     created = await host.tickets.create_ticket(host.tracker, title, "", [])
     return created.target.url
@@ -79,6 +91,42 @@ async def _ticket(host: Harness, title: str = "Fix login") -> str:
 
 async def _head(host: Harness, url: str) -> str:
     return (await host.code.read("pull_requests", url)).items[0]["head_sha"]
+
+
+@pytest.mark.asyncio
+async def test_only_the_call_that_drafted_a_pr_reports_a_conversion(host: Harness):
+    url = (await _pull_request(host)).target.url
+    results = await asyncio.gather(
+        host.code.convert_pull_request_to_draft(url),
+        host.other_code.convert_pull_request_to_draft(url),
+    )
+    assert sorted(results) == [False, True]
+    assert (await host.code.read("pull_requests", url)).items[0]["draft"]
+    before = len(host.writes)
+    assert await host.code.convert_pull_request_to_draft(url) is False
+    assert host.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_draft_conversion_refuses_a_write_outside_scope(host: Harness):
+    # The harness' other repository need not hold a PR: the write must be
+    # refused by scope before even trying to convert it.
+    url = (await _pull_request(host)).target.url.replace(
+        host.repository, host.elsewhere
+    )
+    before = len(host.writes)
+    with pytest.raises(ServiceError, match="refused"):
+        await host.code.convert_pull_request_to_draft(url)
+    assert host.writes[before:] == []
+
+
+@pytest.mark.asyncio
+async def test_a_closed_pull_request_is_not_drafted(host: Harness):
+    url = (await _pull_request(host)).target.url
+    host.merge(url)
+    before = len(host.writes)
+    assert await host.code.convert_pull_request_to_draft(url) is False
+    assert host.writes[before:] == []
 
 
 @pytest.mark.asyncio
@@ -131,6 +179,28 @@ async def test_a_pull_request_with_a_current_head_and_passing_ci_is_ready(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("required", [False, True])
+async def test_base_progress_blocks_only_when_the_host_requires_up_to_date(
+    host: Harness, required: bool
+):
+    created = await _pull_request(host)
+    before = await host.code.readiness(created.target.url)
+    host.advance_base()
+    requires_up_to_date = host.require_up_to_date(required)
+
+    result = await host.code.readiness(created.target.url)
+
+    assert before.readiness == "ready"
+    assert result.base_sha != before.base_sha
+    assert result.head_sha == before.head_sha
+    assert (result.behind_by, result.out_of_date) == (1, True)
+    assert result.readiness == ("blocked" if requires_up_to_date else "ready")
+    assert [b.code for b in result.completion_blockers] == (
+        ["base_out_of_date"] if requires_up_to_date else []
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
     """Readiness answers only from a base it read: a base it cannot read is no
     base without commits ahead of the head."""
@@ -146,7 +216,7 @@ async def test_a_pull_request_whose_base_is_gone_is_not_judged(host: Harness):
 @pytest.mark.asyncio
 async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harness):
     code = host.code
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     head = await _head(host, url)
 
@@ -177,7 +247,7 @@ async def test_a_pull_request_is_reviewed_and_its_threads_replied_to(host: Harne
 async def test_a_verdict_lands_only_on_the_head_the_member_read(host: Harness):
     """A head that moved since the member read it has commits the member has
     not read: neither a verdict nor an inline comment is written on it."""
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     read = await _head(host, url)
     host.advance("feature")
@@ -200,7 +270,7 @@ async def test_a_verdict_lands_only_on_the_head_the_member_read(host: Harness):
 
 @pytest.mark.asyncio
 async def test_request_changes_is_given_or_refused_as_unsupported(host: Harness):
-    created = await _pull_request(host)
+    created = await _their_pull_request(host)
     url = created.target.url
     head = await _head(host, url)
 
@@ -257,7 +327,7 @@ async def test_a_reaction_reaches_only_what_the_item_it_names_holds(
             )
         ).id
     else:
-        await code.review(first, "Looks good.", "approve", head)
+        await code.review(first, "Looks good.", "comment", head)
         target_id = (await code.read("pull_request_reviews", first)).items[0]["id"]
     before = len(host.writes)
 
@@ -419,6 +489,112 @@ async def test_a_merge_closes_only_a_ticket_the_code_host_can_close(host: Harnes
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("update", [False, True])
+async def test_a_closing_child_link_keeps_parent_context_without_closing_it(
+    host: Harness, update: bool
+):
+    """The documented create/update recipe leaves an unfinished parent open."""
+    parent, child = [await _ticket(host, title) for title in ("Parent", "Child")]
+    body = f"Parent ticket: {parent}"
+    url = (
+        await _pull_request(
+            host, body=body, tickets=[TicketLink(child, closes=not update)]
+        )
+    ).target.url
+    if update:
+        await host.code.update_pull_request(
+            url, body=body, title=None, tickets=[TicketLink(child, closes=True)]
+        )
+
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert body in pull["body"]
+    host.merge(url)
+    states = [
+        (await host.tickets.read("tickets", ticket)).items[0]["state"]
+        for ticket in (parent, child)
+    ]
+    assert states == ["open", "closed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closes", [False, True])
+async def test_ticket_links_can_switch_between_reference_and_closing(
+    host: Harness, closes: bool
+):
+    ticket = await _ticket(host)
+    unlinked = await _ticket(host, "Not part of the PR")
+    url = (
+        await _pull_request(host, tickets=[TicketLink(ticket, not closes)])
+    ).target.url
+
+    await host.code.update_pull_request(
+        url, body=None, title="Finished", tickets=[TicketLink(ticket, closes)]
+    )
+    await host.code.update_pull_request(
+        url,
+        body=f"Verified\n\nRefs {ticket}\n\nCloses {unlinked}",
+        title=None,
+        tickets=None,
+    )
+    assert (await host.code.read("ticket_pull_requests", unlinked)).items == []
+    host.merge(url)
+
+    assert (await host.tickets.read("tickets", ticket)).items[0]["state"] == (
+        "closed" if closes else "open"
+    )
+    assert (await host.tickets.read("tickets", unlinked)).items[0]["state"] == "open"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove_all", [False, True])
+async def test_replacing_links_removes_old_links_and_their_closing_effect(
+    host: Harness, remove_all: bool
+):
+    first, second = [await _ticket(host, title) for title in "AB"]
+    url = (
+        await _pull_request(
+            host,
+            body="Context",
+            tickets=[TicketLink(first, True), TicketLink(FOREIGN_TICKET, False)],
+        )
+    ).target.url
+    await host.code.update_pull_request(
+        url,
+        body=None,
+        title=None,
+        tickets=[] if remove_all else [TicketLink(second, True)],
+    )
+
+    assert (await host.code.read("ticket_pull_requests", first)).items == []
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert "Context" in pull["body"] and FOREIGN_TICKET not in pull["body"]
+    host.merge(url)
+    states = [
+        (await host.tickets.read("tickets", ticket)).items[0]["state"]
+        for ticket in (first, second)
+    ]
+    assert states == ["open", "open" if remove_all else "closed"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_link_replacement_writes_nothing(host: Harness):
+    own = TicketLink(await _ticket(host), True)
+    url = (await _pull_request(host, body="Original", tickets=[own])).target.url
+    before = len(host.writes)
+    for foreign in (FOREIGN_TICKET, host.theirs.url):
+        with pytest.raises(ServiceUnsupported):
+            await host.code.update_pull_request(
+                url,
+                body="Changed",
+                title="Changed",
+                tickets=[own, TicketLink(foreign, True)],
+            )
+    assert host.writes[before:] == []
+    pull = (await host.code.read("pull_requests", url)).items[0]
+    assert "Original" in pull["body"] and pull["title"] == "feature"
+
+
+@pytest.mark.asyncio
 async def test_an_artifact_is_only_the_current_heads(host: Harness):
     created = await _pull_request(host)
     url = created.target.url
@@ -480,3 +656,43 @@ async def test_the_git_remote_names_its_repository_and_its_open_pull_requests(
     assert await code.open_pull_requests(host.repository, "other") == []
     head = await code.pull_request_head(created.target.url)
     assert (head.repository, head.branch) == (host.repository, "feature")
+
+
+@pytest.mark.asyncio
+async def test_member_show_reads_default_branch_for_every_provider(
+    host: Harness, tmp_path: Path, monkeypatch
+):
+    # Each provider supplies its branch and credential; only transport is a local remote.
+    source = tmp_path / "show-source"
+    remote = tmp_path / "show.git"
+    with git.Repo.init(source, initial_branch="main") as repo:
+        (source / "AGENTS.md").write_text("current guidelines\n", encoding="utf-8")
+        (source / "docs").mkdir()
+        (source / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+        repo.git.add(A=True)
+        commit = repo.index.commit(
+            "guidelines", author=git.Actor("Test", "test@example.com")
+        )
+        with git.Repo.clone_from(source, remote, bare=True):
+            pass
+    clone_url = AsyncMock(return_value=remote.as_uri())
+    monkeypatch.setattr(host.code, "clone_url", clone_url)
+    credential = AsyncMock(wraps=host.code.git_credential)
+    monkeypatch.setattr(host.code, "git_credential", credential)
+    service = MemberGitWorkspaceService(
+        host.code.person, host.team, lambda: host.code, lambda: host.tickets
+    )
+    result = await service.show(
+        host.repository, ["AGENTS.md", "docs", ".", "CLAUDE.md"]
+    )
+    assert (result["default_branch"], result["commit"]) == ("main", commit.hexsha)
+    assert result["items"][0]["content"] == "current guidelines\n"
+    assert result["items"][1]["entries"] == [{"name": "guide.md", "kind": "file"}]
+    assert result["items"][2]["entries"] == [
+        {"name": "AGENTS.md", "kind": "file"},
+        {"name": "docs", "kind": "directory"},
+    ]
+    assert result["items"][3] == {"path": "CLAUDE.md", "kind": "missing"}
+    clone_url.assert_awaited_once_with(host.repository)
+    credential.assert_awaited_once_with()
+    assert not service.workspace_root.exists()

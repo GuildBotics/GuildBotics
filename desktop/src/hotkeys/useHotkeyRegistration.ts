@@ -1,24 +1,25 @@
 // Keeps the OS registrations in step with the workspace configuration.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getHotkeys } from "../api/client";
+import { onAppEvent } from "../appEvents";
+import { isTauriRuntime } from "../desktopWindow";
 import { syncHotkeys } from "./hotkeyRuntime";
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 /**
  * Register the workspace's hotkeys and keep the tray menu readable.
  *
  * The query is shared with the assignment screens, so switching workspaces (or
- * saving an assignment) re-registers without extra plumbing.
+ * saving an assignment) re-registers without extra plumbing. An assignment
+ * saved from another screen -- a browser tab -- arrives as the server's
+ * announcement, so the Desktop window re-reads and re-registers then too.
  */
 export function useHotkeyRegistration(): void {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const hotkeys = useQuery({ queryKey: ["hotkeys"], queryFn: getHotkeys });
   const settings = hotkeys.data;
 
@@ -27,6 +28,16 @@ export function useHotkeyRegistration(): void {
       void syncHotkeys(settings);
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    return onAppEvent(
+      "hotkeys.changed",
+      () => void queryClient.invalidateQueries({ queryKey: ["hotkeys"] }),
+    );
+  }, [queryClient]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {

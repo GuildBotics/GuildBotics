@@ -20,17 +20,24 @@ Reviewer role (``pull_request_review``): the member is a requested reviewer,
 new commits landed after the member's last review, or, once the member has
 spoken on the PR, there is a statement the member has not answered (threads
 only those the member took part in). Re-reviews not driven by a request stop
-after :data:`MAX_REVIEW_ROUNDS` rounds (``REVIEW_LIMIT``): the code host makes
-the PR a draft and then says so on it (``REVIEW_LIMIT_REASON``). Rounds are
+after :data:`MAX_REVIEW_ROUNDS` reviewed heads (``REVIEW_LIMIT``), but only
+when the current head has never been reviewed by the member. Statements and
+thread replies on an already reviewed head still reach the member, including
+a head restored by force push. At the limit the patrol returns a decision
+(``REVIEW_LIMIT``); the host's ticket selector hands the PR to a human by
+making it a draft, recording it and announcing it. Rounds are
 counted from the last time a human marked the PR ready for review, as the code
 host records it, so every reviewer starts a new count; nothing else is stored.
 A review-limit notice by any member also counts as that point, so a PR
 announced before the limit made it a draft resumes too.
 
-Checks role (``pull_request_checks``): the member's run on its own PR stopped
-to await the head's checks (its latest status notice there is
+Checks role (``pull_request_checks``): a run of the member's -- whatever
+work it did: a ticket, a chat thread, a command -- stopped to await the head's
+checks on the member's own PR (its latest status notice there is
 ``awaiting_checks``), and they have settled -- no ``checks_pending`` blocker
-is left -- or the head moved past the one it awaited. The wait lasts until the
+is left -- or the head moved past the one it awaited. Any task on the PR
+resumes, while the wait lasts, the work the notice names
+(:attr:`~guildbotics.entities.task.Task.resumes`). The wait lasts until the
 member's next status notice on the PR: a later wait, a failure, or the notice
 the host leaves when the resumed run ends otherwise
 (:func:`checks_settled`), so no comment a run writes or leaves out can end it
@@ -43,18 +50,20 @@ every earlier hold.
 
 A draft PR reaches neither role. Draft is the switch a human flips to take a
 PR into their own hands, and the code host leaves drafts out of the patrol
-before any snapshot is loaded. Besides humans, only the code host changes it,
-and only to hand a PR over at the review limit; a member's turn cannot.
+before any snapshot is loaded. Besides humans, only the host ticket selector
+changes it through the code-host port, to hand a PR over at the review limit;
+a member's turn cannot.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from guildbotics.entities import Task
+from guildbotics.entities.task import AwaitedRun
 from guildbotics.runtime.code_hosting_service import CodeHostingService
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.port import ServiceError, WorkflowStatus, WorkflowStatusReason
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.timestamps import parse_iso_datetime
@@ -275,7 +284,9 @@ def _review_work(pr: PullRequest, me: str) -> str | None:
         or (_last_spoken_at(pr, me) and _has_unanswered_statement(pr, me))
     ):
         return None
-    return REVIEW if len(review_rounds(pr, me)) < MAX_REVIEW_ROUNDS else REVIEW_LIMIT
+    if pr.head_oid not in reviewed and len(review_rounds(pr, me)) >= MAX_REVIEW_ROUNDS:
+        return REVIEW_LIMIT
+    return REVIEW
 
 
 def pull_request_work(pr: PullRequest, me: str) -> str | None:
@@ -352,12 +363,14 @@ async def patrol(
     *,
     provider: str,
     person_id: str,
-    draft: Callable[[], Awaitable[object]],
 ) -> Task | None:
-    """The task *pr* is for the member *me*; one at the re-review limit is
-    handed over instead (:func:`hand_over_at_review_limit`). Only the checks
+    """The task *pr* is for the member *me*, including a review-limit decision
+    for the ticket selector to settle. This function never writes. Only the checks
     role reads the code host beyond the snapshot, and only for a PR whose
-    member awaits its checks at the head the snapshot has.
+    member awaits its checks at the head the snapshot has. While the member
+    awaits them, whatever the PR asks of it resumes the awaited work, so a
+    run for its feedback reports where that work came from, and awaits the
+    checks again for that work, not for the PR's.
 
     Args:
         code: The code host the PR is on.
@@ -365,17 +378,13 @@ async def patrol(
         me: The member's name, in the form the snapshot's names are in.
         provider: The provider's name, as the task records it.
         person_id: The member.
-        draft: Makes the PR a draft.
     """
     work = pull_request_work(pr, me)
+    awaited = _awaited_checks(pr, me)
     if work is None:
-        awaited = _awaited_checks(pr, me)
         if awaited is None or not await _checks_settled(code, pr, awaited):
             return None
         work = CHECKS
-    if work == REVIEW_LIMIT:
-        await hand_over_at_review_limit(code, pr.url, person_id, draft)
-        return None
     return Task(
         provider=provider,
         label=pr.label,
@@ -388,44 +397,14 @@ async def patrol(
         assignee=person_id,
         pull_request_url=pr.url,
         trigger_reason=work,
-    )
-
-
-async def hand_over_at_review_limit(
-    code: CodeHostingService,
-    url: str,
-    person_id: str,
-    draft: Callable[[], Awaitable[object]],
-) -> None:
-    """Make the PR a draft, then say on it that automatic re-review stopped.
-
-    The notice tells the human that the PR is theirs until they mark it
-    ready for review, so it is posted only once the PR is a draft. When
-    the conversion fails, a failure notice takes its place: it holds the
-    PR until someone acts on it, and the rounds stay as they are.
-    """
-    reason: WorkflowStatusReason = REVIEW_LIMIT_REASON
-    try:
-        await draft()
-    except Exception as exc:
-        _LOGGER.warning(f"Could not convert {url} to a draft: {exc}")
-        reason = "failed"
-    notice = (
-        t(
-            "integrations.pull_request_patrol.review_limit_reached",
-            count=MAX_REVIEW_ROUNDS,
-        )
-        if reason == REVIEW_LIMIT_REASON
-        else t(
-            "integrations.pull_request_patrol.review_limit_draft_failed",
-            count=MAX_REVIEW_ROUNDS,
-        )
-    )
-    await code.comment(
-        url,
-        notice,
-        status=WorkflowStatus(
-            reason=reason, person_id=person_id, run_id="", subject=url
+        resumes=(
+            AwaitedRun(
+                run_id=awaited.run_id,
+                work_kind=awaited.work_kind,
+                work_identity=awaited.work_identity,
+            )
+            if awaited is not None
+            else None
         ),
     )
 
@@ -436,11 +415,12 @@ async def await_checks(
     *,
     person_id: str,
     run_id: str,
+    work: Work,
     subject: str,
     head: str,
 ) -> None:
-    """Say on the PR that the member's run stopped to await the checks of
-    ``head``; the patrol resumes the member once they settle."""
+    """Say on the PR that the member's run doing ``work`` stopped to await the
+    checks of ``head``; the patrol resumes that work once they settle."""
     await code.comment(
         url,
         t("integrations.pull_request_patrol.awaiting_checks"),
@@ -450,6 +430,8 @@ async def await_checks(
             run_id=run_id,
             subject=subject,
             head=head,
+            work_kind=work.kind,
+            work_identity=work.identity,
         ),
     )
 
@@ -457,8 +439,9 @@ async def await_checks(
 async def checks_settled(
     code: CodeHostingService, url: str, *, person_id: str, run_id: str
 ) -> None:
-    """End the wait on the PR: the run resumed for its checks ended without
-    awaiting them again."""
+    """End the wait on the PR: the run that resumed its work -- for the
+    checks, or for feedback that arrived meanwhile -- ended without awaiting
+    them again."""
     await code.comment(
         url,
         t("integrations.pull_request_patrol.checks_settled"),

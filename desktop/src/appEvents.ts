@@ -1,54 +1,51 @@
-// Cross-window notifications.
+// Changes the server announces on `/api/events`.
 //
-// Each window runs its own webview with its own query cache, so state that is
-// scoped to the workspace has to be announced rather than left for the other
-// window to notice.
+// Every screen -- a Desktop window or a browser tab, on any machine -- keeps
+// its own query cache, so state that changes on the server has to be
+// announced rather than left for each screen to notice.
 
-const WORKSPACE_CHANGED = "app://workspace-changed";
+import { subscribeEvents } from "./api/client";
 
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+/** What the server announces for every screen to react to. */
+export type AppEvent = "workspace.changed" | "hotkeys.changed";
 
-/** Tell the other windows that the active workspace is now a different one. */
-export async function announceWorkspaceChange(): Promise<void> {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  try {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit(WORKSPACE_CHANGED);
-  } catch {
-    // The event API is unavailable (browser preview or a stubbed harness).
-  }
-}
+/** How long a screen waits before listening again after the stream closes. */
+const RECONNECT_DELAY_MS = 2000;
 
 /**
- * React to a workspace switch made in another window.
+ * Run `handler` whenever the server publishes `type`.
+ *
+ * The stream closes when the server restarts, so it is opened again after a
+ * short wait until the listening stops. Each connection replays the server's
+ * recent events; the handlers only re-read state, so a replay is harmless.
  *
  * Returns a function that stops listening.
  */
-export function onWorkspaceChange(handler: () => void): () => void {
-  if (!isTauriRuntime()) {
-    return () => {};
-  }
-  let stop: (() => void) | undefined;
-  let cancelled = false;
-  void (async () => {
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      const unlisten = await listen(WORKSPACE_CHANGED, () => handler());
-      if (cancelled) {
-        unlisten();
-      } else {
-        stop = unlisten;
-      }
-    } catch {
-      // The event API is unavailable; this window keeps its current data.
-    }
-  })();
+export function onAppEvent(type: AppEvent, handler: () => void): () => void {
+  let stopped = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const listen = (): (() => void) =>
+    subscribeEvents(
+      (event) => {
+        if (event.type === type) {
+          handler();
+        }
+      },
+      (status) => {
+        if (status === "disconnected" && !stopped) {
+          retry = setTimeout(() => (close = listen()), RECONNECT_DELAY_MS);
+        }
+      },
+    );
+  let close = listen();
   return () => {
-    cancelled = true;
-    stop?.();
+    stopped = true;
+    clearTimeout(retry);
+    close();
   };
+}
+
+/** React to the server opening another workspace, from whichever screen. */
+export function onWorkspaceChange(handler: () => void): () => void {
+  return onAppEvent("workspace.changed", handler);
 }

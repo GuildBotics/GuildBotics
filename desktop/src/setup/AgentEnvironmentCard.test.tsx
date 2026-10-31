@@ -21,6 +21,7 @@ vi.mock("../api/client", async (importOriginal) => ({
   getAgentEnvironmentStatus: vi.fn(),
   buildAgentEnvironment: vi.fn(),
   getCliAgentUsage: vi.fn(),
+  getServerMachineName: vi.fn(async () => "studio"),
 }));
 
 const t = i18n.getFixedT("en");
@@ -39,7 +40,7 @@ function status(
     resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
-      default: "node:22.23.2-bookworm",
+      default: "node:24.22.1-bookworm",
       architecture: "arm64",
       reference: "",
       digest: "",
@@ -206,7 +207,9 @@ describe("AgentEnvironmentCard", () => {
       await screen.findByText(tr("setup.intelligence.environment.usageFailed"));
       const row = within(document.getElementById("agent-environment-tool-codex")!);
       expect(
-        row.getByText(tr("setup.intelligence.environment.toolCredentialsSaved")),
+        await row.findByText(
+          tr("setup.intelligence.environment.toolCredentialsSaved", { machine: "studio" }),
+        ),
       ).toBeVisible();
       expect(row.getByText("Usage retrieval failed.")).toBeVisible();
       expect(
@@ -300,7 +303,7 @@ describe("AgentEnvironmentCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("guildbotics-abc")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.imageDefault"))).toBeInTheDocument();
-    expect(screen.getByText("node:22.23.2-bookworm")).toBeInTheDocument();
+    expect(screen.getByText("node:24.22.1-bookworm")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.network.modes.allowlist"))).toBeInTheDocument();
     expect(screen.getByText("github.com, pypi.org")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.dnsHost"))).toBeInTheDocument();
@@ -308,10 +311,14 @@ describe("AgentEnvironmentCard", () => {
     // The catalog's three answers, on the device's layer: logged in here, not
     // logged in here (with the command that does it), not provisioned at all.
     expect(
-      screen.getByText(t("setup.intelligence.environment.toolCredentialsSaved")),
+      await screen.findByText(
+        t("setup.intelligence.environment.toolCredentialsSaved", { machine: "studio" }),
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(t("setup.intelligence.environment.toolCredentialsMissing")),
+      screen.getByText(
+        t("setup.intelligence.environment.toolCredentialsMissing", { machine: "studio" }),
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText("/Users/me/.guildbotics/bin/guildbotics environment login claude"),

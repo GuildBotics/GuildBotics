@@ -2012,6 +2012,9 @@ _FIXED_TMP = {
     ("guildbotics/intelligences/cli_agents.py", "<module>"): (
         "an install script the snapshot build runs inside the image it builds"
     ),
+    ("guildbotics/environment/snapshot.py", "build_steps"): (
+        "the Node.js archive the snapshot build fetches inside the image it builds"
+    ),
     ("guildbotics/guest/antigravity.py", "_run_active_turn"): (
         "a directory of the turn's own, inside the command's microVM"
     ),
@@ -2099,9 +2102,9 @@ _GUEST_WRITABLE = {
 
 
 def test_the_host_does_nothing_in_a_place_a_microvm_writes_but_name_it() -> None:
-    """What the host reads, runs or trusts is never where a command can
-    write: a working directory a grant opens, a clone, the exchange
-    directory. A new caller naming one is classified here."""
+    """What the host runs or trusts is never where a command can write: a
+    working directory a grant opens, a clone, the exchange directory. A new
+    caller naming one is classified here."""
     namers = {"get_member_clone_path", "exchange_dir", "host_command_cwd"}
 
     def names_a_writable_place(call: ast.Call) -> bool:

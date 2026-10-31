@@ -246,7 +246,7 @@ class CliAgentProvision(BaseModel):
     a release; it does not imply real-device verification. A tool that is not
     on npm names an ``install`` script instead, which pins its version the
     same way. A tool with neither is not provisioned yet. Raising a pin follows
-    ``.agents/skills/update-ai-cli-tools/SKILL.md``; optional real-device
+    ``.agents/skills/update-dependencies/SKILL.md``; optional real-device
     verification of its PR follows ``.agents/skills/verify-ai-cli-tools/SKILL.md``.
 
     The tool keeps its state under ``state_root`` in the home directory (the
@@ -373,7 +373,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # access token has expired whenever it first needs it; listing the
         # models needs it, and makes no turn.
         provision=CliAgentProvision(
-            package="@openai/codex@0.162.1",
+            package="@openai/codex@0.164.0",
             state_root=".codex",
             state_root_env="CODEX_HOME",
             auth="auth.json",
@@ -450,7 +450,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # ANTHROPIC_BASE_URL, while `/usage` and the refresh talk to the
         # account endpoints directly and so run where the login is.
         provision=CliAgentProvision(
-            package="@anthropic-ai/claude-code@2.1.296",
+            package="@anthropic-ai/claude-code@2.1.310",
             state_root=".claude",
             state_root_env="CLAUDE_CONFIG_DIR",
             auth=".credentials.json",
@@ -503,7 +503,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             install=(
                 "curl -fsSL https://x.ai/cli/install.sh"
-                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.50\n"
+                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.70\n"
                 "cp -L /usr/local/bin/grok /usr/local/bin/grok.bin\n"
                 "mv -f /usr/local/bin/grok.bin /usr/local/bin/grok\n"
                 "rm -f /usr/local/bin/agent\n"
@@ -559,7 +559,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # the hosted GitHub MCP server (read-only, as the user) and the
         # repository's custom agents. The telemetry stays closed.
         provision=CliAgentProvision(
-            package="@github/copilot@1.0.95",
+            package="@github/copilot@1.0.103",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
             auth="config.json",
@@ -606,13 +606,13 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             install=(
                 'case "$(uname -m)" in\n'
                 "  x86_64) platform=linux-x64 archive=cli_linux_x64"
-                " sha512=abe3ddf5cf30d3adaa586acf505221aa19702f5ca71af3c8b1f9b1a5976bd8e5c151c41ea33b39c41675d25843462a3e8c382c054f580e9d7e1688919d3b5110 ;;\n"
+                " sha512=beda760587589f5827b0b516c3ec2c5bd5cd2e91eb0e2533807ba1e990a27dcd63aef0191e0b76fb60feab0d16eaa8210fb79842c34dd4809e257e1712edd152 ;;\n"
                 "  aarch64) platform=linux-arm archive=cli_linux_arm64"
-                " sha512=1bfd3503576219a102176c13579665a2f39e84ac86a904b117d3b33f3dd751f194a862496bad6ffe914ad46d2c877ba12b6c07e6db07128b706d238262fe430c ;;\n"
+                " sha512=6a9fa0df6300633404571f66ec7924098cc70a9f23ac55c3659139bbcbdd2ea5301fe1ef728d4c064fac65104ea14a2b74421f320a82e5bcf218c482b58e3a16 ;;\n"
                 '  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;\n'
                 "esac\n"
                 'curl -fsSL "https://storage.googleapis.com/antigravity-public'
-                '/antigravity-cli/1.3.3-5524738307653632/$platform/$archive.tar.gz"'
+                '/antigravity-cli/1.4.7-5900205422411776/$platform/$archive.tar.gz"'
                 " -o /tmp/agy.tar.gz\n"
                 'echo "$sha512  /tmp/agy.tar.gz" | sha512sum -c -\n'
                 "tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\n"

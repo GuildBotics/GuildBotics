@@ -10,7 +10,7 @@ the roles GitHub records on the PR itself. Fetching and dispatching live in
 
 from __future__ import annotations
 
-from guildbotics.integrations.github.github_utils import normalize_login
+from guildbotics.integrations.github.identity import normalize_login
 from guildbotics.integrations.github.workflow_status_comment import (
     parse_workflow_status_comment,
 )

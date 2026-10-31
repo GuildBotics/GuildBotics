@@ -18,7 +18,7 @@ from guildbotics.runtime.port import ServiceError
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
 _ISSUE_LINK = re.compile(
-    rf"((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})[ \t]+#(\d+))",
+    rf"((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})[ \t]+(?:#(\d+)|(https?://\S+)))",
     re.I,
 )
 _ISSUE_SOURCE_LINK = re.compile(
@@ -32,6 +32,8 @@ class _IssueLink:
     end: int
     trailer: str
     number: str
+    line_start: int
+    line_end: int
 
 
 def _issue_links(body: str) -> Iterator[_IssueLink]:
@@ -86,7 +88,9 @@ def _issue_links(body: str) -> Iterator[_IssueLink]:
                     offset + match.start(1),
                     offset + match.end(1),
                     match.group(1),
-                    match.group(2),
+                    match.group(2) or match.group(3),
+                    offset,
+                    offsets[source_row + 1],
                 )
 
 
@@ -104,16 +108,28 @@ def _append_trailer(body: str, trailer: str) -> str:
 
 
 def preserve_issue_links(body: str, previous_body: str) -> str:
-    """Append missing issue links while keeping the replacement body's wording."""
-    mentioned = {match.number for match in _issue_links(body)}
+    """Keep existing managed links while replacing only the PR's prose."""
+    body = remove_issue_links(body)
     inherited: set[str] = set()
     for match in _issue_links(previous_body):
-        number = match.number
         trailer = match.trailer
-        if number not in mentioned and trailer.casefold() not in inherited:
+        if trailer.casefold() not in inherited:
             body = _append_trailer(body, trailer)
             inherited.add(trailer.casefold())
     return body
+
+
+def remove_issue_links(body: str) -> str:
+    """Remove managed link lines, retaining prose and quoted/code examples."""
+    links = list(_issue_links(body))
+    for link in reversed(links):
+        body = body[: link.line_start] + body[link.line_end :]
+    return body.rstrip() if links else body
+
+
+def append_external_issue_link(body: str, url: str) -> str:
+    """Append a reference to a ticket outside this repository."""
+    return _append_trailer(body, f"Refs {url}")
 
 
 def append_issue_link(body: str, number: int, *, closes: bool) -> str:

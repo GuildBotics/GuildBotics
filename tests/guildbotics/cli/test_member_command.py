@@ -2,8 +2,10 @@ import importlib
 import json
 import logging
 import os
+from pathlib import Path
 from contextlib import ExitStack
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import click
 import httpx
@@ -14,10 +16,12 @@ from guildbotics.capabilities import member_activity_events
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.factory import ServiceIntegrationFactory
-from guildbotics.integrations.local import chat
 from guildbotics.integrations.github import async_client
+from guildbotics.integrations.local.identity import username
+from guildbotics.integrations.local import chat
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
@@ -31,23 +35,23 @@ from guildbotics.runtime.member_invocation import (
     Work,
     member_invocation_scope,
 )
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.port import ServiceError
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import t
-from tests.guildbotics.local_chat import at, chat_team, lines, say
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     write_active_workspace,
 )
-from tests.guildbotics.local_chat import at, chat_event
+from tests.guildbotics.local_chat import at, chat_event, chat_team, lines, say
 
 member_module = importlib.import_module("guildbotics.cli.member")
 
 
 def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, capsys):
-    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+    monkeypatch.setattr(member_module, "_member_command_writes", lambda: True)
     calls = []
 
     class PreparedSync:
@@ -119,6 +123,78 @@ def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
 
     assert result == {"written": True}
     assert json.loads(capsys.readouterr().out) == result
+
+
+def test_read_only_member_command_skips_one_shot_sync(monkeypatch):
+    def prepare():
+        pytest.fail("read-only commands must not prepare one-shot sync")
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
+
+    @click.command()
+    @member_module._read_only_member_command
+    def read_command():
+        async def read():
+            return {"read": True}
+
+        member_module._run(read(), output_format="json")
+
+    result = CliRunner().invoke(read_command)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"read": True}
+
+
+@pytest.mark.parametrize("source", ["routine", "scheduled", "manual", "event_queue"])
+def test_interactive_write_and_sync_run_while_the_members_clone_is_in_use(
+    monkeypatch, source
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _: (FakeContext(person), person),
+    )
+    calls = []
+
+    class PreparedSync:
+        def commit_and_push_once(self, *, timeout):
+            calls.append("sync")
+            return SimpleNamespace(failure=None)
+
+    def prepare():
+        calls.append("prepare")
+        return PreparedSync()
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
+    coordinator = ExecutionCoordinator()
+    with coordinator.track_work(source=source, person_id="aiko", command="workflow"):
+        result = CliRunner().invoke(
+            member_module.member,
+            [
+                "memory",
+                "record",
+                "--person",
+                "aiko",
+                "--scope",
+                "personal",
+                "--title",
+                "Concurrent note",
+                "--content-stdin",
+            ],
+            input="Saved while the workflow uses the clone.\n",
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["doc_id"]
+        # The interactive command neither releases nor replaces the run's lease.
+        with pytest.raises(WorkRejectedError) as excinfo:
+            with coordinator.track_work(
+                source="manual", person_id="aiko", command="another workflow"
+            ):
+                pass
+        assert excinfo.value.reason == "lease_unavailable"
+
+    assert calls == ["prepare", "sync"]
 
 
 @pytest.fixture
@@ -404,7 +480,7 @@ def test_member_help_prints_capability_reference():
     assert "#### レビュー指摘への対応" in result.output
 
 
-def test_member_command_lease_classification_uses_callback_metadata() -> None:
+def test_member_command_write_classification_uses_callback_metadata() -> None:
     @click.command(name="context")
     def unmarked_command() -> None:
         """A write-capable command whose name resembles a read-only command."""
@@ -415,9 +491,9 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         """A read-only command whose name does not imply its access mode."""
 
     with click.Context(unmarked_command):
-        assert member_module._member_command_needs_lease() is True
+        assert member_module._member_command_writes() is True
     with click.Context(read_only_command):
-        assert member_module._member_command_needs_lease() is False
+        assert member_module._member_command_writes() is False
 
 
 _READ_GROUPS = {"ticket": "ticket", "pull_request": "pr", "repository": "repo-info"}
@@ -427,11 +503,13 @@ def test_ci_inspection_commands_are_read_only() -> None:
     commands = member_module.member.commands
 
     for command in (
+        commands["git"].commands["show"],
         *(commands[group].commands["read"] for group in _READ_GROUPS.values()),
         commands["pr"].commands["artifact"].commands["download"],
+        commands["ticket"].commands["attachment"].commands["download"],
     ):
         with click.Context(command):
-            assert member_module._member_command_needs_lease() is False
+            assert member_module._member_command_writes() is False
 
 
 def test_inspection_cli_leaves_are_removed():
@@ -1436,8 +1514,15 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
             }
 
         async def ticket_create(
-            self, tracker, title, body, add_to_board, labels, human_approved
+            self, tracker, title, body, add_to_board, labels, human_approved, **options
         ):
+            assert options == {
+                "interactive": True,
+                "assignee": "otota",
+                "lane": "in_progress",
+                "parent": "local://tickets/demo/T-1",
+                "blocked_by": ("local://tickets/demo/T-2", "local://tickets/demo/T-3"),
+            }
             calls.append(
                 ("create", tracker, title, body, add_to_board, labels, human_approved)
             )
@@ -1494,6 +1579,17 @@ def test_member_issue_commands_pass_content_stdin(monkeypatch):
             "--label",
             "priority: high",
             "--no-add-to-board",
+            "--interactive",
+            "--assignee",
+            "otota",
+            "--lane",
+            "in_progress",
+            "--parent",
+            "local://tickets/demo/T-1",
+            "--blocked-by",
+            "local://tickets/demo/T-2",
+            "--blocked-by",
+            "local://tickets/demo/T-3",
             "--human-approved",
             "--content-stdin",
         ],
@@ -1544,7 +1640,14 @@ def test_member_issue_api_failures_do_not_record_activity(monkeypatch):
             raise ServiceError("GitHub API failed")
 
         async def ticket_create(
-            self, _tracker, _title, _body, _add_to_board, _labels, _human_approved
+            self,
+            _tracker,
+            _title,
+            _body,
+            _add_to_board,
+            _labels,
+            _human_approved,
+            **options,
         ):
             raise ServiceError("GitHub API failed")
 
@@ -1930,6 +2033,73 @@ def test_member_git_prepare_names_the_repository_of_a_ticket_with_repo(monkeypat
     assert calls == [
         {"issue_url": ticket_url, "pr_url": None, "repo": "acme/widget", "branch": None}
     ]
+    assert context.closed
+
+
+@pytest.mark.parametrize("with_guidelines", [False, True])
+def test_member_git_show_interactively_reads_without_checkout_or_lease(
+    monkeypatch, tmp_path, worker_git_seed, with_guidelines
+):
+    import git
+    from guildbotics.capabilities import member_git
+    from guildbotics.integrations.local import store
+    from tests.guildbotics.local_code_host import REPOSITORY, local_team
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    context = FakeContext(person)
+    context.team = local_team(person)
+    worker_git_seed.copy(worker_git_seed.member_remote, store.bare(REPOSITORY))
+    if with_guidelines:
+        # Use the real guidelines, not a small stand-in that hides the size regression.
+        guidelines = Path("AGENTS.md").read_text(encoding="utf-8")
+        assert len(guidelines.encode()) > member_git.MAX_PAGE_BYTES // 8
+        source = tmp_path / "source"
+        with git.Repo.clone_from(store.bare(REPOSITORY), source) as repository:
+            (source / "AGENTS.md").write_text(guidelines, encoding="utf-8")
+            repository.git.add("AGENTS.md")
+            repository.index.commit(
+                "guidelines", author=git.Actor("Test", "test@example.com")
+            )
+            repository.git.push("origin", "main")
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", lambda _: (context, person)
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a read must not prepare sync or check chat freshness")
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", forbidden)
+    monkeypatch.setattr(member_git, "ensure_chat_current", forbidden)
+    # No guest, work context, lease, or checkout, as in a normal interactive session.
+    with member_invocation_scope(MemberInvocation()):
+        result = CliRunner().invoke(
+            member_module.member,
+            [
+                "git",
+                "show",
+                "--person",
+                "aiko",
+                "--repo",
+                REPOSITORY,
+                "--path",
+                "README.md",
+                "--path",
+                ".",
+                "--path",
+                "AGENTS.md",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["default_branch"] == "main"
+    assert payload["items"][0]["content"] == "initial\n"
+    assert payload["items"][1]["kind"] == "directory"
+    if with_guidelines:
+        assert payload["items"][2]["status"] == "ok"
+        assert payload["items"][2]["content"] == guidelines
+    else:
+        assert payload["items"][2]["kind"] == "missing"
+    assert len(result.output.encode()) < member_git.MAX_PAGE_BYTES
     assert context.closed
 
 
@@ -2534,10 +2704,24 @@ def test_member_pr_update_rejects_update_without_any_change():
     )
 
     assert result.exit_code != 0
-    assert "pr update needs --content-stdin/--content-file or --title." in result.output
+    assert (
+        "pr update needs --content-stdin/--content-file, --title, --issue-url, or --drop-issue-links."
+        in result.output
+    )
 
 
-def test_member_pr_update_drop_issue_links_requires_content():
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (["--issue-url", ""], "--issue-url must not be empty."),
+        (["--closes-issue"], "--closes-issue requires --issue-url."),
+        (
+            ["--issue-url", "https://tickets.test/A", "--drop-issue-links"],
+            "cannot be combined",
+        ),
+    ],
+)
+def test_member_pr_update_refuses_ambiguous_or_invalid_links(options, message):
     result = CliRunner().invoke(
         member_module.member,
         [
@@ -2547,21 +2731,46 @@ def test_member_pr_update_drop_issue_links_requires_content():
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
-            "--title",
-            "New",
-            "--drop-issue-links",
+            *options,
         ],
     )
-
-    assert result.exit_code != 0
-    assert (
-        "--drop-issue-links requires --content-stdin/--content-file." in result.output
-    )
+    assert result.exit_code != 0 and message in result.output
 
 
-@pytest.mark.parametrize("drop_issue_links", [False, True])
+@pytest.mark.parametrize(
+    ("options", "links", "content"),
+    [
+        ([], None, True),
+        (["--drop-issue-links"], [], True),
+        (["--drop-issue-links"], [], False),
+        (
+            ["--issue-url", "https://tickets.test/A"],
+            [TicketLink("https://tickets.test/A", False)],
+            False,
+        ),
+        (
+            ["--issue-url", "https://tickets.test/A", "--refs-issue"],
+            [TicketLink("https://tickets.test/A", False)],
+            True,
+        ),
+        (
+            [
+                "--issue-url",
+                "https://tickets.test/A",
+                "--issue-url",
+                "https://tickets.test/B",
+                "--closes-issue",
+            ],
+            [
+                TicketLink("https://tickets.test/A", True),
+                TicketLink("https://tickets.test/B", True),
+            ],
+            False,
+        ),
+    ],
+)
 def test_member_pr_update_reads_entire_stdin_and_closes_service(
-    monkeypatch, drop_issue_links
+    monkeypatch, options, links, content
 ):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
@@ -2574,13 +2783,13 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
+        async def pr_update(self, pr_url, body, title, *, tickets):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_ticket_links": drop_ticket_links,
+                    "tickets": tickets,
                 }
             )
             return {"body": body, "target": _pr_target(pr_url)}
@@ -2602,8 +2811,8 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
             "aiko",
             "--url",
             "https://github.com/owner/repo/pull/7",
-            "--content-stdin",
-            *(["--drop-issue-links"] if drop_issue_links else []),
+            *(["--content-stdin"] if content else []),
+            *options,
         ],
         input="## Summary\n\nUpdated body\n",
     )
@@ -2611,9 +2820,9 @@ def test_member_pr_update_reads_entire_stdin_and_closes_service(
     assert result.exit_code == 0
     assert calls == {
         "pr_url": "https://github.com/owner/repo/pull/7",
-        "body": "## Summary\n\nUpdated body\n",
+        "body": "## Summary\n\nUpdated body\n" if content else None,
         "title": None,
-        "drop_ticket_links": drop_issue_links,
+        "tickets": links,
         "closed": True,
     }
 
@@ -2634,13 +2843,13 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title, *, drop_ticket_links):
+        async def pr_update(self, pr_url, body, title, *, tickets):
             calls.update(
                 {
                     "pr_url": pr_url,
                     "body": body,
                     "title": title,
-                    "drop_ticket_links": drop_ticket_links,
+                    "tickets": tickets,
                 }
             )
             return {"body": body, "target": _pr_target(pr_url)}
@@ -2673,7 +2882,7 @@ def test_member_pr_update_normalizes_blank_stdin_and_records_evidence(
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "",
         "title": None,
-        "drop_ticket_links": False,
+        "tickets": None,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""
@@ -2787,6 +2996,45 @@ def test_member_issue_update_passes_the_relations(monkeypatch, options, relation
 
     assert result.exit_code == 0, result.output
     assert {key: calls[key] for key in relations} == relations
+
+
+@pytest.mark.parametrize(
+    "flag, enabled", [("--interactive", True), ("--no-interactive", False)]
+)
+@pytest.mark.parametrize("approved", [False, True])
+def test_member_issue_update_interactive_flags_require_approval(
+    monkeypatch, flag, enabled, approved
+):
+    from tests.guildbotics.local_code_host import item, local_member, ticket
+
+    context = local_member()
+    url = ticket(1, interactive=not enabled)
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda identifier: (context, context.person),
+    )
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "ticket",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            url,
+            flag,
+            *(["--human-approved"] if approved else []),
+        ],
+    )
+    if approved:
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["interactive"] is enabled
+        assert item(url)["interactive"] is enabled
+    else:
+        assert result.exit_code != 0
+        assert "human instruction" in result.output
+        assert item(url)["interactive"] is not enabled
 
 
 def test_member_issue_update_rejects_state_reason_without_close():
@@ -2932,6 +3180,7 @@ def test_member_issue_close_passes_approval_and_records_activity(monkeypatch):
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
     assert activity_calls[0][0] is person
@@ -2996,6 +3245,7 @@ def test_member_issue_update_reads_entire_stdin_and_closes_service(monkeypatch):
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
 
@@ -3062,6 +3312,7 @@ def test_member_issue_update_normalizes_blank_stdin_and_records_evidence(
         "parent": None,
         "add_blocked_by": (),
         "remove_blocked_by": (),
+        "interactive": None,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""
@@ -3402,7 +3653,7 @@ def test_member_task_status_cli(monkeypatch, bind_invocation, tmp_path):
         "run-1",
         "done",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
     runner = CliRunner()
@@ -3463,7 +3714,7 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
         "run-1",
         "done",
         "summary",
-        "https://github.com/owner/repo/issues/1",
+        Work.of_ticket("https://github.com/owner/repo/issues/1"),
         "aiko",
     )
     runner = CliRunner()
@@ -3572,7 +3823,7 @@ def _replies(channel_id: str) -> list[tuple[str, str]]:
     return [
         (line["text"], line["thread_id"])
         for line in lines(channel_id)
-        if line["author"] == "aiko" and "reaction" not in line
+        if line["author"] == username("aiko") and "reaction" not in line
     ]
 
 
@@ -3709,7 +3960,7 @@ def test_member_chat_reaction_accepts_message_url(local_chat):
     assert payload["channel_id"] == local_chat
     assert payload["message_id"] == "r1"
     assert [line for line in lines(local_chat) if "reaction" in line] == [
-        {"reaction": "ack", "author": "aiko", "message_id": "r1"}
+        {"reaction": "ack", "author": username("aiko"), "message_id": "r1"}
     ]
 
 
@@ -3841,8 +4092,8 @@ def test_member_task_complete_rejects_blocked_pr_readiness(
         def __init__(self, *_args):
             pass
 
-        async def task_completion_readiness(self, ticket_url, evidence):
-            calls.update({"ticket_url": ticket_url, "evidence": evidence})
+        async def task_completion_readiness(self, work, evidence):
+            calls.update({"work": work, "evidence": evidence})
             raise member_module.MemberCapabilityError(
                 "Task cannot be completed because PR readiness is blocked. "
                 "https://github.com/owner/repo/pull/7: CI checks are still pending."
@@ -3879,7 +4130,7 @@ def test_member_task_complete_rejects_blocked_pr_readiness(
     assert result.exit_code != 0
     assert "PR readiness is blocked" in result.output
     assert "CI checks are still pending" in result.output
-    assert calls["ticket_url"] == "https://github.com/owner/repo/issues/1"
+    assert calls["work"] == TICKET_WORK
     assert calls["evidence"][0]["evidence_type"] == "pr_create"
     assert calls["closed"] is True
     with pytest.raises(member_module.TaskRunError, match="not completed"):
@@ -3909,8 +4160,8 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
         def __init__(self, *_args):
             pass
 
-        async def task_completion_readiness(self, ticket_url, _evidence):
-            checked.append(ticket_url)
+        async def task_completion_readiness(self, work, _evidence):
+            checked.append(work)
             return [readiness]
 
         async def aclose(self):
@@ -3944,18 +4195,28 @@ def test_member_task_complete_returns_revalidated_pr_readiness(
     payload = json.loads(result.output)
     assert payload["pr_readiness"] == [readiness]
     # The ticket is the run's work, which no argument names.
-    assert checked == [TICKET_WORK.identity]
+    assert checked == [TICKET_WORK]
     assert payload["subject_url"] == TICKET_WORK.identity
 
 
-def test_member_task_complete_awaits_pending_checks(
-    monkeypatch, bind_invocation, tmp_path
+@pytest.mark.parametrize(
+    ("run_ids", "work", "subject"),
+    [
+        ({"task_run_id": "run-1"}, TICKET_WORK, TICKET_WORK.identity),
+        ({"run_id": "run-1"}, CHAT_WORK, "slack:C1:100.1:E1"),
+        ({"task_run_id": "run-1", "work": Work("manual", "run-1")}, None, "run-1"),
+    ],
+)
+def test_member_checks_await_ends_any_run_to_await_its_pending_checks(
+    monkeypatch, bind_invocation, tmp_path, run_ids, work, subject
 ):
-    """The run ends without a wait in the turn: what the capability told the
-    PR is the run's evidence, and the run is over, not failed."""
+    """A ticket's, a chat thread's, or a command's run ends without a wait in
+    the turn, the same way: what the capability told the PRs is the run's
+    evidence, and the run is over, not failed, about its own work's subject."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    _bind_workflow(bind_invocation, task_run_id="run-1")
+    _bind_workflow(bind_invocation, **run_ids)
+    work = work or run_ids["work"]
     person = Person(person_id="aiko", name="Aiko")
     waiting = {
         "target": _pr_target("https://github.com/owner/repo/pull/7"),
@@ -3965,14 +4226,14 @@ def test_member_task_complete_awaits_pending_checks(
         "target": _pr_target("https://github.com/owner/repo/pull/8"),
         "readiness": "ready",
     }
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[Work, str]] = []
 
     class FakeService:
         def __init__(self, *_args):
             pass
 
-        async def await_checks(self, ticket_url, run_id, runs):
-            calls.append((ticket_url, run_id))
+        async def await_checks(self, awaited_work, run_id, runs):
+            calls.append((awaited_work, run_id))
             runs.append_evidence(
                 run_id, "checks_awaited", {"target": waiting["target"]}
             )
@@ -3991,14 +4252,13 @@ def test_member_task_complete_awaits_pending_checks(
 
     result = CliRunner().invoke(
         member_module.member,
-        ["task", "complete", "--person", "aiko", "--status", "awaiting_checks"]
-        + ["--content-stdin"],
+        ["checks", "await", "--person", "aiko", "--content-stdin"],
         input="Waiting for CI.\n",
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert calls == [(TICKET_WORK.identity, "run-1")]
+    assert calls == [(work, "run-1")]
     assert (payload["status"], payload["evidence_types"]) == (
         "awaiting_checks",
         ["checks_awaited"],
@@ -4006,14 +4266,30 @@ def test_member_task_complete_awaits_pending_checks(
     assert payload["pr_readiness"] == [waiting, ready]
     [record] = TaskRunStore().records()
     assert record.status == "succeeded"
-    assert record.result is not None and record.result.status == "awaiting_checks"
+    assert record.result is not None
+    assert (record.result.status, record.result.subject_id) == (
+        "awaiting_checks",
+        subject,
+    )
 
 
-def test_member_chat_complete_cannot_await_checks():
-    """Only a ticket run's PRs have checks to await."""
+def test_member_checks_await_is_refused_outside_a_run():
     result = CliRunner().invoke(
         member_module.member,
-        ["chat", "complete", "--person", "aiko", "--status", "awaiting_checks"]
+        ["checks", "await", "--person", "aiko", "--content-stdin"],
+        input="Waiting.\n",
+    )
+
+    assert result.exit_code == 1
+    assert t("cli.member.run.required_any") in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize("group", ["task", "chat"])
+def test_a_run_completion_cannot_await_checks(group):
+    """Only ``checks await`` ends a run to await checks."""
+    result = CliRunner().invoke(
+        member_module.member,
+        [group, "complete", "--person", "aiko", "--status", "awaiting_checks"]
         + ["--content-stdin"],
         input="Waiting.\n",
     )

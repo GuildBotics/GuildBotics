@@ -40,16 +40,18 @@ import asyncio
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any
+from tempfile import TemporaryFile
+from typing import IO, Any
 from urllib.parse import quote, unquote
 
 import httpx
 
 from guildbotics.entities import Person, Service, Team
 from guildbotics.entities.message import Message
+from guildbotics.integrations.branvil.identity import member_identity
 from guildbotics.integrations.repository_scope import check_path, refuse, valid_path
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime.member_invocation import current_member_invocation
@@ -132,6 +134,12 @@ def username(person: Person) -> str:
     return str(person.account_info.get("branvil_username") or "")
 
 
+def interactive(ticket: dict[str, Any]) -> bool:
+    """Whether a human works on ``ticket`` with an agent: it, or one of its
+    ancestors, is marked interactive."""
+    return bool(ticket["interactive"] or ticket["interactive_ancestor"])
+
+
 def segment(path: str) -> str:
     """A repository, workspace, branch, or id as one API path segment."""
     return quote(path, safe="")
@@ -175,12 +183,16 @@ class Unauthorized(ServiceError):
     """Branvil took the token for nobody's."""
 
 
+class Conflict(ServiceError):
+    """Branvil refused a conflicting update, such as a stale revision."""
+
+
 def _failure(response: httpx.Response) -> ServiceError:
     """What Branvil's error answer means, in words fit for the user."""
     try:
         error = response.json()["error"]
         code, message = str(error["code"]), str(error["message"])[:_MESSAGE_LIMIT]
-    except (ValueError, KeyError, TypeError):
+    except ValueError, KeyError, TypeError:
         code, message = "", ""
     status = response.status_code
     if status == httpx.codes.NOT_FOUND:
@@ -197,7 +209,12 @@ def _failure(response: httpx.Response) -> ServiceError:
         )
     if code == "invalid_cursor":
         return ServiceError(t("integrations.resources.continuation"))
-    return ServiceError(
+    error_type = (
+        Conflict
+        if status == httpx.codes.CONFLICT and code == "conflict"
+        else ServiceError
+    )
+    return error_type(
         t(
             "integrations.branvil.api.refused",
             operation=f"{response.request.method} {response.request.url.path}",
@@ -409,6 +426,26 @@ class Calls:
         as :meth:`call` sends a write."""
         return _json(await self.client().put(path, content=content))
 
+    @asynccontextmanager
+    async def download(
+        self, path: str, limit: int, too_large: ServiceError
+    ) -> AsyncIterator[IO[bytes]]:
+        """The file at ``path``, read to its end.
+
+        Raises:
+            ServiceError: ``too_large``, if it is above ``limit`` bytes.
+        """
+        async with self.client().stream("GET", path) as response:
+            if int(response.headers.get("content-length") or 0) > limit:
+                raise too_large
+            with TemporaryFile() as content:
+                async for chunk in response.aiter_bytes():
+                    if content.tell() + len(chunk) > limit:
+                        raise too_large
+                    content.write(chunk)
+                content.seek(0)
+                yield content
+
     async def items(self, path: str, **params: Any) -> list[dict[str, Any]]:
         """Every item of the collection at ``path``."""
         found: list[dict[str, Any]] = []
@@ -511,11 +548,14 @@ class BranvilApi(Calls):
         conditions: dict[str, Any],
         continuation: str,
         translate: Callable[[dict[str, Any]], ReadModel | dict[str, Any]],
+        **params: Any,
     ) -> ReadPage:
         """The page of the collection at ``path`` that ``continuation`` (a
-        cursor Branvil gave, bound to the collection) asks for."""
+        cursor Branvil gave, bound to the collection and ``params``) asks
+        for."""
         page = await self.get(
             path,
+            **params,
             limit=conditions["page_size"],
             **({"cursor": continuation} if continuation else {}),
         )
@@ -535,7 +575,7 @@ class BranvilApi(Calls):
             raise ServiceError(t("integrations.branvil.api.username_missing"))
         me = await self.get("/me")
         name = str(me.get("name") or "")
-        if name.casefold() != username(self.person).casefold():
+        if not member_identity(self.person).matches(name):
             record_auth_failure(self.person.person_id, "identity_mismatch")
             raise ServiceError(
                 t(
@@ -609,7 +649,7 @@ class BranvilApi(Calls):
     def author_type(self, author: object) -> str:
         if not author:
             return ""
-        mine = str(author).casefold() == username(self.person).casefold()
+        mine = member_identity(self.person).matches(str(author))
         return Message.ASSISTANT if mine else Message.USER
 
     def message(self, comment: dict[str, Any]) -> Message:
@@ -620,7 +660,7 @@ class BranvilApi(Calls):
             (
                 member.name
                 for member in self.team.members
-                if author and username(member).casefold() == author.casefold()
+                if author and member_identity(member).matches(author)
             ),
             "",
         )
@@ -644,7 +684,11 @@ class BranvilApi(Calls):
 
     def mentions(self, text: str, name: str | None = None) -> bool:
         """Whether ``text`` mentions ``name``, the member by default."""
-        name = username(self.person) if name is None else name
+        name = (
+            member_identity(self.person).mention.removeprefix("@")
+            if name is None
+            else name
+        )
         return bool(name) and (
             re.search(
                 # A name may hold a dot, but a sentence's dot ends it.
@@ -653,6 +697,12 @@ class BranvilApi(Calls):
                 flags=re.IGNORECASE | re.ASCII,
             )
             is not None
+        )
+
+    def mentions_member(self, data: dict[str, Any]) -> bool:
+        """Whether a stored ticket or comment mentions this member."""
+        return any(
+            member_identity(self.person).matches(name) for name in data["mentions"]
         )
 
     async def post_comment(

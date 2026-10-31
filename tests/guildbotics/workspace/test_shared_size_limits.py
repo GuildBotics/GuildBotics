@@ -83,6 +83,12 @@ NOT_SHARED = {
     "guildbotics/app_api/command_input_files.py:MAX_COMMAND_INPUT_FILE_BYTES": (
         "a temporary upload outside the workspace"
     ),
+    "guildbotics/app_api/auth.py:_MAX_STATE_BYTES": (
+        "a local app's consent state, held in memory and handed back in its redirect"
+    ),
+    "guildbotics/app_api/command_input_files.py:_NAME_CHARS": (
+        "the name an uploaded command input keeps in the machine-local inputs"
+    ),
     "guildbotics/hub/secret_stream.py:MAX_HEADER_BYTES": (
         "one header line of the SSH stream secret values travel on, which is "
         "never written to a file"
@@ -121,6 +127,9 @@ NOT_SHARED = {
     "guildbotics/capabilities/member_git.py:MAX_GIT_BUNDLE_BYTES": (
         "history a member's clone sends the host, into a temporary file"
     ),
+    "guildbotics/capabilities/member_git.py:MAX_GIT_SHOW_BYTES": (
+        "one default-branch object read into a bounded member result"
+    ),
     "guildbotics/capabilities/member_git.py:_MAX_GIT_OUTPUT_BYTES": (
         "what the host reads back from git run in a member's clone"
     ),
@@ -153,6 +162,10 @@ NOT_SHARED = {
     ),
     "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (
         "a temporary GitHub Actions artifact outside shared workspace state"
+    ),
+    "guildbotics/capabilities/artifact_archive.py:MAX_ATTACHMENT_BYTES": (
+        "a ticket's attachment, written to the command's working directory"
+        " outside shared workspace state"
     ),
     "guildbotics/observability/diagnostics_store.py:DEFAULT_DIAGNOSTICS_MAX_BYTES": (
         "local/run diagnostics, which stay on this device"

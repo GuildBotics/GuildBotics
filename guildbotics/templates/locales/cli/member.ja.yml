@@ -13,6 +13,8 @@ ja:
     unavailable_with_holder: "person execution lease は PID %{pid}（%{source}: %{command}）が使用しています。"
   run:
     required: "このコマンドは呼び出し元の %{kind} ワークフローの実行を対象とするため、その実行の中でだけ使えます。"
+    required_any: "このコマンドは呼び出し元のワークフローまたはコマンドの実行を対象とするため、その実行の中でだけ使えます。"
+    chat_event: "このコマンドはチャットのイベント以外の実行を対象とします。チャットのイベントの実行は guildbotics member chat complete で完了させます。"
   sync:
     invalid_identity: "Workspace 同期を開始できませんでした。%{path} が不正です。コマンドによる変更はまだ行われていません。ファイルを修復してから再実行してください。"
   chat_updates:
@@ -22,3 +24,10 @@ ja:
     not_checked: "この入力に対する新着確認がまだ行われていません。"
     new_messages: "前回の確認後に元のスレッドへ新着メッセージが届いています。"
     required: "%{reason} guildbotics member chat updates --person %{person} を実行し、結果を読んで操作内容を再検討してから再試行してください。"
+  ticket_assignee: "名簿のメンバー %{person} にチケットサービスのアカウントがありません。"
+  ticket_interactive: "チケットの対話指定の切り替え"
+  ticket_create: "チケットの作成"
+  ticket_state: "チケットの状態の '%{state}' への変更"
+  human_approval_required: "%{action}には、人の依頼または承認が必要です。人に確認してから --human-approved を付けて再実行してください。"
+  ticket_update_empty: "ticket update には、本文、タイトル、ラベル、状態、親、依存先、対話指定のいずれかが必要です。"
+  ticket_update_options: "ticket update には --content-stdin/--content-file、--title、--add-label、--remove-label、--state、--parent、--add-blocked-by、--remove-blocked-by、--interactive/--no-interactive のいずれかが必要です。"

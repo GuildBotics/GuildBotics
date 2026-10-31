@@ -36,6 +36,7 @@ import {
   type WorkspaceLiveState,
   type WorkspaceSyncPreview,
 } from "../api/client";
+import { SERVER_MACHINE_QUERY_KEY, ServerMachineBadge } from "../serverMachine";
 import { HubConnector } from "./HubConnector";
 import { RequestErrorAlert } from "./RequestErrorAlert";
 import { SecretsCard } from "./SecretsCard";
@@ -62,7 +63,10 @@ export function SyncSettings() {
   const status = useSyncStatus("workspace");
   return (
     <Stack gap="md">
-      <Title order={3}>{t("sync.settings.title")}</Title>
+      <Group gap="xs">
+        <Title order={3}>{t("sync.settings.title")}</Title>
+        <ServerMachineBadge />
+      </Group>
       <Text c="dimmed" size="sm">
         {t("sync.settings.subtitle")}
       </Text>
@@ -505,6 +509,7 @@ function DevicesCard() {
     mutationFn: (displayName: string) => renameThisDevice(displayName),
     onSuccess: (next) => {
       queryClient.setQueryData(["workspace-devices"], next);
+      void queryClient.invalidateQueries({ queryKey: SERVER_MACHINE_QUERY_KEY });
       setName(null);
     },
   });

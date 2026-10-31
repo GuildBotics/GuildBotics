@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
-import { readStackContext } from "./stack-context";
+import { ownerApi, readStackContext, test } from "./stack-context";
 
 // Journeys ⑦–⑩: sharing one workspace, against the REAL backend and REAL Git.
 //
@@ -62,23 +62,12 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-async function api(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`http://${ctx.host}:${ctx.backendPort}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-GuildBotics-Session-Token": ctx.token,
-      ...(init.headers ?? {}),
-    },
-  });
-}
-
 async function syncStatus(): Promise<{
   enabled: boolean;
   workspace_id: string | null;
   state: string;
 }> {
-  return (await api("/workspace/sync")).json();
+  return (await ownerApi(ctx, "/workspace/sync")).json();
 }
 
 async function openSyncSettings(page: Page): Promise<void> {
@@ -101,7 +90,7 @@ async function hostHubHere(page: Page): Promise<void> {
  * hosting no hub is never carried on to registering with one.
  */
 async function lookUpLocalHub(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Use the hub on this machine" }).click();
+  await page.getByRole("button", { name: /^Use the hub on / }).click();
 }
 
 /**
@@ -177,7 +166,7 @@ test("⑦ takes a copy of the workspace into a new directory", async ({ page }) 
   mkdirSync(join(target, ".guildbotics", "local", "run"), { recursive: true });
   writeFileSync(join(target, ".guildbotics", "local", "run", "diagnostics.jsonl"), "{}\n");
 
-  const response = await api("/workspace/sync/clone", {
+  const response = await ownerApi(ctx, "/workspace/sync/clone", {
     method: "POST",
     body: JSON.stringify({
       hub: { endpoint: "" },
@@ -196,7 +185,7 @@ test("⑦ takes a copy of the workspace into a new directory", async ({ page }) 
   expect(copied.workspace_id).toBe(status.workspace_id);
 
   // Put the backend back on the original workspace for the journeys below.
-  await api("/workspace", {
+  await ownerApi(ctx, "/workspace", {
     method: "POST",
     body: JSON.stringify({ workspace_dir: ctx.workspaceDir }),
   });
@@ -220,7 +209,7 @@ test("⑧ keeps the change that reached the hub first and sets the other aside",
     ),
   );
 
-  await api("/workspace/sync/retry", { method: "POST" });
+  await ownerApi(ctx, "/workspace/sync/retry", { method: "POST" });
 
   // The hub's version of the contended file is what survives, there and here.
   // The hub's head may well move past their commit: whatever else this device
@@ -293,7 +282,7 @@ test("⑧ refreshes an open member editor after a competing change is set aside"
     memberFile,
     readFileSync(memberFile, "utf-8").replace(/^name: .*$/m, "name: Member from this device"),
   );
-  expect((await api("/workspace/sync/retry", { method: "POST" })).status).toBe(200);
+  expect((await ownerApi(ctx, "/workspace/sync/retry", { method: "POST" })).status).toBe(200);
 
   const list = page.getByRole("list", { name: "Members", exact: true });
   await expect(list.getByText("Member from another device (local-agent)")).toBeVisible({

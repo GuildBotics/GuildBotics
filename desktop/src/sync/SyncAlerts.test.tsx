@@ -26,6 +26,7 @@ vi.mock("../api/client", async () => {
     getWorkspaceSecrets: vi.fn(),
     getWorkspaceSyncStatus: vi.fn(),
     retryWorkspaceSync: vi.fn(),
+    getServerMachineName: vi.fn(async () => "studio"),
   };
 });
 
@@ -177,7 +178,9 @@ describe("the synchronization warning band", () => {
     renderAlerts();
 
     expect(await screen.findByText(t("sync.rejected.alertTitle.workspace"))).toBeInTheDocument();
-    expect(screen.getByText(t("sync.rejected.alert", { count: 1 }))).toBeInTheDocument();
+    expect(
+      screen.getByText(t("sync.rejected.alert", { count: 1, machine: "studio" })),
+    ).toBeInTheDocument();
     expect(screen.queryByText(t("sync.rejected.alertTitle.identities"))).toBe(null);
   });
 
@@ -243,7 +246,11 @@ describe("the synchronization warning band", () => {
 
     expect(await screen.findByText(t("sync.state.unreachable.label"))).toBeInTheDocument();
     expect(
-      screen.getByText(t("sync.identities.title", { label: t("sync.state.local_error.label") })),
+      screen.getByText(
+        t("sync.identities.title", {
+          label: t("sync.state.local_error.label", { machine: "studio" }),
+        }),
+      ),
     ).toBeInTheDocument();
   });
 
@@ -256,8 +263,12 @@ describe("the synchronization warning band", () => {
       );
       renderAlerts();
 
-      expect(await screen.findByText(t(`sync.secrets.title.${scope}`))).toBeInTheDocument();
-      expect(screen.getByText(t("sync.secrets.alert.attention", { count: 2 }))).toBeInTheDocument();
+      expect(
+        await screen.findByText(t(`sync.secrets.title.${scope}`, { machine: "studio" })),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(t("sync.secrets.alert.attention", { count: 2, machine: "studio" })),
+      ).toBeInTheDocument();
       expect(screen.getByRole("link", { name: t("sync.secrets.hint.link") })).toBeInTheDocument();
     },
   );
@@ -267,7 +278,7 @@ describe("the synchronization warning band", () => {
     renderAlerts();
 
     await waitFor(() => expect(getWorkspaceSecrets).toHaveBeenCalled());
-    expect(screen.queryByText(t("sync.secrets.title.workspace"))).toBe(null);
+    expect(screen.queryByText(t("sync.secrets.title.workspace", { machine: "studio" }))).toBe(null);
   });
 
   it("shows an unreachable hub and a set aside change at the same time", async () => {

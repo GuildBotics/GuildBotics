@@ -18,6 +18,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | Command | Summary |
 | --- | --- |
 | [`guildbotics`](#guildbotics) | GuildBotics CLI entrypoint. |
+| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
 | [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
@@ -52,7 +53,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 | [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
 | [`guildbotics hub workspace list`](#guildbotics-hub-workspace-list) | List the workspaces this hub holds. |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
+| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member chat complete`](#guildbotics-member-chat-complete) | Finish the chat workflow run on its event with evidence. |
@@ -67,12 +68,15 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
 | [`guildbotics member chat resolve-channel`](#guildbotics-member-chat-resolve-channel) | Resolve a channel name to its channel id without reading or posting; the id is empty when no channel has that name. |
 | [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
+| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
+| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
+| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
+| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
@@ -93,19 +97,22 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
 | [`guildbotics member repo-info read`](#guildbotics-member-repo-info-read) | Read one bounded page of the repository's dependency_alerts, the repository named by its path. |
-| [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
+| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
+| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
+| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
 | [`guildbotics member ticket reaction add`](#guildbotics-member-ticket-reaction-add) | React to a comment of the ticket, by the id its read gave it. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
@@ -116,8 +123,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
-| [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
@@ -139,18 +146,36 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics connect`](#guildbotics-connect) | Connect this machine's CLI to the GuildBotics server. |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics git-credential`](#guildbotics-git-credential) | Hand git the human member's credential for a remote of a service GuildBotics is connected to on this machine (ACTION is git's: get, store, or erase). |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
-| [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
+| [`guildbotics kill`](#guildbotics-kill) | Cancel CLI services and force terminate the backend if needed. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
+| [`guildbotics open`](#guildbotics-open) | Open the GuildBotics screens in the browser. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
-| [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
-| [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
+| [`guildbotics start`](#guildbotics-start) | Start the backend and its services; Desktop must be closed. |
+| [`guildbotics stop`](#guildbotics-stop) | Stop CLI services through the local backend API and wait for its exit. |
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
+
+## `guildbotics connect`
+
+Connect this machine's CLI to the GuildBotics server.
+
+For a machine that reaches the server through SSH forwarding: the owner
+allows this machine on the server's consent screen, and the token it is
+given is kept in this machine's OS keychain.
+
+```text
+guildbotics connect [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics diagnostics`
 
@@ -692,7 +717,7 @@ guildbotics hub workspace list [OPTIONS]
 
 ## `guildbotics kill`
 
-Immediately force kill a CLI-managed background service.
+Cancel CLI services and force terminate the backend if needed.
 
 Equivalent to: `guildbotics stop --force --timeout 0`.
 
@@ -720,14 +745,15 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
+| [`guildbotics member checks`](#guildbotics-member-checks) | End a run to await the CI checks of its pull requests. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
-| [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
+| [`guildbotics member git`](#guildbotics-member-git) | Read repositories and prepare, commit, push, and publish member workspaces. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member pr`](#guildbotics-member-pr) | Read, open, update, comment on, and review pull requests, react to their comments and reviews, and download their CI artifacts. |
 | [`guildbotics member repo-info`](#guildbotics-member-repo-info) | Read information about the repository as a whole. |
-| [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, and react to their comments. |
+| [`guildbotics member task`](#guildbotics-member-task) | Completion records of runs other than a chat event's. |
+| [`guildbotics member ticket`](#guildbotics-member-ticket) | Read, create, update, and comment on tickets, react to their comments, and download their attachments. |
 
 ## `guildbotics member chat`
 
@@ -957,6 +983,38 @@ guildbotics member chat updates [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
+## `guildbotics member checks`
+
+End a run to await the CI checks of its pull requests.
+
+```text
+guildbotics member checks [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member checks await`](#guildbotics-member-checks-await) | End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle. |
+
+## `guildbotics member checks await`
+
+End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+
+```text
+guildbotics member checks await [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--content-stdin` | Read the command's entire free-form content from standard input. |
+| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
 ## `guildbotics member context`
 
 Show non-secret member context.
@@ -974,7 +1032,7 @@ guildbotics member context [OPTIONS]
 
 ## `guildbotics member git`
 
-Prepare, commit, push, and publish member git workspaces.
+Read repositories and prepare, commit, push, and publish member workspaces.
 
 ```text
 guildbotics member git [OPTIONS] COMMAND [ARGS]...
@@ -990,6 +1048,7 @@ guildbotics member git [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch `ticket/\<key\>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
+| [`guildbotics member git show`](#guildbotics-member-git-show) | Read literal paths on the code host's current default branch, without a checkout. |
 
 ## `guildbotics member git commit`
 
@@ -1015,7 +1074,7 @@ guildbotics member git commit [OPTIONS]
 
 ## `guildbotics member git prepare`
 
-Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
 
 ```text
 guildbotics member git prepare [OPTIONS]
@@ -1066,6 +1125,22 @@ guildbotics member git push [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member git show`
+
+Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
+
+```text
+guildbotics member git show [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--repo TEXT` | Repository path of the code host. [required] |
+| `--path TEXT` | Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1270,7 +1345,7 @@ guildbotics member pr [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member pr reply`](#guildbotics-member-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member pr review`](#guildbotics-member-pr-review) | Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member pr review-comment`](#guildbotics-member-pr-review-comment) | Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again. |
-| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body or title. |
+| [`guildbotics member pr update`](#guildbotics-member-pr-update) | Change a PR's body, title, or ticket links. |
 
 ## `guildbotics member pr artifact`
 
@@ -1390,7 +1465,7 @@ guildbotics member pr read [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--resource [pull_requests\|pull_request_comments\|pull_request_reviews\|pull_request_files\|pull_request_threads\|review_thread_comments\|pull_request_readiness]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1458,7 +1533,7 @@ guildbotics member pr review-comment [OPTIONS]
 
 ## `guildbotics member pr update`
 
-Change a PR's body or title. Body replacement preserves the ticket links the existing body carries as the code host reads them; new links to the same ticket take precedence. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
+Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
 
 ```text
 guildbotics member pr update [OPTIONS]
@@ -1471,7 +1546,9 @@ guildbotics member pr update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the pull request title. |
-| `--drop-issue-links` | Do not carry the ticket links of the existing body into the replacement body. Requires --content-stdin/--content-file. By default, they are preserved, even with empty content; new links to the same ticket take precedence. See member help for what the code host counts as a link. |
+| `--issue-url TEXT` | Replace all PR ticket links with these URLs. May be repeated. |
+| `--closes-issue / --refs-issue` | Close every --issue-url ticket on merge, or only refer to it (default). [default: refs-issue] |
+| `--drop-issue-links` | Remove all PR ticket links. Cannot be combined with --issue-url. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1503,7 +1580,7 @@ guildbotics member repo-info read [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--resource [dependency_alerts]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1511,7 +1588,7 @@ guildbotics member repo-info read [OPTIONS]
 
 ## `guildbotics member task`
 
-Workflow task-run completion records.
+Completion records of runs other than a chat event's.
 
 ```text
 guildbotics member task [OPTIONS] COMMAND [ARGS]...
@@ -1523,12 +1600,12 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it. |
-| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the ticket run's recorded evidence. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. |
+| [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect the run's recorded evidence. |
 
 ## `guildbotics member task complete`
 
-Finish the ticket workflow run on its ticket with evidence, revalidating affected PR readiness before accepting done, or end it to await the PRs' pending checks, which resume it.
+Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
 
 ```text
 guildbotics member task complete [OPTIONS]
@@ -1537,7 +1614,8 @@ guildbotics member task complete [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--status [done\|asking\|blocked\|awaiting_checks]` | Run outcome. awaiting_checks ends the run to await its PRs' pending checks; the patrol resumes the work once they settle. [required] |
+| `--waiting-for TEXT` | Next member to act, by the context roster's person_id (repeatable; asking/blocked only). |
+| `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1545,7 +1623,7 @@ guildbotics member task complete [OPTIONS]
 
 ## `guildbotics member task status`
 
-Inspect the ticket run's recorded evidence.
+Inspect the run's recorded evidence.
 
 ```text
 guildbotics member task status [OPTIONS]
@@ -1559,7 +1637,8 @@ guildbotics member task status [OPTIONS]
 
 ## `guildbotics member ticket`
 
-Read, create, update, and comment on tickets, and react to their comments.
+Read, create, update, and comment on tickets, react to their comments,
+and download their attachments.
 
 ```text
 guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
@@ -1571,11 +1650,45 @@ guildbotics member ticket [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics member ticket attachment`](#guildbotics-member-ticket-attachment) | Attachment operations. |
 | [`guildbotics member ticket comment`](#guildbotics-member-ticket-comment) | Comment on a ticket in the member voice. |
 | [`guildbotics member ticket create`](#guildbotics-member-ticket-create) | Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. |
 | [`guildbotics member ticket reaction`](#guildbotics-member-ticket-reaction) | Reactions to ticket comments. |
-| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to... |
-| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+| [`guildbotics member ticket read`](#guildbotics-member-ticket-read) | Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id,... |
+| [`guildbotics member ticket update`](#guildbotics-member-ticket-update) | Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. |
+
+## `guildbotics member ticket attachment`
+
+Attachment operations.
+
+```text
+guildbotics member ticket attachment [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member ticket attachment download`](#guildbotics-member-ticket-attachment-download) | Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading. |
+
+## `guildbotics member ticket attachment download`
+
+Download a size-limited file the ticket refers to, by the id its ticket_attachments read gave it, as a file of the destination named as it was attached; remove repository files after reading.
+
+```text
+guildbotics member ticket attachment download [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Ticket URL. [required] |
+| `--id TEXT` | The id the ticket's ticket_attachments read gave the attachment. [required] |
+| `--dest DIRECTORY` | Directory to write the file into. Defaults to the current directory. Remove downloaded files after reading when this is inside a repository. [default: .] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics member ticket comment`
 
@@ -1596,7 +1709,7 @@ guildbotics member ticket comment [OPTIONS]
 
 ## `guildbotics member ticket create`
 
-Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`.
+Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
 
 ```text
 guildbotics member ticket create [OPTIONS]
@@ -1611,6 +1724,11 @@ guildbotics member ticket create [OPTIONS]
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--label TEXT` | Label already defined in the tracker. Repeat for several labels. |
 | `--add-to-board / --no-add-to-board` | Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board. [default: add-to-board] |
+| `--interactive` | Create for interactive work; unsupported providers refuse it. |
+| `--assignee TEXT` | Assignee's person_id from the member context roster, including humans. |
+| `--lane [new\|ready\|in_progress]` | Initial lane; defaults to ready with a parent or blockers, new otherwise. |
+| `--parent TEXT` | Parent ticket URL. |
+| `--blocked-by TEXT` | Blocking ticket URL. Repeat for several blockers. |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -1650,7 +1768,7 @@ guildbotics member ticket reaction add [OPTIONS]
 
 ## `guildbotics member ticket read`
 
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, or ticket_pull_requests (the code host's pull requests that refer to it). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, page_size; items: URL, key, title, state, lane, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 ```text
 guildbotics member ticket read [OPTIONS]
@@ -1659,8 +1777,8 @@ guildbotics member ticket read [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource [tickets\|ticket_comments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
-| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the repository's path. [required] |
+| `--resource [tracker_tickets\|tickets\|ticket_comments\|ticket_attachments\|ticket_pull_requests]` | Resource to read; see member help for its conditions. [required] |
+| `--subject TEXT` | What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required] |
 | `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
 | `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1668,7 +1786,7 @@ guildbotics member ticket read [OPTIONS]
 
 ## `guildbotics member ticket update`
 
-Change a ticket's body, title, labels, state, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent.
+Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。
 
 ```text
 guildbotics member ticket update [OPTIONS]
@@ -1681,6 +1799,7 @@ guildbotics member ticket update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the ticket title. |
+| `--interactive / --no-interactive` | Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it. |
 | `--add-label TEXT` | Add a label already defined in the tracker. Repeat for several labels. |
 | `--remove-label TEXT` | Remove a label from the ticket. Repeat for several labels. |
 | `--state [open\|closed]` | Close or reopen the ticket; requires --human-approved. |
@@ -1690,6 +1809,21 @@ guildbotics member ticket update [OPTIONS]
 | `--remove-blocked-by TEXT` | URL of a ticket this one is no longer blocked by. Repeat for several tickets. |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
 | `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics open`
+
+Open the GuildBotics screens in the browser.
+
+The browser enters with a single-use link that expires after 60 seconds.
+
+```text
+guildbotics open [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--print` | Print the link instead of opening it, to paste into a browser on another machine. |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics run`
@@ -1845,7 +1979,7 @@ guildbotics secrets status [OPTIONS]
 
 ## `guildbotics start`
 
-Start GuildBotics runtimes (scheduler and event listener runner).
+Start the backend and its services; Desktop must be closed.
 
 ```text
 guildbotics start [OPTIONS]
@@ -1853,13 +1987,13 @@ guildbotics start [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--only [scheduler\|events]` | Start only one runtime instead of both scheduler and event listener runner. |
-| `--max-consecutive-errors INTEGER` | Stop a worker after this many consecutive workflow errors. [default: 3] |
+| `--only [scheduler\|events]` | Start only scheduled/routine work or event reception and work. |
+| `--max-consecutive-errors INTEGER RANGE` | Stop a worker after this many consecutive workflow errors. [default: 3; x\>=1] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics stop`
 
-Gracefully stop a CLI-managed background service.
+Stop CLI services through the local backend API and wait for its exit.
 
 ```text
 guildbotics stop [OPTIONS]
@@ -1867,7 +2001,7 @@ guildbotics stop [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--timeout INTEGER` | Seconds to wait at each stop stage [default: 30] |
+| `--timeout INTEGER RANGE` | Seconds to wait at each stop stage [default: 30; x\>=0] |
 | `--force` | Cancel in-flight work after timeout, then force terminate as a last resort |
 | `--help` | Show this message and exit. |
 

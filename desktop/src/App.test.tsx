@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { HashRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   App,
@@ -14,11 +14,9 @@ import {
   saveServicePreferences,
   SERVICE_PREFERENCES_KEY,
   isStopTimeoutPending,
-  localFileHref,
   matchesRecordFilter,
   matchesRecordScopeFilter,
   parseTraceSearch,
-  openLocalFile,
   parseTicketQuery,
   recordAttributeRows,
   ticketChipInfo,
@@ -36,8 +34,10 @@ import {
 import {
   dismissSystemAlert,
   getConfigStatus,
+  getProjectConfig,
   getSystemAlerts,
   getWorkspaceDevices,
+  subscribeEvents,
   getWorkspaceServiceOwner,
   runScenarioDiagnostics,
   startScheduler,
@@ -48,12 +48,6 @@ import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
 import { TestMantineProvider } from "./test/TestMantineProvider";
-
-const openShell = vi.fn();
-
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  open: (path: string) => openShell(path),
-}));
 
 function t(): TFunction {
   return i18n.getFixedT("en") as TFunction;
@@ -67,6 +61,7 @@ vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
     ...actual,
+    getServerMachineName: vi.fn(async () => "studio"),
     getConfigStatus: vi.fn(async () => ({
       cwd: "/workspace",
       workspace: "/workspace",
@@ -104,6 +99,7 @@ vi.mock("./api/client", async (importOriginal) => {
       description: "Demo project",
       llm_api_type: "openai",
       cli_agent: "codex",
+      services: {},
       github_enabled: false,
       github_project_url: "",
       has_google_api_key: false,
@@ -170,6 +166,37 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("reloads what it shows when the server opens another workspace", async () => {
+    const listeners: ((event: RuntimeEvent) => void)[] = [];
+    vi.mocked(subscribeEvents).mockImplementation((listener) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    renderApp();
+    await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
+    await waitFor(() => expect(listeners.length).toBeGreaterThan(0));
+    const reads = vi.mocked(getConfigStatus).mock.calls.length;
+
+    listeners.forEach((listener) =>
+      listener(makeRuntimeEvent({ type: "workspace.changed", payload: { workspace: "/other" } })),
+    );
+
+    await waitFor(() =>
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(reads),
+    );
+  });
+
+  it("places the Branvil browser entry immediately below setup", async () => {
+    const config = await getProjectConfig();
+    vi.mocked(getProjectConfig).mockResolvedValueOnce({
+      ...config,
+      services: { code_hosting_service: { name: "branvil" } },
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    const entry = await screen.findByRole("button", { name: t()("setup.branvil.nav.label") });
+    expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(entry);
+  });
   it("renders the shared workspace and input-store refusal once", async () => {
     const status = await getConfigStatus();
     vi.mocked(getConfigStatus).mockResolvedValue({
@@ -249,7 +276,9 @@ describe("App", () => {
     expect(startScheduler).not.toHaveBeenCalled();
     fireEvent.mouseEnter(run);
     expect(
-      await screen.findByText(t()("service.ownerElsewhere", { name: "Mac mini" })),
+      await screen.findByText(
+        t()("service.ownerElsewhere", { name: "Mac mini", machine: "studio" }),
+      ),
     ).toBeInTheDocument();
   });
 
@@ -396,26 +425,38 @@ describe("App", () => {
     const device = (
       setting: "runtime" | "declaration" | "image" | "snapshot" | "building" | "filesystem",
     ) =>
-      systemAlertMessage(t(), {
-        id: "agent-environment:device",
-        code: "agent_environment_unavailable",
-        severity: "warning",
-        opened_at: "",
-        updated_at: "",
-        occurrence_count: 1,
-        person_id: "",
-        command: "",
-        trace_id: "",
-        provider: "",
-        reason: "why",
-        setting,
-        actions: ["setup"],
-      });
-    const said = t()("systemAlerts.codes.agent_environment_unavailable", { reason: "why" });
-    expect(device("snapshot")).toBe(`${said} ${t()("systemAlerts.environmentFix.snapshot")}`);
-    expect(device("runtime")).toBe(`${said} ${t()("systemAlerts.environmentFix.runtime")}`);
-    expect(device("declaration")).toBe(`${said} ${t()("systemAlerts.environmentFix.declaration")}`);
-    expect(device("image")).toBe(`${said} ${t()("systemAlerts.environmentFix.image")}`);
+      systemAlertMessage(
+        t(),
+        {
+          id: "agent-environment:device",
+          code: "agent_environment_unavailable",
+          severity: "warning",
+          opened_at: "",
+          updated_at: "",
+          occurrence_count: 1,
+          person_id: "",
+          command: "",
+          trace_id: "",
+          provider: "",
+          reason: "why",
+          setting,
+          actions: ["setup"],
+        },
+        "studio",
+      );
+    // The device is the server's machine, which the sentences name.
+    const said = t()("systemAlerts.codes.agent_environment_unavailable", {
+      reason: "why",
+      machine: "studio",
+    });
+    expect(said).toContain("studio");
+    const fix = (part: string) =>
+      `${said} ${t()(`systemAlerts.environmentFix.${part}`, { machine: "studio" })}`;
+    expect(device("snapshot")).toBe(fix("snapshot"));
+    expect(device("runtime")).toBe(fix("runtime"));
+    expect(device("runtime")).toMatch(/studio.*studio/);
+    expect(device("declaration")).toBe(fix("declaration"));
+    expect(device("image")).toBe(fix("image"));
     // A build in progress asks for nothing but patience.
     expect(device("building")).toBe(said);
   });
@@ -441,14 +482,14 @@ describe("App", () => {
         actions: ["setup" as const],
       });
       const said = t()(`systemAlerts.codes.${code}`, { command: provider });
-      expect(systemAlertMessage(t(), alert("credit"))).toBe(
+      expect(systemAlertMessage(t(), alert("credit"), "studio")).toBe(
         `${said} ${t()("systemAlerts.keyRefusals.credit")}`,
       );
-      expect(systemAlertMessage(t(), alert("authentication"))).toBe(
+      expect(systemAlertMessage(t(), alert("authentication"), "studio")).toBe(
         `${said} ${t()("systemAlerts.keyRefusals.authentication")}`,
       );
       // A key found missing by verification says nothing more.
-      expect(systemAlertMessage(t(), alert(""))).toBe(said);
+      expect(systemAlertMessage(t(), alert(""), "studio")).toBe(said);
       expect(systemAlertSetupTarget(alert("credit"))).toBe("/setup?section=intelligence");
     },
   );
@@ -478,10 +519,10 @@ describe("App", () => {
     ];
 
     it("names the provider by its title, or by its name when it is not offered", () => {
-      expect(systemAlertMessage(t(), credentialAlert("github", "alice"), providers)).toBe(
+      expect(systemAlertMessage(t(), credentialAlert("github", "alice"), "studio", providers)).toBe(
         t()("systemAlerts.codes.credential", { provider: "GitHub", person: "alice" }),
       );
-      expect(systemAlertMessage(t(), credentialAlert("gitlab", "alice"), providers)).toBe(
+      expect(systemAlertMessage(t(), credentialAlert("gitlab", "alice"), "studio", providers)).toBe(
         t()("systemAlerts.codes.credential", { provider: "gitlab", person: "alice" }),
       );
     });
@@ -899,36 +940,6 @@ describe("isStopTimeoutPending", () => {
     expect(isStopTimeoutPending(unit({ running: true, state: "failed", error: "other" }))).toBe(
       false,
     );
-  });
-});
-
-describe("localFileHref", () => {
-  it("builds a file URL for an absolute POSIX path", () => {
-    expect(localFileHref("/workspace/trace.log")).toBe("file:///workspace/trace.log");
-  });
-
-  it("builds a file URL for a relative path", () => {
-    expect(localFileHref("logs/trace.log")).toBe("file:///logs/trace.log");
-  });
-
-  it("normalizes Windows backslashes and encodes spaces", () => {
-    expect(localFileHref("C:\\Users\\a b\\trace.log")).toBe("file:///C:/Users/a%20b/trace.log");
-  });
-});
-
-describe("file helpers outside Tauri runtime", () => {
-  beforeEach(() => {
-    openShell.mockClear();
-    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-  });
-
-  afterEach(() => {
-    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-  });
-
-  it("openLocalFile is a no-op when not in Tauri", async () => {
-    await openLocalFile("/workspace/trace.log");
-    expect(openShell).not.toHaveBeenCalled();
   });
 });
 

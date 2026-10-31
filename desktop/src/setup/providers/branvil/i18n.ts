@@ -4,9 +4,13 @@ export const branvil = {
   en: {
     setup: {
       branvil: {
+        nav: {
+          label: "Branvil",
+          openInBrowser: "Open Branvil in the system browser",
+        },
         baseUrl: "Base URL",
         baseUrlHint:
-          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, GuildBotics forwards it. The connection is the same in every workspace.",
+          "Where Branvil is reached, the same on every machine. On a machine other than the Hub, set up the SSH forwarding service with scripts/hub-forward.sh (macOS/Linux) or scripts/hub-forward.ps1 (Windows). The connection is the same in every workspace.",
         baseUrlInvalid: "Enter an http(s) origin such as http://127.0.0.1:7878.",
         workspace: "Workspace",
         workspaceHint:
@@ -31,17 +35,18 @@ export const branvil = {
           copied: "Copied",
         },
         member: {
-          label: "Branvil member",
-          new: "Create a new agent ({{name}})",
-          existing: "Choose an existing agent",
-          choose: "Agent",
-          chooseRequired: "Choose the agent.",
-          stored: "Branvil member: {{name}}",
+          label: "Branvil account",
+          new: "Create a new one ({{name}})",
+          existing: "Use an account on Branvil",
+          choose: "Account",
+          chooseRequired: "Choose the account.",
+          stored: "Branvil account: {{name}}",
           tokenSet: "Its token is issued by GuildBotics and kept in the OS secret store.",
           tokenMissing: "Its token is issued when the member is saved.",
           reissue: "Issue a new token when saved",
-          owner: "Branvil name: {{name}} (Branvil's owner)",
-          ownerPending: "The Branvil name is Branvil's owner's, filled in when saved.",
+          owner: "Branvil account: {{name}} (owner)",
+          ownerPending:
+            "A human member uses Branvil's owner account (the owner is Branvil's only human). It is linked when saved.",
         },
       },
     },
@@ -68,7 +73,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil is not reachable",
           description:
-            "Branvil did not answer at {{target}}. On a machine other than the Hub, check that the Branvil tunnel is running.",
+            "Branvil did not answer at {{target}}. On a machine other than the Hub, check the SSH forwarding service with scripts/hub-forward.sh status (macOS/Linux) or powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status (Windows).",
         },
         branvil_access: {
           title: "Branvil refused the member's token",
@@ -93,9 +98,13 @@ export const branvil = {
   ja: {
     setup: {
       branvil: {
+        nav: {
+          label: "Branvil",
+          openInBrowser: "Branvil をシステムのブラウザで開く",
+        },
         baseUrl: "ベース URL",
         baseUrlHint:
-          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは GuildBotics が転送します。接続はすべてのワークスペースで共通です。",
+          "Branvil に届く URL です。すべてのマシンで同じにします。Hub 以外のマシンでは scripts/hub-forward.sh（macOS/Linux）か scripts/hub-forward.ps1（Windows）で SSH 転送サービスを設定します。接続はすべてのワークスペースで共通です。",
         baseUrlInvalid: "http://127.0.0.1:7878 のような http(s) のオリジンを入力してください。",
         workspace: "ワークスペース",
         workspaceHint:
@@ -120,17 +129,18 @@ export const branvil = {
           copied: "コピーしました",
         },
         member: {
-          label: "Branvil のメンバー",
-          new: "新しいエージェントを作る（{{name}}）",
-          existing: "既存のエージェントを選ぶ",
-          choose: "エージェント",
-          chooseRequired: "エージェントを選んでください。",
-          stored: "Branvil のメンバー: {{name}}",
+          label: "Branvil のアカウント",
+          new: "新しく作る（{{name}}）",
+          existing: "Branvil にあるアカウントを使う",
+          choose: "アカウント",
+          chooseRequired: "アカウントを選んでください。",
+          stored: "Branvil のアカウント: {{name}}",
           tokenSet: "トークンは GuildBotics が発行し、OS の秘密ストアに保存しています。",
           tokenMissing: "トークンはメンバーを保存したときに発行します。",
           reissue: "保存するときにトークンを再発行する",
-          owner: "Branvil の名前: {{name}}（Branvil のオーナー）",
-          ownerPending: "Branvil の名前は Branvil のオーナーのもので、保存したときに入ります。",
+          owner: "Branvil のアカウント: {{name}}（オーナー）",
+          ownerPending:
+            "人間のメンバーは、Branvil のオーナーのアカウントを使います（Branvil を使う人間はオーナー 1 人だけです）。保存すると対応付けます。",
         },
       },
     },
@@ -157,7 +167,7 @@ export const branvil = {
         branvil_reachable: {
           title: "Branvil に届きません",
           description:
-            "{{target}} の Branvil が応答しませんでした。Hub 以外のマシンでは、Branvil のトンネルが動いているか確認してください。",
+            "{{target}} の Branvil が応答しませんでした。Hub 以外のマシンでは、scripts/hub-forward.sh status（macOS/Linux）または powershell -ExecutionPolicy Bypass -File scripts\\hub-forward.ps1 -Action status（Windows）で SSH 転送サービスを確認してください。",
         },
         branvil_access: {
           title: "Branvil がメンバーのトークンを拒否しました",

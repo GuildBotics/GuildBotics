@@ -6,13 +6,12 @@ import json
 import re
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Literal, TextIO
-from uuid import uuid4
 
 import click
 from pydantic import ValidationError
@@ -53,6 +52,7 @@ from guildbotics.capabilities.task_runs import (
     current_run_id,
     current_task_run_id,
 )
+from guildbotics.capabilities.waiting_for import validate_waiting_for
 from guildbotics.cli._options import (
     CLI_CONTEXT_SETTINGS,
     SharedWriteBusyGroup,
@@ -65,7 +65,6 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
 )
 from guildbotics.drivers.context import resolve_member_context
-from guildbotics.entities.task_run import TASK_RUN_COMPLETIONS
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.factory import chat_provider_name
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -76,16 +75,14 @@ from guildbotics.observability.interactive_sessions import (
     interactive_host,
     interactive_thread_key,
 )
+from guildbotics.runtime.code_hosting_service import TicketLink
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_invocation import (
     ChatSubject,
     MemberInvocation,
+    Work,
     current_member_invocation,
     member_invocation_scope,
-)
-from guildbotics.runtime.person_lease import (
-    PersonExecutionLease,
-    PersonLeaseUnavailableError,
 )
 from guildbotics.runtime.port import SEMANTIC_REACTIONS, SemanticReaction, ServiceError
 from guildbotics.runtime.resources import (
@@ -93,6 +90,7 @@ from guildbotics.runtime.resources import (
     ReadSubject,
     ReviewVerdict,
 )
+from guildbotics.runtime.ticket_service import CreateLane
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
     PreparedOneShotSync,
@@ -269,8 +267,8 @@ class _MemberCommand(click.Command):
         """Run the work the callback returns under the member command's guard.
 
         The callback only reads and checks the command's input, so a usage
-        error needs neither the workspace nor the lease; what the command does
-        is the work it returns, which runs once the guard admits it.
+        error needs neither the workspace nor delegation checks. The work it
+        returns runs once its delegation is validated.
         """
         work = super().invoke(ctx)
         if work is None:
@@ -956,7 +954,33 @@ async def _chat_complete(
 
 @member.group()
 def git() -> None:
-    """Prepare, commit, push, and publish member git workspaces."""
+    """Read repositories and prepare, commit, push, and publish member workspaces."""
+
+
+@git.command(name="show")
+@_read_only_member_command
+@_person_option
+@click.option("--repo", required=True, help="Repository path of the code host.")
+@click.option(
+    "--path",
+    "paths",
+    multiple=True,
+    required=True,
+    help="Literal repository-relative path on the default branch; repeat to read several. Use '.' to list the root.",
+)
+@_json_format_option
+def git_show(
+    person: str, repo: str, paths: tuple[str, ...], output_format: str
+) -> _CommandWork:
+    return _git_show(person, repo, paths)
+
+
+async def _git_show(person: str, repo: str, paths: tuple[str, ...]) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    try:
+        return await _git_service(context, member_person).show(repo, paths)
+    finally:
+        await context.aclose()
 
 
 @git.command(name="prepare")
@@ -1205,7 +1229,7 @@ async def _code_hosting(
             ),
         }
         record_member_work_target(
-            member_person, target, read_only=not _member_command_needs_lease()
+            member_person, target, read_only=not _member_command_writes()
         )
     if then is not None:
         then(member_person, {**result, "target": target})
@@ -1224,7 +1248,8 @@ def _git_service(context: Context, person: Person) -> MemberGitWorkspaceService:
 
 @member.group()
 def ticket() -> None:
-    """Read, create, update, and comment on tickets, and react to their comments."""
+    """Read, create, update, and comment on tickets, react to their comments,
+    and download their attachments."""
 
 
 @member.group()
@@ -1255,7 +1280,7 @@ def _add_read_command(group: click.Group, kind: ReadSubject) -> None:
         required=True,
         help=(
             "What the resource is part of: the ticket's or pull request's URL,"
-            " or the repository's path."
+            " or the tracker/repository path (tracker_tickets searches a tracker)."
         ),
     )
     @click.option(
@@ -1345,6 +1370,26 @@ def ticket_comment(
         " every ticket refuses --no-add-to-board."
     ),
 )
+@click.option(
+    "--interactive",
+    is_flag=True,
+    help="Create for interactive work; unsupported providers refuse it.",
+)
+@click.option(
+    "--assignee",
+    help="Assignee's person_id from the member context roster, including humans.",
+)
+@click.option(
+    "--lane",
+    type=click.Choice(["new", "ready", "in_progress"]),
+    help="Initial lane; defaults to ready with a parent or blockers, new otherwise.",
+)
+@click.option("--parent", help="Parent ticket URL.")
+@click.option(
+    "--blocked-by",
+    multiple=True,
+    help="Blocking ticket URL. Repeat for several blockers.",
+)
 @_human_approved_option
 @_json_format_option
 def ticket_create(
@@ -1353,6 +1398,11 @@ def ticket_create(
     title: str,
     labels: tuple[str, ...],
     add_to_board: bool,
+    interactive: bool,
+    assignee: str | None,
+    lane: CreateLane | None,
+    parent: str | None,
+    blocked_by: tuple[str, ...],
     human_approved: bool,
     output_format: str,
 ) -> _CommandWork:
@@ -1361,7 +1411,18 @@ def ticket_create(
     return _code_hosting(
         person,
         lambda context: member_repository.ticket_create(
-            context, tracker, title, body, add_to_board, labels, human_approved
+            context,
+            tracker,
+            title,
+            body,
+            add_to_board,
+            labels,
+            human_approved,
+            interactive=interactive,
+            assignee=assignee,
+            lane=lane,
+            parent=parent,
+            blocked_by=blocked_by,
         ),
         evidence="issue_create",
         then=record_member_issue_create_event,
@@ -1373,6 +1434,12 @@ def ticket_create(
 @click.option("--url", "issue_url", required=True, help="Ticket URL.")
 @_optional_content_stdin_option
 @click.option("--title", default=None, help="Replace the ticket title.")
+@click.option(
+    "--interactive/--no-interactive",
+    default=None,
+    help="Set or clear this ticket's interactive mode; requires --human-approved. "
+    "An interactive ancestor still keeps it interactive. Unsupported providers refuse it.",
+)
 @click.option(
     "--add-label",
     "add_labels",
@@ -1420,6 +1487,7 @@ def ticket_update(
     issue_url: str,
     content_stdin: bool,
     title: str | None,
+    interactive: bool | None,
     add_labels: tuple[str, ...],
     remove_labels: tuple[str, ...],
     state: str | None,
@@ -1435,6 +1503,7 @@ def ticket_update(
     if not (
         content_stdin
         or title is not None
+        or interactive is not None
         or add_labels
         or remove_labels
         or state
@@ -1442,11 +1511,7 @@ def ticket_update(
         or add_blocked_by
         or remove_blocked_by
     ):
-        raise click.UsageError(
-            "ticket update needs --content-stdin/--content-file, --title, --add-label, "
-            "--remove-label, --state, --parent, --add-blocked-by, or "
-            "--remove-blocked-by."
-        )
+        raise click.UsageError(t("cli.member.ticket_update_options"))
     body = _read_stdin("ticket body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
     return _code_hosting(
@@ -1464,6 +1529,7 @@ def ticket_update(
             parent=parent,
             add_blocked_by=add_blocked_by,
             remove_blocked_by=remove_blocked_by,
+            interactive=interactive,
         ),
         evidence="issue_update",
         then=record_member_issue_close_event,
@@ -1543,15 +1609,21 @@ def pr_create(
 @_optional_content_stdin_option
 @click.option("--title", default=None, help="Replace the pull request title.")
 @click.option(
+    "--issue-url",
+    "issue_urls",
+    multiple=True,
+    help="Replace all PR ticket links with these URLs. May be repeated.",
+)
+@click.option(
+    "--closes-issue/--refs-issue",
+    "closes_issue",
+    default=False,
+    help="Close every --issue-url ticket on merge, or only refer to it (default).",
+)
+@click.option(
     "--drop-issue-links",
     is_flag=True,
-    help=(
-        "Do not carry the ticket links of the existing body into the"
-        " replacement body. Requires --content-stdin/--content-file. By default,"
-        " they are preserved, even with empty content; new links to the same"
-        " ticket take precedence. See member help for what the code host"
-        " counts as a link."
-    ),
+    help=("Remove all PR ticket links. Cannot be combined with --issue-url."),
 )
 @_json_format_option
 def pr_update(
@@ -1559,16 +1631,23 @@ def pr_update(
     pr_url: str,
     content_stdin: bool,
     title: str | None,
+    issue_urls: tuple[str, ...],
+    closes_issue: bool,
     drop_issue_links: bool,
     output_format: str,
 ) -> _CommandWork:
-    if drop_issue_links and not content_stdin:
+    if not all(url.strip() for url in issue_urls):
+        raise click.UsageError("--issue-url must not be empty.")
+    if drop_issue_links and issue_urls:
         raise click.UsageError(
-            "--drop-issue-links requires --content-stdin/--content-file."
+            "--drop-issue-links cannot be combined with --issue-url."
         )
-    if not (content_stdin or title is not None):
+    if closes_issue and not issue_urls:
+        raise click.UsageError("--closes-issue requires --issue-url.")
+    if not (content_stdin or title is not None or issue_urls or drop_issue_links):
         raise click.UsageError(
-            "pr update needs --content-stdin/--content-file or --title."
+            "pr update needs --content-stdin/--content-file, --title, "
+            "--issue-url, or --drop-issue-links."
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
     new_title = _validate_title(title) if title is not None else None
@@ -1579,7 +1658,11 @@ def pr_update(
             pr_url,
             body=body,
             title=new_title,
-            drop_ticket_links=drop_issue_links,
+            tickets=(
+                [TicketLink(url, closes_issue) for url in issue_urls]
+                if issue_urls or drop_issue_links
+                else None
+            ),
         ),
         evidence="pr_update",
     )
@@ -1749,6 +1832,46 @@ def artifact_download(
     )
 
 
+@ticket.group(name="attachment")
+def ticket_attachment() -> None:
+    """Attachment operations."""
+
+
+@ticket_attachment.command(name="download")
+@_read_only_member_command
+@_person_option
+@click.option("--url", "target_url", required=True, help="Ticket URL.")
+@click.option(
+    "--id",
+    "attachment_id",
+    required=True,
+    help="The id the ticket's ticket_attachments read gave the attachment.",
+)
+@click.option(
+    "--dest",
+    type=_HostPath(file_okay=False),
+    default=Path("."),
+    help=(
+        "Directory to write the file into. Defaults to the current directory. "
+        "Remove downloaded files after reading when this is inside a repository."
+    ),
+)
+@_json_format_option
+def attachment_download(
+    person: str,
+    target_url: str,
+    attachment_id: str,
+    dest: Path,
+    output_format: str,
+) -> _CommandWork:
+    return _code_hosting(
+        person,
+        lambda context: member_repository.attachment_download(
+            context, target_url, attachment_id, dest
+        ),
+    )
+
+
 _reaction_options = (
     click.option(
         "--comment-id",
@@ -1818,49 +1941,64 @@ def pr_reaction_add(
 
 @member.group()
 def task() -> None:
-    """Workflow task-run completion records."""
+    """Completion records of runs other than a chat event's."""
 
 
 @task.command(name="complete")
 @_person_option
 @click.option(
+    "--waiting-for",
+    multiple=True,
+    help="Next member to act, by the context roster's person_id (repeatable; asking/blocked only).",
+)
+@click.option(
     "--status",
     required=True,
-    type=click.Choice(TASK_RUN_COMPLETIONS),
-    help=(
-        "Run outcome. awaiting_checks ends the run to await its PRs' pending "
-        "checks; the patrol resumes the work once they settle."
-    ),
+    type=click.Choice(["done", "asking", "blocked"]),
+    help="Run outcome.",
 )
 @_required_content_stdin_option
 @_json_format_option
-def task_complete(person: str, status: str, output_format: str) -> _CommandWork:
-    run_id, ticket_url = _ticket_run()
+def task_complete(
+    person: str, status: str, waiting_for: tuple[str, ...], output_format: str
+) -> _CommandWork:
+    run_id, work = _task_run()
     summary = _read_stdin("run summary")
-    return _task_complete(person, run_id, ticket_url, status, summary)
+    return _task_complete(person, run_id, work, status, summary, waiting_for)
 
 
 async def _task_complete(
-    person: str, run_id: str, ticket_url: str, status: str, summary: str
+    person: str,
+    run_id: str,
+    work: Work,
+    status: str,
+    summary: str,
+    waiting_for: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     context, _ = _resolve(person)
     store = TaskRunStore()
     readiness: list[dict[str, Any]] = []
-    if status in {"done", "awaiting_checks"}:
-        try:
-            if status == "done":
-                readiness = await member_repository.task_completion_readiness(
-                    context, ticket_url, store.evidence(run_id)
-                )
-            else:
-                readiness = await member_repository.await_checks(
-                    context, ticket_url, run_id, store
-                )
-        finally:
-            await context.aclose()
-    payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
-    if status in {"done", "awaiting_checks"}:
+    try:
+        recipients = await validate_waiting_for(
+            context,
+            work,
+            status,
+            waiting_for,
+            store.evidence(run_id) if waiting_for else (),
+        )
+        if status == "done":
+            readiness = await member_repository.task_completion_readiness(
+                context, work, store.evidence(run_id)
+            )
+    finally:
+        await context.aclose()
+    payload = store.complete(
+        run_id, status, summary, work, person, waiting_for=recipients
+    ).to_dict()
+    if status == "done":
         payload["pr_readiness"] = readiness
+    elif not recipients:
+        payload["notification"] = t("capabilities.task_runs.owner_notified")
     return payload
 
 
@@ -1873,12 +2011,41 @@ async def _task_complete(
 )
 @_json_format_option
 def task_status(person: str, output_format: str) -> _CommandWork:
-    run_id, _ticket_url = _ticket_run()
+    run_id, _work = _task_run()
     return _task_status(run_id)
 
 
 async def _task_status(run_id: str) -> dict[str, Any]:
     return TaskRunStore().status(run_id).to_dict()
+
+
+@member.group()
+def checks() -> None:
+    """End a run to await the CI checks of its pull requests."""
+
+
+@checks.command(name="await")
+@_person_option
+@_required_content_stdin_option
+@_json_format_option
+def checks_await(person: str, output_format: str) -> _CommandWork:
+    run_id, work = _invoking_run()
+    summary = _read_stdin("run summary")
+    return _checks_await(person, run_id, work, summary)
+
+
+async def _checks_await(
+    person: str, run_id: str, work: Work, summary: str
+) -> dict[str, Any]:
+    context, _ = _resolve(person)
+    store = TaskRunStore()
+    try:
+        readiness = await member_repository.await_checks(context, work, run_id, store)
+    finally:
+        await context.aclose()
+    payload = store.complete(run_id, "awaiting_checks", summary, work, person).to_dict()
+    payload["pr_readiness"] = readiness
+    return payload
 
 
 def _resolve(person: str):
@@ -1893,15 +2060,27 @@ def _resolve(person: str):
         raise click.ClickException(message) from exc
 
 
-def _ticket_run() -> tuple[str, str]:
-    """The ticket run that invoked the command, and the URL of its ticket: the
-    only run and subject the command may act on, as the host settled them; a
-    call outside one is refused."""
+def _task_run() -> tuple[str, Work]:
+    """The run that invoked the command, other than a chat event's, and the
+    work it does: the only run and subject the command may act on, as the
+    host settled them; a call outside one is refused."""
     invocation = current_member_invocation()
     work = invocation.work
-    if not invocation.task_run_id or work is None or work.kind != "ticket":
-        raise click.ClickException(t("cli.member.run.required", kind="ticket"))
-    return invocation.task_run_id, work.identity
+    if work is not None and work.chat is not None:
+        raise click.ClickException(t("cli.member.run.chat_event"))
+    if not invocation.task_run_id or work is None:
+        raise click.ClickException(t("cli.member.run.required_any"))
+    return invocation.task_run_id, work
+
+
+def _invoking_run() -> tuple[str, Work]:
+    """The run that invoked the command, whatever its work, and that work, as
+    the host settled them; a call outside one is refused."""
+    run_id = current_run_id()
+    work = current_member_invocation().work
+    if not run_id or work is None:
+        raise click.ClickException(t("cli.member.run.required_any"))
+    return run_id, work
 
 
 def _chat_run() -> tuple[str, ChatSubject]:
@@ -1990,18 +2169,18 @@ def _parse_scalar(value: str) -> Any:
 def _run(coro: _CommandWork, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
-    needs_sync = _member_command_needs_lease()
+    needs_sync = _member_command_writes()
     prepared_sync = None
     started = False
     try:
-        with _member_execution_guard(command, interactive_session):
-            if needs_sync:
-                prepared_sync = _prepare_member_sync()
-            started = True
-            if interactive_session is None:
-                result = _run_in_owner_trace(coro, command)
-            else:
-                result = _run_interactive(coro, interactive_session, command)
+        _validate_member_delegation()
+        if needs_sync:
+            prepared_sync = _prepare_member_sync()
+        started = True
+        if interactive_session is None:
+            result = _run_in_owner_trace(coro, command)
+        else:
+            result = _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
         ServiceError,
@@ -2100,42 +2279,25 @@ def _sync_member_result(
     return result
 
 
-@contextmanager
-def _member_execution_guard(command: str, session: InteractiveTraceSession | None):
-    if not _member_command_needs_lease():
-        yield
+def _validate_member_delegation() -> None:
+    """Require workflow writes to act under their turn's delegated lease.
+
+    Interactive commands do not use the member's clone and take no execution
+    lease; their shared state and git operations have their own locks.
+    """
+    if not _running_under_workflow() or not _member_command_writes():
         return
     person = _current_person()
     if not person:
-        yield
         return
-    if _running_under_workflow():
-        # The workflow's turn holds the person's lease; its commands act under it.
-        lease = current_member_invocation().lease
-        if lease is None or (
-            lease.person_id != person
-            and lease.person_id != _resolve(person)[1].person_id
-        ):
-            raise click.ClickException(t("cli.member.lease.invalid_delegation"))
-        yield
-        return
-    _context, member_person = _resolve(person)
-    lease = PersonExecutionLease(member_person.person_id)
-    try:
-        lease.acquire(
-            source="interactive",
-            command=command,
-            work_id=session.trace_id if session is not None else uuid4().hex,
-        )
-    except PersonLeaseUnavailableError as exc:
-        raise click.ClickException(str(exc)) from exc
-    try:
-        yield
-    finally:
-        lease.release()
+    lease = current_member_invocation().lease
+    if lease is None or (
+        lease.person_id != person and lease.person_id != _resolve(person)[1].person_id
+    ):
+        raise click.ClickException(t("cli.member.lease.invalid_delegation"))
 
 
-def _member_command_needs_lease() -> bool:
+def _member_command_writes() -> bool:
     context = click.get_current_context(silent=True)
     callback = context.command.callback if context is not None else None
     # New or malformed commands fail closed as write-capable until their callback
@@ -2233,7 +2395,7 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
         return None
     try:
         _context, member_person = _resolve(person)
-    except (click.ClickException, FileNotFoundError):
+    except click.ClickException, FileNotFoundError:
         return None
     return InteractiveTraceStore().start_or_touch(
         person_id=member_person.person_id,

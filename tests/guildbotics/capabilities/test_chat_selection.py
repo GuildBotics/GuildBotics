@@ -24,6 +24,7 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.local import chat
+from guildbotics.integrations.local.identity import username
 from guildbotics.integrations.local.chat import LocalChatService
 from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionError,
@@ -103,7 +104,7 @@ class FakeChatService(LocalChatService):
                 WorkflowStatus.from_payload(line.get("status")),
             )
             for line in _channel()
-            if line.get("author") == "alice" and "reaction" not in line
+            if line.get("author") == username("alice") and "reaction" not in line
         ]
 
     @property
@@ -331,7 +332,7 @@ def _set_incoming_event(
     ctx: types.SimpleNamespace,
     *,
     message_id: str = "100.1",
-    text: str = "@alice please check",
+    text: str = "@local-alice please check",
     chat_participation: str = "strict",
     author: str = "user",
 ) -> None:
@@ -344,7 +345,7 @@ def _set_incoming_event(
     event = say(
         "C1",
         text,
-        author=author,
+        author=username(author) if author == "alice" else author,
         message_id=message_id,
         thread_id=_ROOT,
         occurred_at=at(float(message_id)),
@@ -417,7 +418,7 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     execution_context = kwargs["agent_execution_context"]
     # The run and the work are the host's, fixed when it selected the event.
     assert ctx.shared_state[WORKFLOW_INVOCATION_KEY].work == Work.of_chat(
-        ChatSubject("local", "C1", "100.1", "C1:100.1", "alice")
+        ChatSubject("local", "C1", "100.1", "C1:100.1", username("alice"))
     )
     assert "run_id" not in execution_context
     assert "work_identity" not in execution_context
@@ -589,7 +590,7 @@ async def test_live_thread_snapshot_paginates_and_keeps_latest_bound() -> None:
         chat_service=service,
         event=event,
         thread_messages=[],
-        self_user_id="alice",
+        self_user_id=username("alice"),
         thread_state=ThreadConversationState(channel_id="C1", thread_id="1.1"),
         chat_participation="strict",
         live_thread=await chat_selection._fetch_thread_events(
@@ -769,8 +770,8 @@ async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
             message_id="100.1",
             occurred_at=at(100.1),
             author_id="user",
-            text="@alice please check",
-            mentions=["alice"],
+            text="@local-alice please check",
+            mentions=[username("alice")],
         ),
     )
     ctx = FakeInvokeContext("noop")
@@ -798,8 +799,8 @@ async def test_muted_unmentioned_followup_after_prior_mention_skips(tmp_path):
             message_id="100.1",
             occurred_at=at(100.1),
             author_id="user",
-            text="@alice please check",
-            mentions=["alice"],
+            text="@local-alice please check",
+            mentions=[username("alice")],
         ),
     )
     ctx = FakeInvokeContext("noop")
@@ -831,8 +832,8 @@ class MentionSnapshotChatService(FakeChatService):
                     message_id="100.1",
                     thread_id=thread_id,
                     author_id="user",
-                    text="@alice please check",
-                    mentions=["alice"],
+                    text="@local-alice please check",
+                    mentions=[username("alice")],
                 )
             ]
         )
@@ -884,7 +885,7 @@ async def test_snapshot_is_fetched_once_and_persisted_to_cache(tmp_path):
     assert service.fetch_count == 1
     cached = state_store.load_thread_messages("local", "alice", "C1", "100.1")
     assert [message.message_id for message in cached] == ["100.1", "100.2"]
-    assert cached[0].mentions == ["alice"]
+    assert cached[0].mentions == [username("alice")]
 
 
 @pytest.mark.asyncio
@@ -925,8 +926,8 @@ async def test_provider_unavailable_with_cached_mention_waits_for_fresh_input(
             message_id="100.1",
             occurred_at=at(100.1),
             author_id="user",
-            text="@alice please check",
-            mentions=["alice"],
+            text="@local-alice please check",
+            mentions=[username("alice")],
         ),
     )
     ctx = FakeInvokeContext("noop")
@@ -960,15 +961,15 @@ async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
             message_id="100.1",
             occurred_at=at(100.1),
             author_id="user",
-            text="@alice please check",
-            mentions=["alice"],
+            text="@local-alice please check",
+            mentions=[username("alice")],
         ),
     )
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(
         ctx,
         message_id="100.2",
-        text="@bob can you check?",
+        text="@local-bob can you check?",
     )
 
     await _dispatch(ctx, chat_service=service, state_store=state_store)
@@ -1048,7 +1049,7 @@ async def test_chat_user_to_person_labels_uses_each_members_chat_user():
 
     labels = await chat_selection._chat_user_to_person_labels(ctx, FakeChatService())
 
-    assert labels == {"alice": "alice", "bob": "bob"}
+    assert labels == {username("alice"): "alice", username("bob"): "bob"}
 
 
 @pytest.mark.asyncio
@@ -1076,7 +1077,7 @@ async def test_an_agent_without_a_configured_chat_user_is_its_credentials_user()
     labels = await chat_selection._chat_user_to_person_labels(ctx, Unconfigured())
 
     # A human has no credential of their own to ask.
-    assert labels == {"alice": "alice"}
+    assert labels == {username("alice"): "alice"}
     assert closed == ["alice"]
 
 
@@ -1097,7 +1098,7 @@ def test_record_handoffs_saves_mentions_to_known_members():
         mentioned_user_ids=["bob"],
         source_person_id="alice",
         message_id="200.1",
-        text="@bob design観点を見てもらえますか?",
+        text="@local-bob design観点を見てもらえますか?",
     )
 
     assert len(thread_state.handoffs) == 1
@@ -1105,7 +1106,7 @@ def test_record_handoffs_saves_mentions_to_known_members():
     assert handoff.person_id == "bob"
     assert handoff.roles == ["design"]
     assert handoff.message_id == "200.1"
-    assert handoff.text == "@bob design観点を見てもらえますか?"
+    assert handoff.text == "@local-bob design観点を見てもらえますか?"
 
 
 def test_record_handoffs_ignores_non_team_participant_labels():
@@ -1136,7 +1137,7 @@ async def test_prompt_payload_includes_existing_handoffs():
                 person_id="bob",
                 roles=["design"],
                 message_id="200.1",
-                text="@bob design観点を見てもらえますか?",
+                text="@local-bob design観点を見てもらえますか?",
             )
         ],
     )
@@ -1155,7 +1156,7 @@ async def test_prompt_payload_includes_existing_handoffs():
         chat_service=FakeChatService(),
         event=event,
         thread_messages=[],
-        self_user_id="alice",
+        self_user_id=username("alice"),
         thread_state=thread_state,
         chat_participation="strict",
         live_thread=([], True),
@@ -1167,7 +1168,7 @@ async def test_prompt_payload_includes_existing_handoffs():
             "person_id": "bob",
             "roles": ["design"],
             "message_id": "200.1",
-            "text": "@bob design観点を見てもらえますか?",
+            "text": "@local-bob design観点を見てもらえますか?",
             "thread_topic": "",
             "latest_focus": "",
         }
@@ -1202,7 +1203,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     assert len(handle_calls) == 2
     # All attempts are turns of one run doing one work: one conversation.
     assert ctx.shared_state[WORKFLOW_INVOCATION_KEY].work.identity == (
-        "local:alice:C1:100.1"
+        f"local:{username('alice')}:C1:100.1"
     )
     assert [call["agent_execution_context"]["attempt"] for call in handle_calls] == [
         3,
@@ -1439,7 +1440,7 @@ async def test_obvious_self_message_is_marked_processed_without_agent(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    _set_incoming_event(ctx, text="bot message", author="alice")
+    _set_incoming_event(ctx, text="bot message", author=username("alice"))
 
     await _dispatch(ctx, chat_service=service, state_store=state_store)
 
@@ -1673,8 +1674,8 @@ async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals
     store = FileConversationStateStore(base_dir=tmp_path / "state")
     events = [
         _batch_event(2),
-        _batch_event(3, text="Deploy version A", mentions=["alice"]),
-        _batch_event(4, text="Version B fixes the bug", mentions=["bob"]),
+        _batch_event(3, text="Deploy version A", mentions=[username("alice")]),
+        _batch_event(4, text="Version B fixes the bug", mentions=[username("bob")]),
         _batch_event(5, text="Correction: deploy version B instead"),
     ]
     for event in (events[1], events[-1]):
@@ -1724,7 +1725,7 @@ async def test_failed_batch_is_refreshed_on_retry_without_losing_action_evidence
     tmp_path,
 ):
     store = FileConversationStateStore(base_dir=tmp_path / "state")
-    events = [_batch_event(3, mentions=["alice"]), _batch_event(5)]
+    events = [_batch_event(3, mentions=[username("alice")]), _batch_event(5)]
     for event in events:
         store.upsert_pending_event("local", "alice", "C1", event)
     service = SnapshotChatService(events)
@@ -1762,7 +1763,7 @@ async def test_completed_batch_recovery_does_not_consume_new_messages(
     tmp_path, monkeypatch
 ):
     store = FileConversationStateStore(base_dir=tmp_path / "state")
-    events = [_batch_event(3, mentions=["alice"]), _batch_event(5)]
+    events = [_batch_event(3, mentions=[username("alice")]), _batch_event(5)]
     service = SnapshotChatService(events)
     original_mark = store.mark_processed_events
 
@@ -1789,7 +1790,8 @@ async def test_completed_batch_recovery_does_not_consume_new_messages(
 async def test_batch_keeps_unread_messages_beyond_historical_context_bound(tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path / "state")
     events = [
-        _batch_event(i, mentions=["alice"] if i == 3 else []) for i in range(3, 155)
+        _batch_event(i, mentions=[username("alice")] if i == 3 else [])
+        for i in range(3, 155)
     ]
     ctx = _batch_context()
     await _dispatch(ctx, chat_service=SnapshotChatService(events), state_store=store)
@@ -1813,7 +1815,11 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
     from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 
     store = FileConversationStateStore(base_dir=tmp_path / "state")
-    events = [_batch_event(3, mentions=["alice"]), _batch_event(4), _batch_event(5)]
+    events = [
+        _batch_event(3, mentions=[username("alice")]),
+        _batch_event(4),
+        _batch_event(5),
+    ]
     for event in events:
         store.upsert_pending_event("local", "alice", "C1", event)
     store = FileConversationStateStore(
@@ -1860,13 +1866,87 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wrote_on_an_item", [False, True])
+async def test_dispatcher_retries_a_crashed_run_with_the_agent(
+    monkeypatch, tmp_path, wrote_on_an_item
+):
+    """A run the execution boundary finished as failed recorded no completion,
+    so the next attempt runs the agent again instead of reading the failure
+    as the member's ``blocked``, whatever the crashed attempt wrote."""
+    from guildbotics.drivers.execution import TaskRunCoordinator
+    from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
+
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=[username("alice")])]
+    store.upsert_pending_event("local", "alice", "C1", events[0])
+    service = SnapshotChatService(events)
+    contexts: list[FakeInvokeContext] = []
+
+    class Parent:
+        logger = StubLogger()
+        action = "crash"
+
+        def clone_for(self, person):
+            ctx = FakeInvokeContext(self.action)
+            ctx.get_chat_service = lambda: service
+            contexts.append(ctx)
+
+            async def close():
+                pass
+
+            ctx.aclose = close
+            return ctx
+
+    class Runner:
+        access = CommandAccess()
+
+        def __init__(self, context, _command, _args, cwd):
+            self.cwd = cwd
+            self.context = context
+
+        async def run(self):
+            await chat_conversation_workflow.main(self.context)
+
+    runs_as(monkeypatch, Runner)
+    parent = Parent()
+    dispatcher = PendingChatDispatcher(
+        parent, state_store=store, execution_coordinator=TaskRunCoordinator()
+    )
+    person = Person(person_id="alice", name="Alice", is_active=True)
+
+    await dispatcher.process_person(person)
+
+    [pending] = store.load_pending_events("local", "alice", "C1")
+    [record] = RunStore().records()
+    assert (record.run_id, record.status, record.result) == (
+        pending.run_id,
+        "failed",
+        None,
+    )
+    if wrote_on_an_item:
+        RunStore().append_evidence(
+            pending.run_id, "issue_comment", {"url": "local://tickets/T-1#c-1"}
+        )
+    pending.next_attempt_at = None
+    store.save_pending_event("local", "alice", "C1", pending)
+    parent.action = "reply"
+    crashed = len(contexts)
+
+    await dispatcher.process_person(person)
+
+    assert [len(_agent_invocations(ctx)) for ctx in contexts[crashed:]] == [0, 1]
+    assert RunStore().status(pending.run_id).summary == "Posted a reply."
+    assert store.load_pending_events("local", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
 async def test_batch_includes_members_own_reply_without_using_it_as_reaction_target(
     tmp_path,
 ):
     store = FileConversationStateStore(base_dir=tmp_path / "state")
-    events = [_batch_event(3, mentions=["alice"]), _batch_event(5)]
+    events = [_batch_event(3, mentions=[username("alice")]), _batch_event(5)]
     own_reply = _batch_event(6, text="I already finished the earlier work")
-    own_reply.author_id = "alice"
+    own_reply.author_id = username("alice")
     own_reply.is_bot_message = True
     events.append(own_reply)
     ctx = _batch_context()
@@ -1900,7 +1980,7 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 
     store = FileConversationStateStore()
-    service = SnapshotChatService([_batch_event(3, mentions=["alice"])])
+    service = SnapshotChatService([_batch_event(3, mentions=[username("alice")])])
     secondary = action in {"issue_comment", "git_publish", "git_push", "issue_update"}
     handled = secondary or action in {"reply", "reaction"}
     ctx = _batch_context("noop" if secondary else action)

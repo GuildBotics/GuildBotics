@@ -4,3 +4,5 @@ ja:
   resource: "未対応の参照リソースです。対応する名前は member help で確認してください。"
   parameters: "リソースの取得条件が不正です。対応する引数は member help で確認してください。"
   continuation: "ページ送りの応答または継続指定が不正です。同じリソース・対象・取得条件を使用してください。"
+  attachment_missing: "%{url} は添付 '%{id}' を参照していません。参照している添付は ticket_attachments で確認してください。"
+  attachment_too_large: "添付 '%{name}' は上限の %{limit} バイトを超えています。人に内容の確認を依頼してください。"

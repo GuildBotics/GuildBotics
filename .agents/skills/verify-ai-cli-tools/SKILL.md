@@ -8,10 +8,10 @@ description: Verify AI CLI releases on an existing GuildBotics update PR when a 
 Invoke with `$verify-ai-cli-tools` and an existing update PR, or use the PR
 already identified in the conversation. If the target is unknown, ask which
 PR to verify. This is optional, human-attended verification; the unattended
-[update skill](../update-ai-cli-tools/SKILL.md) does not call it.
+[update skill](../update-dependencies/SKILL.md) does not call it.
 
 Inspect the PR's current head, changed pins, and existing verification results.
-Use that PR's branch and checkout, normally `codex/update-ai-cli-tools`, in a
+Use that PR's branch and checkout, normally `codex/update-dependencies`, in a
 dedicated worktree. Do not verify the remote default branch or a different
 revision, switch the user's shared checkout, create a new update PR, or merge.
 Choose the affected tools and checks from the human's request and PR diff.
@@ -39,7 +39,7 @@ a service running old code can rebuild its own snapshot and remove yours.
 Saved logins are device-wide, so a separate workspace still uses the device's
 logins. Do not log in, reset, or replace them as part of verification.
 
-After build approval, run from the target PR checkout with Python 3.12 and
+After build approval, run from the target PR checkout with Python 3.15 and
 its dependencies. This creates a disposable workspace outside the repository:
 
 ```bash
@@ -144,15 +144,28 @@ directory; do not run those binaries or store credentials in the evidence.
 
 For a failed tool, restore its pin to the PR base version and its associated
 changes, or ask the human to decide when the remedy is unclear. Diagnose
-pre-existing failures and prepare an Issue draft under AGENTS.md; do not
-publish an Issue without human authorization. After changing a pin, adapter,
+pre-existing failures under AGENTS.md: before writing an Issue draft, search
+the same tracker using
+`member ticket read --resource tracker_tickets --subject <tracker>
+--params '{"text":"<terms>","state":"all"}'`. Search with a few short term
+sets (component or command plus symptom), including synonyms and
+English/Japanese variants, rather than one long phrase: `text` requires all
+terms to match. Follow every continuation with identical conditions for each
+term set. A failed or incomplete search is not no matches. If an open ticket covers the issue,
+comment there with the new findings and report its URL instead of a draft.
+If only a closed ticket matches, do not reopen or comment on it; reference it
+in Related in a complete new draft. If no open match was found and the search
+fails or is incomplete, still present the complete draft, stating the
+conditions tried and that duplicates could not be ruled out; reference any
+closed match in Related. If a completed search finds no match, prepare the
+draft as before. Do not publish an Issue without human authorization. After changing a pin, adapter,
 or build recipe, rebuild and rerun affected checks with fresh approval on
 the final configuration. A prior passing result is not evidence for that revision.
 
 ## 3. Record only observed behavior on the same PR
 
 Use the version searches and distinctions in the update skill's
-[version-dependent documentation section](../update-ai-cli-tools/SKILL.md#2-update-what-depends-on-the-version).
+[version-dependent documentation section](../update-dependencies/SKILL.md#2-update-what-depends-on-the-version).
 Advance measured descriptions, verified baselines, and fixtures only when a
 check observed that exact behavior on the final pin. Rename a newly recorded
 fixture and its references together; retain earlier evidence that remains useful.

@@ -188,7 +188,7 @@ def _non_negative_int(value: object) -> int:
         return 0
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
 
 

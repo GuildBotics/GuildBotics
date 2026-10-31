@@ -12,13 +12,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from logging import Logger
-from typing import Any, Literal
+from typing import IO, Any, Literal
 
 from guildbotics.entities import Person, Task, Team
 from guildbotics.runtime.port import SemanticReaction, WorkflowStatus
 from guildbotics.runtime.resources import (
+    Attachment,
     CommentWritten,
     ReactionAdded,
     ReadModel,
@@ -29,6 +31,14 @@ from guildbotics.runtime.resources import (
 
 #: A lane a ticket is moved to.
 MoveLane = Literal["ready", "in_progress", "done"]
+CreateLane = Literal["new", "ready", "in_progress"]
+
+
+def creation_lane(
+    lane: CreateLane | None, parent: str | None, blocked_by: Sequence[str]
+) -> CreateLane:
+    """Resolve the initial lane before a ticket becomes visible to patrol."""
+    return lane if lane is not None else "ready" if parent or blocked_by else "new"
 
 
 class TicketCreated(ReadModel):
@@ -42,6 +52,8 @@ class TicketUpdated(ReadModel):
     state_changed: bool
     labels: list[str]
     target: WorkTarget
+    interactive: bool
+    interactive_ancestor: str | None
 
 
 class ClosedItem(ReadModel):
@@ -73,8 +85,23 @@ class TicketService(ABC):
         continuation: str = "",
     ) -> ReadPage:
         """Read a ticket's resource of :data:`~.resources.TICKET_RESOURCES`,
-        ``subject`` being the ticket's URL (see
+        ``subject`` being the ticket's URL, or the tracker path for
+        ``tracker_tickets`` (see
         :meth:`~.code_hosting_service.CodeHostingService.read`)."""
+
+    @abstractmethod
+    def attachment(
+        self, url: str, attachment_id: str, limit: int
+    ) -> AbstractAsyncContextManager[tuple[Attachment, IO[bytes]]]:
+        """The attachment ``attachment_id`` the ticket ``url`` refers to, as
+        its ``ticket_attachments`` read lists it, with its content of at most
+        ``limit`` bytes.
+
+        Raises:
+            ServiceUnsupported: If the service keeps no attachments.
+            ServiceNotFound: If the ticket refers to no such attachment.
+            ServiceError: If it is above ``limit``.
+        """
 
     @abstractmethod
     async def comment(
@@ -92,13 +119,22 @@ class TicketService(ABC):
         labels: Sequence[str],
         *,
         add_to_board: bool = True,
+        interactive: bool = False,
+        assignee: str | None = None,
+        lane: CreateLane | None = None,
+        parent: str | None = None,
+        blocked_by: Sequence[str] = (),
     ) -> TicketCreated:
-        """Open a ticket in ``tracker``, in the board's new lane unless not
-        ``add_to_board``; labels are the tracker's own, never new ones.
+        """Open a ticket with its assignment, mode and relations already set.
+
+        ``assignee`` is a service actor name. The default lane is ready with
+        a parent or blockers, new otherwise, regardless of ``interactive``.
+        Providers without atomic creation set the lane last, keeping partial
+        work outside patrol's candidates. Labels are the tracker's own.
 
         Raises:
             ServiceUnsupported: If not ``add_to_board`` and the board holds
-                every ticket.
+                every ticket, or if ``interactive`` is unsupported.
         """
 
     @abstractmethod
@@ -115,6 +151,7 @@ class TicketService(ABC):
         parent: str | None = None,
         add_blocked_by: Sequence[str] = (),
         remove_blocked_by: Sequence[str] = (),
+        interactive: bool | None = None,
     ) -> TicketUpdated:
         """Change a ticket; a label is added or removed without touching the
         labels others set meanwhile, and removing one it does not carry
@@ -124,7 +161,16 @@ class TicketService(ABC):
         way: ``parent`` is the ticket it becomes a part of (``""`` makes it
         part of none, ``None`` keeps it), and ``add_blocked_by`` /
         ``remove_blocked_by`` change the tickets it is blocked by. A ticket's
-        children and the tickets it blocks change by updating those tickets."""
+        children and the tickets it blocks change by updating those tickets.
+
+        ``interactive=None`` keeps the setting; false clears only this
+        ticket's own setting. The result includes the nearest interactive
+        ancestor, which keeps the ticket interactive regardless of its own
+        setting.
+
+        Raises:
+            ServiceUnsupported: If ``interactive`` is specified but unsupported.
+        """
 
     @abstractmethod
     async def add_reaction(
@@ -136,11 +182,21 @@ class TicketService(ABC):
     async def candidates(self) -> list[Task]:
         """The member's actionable tickets in patrol order. A ticket of the
         ready lane blocked by an open ticket is not one: it is not started
-        until its blockers are closed."""
+        until its blockers are closed. Open tickets outside the member's
+        assignment with an unanswered mention are also candidates, with
+        ``assignee=None`` and ``trigger_reason=issue_mention``. These answer
+        the conversation only, regardless of the lane, without moving it.
+        Each ticket occurs once; refresh re-evaluates both assignment and
+        unanswered mentions."""
 
     @abstractmethod
     async def refresh(self, task: Task) -> Task | None:
         """Re-read one candidate immediately before it is dispatched."""
+
+    async def can_receive_work(self, url: str) -> bool:
+        """Whether the current conversation dispatches this ticket to the member,
+        without changing its lane or recording a patrol action."""
+        raise NotImplementedError
 
     @abstractmethod
     async def move(self, task: Task, lane: MoveLane) -> bool:

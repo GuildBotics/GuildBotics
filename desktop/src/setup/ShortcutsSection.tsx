@@ -1,4 +1,4 @@
-import { Alert, Card, Stack, Text, Title } from "@mantine/core";
+import { Alert, Card, Group, Stack, Text, Title } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,6 +7,7 @@ import { getHotkeys, updateHotkeys, type HotkeySettings } from "../api/client";
 import { HotkeyInput } from "../hotkeys/HotkeyInput";
 import { hotkeyErrorMessageKey, useHotkeyRecordingGuard } from "../hotkeys/useHotkeys";
 import { syncHotkeys } from "../hotkeys/hotkeyRuntime";
+import { ServerMachineBadge } from "../serverMachine";
 
 export function ShortcutsSection() {
   const { t } = useTranslation();
@@ -31,7 +32,10 @@ export function ShortcutsSection() {
 
   return (
     <Stack gap="md">
-      <Title order={3}>{t("hotkey.settingsTitle")}</Title>
+      <Group gap="xs">
+        <Title order={3}>{t("hotkey.settingsTitle")}</Title>
+        <ServerMachineBadge />
+      </Group>
       <Card withBorder radius="md" p="md">
         <Stack gap="sm">
           <Text size="sm" c="dimmed">

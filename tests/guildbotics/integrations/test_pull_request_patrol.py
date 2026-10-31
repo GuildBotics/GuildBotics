@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from guildbotics.integrations.github.github_utils import normalize_login
+from guildbotics.integrations.github.identity import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
     PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
     PULL_REQUEST_QUERY,
@@ -444,7 +444,7 @@ def test_thread_reply_after_a_failure_notice_restarts_review_work():
 
 
 def _theirs(**overrides: Any) -> dict[str, Any]:
-    return _node(author={"login": "other"}, headRefOid="head-2", **overrides)
+    return _node(**{"author": {"login": "other"}, "headRefOid": "head-2", **overrides})
 
 
 def test_someone_elses_pr_i_never_touched_asks_nothing():
@@ -530,16 +530,15 @@ def test_rounds_are_counted_from_the_last_limit_notice(announcer):
     assert len(review_rounds(parse_pull_request(unannounced), ME)) == 6
 
 
-THIRD = "2026-01-03T00:00:00Z"
-#: Each way the reviewer is started, on a PR with three rounds behind it.
+#: Each way a new head starts the reviewer, after three reviewed heads.
 RESTARTS = {
     "new_commits": {"reviews": {"nodes": _rounds(3)}},
     "thread_reply": {
-        "reviews": {"nodes": [*_rounds(2), _review(ME, commit="head-2", at=THIRD)]},
+        "reviews": {"nodes": _rounds(3)},
         "reviewThreads": {"nodes": [_thread(ME, "other", at="2026-01-06T00:00:00Z")]},
     },
     "unanswered_statement": {
-        "reviews": {"nodes": [*_rounds(2), _review(ME, commit="head-2", at=THIRD)]},
+        "reviews": {"nodes": _rounds(3)},
         "comments": {"nodes": [_comment("other", "Fixed", "2026-01-06T00:00:00Z")]},
     },
 }
@@ -649,18 +648,15 @@ def test_marking_ready_without_a_notice_starts_the_count_over():
     assert _work(ready) == REVIEW
 
 
-def test_only_explicit_request_outlives_the_limit():
+@pytest.mark.parametrize("head", ["round-3", "round-4"])
+def test_explicit_request_outlives_the_limit_on_any_head(head):
     requested = _theirs(
+        headRefOid=head,
         reviews={"nodes": _rounds(3)},
         reviewRequests={"nodes": [{"requestedReviewer": {"login": ME}}]},
     )
-    replied = _theirs(
-        reviews={"nodes": _rounds(3)},
-        reviewThreads={"nodes": [_thread(ME, "other")]},
-    )
 
     assert _work(requested) == REVIEW
-    assert _work(replied) == REVIEW_LIMIT
 
 
 def test_thread_reply_before_the_review_limit_is_review_work():
@@ -739,12 +735,40 @@ def test_reviewer_is_not_started_by_empty_approvals_or_notices(noise):
     assert _work(_reviewed(**noise)) is None
 
 
-def test_statements_count_toward_the_review_limit():
-    """Three rounds, the last at the current head: only the comment is new."""
-    rounds = [*_rounds(2), _review(ME, commit="head-2", at="2026-01-03T00:00:00Z")]
-    commented = _theirs(
-        reviews={"nodes": rounds},
-        comments={"nodes": [_comment("other", "Fixed", "2026-01-06T00:00:00Z")]},
+@pytest.mark.parametrize("kind", STATEMENTS)
+@pytest.mark.parametrize(
+    ("head", "expected"),
+    [("round-3", REVIEW), ("round-1", REVIEW), ("round-4", REVIEW_LIMIT)],
+    ids=["unchanged", "returned_to_reviewed_head", "new_head"],
+)
+def test_statements_at_the_limit_only_stop_for_an_unreviewed_head(kind, head, expected):
+    activity = STATEMENTS[kind]([])
+    reviews = activity.pop("reviews", {"nodes": []})["nodes"]
+    node = _theirs(
+        headRefOid=head,
+        reviews={"nodes": [*_rounds(3), *reviews]},
+        **activity,
     )
 
-    assert _work(commented) == REVIEW_LIMIT
+    assert _work(node) == expected
+
+
+def test_returning_to_a_head_reviewed_before_ready_does_not_hit_the_limit():
+    """Head membership uses all reviews, even when the round count restarted."""
+    after = [
+        _review(ME, commit=f"after-{index}", at=f"2026-01-0{index}T12:00:00Z")
+        for index in (5, 6, 7)
+    ]
+    node = _theirs(
+        headRefOid="round-1",
+        readyForReview=_ready("2026-01-04T00:00:00Z"),
+        reviews={"nodes": [*_rounds(3), *after]},
+        comments={"nodes": [_comment("other", "Q?", "2026-01-08T00:00:00Z")]},
+    )
+
+    assert review_rounds(parse_pull_request(node), ME) == {
+        "after-5",
+        "after-6",
+        "after-7",
+    }
+    assert _work(node) == REVIEW

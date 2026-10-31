@@ -1,8 +1,11 @@
+import { isTauriRuntime } from "./desktopWindow";
+
+/** Open a page outside GuildBotics: the system browser from a Desktop window, a new tab in a browser. */
 export async function openExternal(url: string): Promise<void> {
-  if (!url || typeof window === "undefined") {
+  if (!url) {
     return;
   }
-  if ("__TAURI_INTERNALS__" in window) {
+  if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-shell");
     await open(url);
     return;

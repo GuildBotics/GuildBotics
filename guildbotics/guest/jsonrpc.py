@@ -336,7 +336,7 @@ class LineJsonRpcTransport:
     def _resolve(self, response_id: Any, message: dict[str, Any]) -> None:
         try:
             future = self._pending.get(int(response_id))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return
         if future is None or future.done():
             return

@@ -37,7 +37,6 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.setup.setup_service import ProjectSetupInput
-from guildbotics.utils.local_api import NONCE_PATTERN
 from guildbotics.utils.person_id import OptionalPersonId, PersonId
 
 
@@ -90,14 +89,9 @@ class HealthResponse(BaseModel):
     status: str
     service_instance_id: str
     workspace: Path | None
-
-
-class LocalApiProofRequest(BaseModel):
-    nonce: str = Field(pattern=NONCE_PATTERN)
-
-
-class LocalApiProofResponse(BaseModel):
-    proof: str
+    #: The server machine's name: what a screen means by "this machine",
+    #: whichever machine its browser runs on.
+    machine_name: str
 
 
 class ShutdownResponse(BaseModel):
@@ -948,6 +942,7 @@ class SchedulerStartRequest(BaseModel):
 
 class SchedulerStopRequest(BaseModel):
     force: bool = False
+    wait: bool = True
 
 
 class RuntimeActiveWork(BaseModel):

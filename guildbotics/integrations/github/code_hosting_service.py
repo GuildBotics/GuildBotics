@@ -10,15 +10,22 @@ from urllib.parse import urlparse
 
 from guildbotics.entities import Task
 from guildbotics.integrations.github.actions_client import GitHubActionsClient
-from guildbotics.integrations.github.api import INLINE, GitHubItem, number_of
+from guildbotics.integrations.github.api import (
+    INLINE,
+    GitHubItem,
+    GraphQLUnprocessable,
+    number_of,
+)
 from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_github_token,
-    normalize_login,
 )
+from guildbotics.integrations.github.identity import member_identity
 from guildbotics.integrations.github.issue_links import (
+    append_external_issue_link,
     append_issue_link,
     preserve_issue_links,
+    remove_issue_links,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
     PULL_REQUEST_QUERY,
@@ -39,7 +46,13 @@ from guildbotics.integrations.github.reads import (
 from guildbotics.integrations.github.repository_scope import (
     CONVERT_PULL_REQUEST_TO_DRAFT,
 )
-from guildbotics.integrations.pull_request_patrol import patrol
+from guildbotics.integrations.pull_request_patrol import (
+    FEEDBACK,
+    REVIEW,
+    PullRequest,
+    patrol,
+    pull_request_work,
+)
 from guildbotics.integrations.repository_scope import check_path
 from guildbotics.runtime.code_hosting_service import (
     ArtifactRef,
@@ -217,7 +230,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             raise ServiceUnsupported(
                 f"A merge into {repository} closes only an issue of it, not {url}."
             )
-        return f"{body.rstrip()}\n\nRefs {url}".lstrip()
+        return append_external_issue_link(body, url)
 
     async def update_pull_request(
         self,
@@ -225,14 +238,21 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         *,
         body: str | None,
         title: str | None,
-        drop_ticket_links: bool,
+        tickets: Sequence[TicketLink] | None,
     ) -> PullRequestUpdated:
         item = self.item(url, "pull_request")
         payload: dict[str, Any] = {}
-        if body is not None:
-            if not drop_ticket_links:
+        if tickets is not None:
+            if body is None:
                 previous = await self.fetch(item)
-                body = preserve_issue_links(body, previous.get("body") or "")
+                body = previous.get("body") or ""
+            body = remove_issue_links(body)
+            for ticket in tickets:
+                body = await self._linked(item.repository, body, ticket)
+        elif body is not None:
+            previous = await self.fetch(item)
+            body = preserve_issue_links(body, previous.get("body") or "")
+        if body is not None:
             payload["body"] = body
         if title is not None:
             payload["title"] = title
@@ -437,6 +457,24 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     #   Pull request patrol                                              #
     # ------------------------------------------------------------------ #
 
+    async def convert_pull_request_to_draft(self, url: str) -> bool:
+        item = self.item(url, "pull_request")
+        self.check_push(item.repository)
+        pull = await self.fetch(item)
+        if pull["draft"] or pull["state"] != "open":
+            return False
+        try:
+            await self.graphql(
+                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": pull["node_id"]}
+            )
+        except GraphQLUnprocessable:
+            # GitHub refuses converting an already draft PR. If another
+            # caller won after the read, this call made no transition.
+            if (await self.fetch(item))["draft"]:
+                return False
+            raise
+        return True
+
     async def pull_request_candidates(self) -> list[Task]:
         """Every open PR that asks something of the member, oldest update first."""
         candidates: list[Task] = []
@@ -451,8 +489,31 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         return await self._pull_request_work(task.pull_request_url)
 
     async def _pull_request_work(self, url: str) -> Task | None:
-        """What the PR asks of the member now; one at the re-review limit is
-        handed over instead."""
+        """What the PR asks of the member now, including review-limit decisions."""
+        pull = await self._patrol_snapshot(url)
+        return await patrol(
+            self,
+            pull,
+            member_identity(self.person).name,
+            provider="github",
+            person_id=self.person.person_id,
+        )
+
+    async def can_receive_work(self, url: str) -> bool:
+        # Resolve the kind before searching: a ticket must still be routed to
+        # the ticket service, rather than look like a PR the search omitted.
+        self.item(url, "pull_request")
+        if not any(
+            item["html_url"] == url for item in await self._search_pull_requests()
+        ):
+            return False
+        pull = await self._patrol_snapshot(url)
+        return pull_request_work(pull, member_identity(self.person).name) in {
+            FEEDBACK,
+            REVIEW,
+        }
+
+    async def _patrol_snapshot(self, url: str) -> PullRequest:
         item = self.item(url, "pull_request")
         owner, name = item.repository.split("/")
         data = await self.graphql(
@@ -461,24 +522,14 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         node = (data.get("repository") or {}).get("pullRequest")
         if not node:
             raise ServiceNotFound(f"{url} is not there.")
-        pull = parse_pull_request(node)
-        return await patrol(
-            self,
-            pull,
-            normalize_login(get_github_username(self.person, strict=True)),
-            provider="github",
-            person_id=self.person.person_id,
-            draft=lambda: self.graphql(
-                CONVERT_PULL_REQUEST_TO_DRAFT, {"pullRequest": pull.id}
-            ),
-        )
+        return parse_pull_request(node)
 
     async def _search_pull_requests(self) -> list[dict[str, Any]]:
         """Open PRs under the project owner that name this member.
 
         Search is the one listing that needs no repository list and works for
-        both PAT and GitHub App logins (``<app>[bot]``). Three qualifiers cover
-        the two roles: written by, reviewed by, and review requested from the
+        both PAT and GitHub App logins (``<app>[bot]``). The qualifiers cover
+        the two roles: written by, reviewed or commented on by, and review requested from the
         member (the last never matches a GitHub App, which GitHub cannot
         request a review from).
 
@@ -489,7 +540,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         """
         username = get_github_username(self.person, strict=True)
         found: dict[str, dict[str, Any]] = {}
-        for qualifier in ("author", "reviewed-by", "review-requested"):
+        for qualifier in ("author", "reviewed-by", "review-requested", "commenter"):
             page = await self.get(
                 "/search/issues",
                 params={

@@ -63,7 +63,7 @@ from guildbotics.integrations.provider import (
     SetupError,
     SetupItems,
     message_page,
-    page_path,
+    page_url,
 )
 from guildbotics.integrations.repository_scope import valid_path
 from guildbotics.runtime.port import ServiceError, ServiceNotFound
@@ -137,9 +137,6 @@ class Connected(BaseModel):
 class ConnectStart(BaseModel):
     #: The Branvil to connect to, as the form names it.
     base_url: BaseUrl = DEFAULT_BASE_URL
-    #: This local API as the user's browser reaches it; Branvil sends the
-    #: browser back there.
-    callback_base_url: str = Field(min_length=1)
 
 
 class ConsentStarted(BaseModel):
@@ -200,8 +197,7 @@ class Consents:
         state = secrets.token_urlsafe(32)
         consent = _Consent(
             base_url=request.base_url,
-            redirect_uri=request.callback_base_url.rstrip("/")
-            + page_path(PROVIDER, "connected"),
+            redirect_uri=page_url(PROVIDER, "connected"),
             verifier=secrets.token_urlsafe(48),
         )
         self._held[state] = consent

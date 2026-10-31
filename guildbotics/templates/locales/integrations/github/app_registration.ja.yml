@@ -1,5 +1,5 @@
 ja:
-  redirecting: "GitHub へリダイレクトしています…"
+  continue: "GitHub で GitHub App を作成します。"
   submit: "GitHub へ進む"
   error_title: "GitHub App の登録に失敗しました。"
   error_hint: "このページを閉じて、GuildBotics アプリからやり直してください。"

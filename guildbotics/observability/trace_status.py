@@ -101,7 +101,7 @@ class TraceStatus:
         if kind != "event":
             return
         event_type = str(item.get("type") or "")
-        if event_type == "command.deferred":
+        if event_type in {"command.deferred", "review_limit.deferred"}:
             self._deferred = True
         elif event_type == "workflow.rate_limited":
             self._rate_limited = True

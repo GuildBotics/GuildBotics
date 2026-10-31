@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { providerOperation, type ProjectServices } from "../../../api/client";
 import i18n from "../../../i18n";
@@ -18,7 +18,6 @@ vi.mock("../../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../api/client")>();
   return {
     ...actual,
-    connected: () => ({ base: "http://127.0.0.1:8765" }),
     providerOperation: vi.fn(),
   };
 });
@@ -102,7 +101,7 @@ function Account({ start, human }: { start: BranvilForm; human: boolean }) {
         form={form}
         onChange={(update) => setForm(update)}
         context={memberContext(human)}
-        errors={{}}
+        errors={branvilAccount.errors(form, memberContext(human), i18n.t.bind(i18n))}
       />
       <output>{JSON.stringify(branvilAccount.request(form, human))}</output>
     </>
@@ -116,24 +115,37 @@ beforeEach(() => {
   vi.mocked(openExternal).mockClear();
 });
 
-describe("BranvilAccount panel", () => {
-  it("creates a new agent named after the member, or takes one chosen", async () => {
+describe.each(["en", "ja"])("BranvilAccount panel (%s)", (language) => {
+  const t = i18n.getFixedT(language);
+
+  beforeEach(async () => {
+    await i18n.changeLanguage(language);
+  });
+
+  afterEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  it("creates an account named after the member, or takes one chosen", async () => {
     branvil();
     renderWithProviders(<Account start={branvilAccount.initial()} human={false} />);
 
+    expect(screen.getByText(t("setup.branvil.member.label"))).toBeVisible();
     expect(screen.getByLabelText(t("setup.branvil.member.new", { name: "my-bot" }))).toBeChecked();
     expect(sent()).toEqual({ username: "", reissue: false });
 
     await userEvent.click(screen.getByLabelText(t("setup.branvil.member.existing")));
+    expect(screen.getByText(t("setup.branvil.member.chooseRequired"))).toBeVisible();
     await userEvent.click(screen.getByRole("combobox", { name: t("setup.branvil.member.choose") }));
     await userEvent.click(await screen.findByRole("option", { name: "beta" }));
 
     expect(sent()).toEqual({ username: "beta", reissue: false });
+    expect(screen.queryByText(t("setup.branvil.member.chooseRequired"))).not.toBeInTheDocument();
     // No token is ever typed: GuildBotics issues it.
     expect(screen.queryByPlaceholderText("bvt_…")).not.toBeInTheDocument();
   });
 
-  it("shows a linked agent's token and reissues it on request", async () => {
+  it("shows a linked account's token and reissues it on request", async () => {
     branvil();
     const start = branvilAccount.fromView(
       { username: "aiko", has_token: true },
@@ -149,7 +161,7 @@ describe("BranvilAccount panel", () => {
     expect(sent()).toEqual({ username: "aiko", reissue: true });
   });
 
-  it("names a human after Branvil's owner", async () => {
+  it("explains the owner's account is linked when a human member is saved", async () => {
     branvil();
     renderWithProviders(<Account start={branvilAccount.initial()} human />);
 
@@ -158,6 +170,20 @@ describe("BranvilAccount panel", () => {
     expect(
       await screen.findByText(t("setup.branvil.connection.connected", { owner: "otota" })),
     ).toBeVisible();
+  });
+
+  it("shows a saved human member's owner account", () => {
+    branvil();
+    const start = branvilAccount.fromView(
+      { username: "otota", has_token: false },
+      branvilAccount.initial(),
+      true,
+    );
+    renderWithProviders(<Account start={start} human />);
+
+    expect(screen.getByText(t("setup.branvil.member.owner", { name: "otota" }))).toBeVisible();
+    expect(screen.queryByText(t("setup.branvil.member.ownerPending"))).not.toBeInTheDocument();
+    expect(sent()).toEqual({ username: "otota" });
   });
 });
 
@@ -172,7 +198,6 @@ describe("Branvil connection", () => {
 
     expect(providerOperation).toHaveBeenCalledWith("branvil", "connect", {
       base_url: BRANVIL_BASE_URL,
-      callback_base_url: "http://127.0.0.1:8765",
     });
     expect(openExternal).toHaveBeenCalledWith(`${BRANVIL_BASE_URL}/-/authorize?state=consent-1`);
     expect(screen.getByText(t("setup.branvil.connection.pending"))).toBeVisible();

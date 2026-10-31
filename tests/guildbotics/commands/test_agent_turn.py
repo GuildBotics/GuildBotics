@@ -15,6 +15,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     CliAgentExecutionResult,
 )
 from guildbotics.runtime.member_invocation import Work
+from guildbotics.utils.i18n_tool import t
 
 
 def _store(tmp_path) -> RunStore:
@@ -40,7 +41,7 @@ def _ticket_completion(store: RunStore, run_id: str, status: str = "done") -> No
         run_id,
         status,
         "completed",
-        "https://example.test/1",
+        Work.of_ticket("https://example.test/1"),
         "aiko",
     )
 
@@ -129,35 +130,36 @@ async def test_turn_exhausts_the_configured_attempt_budget(tmp_path):
     assert excinfo.value.attempts == 2
 
 
+@pytest.mark.parametrize("category", ["rate_limited", "timeout"])
 @pytest.mark.parametrize("failure_stage", ["invoke", "completion"])
 @pytest.mark.asyncio
-async def test_turn_reraises_rate_limits_without_retrying(
-    tmp_path, monkeypatch, failure_stage
+async def test_turn_reraises_terminal_failures_without_retrying(
+    tmp_path, monkeypatch, failure_stage, category
 ):
     calls = 0
-    rate_limited = CliAgentExecutionError(
+    terminal_failure = CliAgentExecutionError(
         cli_agent="codex",
         result=CliAgentExecutionResult(
             stdout="",
-            stderr="rate limit",
+            stderr=category,
             returncode=75,
-            error_category="rate_limited",
+            error_category=category,
             error_details={"retry_after_text": "11:44 AM"},
         ),
     )
 
-    def raise_wrapped_rate_limit(*args, **kwargs):
-        raise CommandError("wrapped") from rate_limited
+    def raise_wrapped_failure(*args, **kwargs):
+        raise CommandError("wrapped") from terminal_failure
 
     async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
         if failure_stage == "invoke":
-            raise_wrapped_rate_limit()
+            raise_wrapped_failure()
         return "response"
 
     if failure_stage == "completion":
-        monkeypatch.setattr(RunStore, "status", raise_wrapped_rate_limit)
+        monkeypatch.setattr(RunStore, "status", raise_wrapped_failure)
 
     with pytest.raises(CliAgentExecutionError) as excinfo:
         await run_agent_turn(
@@ -169,7 +171,31 @@ async def test_turn_reraises_rate_limits_without_retrying(
         )
 
     assert calls == 1
-    assert excinfo.value is rate_limited
+    assert excinfo.value is terminal_failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["process", "protocol", "session_unavailable"])
+async def test_other_cli_failures_still_use_the_full_attempt_budget(tmp_path, category):
+    attempts = []
+    error = CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="", stderr="failed", returncode=1, error_category=category
+        ),
+    )
+
+    async def invoke(context, parameters):
+        attempts.append(context["attempt"])
+        raise CommandError("wrapped") from error
+
+    with pytest.raises(CompletionRetryExhausted):
+        await run_agent_turn(
+            invoke=invoke,
+            ledger=HostRunLedger("run-1", Work.of_ticket("https://example.test/1")),
+            execution_context={"max_completion_attempts": 3},
+        )
+    assert attempts == [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -354,3 +380,33 @@ async def test_a_run_that_awaits_its_checks_is_complete(tmp_path, monkeypatch):
 
     assert calls == 1
     assert recorded == [{"run_id": "run-1", "attempt": 1, "status": "awaiting_checks"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "work",
+    [Work("chat", "slack:U_BOT:C1:100.1"), Work("manual", "run-0")],
+)
+async def test_a_turn_answering_no_chat_event_is_driven_as_any_work(tmp_path, work):
+    """A run the patrol resumed in a chat thread's or a command's work answers
+    no chat event: it is driven to completion like a ticket's run, with no
+    chat parameters and the generic continuation."""
+    store = _store(tmp_path)
+    seen: list[tuple[dict[str, Any], dict[str, str]]] = []
+
+    async def invoke(context: dict[str, Any], parameters: dict[str, str]) -> str:
+        seen.append((context, parameters))
+        if len(seen) == 2:
+            _ticket_completion(store, "run-1")
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        ledger=HostRunLedger("run-1", work),
+        execution_context={"max_completion_attempts": 2},
+    )
+
+    assert [parameters for _, parameters in seen] == [{}, {}]
+    assert seen[1][0]["continuation_input"] == t(
+        "commands.workflows.common.agent_continuation", run_id="run-1"
+    )

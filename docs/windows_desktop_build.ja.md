@@ -9,7 +9,7 @@ repository を clone する前に、以下をインストールします。
 - Visual Studio Build Tools 2022 の **Desktop development with C++** workload と Windows SDK。
 - [rustup](https://rustup.rs/) の stable `x86_64-pc-windows-msvc` toolchain。
 - Node.js 24。
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) と Python 3.12 以上。
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) と Python 3.15 以上。
 - Git for Windows。repository の build script は Git Bash から実行します。
 - WebView2 Runtime。通常は Windows 11 に含まれます。未導入の場合、NSIS installer は Tauri の download-bootstrapper 方式で導入します。
 - オプション機能「**Windows ハイパーバイザー プラットフォーム**」。エージェント隔離環境（AI CLI の turn を動かす microVM）に必要です。runtime（microsandbox）は sidecar に同梱され、GuildBotics が初回利用時に `%USERPROFILE%\.guildbotics\data\msb` へ配置します。
@@ -34,8 +34,8 @@ sidecar build より前に、Windows 固有の Python 挙動と Rust unit test �
 ```bash
 uv run --no-sync python -m pytest \
   tests/guildbotics/utils/test_processes.py \
-  tests/guildbotics/runtime/test_service_control.py \
-  tests/guildbotics/runtime/test_service_lock.py \
+  tests/guildbotics/drivers/test_app_api_lock.py \
+  tests/guildbotics/drivers/test_service_lock.py \
   tests/guildbotics/cli/test_start_command.py \
   tests/guildbotics/cli/test_stop_command.py \
   tests/guildbotics/cli/test_member_command.py \
@@ -49,9 +49,10 @@ Rust test wrapper はテスト時だけ Tauri の `bundle.resources` を空に�
 
 ## build
 
-Git Bash で repository root から実行します。
+Git Bash で repository root から実行します。Local API は自分が配る画面（`desktop/dist`）を同梱するので、先に画面を build します。
 
 ```bash
+(cd desktop && npm ci && npm run build)
 scripts/desktop-build-backend.sh
 scripts/desktop-smoke-sidecars.sh
 cd desktop
@@ -62,7 +63,7 @@ PyInstaller の program は 1 つの directory `desktop/src-tauri/binaries/guild
 
 NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成されます。Windows 用 Tauri overlay でも bundle target を NSIS に固定しているため、通常の Windows build が MSI を作ろうとすることはありません。
 
-`tauri dev` では `scripts/desktop-dev-tauri.sh` が実体の PyInstaller `.exe` sidecar を先に build します。frontend の反復を速くする場合は、1 つ目の Git Bash terminal で `scripts/desktop-dev-backend.sh`、別 terminal で Vite dev command を実行し、frontend 変更ごとの sidecar rebuild を避けます。
+`tauri dev` では `scripts/desktop-dev-tauri.sh` が画面と実体の PyInstaller `.exe` sidecar を先に build します。frontend の反復を速くする場合は、1 つ目の Git Bash terminal で `scripts/desktop-dev-backend.sh`、別 terminal で Vite dev command を実行し、frontend 変更ごとの sidecar rebuild を避けます。
 
 ## install と PATH
 

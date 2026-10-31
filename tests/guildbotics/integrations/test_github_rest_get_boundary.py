@@ -16,6 +16,12 @@ ROOT = Path(__file__).parents[3]
 # Adding a raw GET requires both a classification and a concrete reason.
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
+        "guildbotics/integrations/github/ticket_service.py",
+        "_search_mentions_query",
+        "self.get",
+        "'/search/issues'",
+    ): "bounded: one mention search paginates by total_count up to GitHub's 1000-result ceiling; partial results fail only mention discovery",
+    (
         "guildbotics/integrations/github/api.py",
         "get",
         "(await self.client()).get",
@@ -39,6 +45,12 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "client.get",
         "_REST[resource].format(api=item.api, conversation=item.conversation)",
     ): "bounded: one size-limited page with a condition-bound continuation",
+    (
+        "guildbotics/integrations/github/reads.py",
+        "search_tickets",
+        "client.get",
+        "'/search/issues'",
+    ): "bounded: one size-limited search page with a condition-bound continuation; incomplete results and totals above 1000 fail",
     (
         "guildbotics/integrations/github/reads.py",
         "read_alerts",

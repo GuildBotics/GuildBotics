@@ -584,8 +584,9 @@ def member_invocation(
     participant_labels: str = "",
 ) -> MemberInvocation:
     """What a member command asked for by ``run_id``'s ``work`` runs with: a
-    chat run's, or a task run's for any other work."""
-    chat = work is not None and work.kind == "chat"
+    chat event's run's, or a task run's for any other run -- a run resumed in
+    a chat thread's work among them, which answers no event."""
+    chat = work is not None and work.chat is not None
     return MemberInvocation(
         run_id=run_id if chat else "",
         task_run_id="" if chat else run_id,
