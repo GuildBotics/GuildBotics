@@ -9,8 +9,7 @@ SIDECAR_PATH="$PROGRAMS_DIR/guildbotics-app-api"
 CLI_PATH="$PROGRAMS_DIR/guildbotics"
 
 if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
-  # The real programs carry the screens they serve.
-  (cd "$REPO_ROOT/desktop" && npm run build)
+  # The real programs carry the screens desktop-dev-tauri.sh has just built.
   "$SCRIPT_DIR/desktop-build-backend.sh"
   exit 0
 fi
