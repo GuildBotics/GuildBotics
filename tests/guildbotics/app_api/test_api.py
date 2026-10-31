@@ -598,6 +598,33 @@ def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
     assert forced_runtime_stop + maintenance_join <= TEARDOWN_BUDGET_SECONDS
 
 
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_a_secret_store_that_cannot_be_used_is_a_503_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: str
+) -> None:
+    from guildbotics.app_api.auth import LANGUAGE_HEADER
+    from guildbotics.utils.i18n_tool import t
+    from guildbotics.utils.keychain import SecretStoreError
+
+    runtime = RuntimeStub(tmp_path)
+
+    def refuse() -> TeamSummary:
+        raise SecretStoreError("secrets.yml cannot be read")
+
+    monkeypatch.setattr(runtime, "get_team_summary", refuse)
+
+    with owner_client(create_app(runtime=runtime)) as client:
+        response = client.get("/team", headers={LANGUAGE_HEADER: language})
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "secret_store_unavailable"
+    assert response.json()["message"] == t(
+        "app_api.errors.secret_store_unavailable",
+        locale=language,
+        reason="secrets.yml cannot be read",
+    )
+
+
 def test_health_reports_the_service_its_workspace_and_its_machine(
     tmp_path: Path,
 ) -> None:

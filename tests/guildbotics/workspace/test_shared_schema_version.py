@@ -268,14 +268,12 @@ def test_every_record_written_under_state_declares_its_generation(
 def test_no_record_carries_its_own_copy_of_the_generation() -> None:
     """One literal, so no kind can be raised on its own.
 
-    A second literal is not a duplicate that reads badly, it is a fault: the
-    boundary refuses any version above the one constant, on the sending side
-    too, so raising one kind alone makes the device that wrote the record
-    reject its own file and stop its own queue.
+    A second literal is not a duplicate that reads badly, it is a fault: one
+    kind raised on its own would claim a format the others do not share.
     """
     device_local = {
-        # ``local/secrets.json`` records what generation of each secret this
-        # machine holds. It is never shared, so it is not this generation.
+        # ``local/secrets.json`` records this machine's keychain namespace. It
+        # is not a shared record, so it is not this generation.
         "guildbotics/utils/secret_store.py",
     }
     offenders: list[str] = []

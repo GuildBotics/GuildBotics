@@ -173,6 +173,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.local_api import API_PREFIX, PROOF_PATH, server_port
 from guildbotics.utils.person_id import (
     MemberConfigError,
@@ -317,6 +318,22 @@ def create_app(
         request: Request, exc: UnsafePathError
     ) -> JSONResponse:
         return _error_response(400, "unsafe_host_path", str(exc), {})
+
+    @app.exception_handler(SecretStoreError)
+    async def secret_store_error_handler(
+        request: Request, exc: SecretStoreError
+    ) -> JSONResponse:
+        # A locked keychain or an index that cannot be read stops every route
+        # that reaches the store the same way; the reason names the file or
+        # the keychain's answer, never a value.
+        return _error_response(
+            503,
+            "secret_store_unavailable",
+            api_error_message(
+                "secret_store_unavailable", _request_language(request), {"reason": exc}
+            ),
+            {},
+        )
 
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:

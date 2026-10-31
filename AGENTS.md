@@ -316,7 +316,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
 - **世代の正本は `guildbotics/utils/shared_writes.py` の `SHARED_RECORD_SCHEMA_VERSION` 1つだけ。** 種別ごとに定数を持たせない。`utils` に置くのは、writer が層をまたぐため（`observability` は `utils` にしか依存できない）
 - **`state/` 配下の構造化 record は全部 `schema_version` を持つ。** 母集団は `tests/guildbotics/workspace/test_shared_schema_version.py` が実際の writer を走らせて `state/` を走査することで決まる。record ではない拡張子（`.md` / `.txt`）だけが理由つきで除外され、新しい record 種別は分類しないと落ちる。付与は書き込みの choke point で行い（chat state なら `_write_json`、memory meta なら `_write_doc`）、呼び出し側に持たせない
-- **`config/secrets.yml` は `schema_version` を持たない。** 中身は `keys`（キー名の一覧）だけで、Secret 値の入る余地を構造的に無くしている（`read_secret_index` は別の形を `SecretStoreError` で拒否する）
+- **`config/secrets.yml` は `schema_version` を持たない。** 中身は `keys`（キー名の一覧）だけで、Secret 値の入る余地を構造的に無くしている（`read_secret_index` は、読めない・壊れた・別の形の索引を、空として扱わず `SecretStoreError` で拒否する。空として読むと、次の書き込みが既存のキー名を消す。`local/secrets.json` の `store_id` も同じで、新しい名前空間を作るのはファイルが無いときだけ）
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名以外の field を持たないため、Secret 値の混入を内容検査なしに防げる
 - 1つの文書が複数ファイルに分かれる場合（memory の `meta.yml` と `body.md`）は、**どちらも書く前に両方を測る**。片方が着地して片方が拒否された文書は、古い文書でも新しい文書でもない

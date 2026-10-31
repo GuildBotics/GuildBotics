@@ -17,6 +17,7 @@ en:
   origin_mismatch: "Requests from another site are refused."
   command_workspace_changed: "The Desktop workspace changed before the command started. Run the command again."
   validation_error: "Request validation failed."
+  secret_store_unavailable: "The OS secret store could not be used: %{reason}"
   config_busy: "Another save is still writing to this workspace, so nothing was saved. Try again in a moment."
   config_changed: "This screen was loaded before a more recent change, so nothing was saved. Reload it and make the change again."
   project_not_found: "Project config was not found."

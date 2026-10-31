@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -260,22 +261,53 @@ def test_no_secret_value_reaches_a_workspace_file(fake_keyring, tmp_path):
 
 @pytest.mark.parametrize(
     "local_text",
-    [json.dumps({"keys": {}}), json.dumps({"store_id": ""}), "{not json"],
-    ids=["no-namespace", "empty-namespace", "unparsable"],
+    [
+        json.dumps({"keys": {}}),
+        json.dumps({"store_id": ""}),
+        json.dumps({"store_id": 123}),
+        "{not json",
+        json.dumps(["store_id"]),
+    ],
+    ids=["no-namespace", "empty-namespace", "not-a-name", "unparsable", "not-a-record"],
 )
-def test_a_record_without_a_namespace_starts_over(fake_keyring, tmp_path, local_text):
+def test_a_record_that_names_no_namespace_stops_every_operation(
+    fake_keyring, tmp_path, local_text
+):
+    """A fresh namespace would leave the values under the old one where
+    nothing records them, so only a missing record starts one."""
     config_dir = tmp_path / ".guildbotics" / "config"
     local = tmp_path / ".guildbotics" / "local" / "secrets.json"
     local.parent.mkdir(parents=True)
     local.write_text(local_text, encoding="utf-8")
     store = KeyringSecretStore(config_dir)
 
-    store.set("TOKEN", "value")
+    for operation in (
+        lambda: store.get("TOKEN"),
+        lambda: store.set("TOKEN", "value"),
+        lambda: store.delete("TOKEN"),
+        store.ensure_initialized,
+    ):
+        with pytest.raises(SecretStoreError):
+            operation()
 
-    store_id = _local_record(tmp_path)["store_id"]
-    assert store_id
-    assert _namespaces(fake_keyring) == {f"GuildBotics/{store_id}"}
-    assert KeyringSecretStore(config_dir).get("TOKEN") == "value"
+    assert local.read_text(encoding="utf-8") == local_text
+    assert not store.location.exists()
+    assert fake_keyring.passwords == {}
+
+
+def test_a_damaged_namespace_record_leaves_the_index_as_it_was(fake_keyring, tmp_path):
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("TOKEN", "value")
+    index = store.location.read_bytes()
+    (tmp_path / ".guildbotics" / "local" / "secrets.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+
+    with pytest.raises(SecretStoreError):
+        store.delete("TOKEN")
+
+    assert store.location.read_bytes() == index
+    assert len(fake_keyring.passwords) == 1
 
 
 def test_deleting_an_unknown_key_records_no_namespace(fake_keyring, tmp_path):
@@ -288,29 +320,86 @@ def test_deleting_an_unknown_key_records_no_namespace(fake_keyring, tmp_path):
     assert not store.location.exists()
 
 
-def test_an_index_in_another_shape_is_refused_rather_than_read_as_empty(
-    fake_keyring, tmp_path
+@pytest.mark.parametrize(
+    "index_bytes",
+    [
+        b"keys:\n  TOKEN:\n    generation: 1\n",
+        b"keys: [TOKEN]\nTOKEN: a-value\n",
+        b"keys: [TOKEN\n",
+        b"- TOKEN\n",
+        b"",
+        b"keys: [1]\n",
+        b"keys: [\xff\xfe]\n",
+    ],
+    ids=[
+        "old-mapping",
+        "extra-field",
+        "syntax-error",
+        "top-level-list",
+        "empty",
+        "not-names",
+        "not-utf-8",
+    ],
+)
+def test_an_index_that_is_not_a_list_of_names_stops_every_operation(
+    fake_keyring, tmp_path, index_bytes
 ):
-    """Read as no keys, every secret would silently go missing."""
+    """Read as no keys, the next write would replace the index and every
+    secret would silently go missing."""
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.location.parent.mkdir(parents=True)
-    store.location.write_text(
-        dump_yaml({"keys": {"TOKEN": {"generation": 1}}}), encoding="utf-8"
-    )
+    store.location.write_bytes(index_bytes)
 
-    with pytest.raises(SecretStoreError):
-        store.keys()
-    with pytest.raises(SecretStoreError):
-        store.set("OTHER_TOKEN", "value")
+    for operation in (
+        store.keys,
+        store.values,
+        store.ensure_initialized,
+        lambda: store.set("NEW_TOKEN", "value"),
+        lambda: store.delete("TOKEN"),
+    ):
+        with pytest.raises(SecretStoreError):
+            operation()
+
+    assert store.location.read_bytes() == index_bytes
+    assert not (tmp_path / ".guildbotics" / "local" / "secrets.json").exists()
     assert fake_keyring.passwords == {}
 
 
-def test_an_index_with_anything_beside_the_names_is_refused(fake_keyring, tmp_path):
+def test_an_index_whose_directory_cannot_be_searched_is_not_missing(
+    fake_keyring, tmp_path, posix_permissions
+):
+    """``exists()`` answers "missing" for a file it may not look at, and the
+    read-only callers would then see no names at all."""
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
-    store.location.parent.mkdir(parents=True)
-    store.location.write_text(
-        dump_yaml({"keys": ["TOKEN"], "TOKEN": "a-value"}), encoding="utf-8"
-    )
+    store.set("TOKEN", "value")
+    store.location.parent.chmod(0)
+    try:
+        with pytest.raises(SecretStoreError):
+            store.keys()
+    finally:
+        store.location.parent.chmod(0o755)
+    assert store.keys() == ["TOKEN"]
+
+
+def test_an_index_that_cannot_be_read_stops_the_write(
+    fake_keyring, tmp_path, monkeypatch
+):
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("TOKEN", "value")
+    before = store.location.read_bytes()
+    real_open = Path.open
+
+    def unreadable(path, *args, **kwargs):
+        if path == store.location and "w" not in (args[0] if args else "r"):
+            raise PermissionError("index temporarily unreadable")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unreadable)
 
     with pytest.raises(SecretStoreError):
-        store.keys()
+        store.set("NEW_TOKEN", "value")
+
+    monkeypatch.undo()
+    assert store.location.read_bytes() == before
+    namespace = f"GuildBotics/{_local_record(tmp_path)['store_id']}"
+    assert fake_keyring.passwords == {(namespace, "TOKEN"): "value"}

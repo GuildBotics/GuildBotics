@@ -20,6 +20,7 @@ from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.keychain import SecretStoreError, SecretValueTooLargeError
 from guildbotics.utils.person_id import is_member_secret
 from guildbotics.utils.secret_store import (
+    SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
     format_env_line,
     keyring_status,
@@ -55,7 +56,23 @@ class _SecretsContext:
         _set_values(self.store(), values)
 
 
-@click.group()
+class _SecretStoreGroup(click.Group):
+    """A command group that reports a store it cannot use as a command error.
+
+    Every command reaches the store, and a locked keychain or an index that
+    cannot be read stops each of them the same way.
+    """
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except SecretStoreError as exc:
+            raise click.ClickException(
+                t("cli.secrets.store_failed", error=exc)
+            ) from exc
+
+
+@click.group(cls=_SecretStoreGroup)
 @click.pass_context
 @click.option(
     "--workspace",
@@ -87,20 +104,16 @@ def secrets(ctx: click.Context, workspace_dir: Path | None, identities: bool) ->
 def secrets_status(env: _SecretsContext) -> None:
     """Show OS secret-store status for this workspace."""
     status = keyring_status()
-    try:
-        store = env.store()
-        key_count = len(store.keys())
-        location = str(store.location)
-    except SecretStoreError:
-        key_count = 0
-        location = str(env.config_dir / "secrets.yml")
     click.echo(f"workspace: {env.root}")
     click.echo(
         f"os_secret_store: {'available' if status['available'] else 'unavailable'}"
     )
     click.echo(f"locked: {'yes' if status['locked'] else 'no'}")
-    click.echo(f"location: {location}")
-    click.echo(f"stored keys: {key_count}")
+    click.echo(f"location: {env.config_dir / SECRETS_INDEX_FILENAME}")
+    try:
+        click.echo(f"stored keys: {len(env.store().keys())}")
+    except SecretStoreError as exc:
+        click.echo(f"stored keys: unknown ({exc})")
 
 
 @secrets.command(name="list")
@@ -199,5 +212,3 @@ def _set_values(store: KeyringSecretStore, values: dict[str, str]) -> None:
                 limit=exc.limit,
             )
         ) from exc
-    except SecretStoreError as exc:
-        raise click.ClickException(t("cli.secrets.store_failed", error=exc)) from exc

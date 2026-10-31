@@ -8,6 +8,7 @@ from guildbotics.utils.env_loader import (
     read_debug_env,
     write_debug_env,
 )
+from guildbotics.utils.fileio import get_identity_config_dir
 from guildbotics.utils.keychain import SecretStoreError
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
@@ -128,3 +129,21 @@ def test_locked_keychain_does_not_break_env_var_only_operation(
     load_guildbotics_env(override=True)
 
     assert os.environ["OPENAI_API_KEY"] == "from-real-env"
+
+
+def test_a_damaged_identity_index_still_loads_the_workspace_secrets(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """Each store is read on its own: one that cannot be read loses its own
+    values, not the other's."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "from-keychain"
+    )
+    identity_index = get_identity_config_dir() / "secrets.yml"
+    identity_index.parent.mkdir(parents=True, exist_ok=True)
+    identity_index.write_text("keys: [BROKEN\n", encoding="utf-8")
+
+    load_guildbotics_env(override=True)
+
+    assert os.environ["OPENAI_API_KEY"] == "from-keychain"

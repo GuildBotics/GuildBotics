@@ -1023,8 +1023,11 @@ access and member key spelling in the package.
 - **Backend** (`utils/secret_store.py`): OS keychain only. The workspace keeps a
   non-secret index in `.guildbotics/config/secrets.yml`, `keys: [<name>, ...]` and
   nothing else, so no value has a place to go. `.guildbotics/local/secrets.json` holds
-  this machine's keychain namespace (`store_id`, the service `GuildBotics/<store_id>`);
-  a record without a `store_id` starts over as a new, empty namespace.
+  this machine's keychain namespace (`store_id`, the service `GuildBotics/<store_id>`).
+  Only a missing record starts a new namespace, and only a missing index is empty:
+  one that cannot be read, parsed, or has another shape is a `SecretStoreError`
+  before anything is written, because a fresh start would leave the values where
+  nothing records them.
   There is no env-file backend and no `GUILDBOTICS_SECRETS_BACKEND` switch. A
   missing or locked keychain is an error. Machine moves use `guildbotics secrets
   export` / `import` (dotenv is an exchange format only). `secrets set --from-file`

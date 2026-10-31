@@ -24,13 +24,13 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Concatenate
 
+import yaml
 from dotenv import dotenv_values
 
 from guildbotics.utils.fileio import (
     atomic_write_text,
     get_identity_config_dir,
     get_workspace_config_dir,
-    load_yaml_dict,
     save_yaml_file,
     workspace_root_from_config_dir,
 )
@@ -326,8 +326,9 @@ class KeyringSecretStore(SecretStore):
         The span starts at the read: what is written is the index that was
         read, so a write in between would be written back over.
         """
+        local = self._read_local()
         self._write_index(self._read_index())
-        self._write_local(self._read_local())
+        self._write_local(local)
 
     def _service(self, local: dict[str, Any]) -> str:
         return f"{_KEYRING_SERVICE_PREFIX}/{local['store_id']}"
@@ -342,28 +343,28 @@ class KeyringSecretStore(SecretStore):
     def _read_local(self) -> dict[str, Any]:
         """Read the keychain namespace this workspace's values are held under.
 
-        A record without a namespace -- absent or unparsable -- names nothing
-        this store can read, so it starts over as a new namespace, which the
-        first write keeps.
-
-        A record that exists but cannot be read is an error, not a fresh start:
-        the next write would replace the namespace it names and leave the
-        values there where nothing records them.
+        Only a record that does not exist starts a new namespace, which the
+        first write keeps. One that cannot be read, parsed, or names no
+        namespace is an error, not a fresh start: the next write would replace
+        the namespace it named and leave the values there where nothing
+        records them.
         """
         try:
             data = json.loads(self._local_index.read_text(encoding="utf-8"))
-        except FileNotFoundError, ValueError:
-            data = None
-        except OSError as exc:
-            raise SecretStoreError(str(exc)) from exc
+        except FileNotFoundError:
+            return {"store_id": uuid.uuid4().hex}
+        except (OSError, ValueError) as exc:
+            raise SecretStoreError(
+                f"{self._local_index} cannot be read: {exc}"
+            ) from exc
         store_id = data.get("store_id") if isinstance(data, dict) else None
         if not isinstance(store_id, str) or not store_id:
-            return {"store_id": uuid.uuid4().hex}
+            raise SecretStoreError(f"{self._local_index} names no keychain namespace.")
         return {"store_id": store_id}
 
     def _write_local(self, local: dict[str, Any]) -> None:
-        # Replaced whole, never truncated in place: a torn record reads as one
-        # without a namespace and would orphan every value held under it.
+        # Replaced whole, never truncated in place: a torn record would stop
+        # every operation until it is repaired.
         payload = {"schema_version": 1, **local}
         atomic_write_text(
             self._local_index,
@@ -374,16 +375,32 @@ class KeyringSecretStore(SecretStore):
 def read_secret_index(config_dir: Path) -> list[str]:
     """Return the key names ``config_dir``'s index lists, reading no value.
 
+    Only an index that does not exist is empty. One that cannot be read,
+    parsed, or holds anything but the list of names is refused: read as no
+    keys, the next write would replace it and every secret would silently go
+    missing, and a field beside the names is where a value would end up.
+
     Raises:
-        SecretStoreError: When the index holds anything but the list of names:
-            read as no keys, every secret would silently go missing, and a
-            field beside them is where a value would end up.
+        SecretStoreError: When the index exists but is not a list of names.
     """
     path = config_dir / SECRETS_INDEX_FILENAME
-    index = load_yaml_dict(path)
-    raw = index.get("keys", [])
+    try:
+        # Asked first, so that a missing index is told apart without reading
+        # one: ``exists()`` would also answer "missing" for an index it may
+        # not look at.
+        path.stat()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise SecretStoreError(f"{path} cannot be read: {exc}") from exc
+    try:
+        index = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise SecretStoreError(f"{path} cannot be read: {exc}") from exc
+    raw = index.get("keys") if isinstance(index, dict) else None
     if (
-        set(index) - {"keys"}
+        not isinstance(index, dict)
+        or set(index) != {"keys"}
         or not isinstance(raw, list)
         or not all(isinstance(key, str) for key in raw)
     ):

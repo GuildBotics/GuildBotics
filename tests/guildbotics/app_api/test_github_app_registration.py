@@ -38,7 +38,7 @@ HTTP_OK = 200
 HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
-HTTP_SERVER_ERROR = 500
+HTTP_SERVICE_UNAVAILABLE = 503
 APP_ID = 1978826
 INSTALLATION_ID = 86632391
 BOT_USER_ID = 233270845
@@ -424,7 +424,7 @@ def test_member_save_retries_a_registration_after_the_keychain_failed(
     with monkeypatch.context() as patch:
         patch.setattr(KeyringSecretStore, "set", locked)
         failed = _add(client, tmp_path, app_registration_id=registration)
-    assert failed.status_code == HTTP_SERVER_ERROR
+    assert failed.status_code == HTTP_SERVICE_UNAVAILABLE
     assert not _person_file(tmp_path).exists()
 
     retried = _add(client, tmp_path, app_registration_id=registration)

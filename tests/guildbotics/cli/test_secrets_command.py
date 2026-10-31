@@ -4,6 +4,7 @@ import importlib
 from pathlib import Path
 
 import i18n
+import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main
@@ -63,6 +64,29 @@ def test_status_reports_os_secret_store(fake_keyring, tmp_path):
     assert result.exit_code == 0
     assert "os_secret_store: available" in result.output
     assert "locked: no" in result.output
+
+
+@pytest.mark.parametrize("command", ["list", "delete", "export", "set"])
+def test_an_index_the_store_cannot_read_is_a_command_error(
+    fake_keyring, tmp_path, command
+):
+    workspace = _workspace(tmp_path)
+    index = _config_dir(workspace) / "secrets.yml"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("keys: [BROKEN\n", encoding="utf-8")
+    arguments = {"delete": ["TOKEN"], "set": ["TOKEN", "value"]}.get(command, [])
+
+    result = CliRunner().invoke(
+        secrets, ["--workspace", str(workspace), command, *arguments]
+    )
+
+    assert result.exit_code == 1
+    assert str(index) in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    status = CliRunner().invoke(secrets, ["--workspace", str(workspace), "status"])
+    assert status.exit_code == 0
+    assert f"stored keys: unknown ({index}" in status.output
 
 
 def test_set_stores_in_keychain(fake_keyring, tmp_path):

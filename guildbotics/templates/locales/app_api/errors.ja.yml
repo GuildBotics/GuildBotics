@@ -16,6 +16,7 @@ ja:
   origin_mismatch: "別のサイトからのリクエストは受け付けません。"
   command_workspace_changed: "コマンドの開始前に Desktop のワークスペースが変わりました。コマンドをもう一度実行してください。"
   validation_error: "リクエストの検証に失敗しました。"
+  secret_store_unavailable: "OS の秘密ストアを使えませんでした: %{reason}"
   config_busy: "ほかの保存がこのワークスペースへ書き込み中のため、保存されませんでした。少し待ってから、もう一度実行してください。"
   config_changed: "この画面はより新しい変更より前に読み込まれていたため、保存されませんでした。画面を読み込み直してから、もう一度変更してください。"
   project_not_found: "プロジェクト設定が見つかりませんでした。"
